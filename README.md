@@ -4,7 +4,12 @@
 
 ## 빠른 실행
 
+처음 실행할 때 저장소 의존성을 설치합니다.
+
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 ./run-control-station.sh
 ```
 

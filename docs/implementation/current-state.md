@@ -11,7 +11,9 @@
 | `src/control_station/arm_supervisor.py` | 고정 LeRobot 프로세스 시작·종료·상태 |
 | `src/control_station/camera_adapters.py` | `--arm` 모드에서 OpenCV 카메라 단독 점유 및 MJPEG 프레임 제공 |
 | `src/control_station/models.py` | 작업·단계 상태 어휘 및 카메라 스냅샷 |
-| `src/control_station/store.py` | SQLite 작업 생성·조회 |
+| `src/control_station/database.py` | SQLAlchemy ORM 모델, SQLite 엔진과 세션 설정 |
+| `src/control_station/store.py` | ORM 세션을 통한 작업·단계·이벤트 생성·조회 |
+| `migrations/` | Alembic schema revision |
 | `src/control_station/web/` | 간단한 상태 화면과 텔레오퍼레이션 제어 |
 
 ## 구현된 API
@@ -24,8 +26,8 @@
 | GET | `/api/arm/status` | 팔 텔레오퍼레이션 프로세스 상태 반환 |
 | POST | `/api/arm/start` | 고정 프로필 프로세스 시작 요청 |
 | POST | `/api/arm/stop` | 프로세스 그룹에 `SIGINT` 종료 요청 |
-| GET | `/api/tasks` | SQLite 작업 목록 반환 |
-| POST | `/api/tasks` | `PENDING` 작업 저장 |
+| GET | `/api/tasks` | SQLite 작업 요약 목록 반환 |
+| POST | `/api/tasks` | `PENDING` 작업, 표준 단계, `TASK_CREATED` 이벤트를 저장 |
 
 ## 현재 동작의 경계
 
@@ -37,8 +39,10 @@
 - `--arm` 모드에서는 관제 서버가 기본 `/dev/video4`를 단독으로 열어 Joint Camera 슬롯에 MJPEG로 보냅니다. LeRobot에는 카메라 설정을 전달하지 않고 Rerun 표시도 끕니다.
 - `/dev/video4`는 Joint Camera, HCAM0의 by-id 경로는 Head Camera로 설정했습니다. 두 경로 모두 영상 캡처 장치이며 `/dev/video5`는 메타데이터 노드입니다.
 - Head Camera의 HCAM0 경로에서 프레임 수신을 확인했습니다. 두 카메라 동시 표시와 실제 장착 위치의 최종 육안 확인은 남아 있습니다.
-- 작업 상태·단계 상태 이름은 모델에 정의되어 있으나 실제 오케스트레이션과 전이는 구현되지 않았습니다.
+- SQLAlchemy ORM과 Alembic revision이 SQLite schema를 관리합니다. 기존 task 열과 행을 보존하고 task steps/events 테이블을 추가하며, 과거 단계·이벤트는 만들어내지 않습니다.
+- 새 작업 생성은 작업 행·표준 단계 6개·`TASK_CREATED` 이벤트를 단일 트랜잭션으로 저장합니다. 생성 응답에서 단계와 이벤트를 확인할 수 있습니다.
+- 작업 상태·단계 상태 이름은 모델에 정의되어 있으나 실제 오케스트레이션, 단계 상세 API, 상태 전이는 아직 구현되지 않았습니다.
 
 ## 다음 작업
 
-우선순위와 완료 조건은 [개발 TODO](../development-plan.md)에서 관리합니다.
+우선순위와 완료 조건은 [개발 로드맵](../development-plan.md) 및 각 에픽 문서에서 관리합니다.
