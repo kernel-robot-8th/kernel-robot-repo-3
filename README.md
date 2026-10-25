@@ -12,9 +12,10 @@
 
 ## 문서
 
+- [개발 원칙과 에이전트 지침](AGENTS.md)
 - [문서 목차](docs/README.md)
 - [시스템 명세](docs/spec/system-spec.md) — 완성 목표와 필수 제어 규칙
 - [목표 데이터 흐름](docs/spec/data-flow.md) — 목표 시스템 구성과 이벤트 흐름
 - [현재 구현 현황](docs/implementation/current-state.md) — 코드가 현재 제공하는 API와 한계
-- [개발 계획](docs/development-plan.md) — 남은 작업 순서
+- [개발 로드맵](docs/development-plan.md) — 에픽별 목적과 진행 순서
 - [원본 제어 흐름 요구사항](robot-control-flow.md)

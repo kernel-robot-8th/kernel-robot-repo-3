@@ -12,6 +12,8 @@
 
 - [구현 현황](implementation/current-state.md): API, 코드 위치, 구현된 기능과 미구현 기능
 - [실행 방법](implementation/runbook.md): 모의 서버와 팔 텔레오퍼레이션 실행
-- [개발 계획](development-plan.md): 완료된 단계와 다음 작업 순서
+- [개발 로드맵](development-plan.md): 에픽 순서, 목적, 의존성 및 전체 진행 상황
+- [에픽 1 — 작업·단계 이력](epics/epic-01-task-history.md): 첫 구현 묶음의 세부 작업과 확인 기준
+- [에픽 2 — 모의 정상 작업 흐름](epics/epic-02-mock-happy-path.md): mock 기반 실행 흐름의 세부 작업과 확인 기준
 
 **읽는 기준:** 목표 동작은 시스템 명세를, 현재 동작은 구현 현황과 실행 방법을 기준으로 확인합니다. 둘이 다르면 현재 구현 현황이 실제 코드 상태를 설명합니다.
