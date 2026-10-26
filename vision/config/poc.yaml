@@ -1,0 +1,52 @@
+# 카메라 → OMX 좌표 PoC 설정. 길이 단위는 mm.
+# 실측 전 값이다. 바닥에 마커를 붙이고 자로 잰 뒤 고친다.
+
+# 상단 고정 카메라. 실행할 때 --camera 로 고른다 (기본: 첫 번째)
+# 해상도를 바꾸면 intrinsic(calib_intrinsics.py)부터 다시 보정한다
+# device 번호는 `v4l2-ctl --list-devices` 로 확인한다. 한 카메라가 /dev/video 두 개를 잡는 경우가 많다
+cameras:
+  top_a: {device: 4, width: 1280, height: 720}   # USB HCAM0
+  top_b: {device: 6, width: 1280, height: 720}   # 미연결. 꽂은 뒤 번호 확인
+  top_c: {device: 8, width: 1280, height: 720}   # 미연결. 꽂은 뒤 번호 확인
+
+aruco:
+  dictionary: DICT_4X4_50
+
+# 기준 마커(ID 0~9) 중심의 바닥 좌표. 원점 = ID0 중심, x는 ID0→ID1, y는 위에서 봤을 때 x에서 반시계 90°
+# 카메라마다 4개 이상 보여야 보정된다. 화면 가장자리 쪽에 넓게 퍼뜨릴수록 정확하다.
+# homography는 이 마커들이 놓인 평면에서만 정확하다. Pinky 마커 높이에 맞춰 붙인다.
+reference_markers_mm:
+  0: [0, 0]
+  1: [300, 0]
+  2: [300, 200]
+  3: [0, 200]
+
+# 검증 마커: 보정에 쓰지 않고 위치만 실측해 둔 마커(ID 0~9 중 기준 마커와 겹치지 않게).
+# 화면에 실제 오차가 나온다. 완료 기준: 카메라마다 ±5 mm
+check_markers_mm:
+  4: [150, 100]
+
+# 기준 마커 실시간 잔차가 이보다 크면 화면에 경고한다 (카메라가 밀렸거나 마커가 떨어졌을 때)
+drift_warn_mm: 5
+
+# OMX base의 바닥 좌표와 방향
+omx:
+  frame_id: omx_base_link
+  origin_on_table_mm: [150, -60]   # OMX 바닥 중심이 놓인 바닥 좌표
+  yaw_deg: 90                       # 바닥 x축에서 OMX 정면(+X)까지 회전각
+  reach_mm: 250                     # 이보다 멀면 좌표를 보내지 않음
+
+# 물체 마커 ID별 설정. grasp_z_mm는 OMX base 바닥 기준 집기 높이
+objects:
+  10: {name: sample_box, grasp_z_mm: 30}
+  11: {name: sample_cup, grasp_z_mm: 45}
+
+# YOLO 물체 검출 (yolo_debug.py). 가중치 models/best.pt는 git에 함께 올린다
+# 클래스: strawberry, car, ball. best_top_a.pt = best.pt를 top_a 촬영으로 추가 학습한 것 (README "YOLO 모델")
+yolo:
+  model_path: models/best_top_a.pt
+  min_confidence: 0.5   # 이보다 낮은 검출은 버린다. 실제 영상에서 확인하고 정한다
+  imgsz: 640            # 학습할 때 쓴 크기
+
+calibration_dir: calib
+recordings_dir: recordings
