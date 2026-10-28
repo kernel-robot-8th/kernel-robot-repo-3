@@ -17,14 +17,13 @@ python -m pip install -r requirements.txt
 
 ## 팔 텔레오퍼레이션 제어 켜기
 
-먼저 `omx_follower`와 `omx_leader` 지원 코드가 포함된 LeRobot 환경을 활성화한 뒤 실행합니다.
+저장소 루트에서 실행합니다. 런처는 현재 셸의 `PATH`를 먼저 확인하고, 없으면 기본 위치 `~/Desktop/lerobot/venv/bin/lerobot-teleoperate`를 자동으로 찾습니다. 관제용 `.venv`가 있으면 그 Python도 자동으로 사용합니다.
 
 ```bash
-source /경로/lerobot/venv/bin/activate
 ./run-control-station.sh --arm
 ```
 
-또는 실행 파일 경로를 직접 지정할 수 있습니다.
+LeRobot이 기본 위치가 아닌 곳에 설치된 경우에만 실행 파일 경로를 지정하면 됩니다.
 
 ```bash
 CONTROL_STATION_ARM_PROGRAM=/경로/lerobot-teleoperate ./run-control-station.sh --arm

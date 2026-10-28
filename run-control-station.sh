@@ -30,8 +30,11 @@ if (( ARM_MODE )); then
   if [[ -z "${TELEOP_BIN}" ]]; then
     TELEOP_BIN="$(command -v lerobot-teleoperate || true)"
   fi
+  if [[ -z "${TELEOP_BIN}" && -x "${HOME}/Desktop/lerobot/venv/bin/lerobot-teleoperate" ]]; then
+    TELEOP_BIN="${HOME}/Desktop/lerobot/venv/bin/lerobot-teleoperate"
+  fi
   if [[ -z "${TELEOP_BIN}" || ! -x "${TELEOP_BIN}" ]]; then
-    printf 'lerobot-teleoperate was not found in PATH. Activate its environment first,\n' >&2
+    printf 'lerobot-teleoperate was not found. Activate its environment first,\n' >&2
     printf 'or set CONTROL_STATION_ARM_PROGRAM to its executable path.\n' >&2
     exit 1
   fi
@@ -43,4 +46,11 @@ fi
 
 cd "${REPO_DIR}"
 export PYTHONPATH="${REPO_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
-exec python3 -m control_station.app
+PYTHON_BIN="${CONTROL_STATION_PYTHON:-}"
+if [[ -z "${PYTHON_BIN}" && -x "${REPO_DIR}/.venv/bin/python" ]]; then
+  PYTHON_BIN="${REPO_DIR}/.venv/bin/python"
+fi
+if [[ -z "${PYTHON_BIN}" ]]; then
+  PYTHON_BIN="$(command -v python3)"
+fi
+exec "${PYTHON_BIN}" -m control_station.app
