@@ -3,6 +3,9 @@ set -euo pipefail
 
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ARM_MODE=0
+SESSION_ID="$(date +%Y%m%d-%H%M%S)-$$"
+LOG_DIR="${REPO_DIR}/.control-station/logs"
+SESSION_LOG="${LOG_DIR}/session-${SESSION_ID}.log"
 
 usage() {
   printf 'Usage: %s [--arm]\n' "$0"
@@ -16,6 +19,11 @@ case "${1:-}" in
   -h|--help) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
 esac
+
+mkdir -p "${LOG_DIR}"
+export CONTROL_STATION_ARM_LOG="${CONTROL_STATION_ARM_LOG:-${LOG_DIR}/arm-${SESSION_ID}.log}"
+exec > >(tee -a "${SESSION_LOG}") 2>&1
+printf 'Session log: %s\n' "${SESSION_LOG}"
 
 if (( ARM_MODE )); then
   TELEOP_BIN="${CONTROL_STATION_ARM_PROGRAM:-}"

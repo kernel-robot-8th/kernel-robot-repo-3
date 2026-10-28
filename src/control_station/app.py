@@ -36,7 +36,7 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
         return self.server  # type: ignore[return-value]
 
     def log_message(self, format: str, *args: object) -> None:
-        pass
+        super().log_message(format, *args)
 
     def _json(self, status: int, body: dict[str, Any]) -> None:
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -66,6 +66,16 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
             self._json(200, {"arm": self.app.arm_supervisor.snapshot()})
         elif route == "/api/tasks":
             self._json(200, {"tasks": self.app.task_store.list_tasks()})
+        elif route.startswith("/api/tasks/"):
+            task_id = route.removeprefix("/api/tasks/")
+            if not task_id or "/" in task_id:
+                self._json(404, {"error": "Task not found"})
+                return
+            task = self.app.task_store.get_task(task_id)
+            if task is None:
+                self._json(404, {"error": "Task not found"})
+            else:
+                self._json(200, {"task": task})
         else:
             if route == "/":
                 self.path = "/index.html"

@@ -13,6 +13,8 @@ python -m pip install -r requirements.txt
 
 브라우저에서 <http://127.0.0.1:8000>을 엽니다. 기본 모드에서는 로봇 제어를 시작하지 않습니다. 서버를 종료하려면 실행 중인 터미널에서 `Ctrl+C`를 누릅니다.
 
+런처로 시작할 때마다 `.control-station/logs/session-<시각>-<프로세스ID>.log`에 관제 서버 출력과 HTTP 요청 로그를 저장하고, 터미널에도 함께 표시합니다. `--arm` 실행의 LeRobot 출력은 같은 세션 ID를 가진 `arm-<시각>-<프로세스ID>.log`에 따로 저장합니다. 이 폴더는 Git에서 제외됩니다.
+
 ## 팔 텔레오퍼레이션 제어 켜기
 
 먼저 `omx_follower`와 `omx_leader` 지원 코드가 포함된 LeRobot 환경을 활성화한 뒤 실행합니다.
@@ -30,7 +32,9 @@ CONTROL_STATION_ARM_PROGRAM=/경로/lerobot-teleoperate ./run-control-station.sh
 
 그 다음 화면의 **텔레오퍼레이션 시작** 버튼을 누르면 팔 프로세스를 시작합니다. `--arm`은 시작 API를 활성화할 뿐 서버 실행만으로 팔을 움직이지 않습니다. 종료 버튼은 프로세스에 `SIGINT`를 보냅니다.
 
-기본 장치 설정은 follower `/dev/omx_follower`, leader `/dev/omx_leader`입니다. LeRobot은 카메라를 열거나 별도 Rerun 화면을 띄우지 않습니다. `--arm` 모드에서 관제 서버가 Joint Camera `/dev/video4`와 Head Camera `/dev/v4l/by-id/usb-Jieli_Technology_USB_Composite_Device-video-index0`를 열어 MJPEG 영상으로 표시합니다. 각 경로는 `CONTROL_STATION_JOINT_CAMERA`, `CONTROL_STATION_HEAD_CAMERA`로 바꿀 수 있습니다. 환경 변수 `CONTROL_STATION_FOLLOWER_PORT`, `CONTROL_STATION_LEADER_PORT`로 모터 포트를 바꿀 수 있습니다. 로그는 `data/arm-teleop.log`에 쌓입니다.
+카메라 캡처와 JPEG 인코딩은 관제 서버가 담당하므로 `opencv-python-headless`도 관제 가상환경에 설치되어야 합니다. `requirements.txt` 설치 후 `--arm`으로 실행하면 됩니다. LeRobot 가상환경에만 OpenCV가 설치된 경우 관제 서버에서는 사용할 수 없습니다.
+
+기본 장치 설정은 follower `/dev/omx_follower`, leader `/dev/omx_leader`입니다. LeRobot은 카메라를 열거나 별도 Rerun 화면을 띄우지 않습니다. `--arm` 모드에서 관제 서버가 Joint Camera `/dev/video4`와 Head Camera `/dev/v4l/by-id/usb-Jieli_Technology_USB_Composite_Device-video-index0`를 열어 MJPEG 영상으로 표시합니다. 각 경로는 `CONTROL_STATION_JOINT_CAMERA`, `CONTROL_STATION_HEAD_CAMERA`로 바꿀 수 있습니다. 환경 변수 `CONTROL_STATION_FOLLOWER_PORT`, `CONTROL_STATION_LEADER_PORT`로 모터 포트를 바꿀 수 있습니다. 런처에서 시작한 팔 프로세스 로그는 `.control-station/logs/arm-<세션ID>.log`에 저장하며 `CONTROL_STATION_ARM_LOG`로 경로를 지정할 수 있습니다.
 
 장치 조사에서 `/dev/video4`는 Innomaker 영상 캡처, `/dev/video5`는 해당 장치의 메타데이터 인터페이스로 확인됐습니다. 별도로 `HCAM0` 장치가 `/dev/video6`으로 나타났고 캡처 프레임을 읽었습니다. 안정적인 by-id 경로를 Head Camera 기본값으로 사용합니다. 화면의 Head Camera 피드가 로봇 머리 위치와 맞는지 확인하고, 다르면 환경 변수로 장치 경로를 조정하세요.
 
@@ -43,8 +47,7 @@ Nav2 action server discovery만 확인할 때 사용합니다. 이동 목표는 
 ```bash
 source /opt/ros/jazzy/setup.bash
 source /경로/ros2_워크스페이스/install/setup.bash
-CONTROL_STATION_MODE=ros2 CONTROL_STATION_MOBILE_DOMAIN=15 \
-  PYTHONPATH=src python3 -m control_station.app
+CONTROL_STATION_MODE=ros2 CONTROL_STATION_MOBILE_DOMAIN=15 ./run-control-station.sh
 ```
 
 domain을 지정하지 않으면 `ROS_DOMAIN_ID`, 없으면 `0`을 사용합니다.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -106,11 +107,26 @@ class OpenCVArmCameraStreamManager:
             with feed.lock:
                 feed.connection_state = CameraConnectionState.DISCONNECTED
                 feed.stream_state = CameraStreamState.ERROR
-                feed.error_message = "OpenCV 미설치: LeRobot 가상환경에서 실행하세요"
+                feed.error_message = "OpenCV 미설치: 관제 서버 가상환경에서 requirements.txt를 설치하세요"
             return
 
         while not self._closed.is_set():
-            capture = cv2.VideoCapture(feed.device, cv2.CAP_V4L2)
+            device = feed.device
+            if not device:
+                return
+            resolved_device = os.path.realpath(device)
+            video_match = re.fullmatch(r"/dev/video(\d+)", resolved_device)
+            if not os.path.exists(resolved_device):
+                with feed.lock:
+                    feed.connection_state = CameraConnectionState.DISCONNECTED
+                    feed.stream_state = CameraStreamState.ERROR
+                    feed.error_message = f"카메라 장치 경로가 없습니다: {device}"
+                self._closed.wait(2)
+                continue
+
+            # OpenCV's V4L2 backend expects a camera index, not a device-name string.
+            source: int | str = int(video_match.group(1)) if video_match else device
+            capture = cv2.VideoCapture(source, cv2.CAP_V4L2)
             if not capture.isOpened():
                 capture.release()
                 with feed.lock:
