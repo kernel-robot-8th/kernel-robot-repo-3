@@ -6,12 +6,34 @@ const armState = document.querySelector('#armState');
 const armDetail = document.querySelector('#armDetail');
 const armStart = document.querySelector('#armStart');
 const armStop = document.querySelector('#armStop');
+const coordinateTargetForm = document.querySelector('#coordinateTargetForm');
+const coordinateTargetMessage = document.querySelector('#coordinateTargetMessage');
+const coordinateTargetResult = document.querySelector('#coordinateTargetResult');
 const taskForm = document.querySelector('#taskForm');
 const taskList = document.querySelector('#taskList');
 const taskDetail = document.querySelector('#taskDetail');
 const taskCount = document.querySelector('#taskCount');
 const taskMessage = document.querySelector('#taskMessage');
+const viewTitle = document.querySelector('#viewTitle');
+const navItems = [...document.querySelectorAll('.nav-item[data-view]')];
+const views = [...document.querySelectorAll('.view[id^="view-"]')];
 let selectedTaskId = null;
+
+const viewNames = { overview: '현황', manual: '수동 조작', tasks: '작업 이력', api: 'API' };
+
+navItems.forEach((item) => {
+  item.addEventListener('click', () => {
+    const selectedView = item.dataset.view;
+    views.forEach((view) => { view.hidden = view.id !== `view-${selectedView}`; });
+    navItems.forEach((navItem) => {
+      const active = navItem === item;
+      navItem.classList.toggle('active', active);
+      if (active) navItem.setAttribute('aria-current', 'page');
+      else navItem.removeAttribute('aria-current');
+    });
+    viewTitle.textContent = viewNames[selectedView] || '현황';
+  });
+});
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -110,6 +132,39 @@ async function sendArmAction(action) {
 
 armStart.addEventListener('click', () => sendArmAction('start'));
 armStop.addEventListener('click', () => sendArmAction('stop'));
+
+coordinateTargetForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = coordinateTargetForm.querySelector('button');
+  const formData = new FormData(coordinateTargetForm);
+  button.disabled = true;
+  coordinateTargetMessage.textContent = '';
+  coordinateTargetResult.hidden = true;
+  try {
+    const response = await fetch('/api/arm/coordinate-target-drafts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        frame_id: formData.get('frame_id'),
+        unit: formData.get('unit'),
+        position: {
+          x: Number(formData.get('x')),
+          y: Number(formData.get('y')),
+          z: Number(formData.get('z')),
+        },
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || '좌표 초안을 저장하지 못했습니다.');
+    coordinateTargetMessage.textContent = `미실행 초안 저장 완료 · ${result.draft.file}`;
+    coordinateTargetResult.textContent = JSON.stringify(result.draft, null, 2);
+    coordinateTargetResult.hidden = false;
+  } catch (error) {
+    coordinateTargetMessage.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
 
 const taskStatusLabels = {
   PENDING: '대기', VALIDATING: '검증 중', RUNNING: '실행 중',

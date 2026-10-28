@@ -12,6 +12,8 @@
 ## 현재 코드
 
 - [구현 현황](implementation/current-state.md): API, 코드 위치, 구현된 기능과 미구현 기능
+- [좌표 목표 초안](implementation/coordinate-target-draft.md): 관제 입력을 미실행 JSON 초안으로 저장하는 임시 기능
+- [OMX 관절 목표 파일 형식](implementation/omx-joint-pose-format.md): 장치에 연결하지 않는 첫 관절 목표 입력 계약 및 검사 방법
 - [실행 방법](implementation/runbook.md): 모의 서버와 팔 텔레오퍼레이션 실행
 - [개발 로드맵](development-plan.md): 에픽 순서, 목적, 의존성 및 전체 진행 상황
 - [에픽 1 — 작업·단계 이력](epics/epic-01-task-history.md): 첫 구현 묶음의 세부 작업과 확인 기준
