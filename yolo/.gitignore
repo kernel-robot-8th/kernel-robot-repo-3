@@ -1,0 +1,6 @@
+# 데이터셋·학습 결과·테스트 결과 사진은 용량이 커서 git에 넣지 않는다.
+dataset*/
+runs/
+test_results/
+*.pt
+camera_frames/
