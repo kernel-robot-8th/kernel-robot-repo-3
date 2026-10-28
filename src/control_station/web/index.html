@@ -33,6 +33,21 @@
       </div>
     </section>
 
+    <section aria-labelledby="tasks-title">
+      <div class="section-heading"><h2 id="tasks-title">작업 이력</h2><span id="taskCount" class="updated">불러오는 중</span></div>
+      <form id="taskForm" class="task-form">
+        <label>목적지<input name="destination" maxlength="40" required placeholder="예: 작업대 A"></label>
+        <label>팔 작업<input name="arm_job" maxlength="120" required placeholder="예: 부품 옮기기"></label>
+        <button type="submit">작업 등록</button>
+      </form>
+      <p id="taskMessage" class="note" role="status"></p>
+      <div class="task-layout">
+        <div id="taskList" class="task-list"><p class="loading">작업을 불러오는 중…</p></div>
+        <article id="taskDetail" class="task-detail"><p class="loading">작업을 선택하면 단계와 생성 이력을 볼 수 있습니다.</p></article>
+      </div>
+      <p class="note">작업 등록은 이력만 저장하며 로봇 명령을 보내지 않습니다.</p>
+    </section>
+
     <section aria-labelledby="cameras-title">
       <div class="section-heading"><h2 id="cameras-title">팔 로봇 카메라</h2><span class="updated">2대</span></div>
       <div id="cameraGrid" class="camera-grid"><p class="loading">상태를 불러오는 중…</p></div>
@@ -50,6 +65,7 @@
         <div><dt>POST</dt><dd><code>/api/arm/start</code> 텔레오퍼레이션 시작</dd></div>
         <div><dt>POST</dt><dd><code>/api/arm/stop</code> 종료 요청</dd></div>
         <div><dt>GET</dt><dd><code>/api/tasks</code> 작업 목록</dd></div>
+        <div><dt>GET</dt><dd><code>/api/tasks/{task_id}</code> 작업 상세·단계·이벤트</dd></div>
         <div><dt>POST</dt><dd><code>/api/tasks</code> 작업 등록</dd></div>
       </dl>
       <p class="note">작업 등록은 저장만 합니다. 작업 오케스트레이션과 작업별 완료 신호는 아직 연결되지 않았습니다.</p>

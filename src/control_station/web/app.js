@@ -6,6 +6,12 @@ const armState = document.querySelector('#armState');
 const armDetail = document.querySelector('#armDetail');
 const armStart = document.querySelector('#armStart');
 const armStop = document.querySelector('#armStop');
+const taskForm = document.querySelector('#taskForm');
+const taskList = document.querySelector('#taskList');
+const taskDetail = document.querySelector('#taskDetail');
+const taskCount = document.querySelector('#taskCount');
+const taskMessage = document.querySelector('#taskMessage');
+let selectedTaskId = null;
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -105,6 +111,92 @@ async function sendArmAction(action) {
 armStart.addEventListener('click', () => sendArmAction('start'));
 armStop.addEventListener('click', () => sendArmAction('stop'));
 
+const taskStatusLabels = {
+  PENDING: '대기', VALIDATING: '검증 중', RUNNING: '실행 중',
+  SUCCEEDED: '성공', FAILED: '실패', CANCELING: '취소 중',
+  CANCELED: '취소됨', NEEDS_INTERVENTION: '확인 필요',
+};
+const stepLabels = {
+  VALIDATE_ROBOTS: '로봇 상태 확인', NAVIGATE_TO_DESTINATION: '목적지로 이동',
+  VERIFY_ARRIVAL: '도착 확인', EXECUTE_ARM_TASK: '팔 작업',
+  VERIFY_ARM_RESULT: '팔 작업 결과 확인', FINALIZE_TASK: '작업 마무리',
+};
+
+function renderTasks(tasks) {
+  taskCount.textContent = `${tasks.length}개 작업`;
+  if (!tasks.length) {
+    taskList.innerHTML = '<p class="loading">등록된 작업이 없습니다.</p>';
+    selectedTaskId = null;
+    taskDetail.innerHTML = '<p class="loading">작업을 등록하면 단계와 생성 이력을 볼 수 있습니다.</p>';
+    return;
+  }
+  if (!tasks.some((task) => task.id === selectedTaskId)) selectedTaskId = tasks[0].id;
+  taskList.innerHTML = tasks.map((task) => `
+    <button type="button" class="task-item${task.id === selectedTaskId ? ' selected' : ''}" data-task-id="${escapeHtml(task.id)}">
+      <span><strong>${escapeHtml(task.destination)}</strong><small>${escapeHtml(task.id)}</small></span>
+      <span class="task-status">${escapeHtml(taskStatusLabels[task.status] || task.status)}</span>
+    </button>`).join('');
+  taskList.querySelectorAll('[data-task-id]').forEach((button) => {
+    button.addEventListener('click', () => {
+      selectedTaskId = button.dataset.taskId;
+      refreshTasks();
+    });
+  });
+}
+
+function renderTaskDetail(task) {
+  const steps = task.steps || [];
+  const events = task.events || [];
+  taskDetail.innerHTML = `
+    <header class="task-detail-head"><div><h3>${escapeHtml(task.destination)}</h3><small>${escapeHtml(task.id)}</small></div><span class="task-status">${escapeHtml(taskStatusLabels[task.status] || task.status)}</span></header>
+    <p class="task-arm-job">팔 작업: ${escapeHtml(task.arm_job)}</p>
+    <h4>단계</h4>
+    <ol class="step-list">${steps.map((step) => `<li><span>${escapeHtml(stepLabels[step.step_type] || step.step_type)}</span><strong>${escapeHtml(taskStatusLabels[step.status] || step.status)}</strong></li>`).join('')}</ol>
+    <h4>이벤트</h4>
+    <ol class="event-list">${events.map((event) => `<li><time>${escapeHtml(event.received_at)}</time><span>${escapeHtml(event.event_type)}</span></li>`).join('') || '<li class="empty-history">기록된 이벤트가 없습니다.</li>'}</ol>`;
+}
+
+async function refreshTasks() {
+  try {
+    const response = await fetch('/api/tasks', { cache: 'no-store' });
+    if (!response.ok) throw new Error('작업 목록을 불러오지 못했습니다.');
+    const { tasks } = await response.json();
+    renderTasks(tasks);
+    if (!selectedTaskId) return;
+    const detailResponse = await fetch(`/api/tasks/${encodeURIComponent(selectedTaskId)}`, { cache: 'no-store' });
+    if (!detailResponse.ok) throw new Error('작업 상세를 불러오지 못했습니다.');
+    const { task } = await detailResponse.json();
+    renderTaskDetail(task);
+  } catch (error) {
+    taskMessage.textContent = error.message;
+  }
+}
+
+taskForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const formData = new FormData(taskForm);
+  const button = taskForm.querySelector('button');
+  button.disabled = true;
+  taskMessage.textContent = '';
+  try {
+    const response = await fetch('/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ destination: formData.get('destination'), arm_job: formData.get('arm_job') }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || '작업 등록에 실패했습니다.');
+    selectedTaskId = result.task.id;
+    taskForm.reset();
+    taskMessage.textContent = '작업 이력을 저장했습니다. 로봇 명령은 전송되지 않았습니다.';
+    await refreshTasks();
+  } catch (error) {
+    taskMessage.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+
 async function refresh() {
   try {
     const [healthResponse, robotsResponse, camerasResponse, armResponse] = await Promise.all([
@@ -133,4 +225,6 @@ async function refresh() {
 }
 
 refresh();
+refreshTasks();
 window.setInterval(refresh, 3000);
+window.setInterval(refreshTasks, 3000);
