@@ -32,6 +32,8 @@ mock adapter에 거절, 실패, timeout, 연결 단절, 결과 불명 상황을 
 
 Nav2의 로봇 측 action server를 관제 이동 어댑터의 action client로 사용합니다. 관제 자체의 ROS action server는 다른 ROS 2 클라이언트가 관제 작업 전체를 호출해야 한다는 요구가 확인될 때만 별도 검토합니다. 모바일 로봇의 ROS 2 domain, Nav2 action 계약, 필요한 lifecycle readiness 진단 방법, 팔 장치의 READY와 작업 완료 회신 방식을 확정한 뒤 mock과 같은 명령·이벤트 계약에 실제 adapter를 연결합니다. 장치 인터페이스 정보가 없는 동안에는 mock 흐름을 계속할 수 있습니다.
 
+OMX 팔의 관절 목표 재생과 말단 좌표 제어를 검토하는 별도 [단계별 계획](plans/omx-coordinate-control.md)이 있습니다. OMX의 모델·좌표계·한계 및 LeRobot 지원을 확인하기 전까지 XYZ 제어 구현이나 실물 시험을 시작하지 않습니다.
+
 ### 에픽 5 — 카메라 통합 마무리
 
 현재 `/dev/video4` Joint Camera 스트림과 `HCAM0` (`/dev/video6`) 단독 프레임 수신은 확인했습니다. 남은 작업은 두 카메라 동시 표시, 장착 위치 확인, 각 스트림의 주소·프로토콜·인코딩·해상도·FPS 확인과 측정값에 기반한 stale 임계값 결정입니다. 한 피드 장애가 다른 피드나 로봇 상태에 영향을 주지 않는지 확인합니다.
