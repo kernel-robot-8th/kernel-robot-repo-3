@@ -53,6 +53,7 @@ function renderCameras(cameras) {
           <div class="camera-detail"><span>프레임 상태</span><strong data-field="freshness"></strong></div>
           <div class="camera-detail"><span>마지막 프레임</span><strong data-field="last-frame"></strong></div>
           <div class="camera-detail"><span>프레임률</span><strong data-field="frame-rate"></strong></div>
+          <div class="camera-detail" data-field="detections-row" hidden><span>YOLO 검출</span><strong data-field="detections"></strong></div>
         </div>
         <p class="note" data-field="error"></p>
       </article>`).join('');
@@ -66,6 +67,11 @@ function renderCameras(cameras) {
     card.querySelector('[data-field="last-frame"]').textContent = camera.last_frame_at || '없음';
     card.querySelector('[data-field="frame-rate"]').textContent = camera.frame_rate == null ? '—' : `${camera.frame_rate} fps`;
     card.querySelector('[data-field="error"]').textContent = camera.error_message || '';
+    const detectorLabel = { loading: '모델 불러오는 중', error: '모델 오류' };
+    card.querySelector('[data-field="detections-row"]').hidden = !camera.detector_state;
+    card.querySelector('[data-field="detections"]').textContent = camera.detector_state === 'ready'
+      ? (camera.detections.map((item) => `${item.class_name} ${Math.round(item.confidence * 100)}%`).join(', ') || '없음')
+      : (detectorLabel[camera.detector_state] || '');
     const preview = card.querySelector('[data-field="preview"]');
     if (camera.stream_url && !preview.querySelector('img')) {
       const image = document.createElement('img');

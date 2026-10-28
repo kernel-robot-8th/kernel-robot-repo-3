@@ -39,8 +39,53 @@ class _CameraFeed:
     frame_times: list[float] = field(default_factory=list)
     error_message: str | None = None
     sequence: int = 0
+    detector: "_YoloDetector | None" = None
+    detections: list[dict[str, object]] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
     thread: threading.Thread | None = None
+
+
+class _YoloDetector:
+    """Draw YOLO detections on camera frames for display only.
+
+    Results are shown on the dashboard and are not used as a robot-control signal.
+    """
+
+    def __init__(self, weights: str) -> None:
+        self.weights = weights
+        self.confidence = float(os.environ.get("CONTROL_STATION_HEAD_YOLO_CONF", "0.25"))
+        self.device = os.environ.get("CONTROL_STATION_HEAD_YOLO_DEVICE", "").strip() or None
+        self.state = "loading"
+        self.error_message: str | None = None
+        self._model = None
+
+    def load(self) -> bool:
+        if not os.path.isfile(self.weights):
+            self.state, self.error_message = "error", f"YOLO 가중치 파일이 없습니다: {self.weights}"
+            return False
+        try:
+            from ultralytics import YOLO
+        except ImportError:
+            self.state = "error"
+            self.error_message = "ultralytics 미설치: requirements-vision.txt를 설치하세요"
+            return False
+        self._model = YOLO(self.weights)
+        self.state = "ready"
+        return True
+
+    def annotate(self, image):  # type: ignore[no-untyped-def]
+        result = self._model.predict(
+            source=image, conf=self.confidence, imgsz=640, device=self.device, verbose=False
+        )[0]
+        detections = [
+            {
+                "class_name": result.names[int(box.cls.item())],
+                "confidence": round(float(box.conf.item()), 3),
+                "center_px": [round(value, 1) for value in box.xywh[0][:2].tolist()],
+            }
+            for box in result.boxes
+        ]
+        return result.plot(), detections
 
 
 class UnconfiguredArmCameraStreamManager:
@@ -76,7 +121,7 @@ class UnconfiguredArmCameraStreamManager:
 class OpenCVArmCameraStreamManager:
     """Own configured V4L2 devices once and expose their latest JPEG frames."""
 
-    def __init__(self) -> None:
+    def __init__(self, joint_enabled: bool = True) -> None:
         joint_device = os.environ.get(
             "CONTROL_STATION_JOINT_CAMERA",
             os.environ.get("CONTROL_STATION_ARM_CAMERA", "/dev/video4"),
@@ -85,9 +130,20 @@ class OpenCVArmCameraStreamManager:
             "CONTROL_STATION_HEAD_CAMERA",
             "/dev/v4l/by-id/usb-Jieli_Technology_USB_Composite_Device-video-index0",
         ).strip()
+        head_weights = os.environ.get("CONTROL_STATION_HEAD_YOLO_WEIGHTS", "").strip()
+        joint_feed = _CameraFeed(
+            "joint_camera", "JOINT", (joint_device or None) if joint_enabled else None
+        )
+        if not joint_enabled:
+            joint_feed.error_message = "팔 카메라 스트림을 사용하려면 --arm 모드로 실행하세요"
         self._feeds = {
-            "head_camera": _CameraFeed("head_camera", "HEAD", head_device or None),
-            "joint_camera": _CameraFeed("joint_camera", "JOINT", joint_device or None),
+            "head_camera": _CameraFeed(
+                "head_camera",
+                "HEAD",
+                head_device or None,
+                detector=_YoloDetector(head_weights) if head_weights else None,
+            ),
+            "joint_camera": joint_feed,
         }
         self._closed = threading.Event()
         for feed in self._feeds.values():
@@ -109,6 +165,9 @@ class OpenCVArmCameraStreamManager:
                 feed.stream_state = CameraStreamState.ERROR
                 feed.error_message = "OpenCV 미설치: 관제 서버 가상환경에서 requirements.txt를 설치하세요"
             return
+
+        if feed.detector is not None:
+            feed.detector.load()
 
         while not self._closed.is_set():
             device = feed.device
@@ -155,12 +214,20 @@ class OpenCVArmCameraStreamManager:
                         self._closed.wait(0.05)
                         continue
                     failed_reads = 0
+                    detections: list[dict[str, object]] = []
+                    detector = feed.detector
+                    if detector is not None and detector.state == "ready":
+                        try:
+                            image, detections = detector.annotate(image)
+                        except Exception as exc:  # keep streaming raw frames if inference fails
+                            detector.state, detector.error_message = "error", f"YOLO 추론 실패: {exc}"
                     encoded, jpeg = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 80])
                     if not encoded:
                         continue
                     now = time.monotonic()
                     with feed.lock:
                         feed.frame = jpeg.tobytes()
+                        feed.detections = detections
                         feed.last_frame_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
                         feed.last_frame_monotonic = now
                         feed.frame_times.append(now)
@@ -207,7 +274,13 @@ class OpenCVArmCameraStreamManager:
                         frame_freshness=freshness,
                         last_frame_at=feed.last_frame_at,
                         frame_rate=frame_rate,
-                        error_message=feed.error_message or (None if configured else "카메라 장치 경로 미설정"),
+                        error_message=(
+                            feed.error_message
+                            or (feed.detector.error_message if feed.detector else None)
+                            or (None if configured else "카메라 장치 경로 미설정")
+                        ),
+                        detector_state=feed.detector.state if feed.detector else None,
+                        detections=list(feed.detections),
                         stream_url=(
                             f"/streams/{feed.camera_id}.mjpg"
                             if configured and feed.frame is not None

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 
 
@@ -65,6 +65,8 @@ class CameraSnapshot:
     frame_rate: float | None = None
     error_message: str | None = None
     stream_url: str | None = None
+    detector_state: str | None = None
+    detections: list[dict[str, object]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)

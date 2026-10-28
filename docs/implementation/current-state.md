@@ -9,7 +9,7 @@
 | `src/control_station/app.py` | localhost HTTP 서버, API 라우팅 |
 | `src/control_station/robot_adapters.py` | 모의 상태와 Nav2 action server discovery |
 | `src/control_station/arm_supervisor.py` | 고정 LeRobot 프로세스 시작·종료·상태 |
-| `src/control_station/camera_adapters.py` | `--arm` 모드에서 OpenCV 카메라 단독 점유 및 MJPEG 프레임 제공 |
+| `src/control_station/camera_adapters.py` | `--arm` 모드에서 OpenCV 카메라 단독 점유 및 MJPEG 프레임 제공. YOLO 가중치를 지정하면 Head Camera 프레임에 검출 박스를 그려 표시 |
 | `src/control_station/models.py` | 작업·단계 상태 어휘 및 카메라 스냅샷 |
 | `src/control_station/database.py` | SQLAlchemy ORM 모델, SQLite 엔진과 세션 설정 |
 | `src/control_station/store.py` | ORM 세션을 통한 작업·단계·이벤트 생성·조회 |
@@ -22,7 +22,7 @@
 |---|---|---|
 | GET | `/api/health` | 서버 모드 반환 |
 | GET | `/api/robots` | mock 상태 또는 ROS 2 Nav2 discovery 반환 |
-| GET | `/api/cameras` | Head·Joint 카메라 상태 및 설정된 스트림 주소 반환 |
+| GET | `/api/cameras` | Head·Joint 카메라 상태, 설정된 스트림 주소, Head Camera YOLO 검출 결과(`detector_state`, `detections`) 반환 |
 | GET | `/api/arm/status` | 팔 텔레오퍼레이션 프로세스 상태 반환 |
 | POST | `/api/arm/start` | 고정 프로필 프로세스 시작 요청 |
 | POST | `/api/arm/stop` | 프로세스 그룹에 `SIGINT` 종료 요청 |
@@ -38,6 +38,7 @@
 - ROS 2 모드는 Nav2 `NavigateToPose` 액션 서버를 찾는 것까지만 합니다. 주행 목표를 보내지 않습니다.
 - 팔 제어는 기본 비활성화입니다. 활성화 시 LeRobot CLI 프로세스의 시작·생존·종료를 관리합니다.
 - LeRobot CLI의 프로세스 생존은 장치 준비 완료나 작업 완료 신호가 아닙니다. 별도의 작업 완료 이벤트는 아직 없습니다.
+- Head Camera YOLO 검출은 화면 표시와 API 조회만 합니다. 로봇 명령이나 작업 상태에 연결되어 있지 않습니다.
 - 텔레오퍼레이션 시작은 저장된 관제 작업을 실행하지 않습니다. `/api/tasks`는 계속 `PENDING`만 저장합니다.
 - `--arm` 모드에서는 관제 서버가 기본 `/dev/video4`를 단독으로 열어 Joint Camera 슬롯에 MJPEG로 보냅니다. LeRobot에는 카메라 설정을 전달하지 않고 Rerun 표시도 끕니다.
 - `/dev/video4`는 Joint Camera, HCAM0의 by-id 경로는 Head Camera로 설정했습니다. 두 경로 모두 영상 캡처 장치이며 `/dev/video5`는 메타데이터 노드입니다.
