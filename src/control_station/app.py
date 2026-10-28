@@ -36,7 +36,7 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
         return self.server  # type: ignore[return-value]
 
     def log_message(self, format: str, *args: object) -> None:
-        pass
+        super().log_message(format, *args)
 
     def _json(self, status: int, body: dict[str, Any]) -> None:
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
