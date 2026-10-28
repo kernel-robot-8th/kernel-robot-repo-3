@@ -201,6 +201,7 @@ def main() -> None:
         server.server_close()
         server.camera_manager.close()
         server.arm_supervisor.close()
+        task_store.close()
         provider.close()
 
 

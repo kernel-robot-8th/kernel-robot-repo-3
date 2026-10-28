@@ -2,9 +2,12 @@
 
 ## 대시보드와 API만 실행
 
-Python 3.10 이상이 있는 저장소 복제본에서 실행합니다. 추가 Python 패키지나 별도 LeRobot 폴더가 필요하지 않습니다.
+Python 3.10 이상 환경에서 저장소 의존성을 설치한 뒤 실행합니다. 기본 모드에는 별도 LeRobot 폴더가 필요하지 않습니다.
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 ./run-control-station.sh
 ```
 

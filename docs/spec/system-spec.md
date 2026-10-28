@@ -35,7 +35,7 @@
 | 관제 UI | 사용자 입력, API 응답 | 작업 요청, 명시적 실행·취소, 로봇·카메라·작업 상태 표시 |
 | HTTP API | UI 요청 | 입력 검증, 명령 접수, 리소스 조회; 로봇 동작 완료까지 HTTP 요청을 붙잡지 않음 |
 | 작업 오케스트레이터 | task ID, 어댑터 이벤트 | 작업 선점, 순서·전이 관리, 단계 실행, 결과 기록 |
-| 이동 로봇 어댑터 | 목적지, command ID | 이동 명령 전달 및 수락·진행·최종 결과를 공통 이벤트로 변환 |
+| 이동 로봇 어댑터 | 목적지, command ID | ROS 2/Nav2 action goal 전달 및 수락·feedback·최종 결과를 공통 이벤트로 변환 |
 | 로봇팔 어댑터 | 팔 작업, command ID | 팔 작업 전달 및 수락·진행·최종 결과를 공통 이벤트로 변환 |
 | 로봇 상태 관리자 | heartbeat, 장치 상태 | 로봇별 연결·준비·실행 상태 및 마지막 갱신 시각 관리 |
 | 카메라 관리자 | 카메라 프레임과 연결 이벤트 | 카메라마다 연결·스트림·신선도 상태 관리 및 프레임 전달 |
@@ -51,7 +51,7 @@
 
 ### TaskStep
 
-필수 필드: `id`, `task_id`, `step_type`, `robot_id`, `status`. 실행한 명령에는 `command_id`를 붙이고 `started_at`, `finished_at`, 결과 또는 오류를 기록합니다. 한 작업 안에서 단계 순서를 고정해 저장합니다.
+필수 필드: `id`, `task_id`, `step_type`, `status`. 실제 로봇이 수행하는 단계는 `robot_id`를 지정하고, `VALIDATE_ROBOTS`, `FINALIZE_TASK`처럼 관제 시스템이 수행하는 단계는 `robot_id: null`로 둡니다. 실행한 명령에는 `command_id`를 붙이고 `started_at`, `finished_at`, 결과 또는 오류를 기록합니다. 한 작업 안에서 단계 순서를 고정해 저장합니다.
 
 목표 단계의 기본 순서는 다음과 같습니다.
 
@@ -194,7 +194,7 @@ NEEDS_INTERVENTION → CANCELED | FAILED | RUNNING
 | `GET` | `/api/health` | 서버 가동 및 실행 모드 조회 |
 | `GET` | `/api/robots` | 각 로봇의 연결·준비·실행 상태 조회 |
 | `GET` | `/api/cameras` | 카메라마다 연결·스트림·프레임 상태 조회 |
-| `POST` | `/api/tasks` | 입력 검증 후 `PENDING` 작업 생성; 성공은 `201 Created`; 명령은 보내지 않음 |
+| `POST` | `/api/tasks` | 입력 검증 후 `PENDING` 작업·표준 단계·`TASK_CREATED` 이벤트 생성; 성공은 `201 Created`; 명령은 보내지 않음 |
 | `GET` | `/api/tasks` | 작업 요약 목록 조회 |
 | `GET` | `/api/tasks/{task_id}` | 작업과 단계 이력 조회 |
 | `POST` | `/api/tasks/{task_id}/start` | 실행 요청 접수; `202 Accepted`와 작업 ID·현재 상태 반환 |
@@ -215,6 +215,18 @@ NEEDS_INTERVENTION → CANCELED | FAILED | RUNNING
 | `execution_state` | `IDLE`, `NAVIGATING`, `EXECUTING`, `STOPPING`, `UNKNOWN` | 현재 알려진 동작 |
 
 상태 snapshot은 `robot_id`, `last_heartbeat_at`, `active_task_id`, 선택적 오류 정보를 포함합니다. heartbeat 허용 주기와 stale 임계값은 실제 장치가 제공하는 주기를 확인해 설정합니다. Nav2 서버 discovery는 통신 상대 발견일 뿐 `READY`나 작업 성공 근거가 아닙니다.
+
+### 7.1 ROS 2/Nav2 action과 lifecycle의 역할
+
+Nav2가 로봇 쪽 action server를 제공하고 관제 백엔드의 이동 어댑터가 action client가 되는 구성을 기본으로 합니다. 관제 UI와 백엔드 사이에는 이미 HTTP API가 있으므로, 관제 자체를 감싸는 ROS 2 action server는 현재 범위에서 만들지 않습니다. 다른 ROS 2 노드가 관제 작업 전체를 ROS action으로 시작·취소해야 한다는 요구가 생기면, 동일한 오케스트레이터를 호출하는 별도 ROS 인터페이스로 검토합니다.
+
+모바일 로봇의 목적지 이동은 확인된 Nav2 action(현재 후보는 `NavigateToPose`)의 goal로 요청하고, action goal handle의 수락/거부, feedback, 최종 result를 관제 공통 이벤트로 변환합니다. ROS 2 action의 goal ID는 ROS 통신 추적에 사용하고, 관제의 `task_id`, `step_id`, `command_id`와 함께 저장해 어느 작업에서 나온 결과인지 연결합니다. ROS goal ID를 관제 명령 ID 대신 사용하지 않습니다.
+
+관제의 이동 단계는 action의 최종 성공 result와 현재 활성 명령 식별자가 일치할 때만 성공합니다. goal 수락은 실행 시작의 근거일 뿐 도착 완료가 아니며, feedback과 거리/진행률도 최종 성공을 대신하지 않습니다. 취소는 action cancel 요청을 보내고 cancel 응답만으로 정지 완료로 보지 않습니다. 최종 action 결과와 로봇 상태를 확인해 취소 결과를 기록합니다. 결과 대기 중 관제 timeout이 발생해도 action을 무조건 재전송하지 않습니다.
+
+ROS 2 lifecycle 상태는 Nav2의 `lifecycle_manager`와 실제 노드 구성을 확인할 수 있을 때만 readiness 진단에 사용합니다. 필요한 노드가 `active`인지 상태 화면과 작업 시작 전 조건에 반영할 수 있지만, action server 발견이나 lifecycle `active`만으로 로봇이 안전하거나 이동을 성공했다고 판정하지 않습니다. 관제가 lifecycle 전이를 임의로 호출해 Nav2를 configure/activate/shutdown하는 것은 기본 범위에 포함하지 않습니다. 운영자가 Nav2 수명 주기를 명시적으로 관제해야 한다는 요구와 지원 인터페이스가 확인될 때 별도 기능으로 계획합니다.
+
+Nav2 action 이름·타입, namespace, goal frame 및 좌표/방향 변환, result 성공 판정, feedback 사용 범위, lifecycle node 목록과 상태 조회 방법은 실제 로봇의 ROS 2 배포판과 Nav2 구성을 확인한 후 확정합니다. 현재 구현된 action server discovery는 이 계약을 확인하는 사전 탐색이며 실제 goal 전송은 하지 않습니다.
 
 ## 8. 카메라 및 영상 계약
 
