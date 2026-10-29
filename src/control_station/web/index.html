@@ -8,14 +8,26 @@
   <script src="/app.js" defer></script>
 </head>
 <body>
-  <main class="page">
-    <header class="header">
-      <div><h1>로봇 관제 서버</h1><p>통신 상태 확인</p></div>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><h1>로봇 관제</h1><p>로컬 제어 서버</p></div>
+      <nav class="main-nav" aria-label="주 메뉴">
+        <button type="button" class="nav-item active" data-view="overview" aria-current="page">현황</button>
+        <button type="button" class="nav-item" data-view="manual">수동 조작</button>
+        <button type="button" class="nav-item" data-view="tasks">작업 이력</button>
+        <button type="button" class="nav-item" data-view="api">API</button>
+      </nav>
       <div id="serverStatus" class="server-status" role="status"><span class="dot"></span> 서버 확인 중</div>
-    </header>
+    </aside>
 
+    <main class="main-content">
+      <header class="header">
+        <div><h2 id="viewTitle">현황</h2><p id="updatedAt" class="updated">갱신 전</p></div>
+      </header>
+
+      <div class="view" id="view-overview">
     <section aria-labelledby="robots-title">
-      <div class="section-heading"><h2 id="robots-title">로봇 인터페이스</h2><span id="updatedAt" class="updated">갱신 전</span></div>
+      <div class="section-heading"><h2 id="robots-title">로봇 인터페이스</h2></div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>로봇</th><th>통신 상태</th><th>연결 정보</th></tr></thead>
@@ -24,7 +36,15 @@
       </div>
       <p class="note">Nav2 액션 서버 발견 여부는 통신 경로만 나타냅니다. 로봇 동작 가능 상태를 보장하지 않습니다. 이 서버는 주행 명령을 전송하지 않습니다.</p>
     </section>
+    <section aria-labelledby="cameras-title">
+      <div class="section-heading"><h2 id="cameras-title">팔 로봇 카메라</h2><span class="updated">2대</span></div>
+      <div id="cameraGrid" class="camera-grid"><p class="loading">상태를 불러오는 중…</p></div>
+      <p class="note">관제 서버가 카메라를 열어 영상을 표시합니다. 현재 영상 장치 경로가 확인된 카메라는 한 대입니다.</p>
+    </section>
 
+      </div>
+
+      <div class="view" id="view-manual" hidden>
     <section aria-labelledby="arm-title">
       <div class="section-heading"><h2 id="arm-title">팔 텔레오퍼레이션</h2><span id="armState" class="updated">상태 확인 중</span></div>
       <div class="arm-control">
@@ -33,6 +53,23 @@
       </div>
     </section>
 
+    <section aria-labelledby="coordinate-target-title">
+      <div class="section-heading"><h2 id="coordinate-target-title">좌표 목표 초안</h2><span class="updated">미실행</span></div>
+      <form id="coordinateTargetForm" class="coordinate-form">
+        <label>좌표계 이름<input name="frame_id" maxlength="80" required placeholder="예: base_link"></label>
+        <label>단위<select name="unit"><option value="m">m</option><option value="mm">mm</option></select></label>
+        <label>X<input name="x" type="number" step="any" required></label>
+        <label>Y<input name="y" type="number" step="any" required></label>
+        <label>Z<input name="z" type="number" step="any" required></label>
+        <button type="submit">초안 파일 저장</button>
+      </form>
+      <p id="coordinateTargetMessage" class="note" role="status">저장된 좌표는 초안 파일로만 남습니다. IK 계산과 팔 동작은 수행하지 않습니다.</p>
+      <pre id="coordinateTargetResult" class="coordinate-result" hidden></pre>
+    </section>
+
+      </div>
+
+      <div class="view" id="view-tasks" hidden>
     <section aria-labelledby="tasks-title">
       <div class="section-heading"><h2 id="tasks-title">작업 이력</h2><span id="taskCount" class="updated">불러오는 중</span></div>
       <form id="taskForm" class="task-form">
@@ -48,13 +85,10 @@
       <p class="note">작업 등록은 이력만 저장하며 로봇 명령을 보내지 않습니다.</p>
     </section>
 
-    <section aria-labelledby="cameras-title">
-      <div class="section-heading"><h2 id="cameras-title">팔 로봇 카메라</h2><span class="updated">2대</span></div>
-      <div id="cameraGrid" class="camera-grid"><p class="loading">상태를 불러오는 중…</p></div>
-      <p class="note">관제 서버가 카메라를 열어 영상을 표시합니다. 현재 영상 장치 경로가 확인된 카메라는 한 대입니다.</p>
-    </section>
+      </div>
 
-    <section class="api-section" aria-labelledby="api-title">
+      <div class="view" id="view-api" hidden>
+    <section aria-labelledby="api-title">
       <h2 id="api-title">서버 API</h2>
       <dl>
         <div><dt>GET</dt><dd><code>/api/health</code> 서버 상태</dd></div>
@@ -64,6 +98,7 @@
         <div><dt>GET</dt><dd><code>/api/arm/status</code> 팔 프로세스 상태</dd></div>
         <div><dt>POST</dt><dd><code>/api/arm/start</code> 텔레오퍼레이션 시작</dd></div>
         <div><dt>POST</dt><dd><code>/api/arm/stop</code> 종료 요청</dd></div>
+        <div><dt>POST</dt><dd><code>/api/arm/coordinate-target-drafts</code> 미실행 좌표 초안 파일 저장</dd></div>
         <div><dt>GET</dt><dd><code>/api/tasks</code> 작업 목록</dd></div>
         <div><dt>GET</dt><dd><code>/api/tasks/{task_id}</code> 작업 상세·단계·이벤트</dd></div>
         <div><dt>POST</dt><dd><code>/api/tasks</code> 작업 등록</dd></div>
@@ -71,7 +106,10 @@
       <p class="note">작업 등록은 저장만 합니다. 작업 오케스트레이션과 작업별 완료 신호는 아직 연결되지 않았습니다.</p>
     </section>
 
-    <footer>로컬 개발 서버 · <code>127.0.0.1</code></footer>
-  </main>
+      </div>
+
+      <footer>로컬 개발 서버 · <code>127.0.0.1</code></footer>
+    </main>
+  </div>
 </body>
 </html>

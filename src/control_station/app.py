@@ -16,6 +16,7 @@ from control_station.camera_adapters import (
     OpenCVArmCameraStreamManager,
     UnconfiguredArmCameraStreamManager,
 )
+from control_station.coordinate_target_drafts import CoordinateDraftError, CoordinateTargetDraftStore
 from control_station.robot_adapters import make_status_provider
 from control_station.store import TaskStore
 
@@ -147,7 +148,12 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
                 return
             self._json(202, {"arm": state})
             return
-        if route != "/api/tasks":
+        if route == "/api/arm/coordinate-target-drafts":
+            origin = self.headers.get("Origin")
+            if origin and urlsplit(origin).netloc != self.headers.get("Host"):
+                self._json(403, {"error": "Cross-origin coordinate draft request rejected"})
+                return
+        elif route != "/api/tasks":
             self._json(404, {"error": "API route not found"})
             return
         if self.headers.get("Content-Type", "").split(";", 1)[0].strip() != "application/json":
@@ -168,6 +174,14 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
             return
         if not isinstance(body, dict):
             self._json(400, {"error": "Request body must be a JSON object"})
+            return
+        if route == "/api/arm/coordinate-target-drafts":
+            try:
+                draft = self.app.coordinate_target_drafts.create(body)
+            except CoordinateDraftError as exc:
+                self._json(400, {"error": str(exc)})
+                return
+            self._json(201, {"draft": draft})
             return
         destination = body.get("destination")
         arm_job = body.get("arm_job")
@@ -203,6 +217,10 @@ def main() -> None:
         else UnconfiguredArmCameraStreamManager()
     )
     server.task_store = task_store
+    draft_dir = os.environ.get(
+        "CONTROL_STATION_COORDINATE_DRAFT_DIR", ".control-station/coordinate-target-drafts"
+    )
+    server.coordinate_target_drafts = CoordinateTargetDraftStore(draft_dir)
     print(f"Control station ({mode} mode): http://{host}:{port}", flush=True)
     try:
         server.serve_forever()
