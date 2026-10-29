@@ -39,6 +39,26 @@ CONTROL_STATION_ARM_PROGRAM=/경로/lerobot-teleoperate ./run-control-station.sh
 
 실제 팔 제어는 운영체제의 장치 권한, LeRobot 의존성 및 사용자별 OMX 지원 코드가 있어야 합니다. 이 구성은 현재 관제 저장소에 포함되지 않습니다. 저장소만 복제한 환경에서는 첫 번째 절차로 대시보드와 API를 실행할 수 있습니다.
 
+## Head Camera YOLO 검출 표시
+
+Head Camera 영상에 학습한 YOLO 모델(딸기·자동차·공)의 검출 박스를 그려 표시합니다. 모델 파일 경로를 지정하면 `--arm` 없이도 Head Camera만 엽니다. Joint Camera는 `--arm` 모드에서만 엽니다.
+
+```bash
+source .venv/bin/activate
+python -m pip install -r requirements-vision.txt   # 처음 한 번. PyTorch가 함께 설치되어 용량이 큽니다.
+CONTROL_STATION_HEAD_YOLO_WEIGHTS=/경로/best.pt ./run-control-station.sh
+```
+
+| 환경 변수 | 기본값 | 내용 |
+|---|---|---|
+| `CONTROL_STATION_HEAD_YOLO_WEIGHTS` | 없음 (꺼짐) | YOLO 가중치 `.pt` 경로 |
+| `CONTROL_STATION_HEAD_YOLO_CONF` | `0.25` | 표시할 최소 신뢰도 |
+| `CONTROL_STATION_HEAD_YOLO_DEVICE` | 자동 | `0`(첫 번째 GPU) 또는 `cpu` |
+
+화면의 Head Camera 카드에 박스가 그려진 영상과 **YOLO 검출** 행(클래스·신뢰도)이 나타나고, `/api/cameras` 응답의 `detector_state`·`detections`(클래스, 신뢰도, 픽셀 중심 좌표)로도 확인할 수 있습니다. 가중치 파일이 없거나 `ultralytics`가 설치되지 않았으면 원본 영상을 그대로 보여 주고 카드에 오류를 표시합니다.
+
+검출 결과는 표시 전용입니다. 로봇 명령이나 작업 상태 판단에 쓰지 않습니다. 카메라는 한 프로그램만 열 수 있으므로 다른 카메라 프로그램을 먼저 종료합니다.
+
 ## ROS 2 Nav2 검색 모드
 
 Nav2 action server discovery만 확인할 때 사용합니다. 이동 목표는 보내지 않습니다.

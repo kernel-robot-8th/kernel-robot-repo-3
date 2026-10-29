@@ -210,9 +210,10 @@ def main() -> None:
     server.mode = mode
     server.robot_provider = provider
     server.arm_supervisor = ArmTeleopSupervisor()
+    head_yolo_enabled = bool(os.environ.get("CONTROL_STATION_HEAD_YOLO_WEIGHTS", "").strip())
     server.camera_manager = (
-        OpenCVArmCameraStreamManager()
-        if server.arm_supervisor.enabled
+        OpenCVArmCameraStreamManager(joint_enabled=server.arm_supervisor.enabled)
+        if server.arm_supervisor.enabled or head_yolo_enabled
         else UnconfiguredArmCameraStreamManager()
     )
     server.task_store = task_store

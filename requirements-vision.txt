@@ -1,0 +1,4 @@
+# Head Camera YOLO 표시(선택)용 의존성. 기본 관제 서버 실행에는 필요하지 않다.
+# ultralytics는 PyTorch를 함께 설치하므로 용량이 크다 (GPU 사용 시 CUDA 빌드 포함).
+-r requirements.txt
+ultralytics>=8.4,<9
