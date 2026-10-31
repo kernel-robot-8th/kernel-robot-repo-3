@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "simulation_only": true,
+  "scene": "simulation/mujoco_omx/robotis_omx/strawberry_pick_scene.xml",
+  "seed": 20261031,
+  "software_versions": {
+    "python": "3.12.3",
+    "mujoco": "3.17.0",
+    "numpy": "2.5.4"
+  },
+  "sha256": {
+    "scripts/run_mujoco_strawberry_place_behind.py": "c48470170516d244840f1f892d329c7c34924f695ad1d36b404777673f87552f",
+    "scripts/run_mujoco_strawberry_repeatability.py": "8f6afc4d0f56050e99c4cc16cee8251c6b534f9ba1897bbec19b6fb292f1e404",
+    "simulation/mujoco_omx/robotis_omx/strawberry_pick_scene.xml": "1cd9edc6aac9362febf2c07799ae0ea161ba64f91b34f46d7e596bf5185d8171",
+    "simulation/mujoco_omx/robotis_omx/shelf_photo_match_scene.xml": "37cc97627cd3cf73edc1144f645aefea4410d86b523a20554674516b6b60b5e2",
+    "simulation/mujoco_omx/robotis_omx/omx.xml": "70ad27711697ceac9b071bf5b721490f85204adec1ea68b0e21e3c36a15d5411",
+    "requirements-mujoco.txt": "6cfdc4c2b724775d3f2b7512004528284aff3ee4fa49fdcec493362a0b157f17"
+  },
+  "gripper_model": {
+    "contact_proxy_radius_mm": 4.0,
+    "closing_preload_rad": 0.03
+  },
+  "steps_per_waypoint": 100,
+  "trials_requested": 5,
+  "successes": 0,
+  "success_rate": 0.0,
+  "elapsed_seconds": 4.620022630006133,
+  "trials": [
+    {
+      "trial": 1,
+      "fruit_offset_xy_m": [
+        -0.0017422522291107283,
+        0.000851668506729678
+      ],
+      "place_target_xy_m": [
+        -0.2,
+        -0.22
+      ],
+      "success": false,
+      "failure_reasons": [
+        "RuntimeError: Lost fingertip contact during carry at sample 49: contacts=[], object_xyz=[0.09539103401767253, -0.009398661382584704, 0.3203861785516633], object_contacts=[], actual_q=[-1.3114190569149828, -0.29679468032471035, -1.2177174286772763, 1.6755739574512885, -0.04115281546929405], target_q=[-1.3165524024449518, -0.3007230233314006, -1.2193300345303344, 1.6766832450144549, -0.04261424645692614]"
+      ]
+    },
+    {
+      "trial": 2,
+      "fruit_offset_xy_m": [
+        -0.004477551180931538,
+        0.0022615371506149
+      ],
+      "place_target_xy_m": [
+        -0.18,
+        -0.2
+      ],
+      "success": false,
+      "failure_reasons": [
+        "RuntimeError: Unexpected object contact during carry at sample 24: ['link5']"
+      ]
+    },
+    {
+      "trial": 3,
+      "fruit_offset_xy_m": [
+        0.004623847604361315,
+        0.0022415481989046856
+      ],
+      "place_target_xy_m": [
+        -0.22,
+        -0.18
+      ],
+      "success": false,
+      "failure_reasons": [
+        "RuntimeError: Lost fingertip contact during carry at sample 36: contacts=[], object_xyz=[0.11659744854867886, 0.07200128076880909, 0.329862825856453], object_contacts=[], actual_q=[-0.9091685681301822, -0.1932501504284944, -1.2181613124354367, 1.5934876537289218, -0.03637648250483367], target_q=[-0.9129850767116899, -0.19878822658646123, -1.2203105387142148, 1.5947363765321665, -0.038065307688320275]"
+      ]
+    },
+    {
+      "trial": 4,
+      "fruit_offset_xy_m": [
+        -0.0006544423111901915,
+        0.0022132691196890784
+      ],
+      "place_target_xy_m": [
+        -0.16,
+        -0.22
+      ],
+      "success": false,
+      "failure_reasons": [
+        "RuntimeError: Lost fingertip contact during carry at sample 27: contacts=[], object_xyz=[0.11414868601634129, 0.11640448687776746, 0.30145697690208106], object_contacts=[], actual_q=[-0.742070275309973, -0.09081899220990945, -1.2186001371050033, 1.5285133644406106, -0.032520905735246235], target_q=[-0.7453624127025938, -0.09747224536951976, -1.220310262232891, 1.5302745421581232, -0.034597164148018306]"
+      ]
+    },
+    {
+      "trial": 5,
+      "fruit_offset_xy_m": [
+        0.0037867498641710375,
+        0.0025127134705897544
+      ],
+      "place_target_xy_m": [
+        -0.22,
+        -0.24
+      ],
+      "success": false,
+      "failure_reasons": [
+        "RuntimeError: Lost fingertip contact during carry at sample 24: contacts=[], object_xyz=[0.11496240706050563, 0.13058306210411535, 0.2928628734992085], object_contacts=[], actual_q=[-0.7033787026911635, -0.04992547473336786, -1.2192969865802465, 1.4865174071968899, -0.027268430752259726], target_q=[-0.706512798441073, -0.057054834780782146, -1.2205041967461772, 1.4884554348901178, -0.02936009567721624]"
+      ]
+    }
+  ],
+  "limitations": [
+    "Synthetic fixed camera and illustrative shelf/strawberry scene only.",
+    "Contact proxies are approximate; official collision meshes are not a validated grasp model.",
+    "The rear floor place is not validated on real hardware."
+  ]
+}

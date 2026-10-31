@@ -1,0 +1,43 @@
+{
+  "trial": "vision_rgbd_center_height",
+  "observation_center_estimate_world_m": [
+    0.09697363056824376,
+    0.21250375115499076,
+    0.2194010950669628
+  ],
+  "known_scene_center_world_m": [
+    0.1,
+    0.21,
+    0.22
+  ],
+  "vision_center_error_mm": 3.9732063755111593,
+  "ik_goal_joints_rad": {
+    "Joint1": -0.4180187182241639,
+    "Joint2": -0.14657921035342625,
+    "Joint3": -0.07301174519287715,
+    "Joint4": 0.5209346910064621,
+    "Joint5": 0.03785335609509531
+  },
+  "fingertip_midpoint_world_m": [
+    0.09583928640327763,
+    0.21308840610177,
+    0.21947269220050547
+  ],
+  "midpoint_error_to_observation_mm": 1.2781565791864726,
+  "finger_z_gap_mm": 1.1164689878240541,
+  "path_shelf_clear": true,
+  "path_first_collision": null,
+  "final_strawberry_world_m": [
+    0.08544393917728213,
+    0.20853249987961583,
+    0.27445757745669536
+  ],
+  "lift_from_shelf_top_mm": 92.45757745669536,
+  "contacts": [
+    "",
+    "link6_fingertip_contact_proxy",
+    "link7_fingertip_contact_proxy"
+  ],
+  "gripper_contact_proxy": true,
+  "simulation_only": true
+}

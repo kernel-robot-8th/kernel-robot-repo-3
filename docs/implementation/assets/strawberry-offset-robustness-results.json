@@ -1,0 +1,100 @@
+{
+  "method": "synthetic fixed-camera RGB-D target, center-height IK, 6mm fingertip contact proxies",
+  "simulation_only": true,
+  "cases": [
+    {
+      "case": "x_minus_6mm",
+      "offset_m": [
+        -0.006,
+        0
+      ],
+      "observation_center_m": [
+        0.09130472348659793,
+        0.21296900004026753,
+        0.21926006545203178
+      ],
+      "midpoint_error_mm": 1.1947065599869915,
+      "fingertip_height_difference_mm": 1.0873544947337388,
+      "shelf_path_clear": true,
+      "final_center_z_m": 0.2757116043123929,
+      "lift_from_initial_center_mm": 55.711604312392886,
+      "contacts": [
+        "",
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "success": true
+    },
+    {
+      "case": "x_plus_6mm",
+      "offset_m": [
+        0.006,
+        0
+      ],
+      "observation_center_m": [
+        0.10079314968682937,
+        0.2123055703724117,
+        0.2174770688655561
+      ],
+      "midpoint_error_mm": 1.3309209105587136,
+      "fingertip_height_difference_mm": 1.136959036720786,
+      "shelf_path_clear": true,
+      "final_center_z_m": 0.2757478053305809,
+      "lift_from_initial_center_mm": 55.74780533058091,
+      "contacts": [
+        "",
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "success": true
+    },
+    {
+      "case": "y_minus_6mm",
+      "offset_m": [
+        0,
+        -0.006
+      ],
+      "observation_center_m": [
+        0.09661991280568957,
+        0.2068103877996621,
+        0.21915581673197057
+      ],
+      "midpoint_error_mm": 1.3367957092998357,
+      "fingertip_height_difference_mm": 1.1352547187192252,
+      "shelf_path_clear": true,
+      "final_center_z_m": 0.2751431583288288,
+      "lift_from_initial_center_mm": 55.1431583288288,
+      "contacts": [
+        "",
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "success": true
+    },
+    {
+      "case": "y_plus_6mm",
+      "offset_m": [
+        0,
+        0.006
+      ],
+      "observation_center_m": [
+        0.09546681904103327,
+        0.2184755675937421,
+        0.21759087477531255
+      ],
+      "midpoint_error_mm": 1.1950336359368259,
+      "fingertip_height_difference_mm": 1.0904205983482407,
+      "shelf_path_clear": true,
+      "final_center_z_m": 0.2764714879050471,
+      "lift_from_initial_center_mm": 56.471487905047105,
+      "contacts": [
+        "",
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "success": true
+    }
+  ],
+  "successes": 4,
+  "total": 4
+}
