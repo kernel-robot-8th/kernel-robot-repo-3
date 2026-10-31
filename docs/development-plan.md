@@ -1,53 +1,97 @@
 # 개발 로드맵
 
-이 문서는 개발 에픽의 순서와 의존성을 한눈에 보는 로드맵입니다. 에픽의 세부 작업과 확인 기준은 각 에픽 문서를 따릅니다. 목표 동작은 [시스템 개발 명세](spec/system-spec.md), 현재 제공 기능은 [구현 현황](implementation/current-state.md)을 기준으로 확인합니다.
+이 로드맵은 기존 Python 관제시스템과 ROS 2/Gazebo workspace를 보존하면서, 에피소드 없는 제한적 Pick & Place를 단계적으로 추가하는 계획입니다. 목표 요구사항은 [시스템 개발 명세](spec/system-spec.md), 현재 확인된 기능은 [구현 현황](implementation/current-state.md), 픽업 세부 작업은 [에픽 7](epics/epic-07-episode-free-shelf-picking.md)을 기준으로 합니다.
 
-## 완료된 기반 작업
+## 계획 원칙
 
-- Python 표준 라이브러리 기반 localhost HTTP 서버와 단순 상태 화면
-- mock 로봇 상태 및 ROS 2 Nav2 action server discovery
-- SQLite 작업 생성·조회; 생성 시 `PENDING`으로 저장
-- `HEAD`·`JOINT` 카메라 상태 모델과 미연결 화면 슬롯
-- 비활성화 기본값의 LeRobot 텔레오퍼레이션 프로세스 API와 관제 서버 런처
-- 목표 시스템 명세와 현재 구현 문서 분리
+- 기존 관제 API, 작업 이력, 카메라 모니터링, 모의 기본 동작을 유지하고 필요한 경계만 확장합니다.
+- 새 ROS 2 패키지·토픽·서비스·액션은 현재 인터페이스 조사를 마친 뒤에만 결정합니다. 이름과 성공 의미를 추측해 계약으로 고정하지 않습니다.
+- 작업 생성/계획, 장치 명령 접수, 장치 실행, 최종 결과 확인을 구분하고 기존 task/step/event 이력에 연결합니다.
+- 인식과 좌표 관측은 명령 없는 경로에서 먼저 확인합니다. 모의 결과와 실물 결과는 별도 상태와 화면으로 구분합니다.
+- MuJoCo는 OMX 팔의 물리 시뮬레이션 후보로 우선 검토합니다. 기존 Gazebo 창고 workspace는 이동 로봇·창고 환경 용도로 보존하고, 중복 시뮬레이터를 동시에 통합하지 않습니다.
+- 실제 장치 명령은 사용자 요청/승인과 장치별 인터페이스·안전 경계 확인을 모두 전제로 합니다. discovery, 프로세스 생존, 카메라 프레임, 시뮬레이션은 장치 준비나 동작 성공의 증거가 아닙니다.
+- 각 확인 지점은 작은 수직 단위로 완료하고, 정해진 에픽을 한 번에 모두 구현하지 않습니다.
 
-## 에픽 순서
+## 저장소 기준선과 재사용 경계
 
-각 에픽을 작은 결과물로 나눠 진행하고, 에픽 안의 확인 지점마다 서버와 화면을 직접 살펴본 뒤 다음 단계로 넘어갑니다. 아래 첫 두 에픽은 실제 로봇에 명령을 보내지 않는 mock 중심 작업입니다.
+현재 저장소에는 localhost HTTP 기반 Python 관제 서버, SQLite/SQLAlchemy 작업·단계·이벤트 이력, Head/Joint 카메라 모니터링, 관측 전용 YOLO 결과, Nav2 action server discovery, 비활성화 기본값의 LeRobot 텔레오퍼레이션 프로세스 관리가 있습니다. 작업 생성은 `PENDING`을 저장하고, mock 모드의 명시적 시작 요청은 별도 mock worker로 진행합니다. 실제 장치 실행 adapter는 아직 연결되지 않았습니다. 상세 사실은 [현재 구현 현황](implementation/current-state.md)을 기준으로 합니다.
 
-| 순서 | 에픽 | 목적 | 선행 관계 | 상태 |
+`simulation/ros2_ws`에는 Gazebo Harmonic 창고 모델을 담은 `toktak_warehouse` 패키지가 있습니다. 확인된 bridge 토픽은 `/clock`, `/cmd_vel`, `/odom`, `/tf`, `/scan`, `/imu/data`, `/joint_states`입니다. 이는 현재 Gazebo 이동로봇 모델의 브리지 계약입니다. 이 workspace에서 Nav2 action server, OMX 제어 노드, 카메라 드라이버, Pick & Place 인터페이스는 확인되지 않았습니다. 실행 중인 ROS graph의 전체 인터페이스 목록으로 확대 해석하지 않습니다.
+
+ROBOTIS 공식 MuJoCo OMX 모델과 placeholder 선반 장면은 저장소에 있습니다. ROS 2 Jazzy `mujoco_ros2_control` backend, controller, fixed RGB-D 및 관제 read-only camera/API 경로를 2026-10-31에 격리 domain과 `/tmp` 임시 apt overlay에서 확인했습니다. 이 확인은 system prefix 설치나 장시간 안정성을 뜻하지 않으며, MuJoCo 관절 command goal은 보내지 않았습니다. 실물 일치, 실제 제어 변환, IK/접촉 집기 및 안정적인 lift는 여전히 검증되지 않았습니다. 기존 모델은 검토 출발점이지 실물 안전 한계나 작동 완료를 뜻하지 않습니다.
+
+## 에픽 순서 및 상태
+
+| 순서 | 에픽 | 목적 | 선행 조건 | 현재 상태 |
 | --- | --- | --- | --- | --- |
-| 1 | [작업·단계 이력](epics/epic-01-task-history.md) | 작업의 표준 단계, 상태 변경 이벤트, 상세 조회와 타임라인 구현 | 완료된 기반 작업 | 진행 중 |
-| 2 | [모의 정상 작업 흐름](epics/epic-02-mock-happy-path.md) | 시작 요청부터 이동·팔 mock 실행, 성공까지의 흐름을 화면에서 확인 | 에픽 1 | 계획 |
-| 3 | 실패·취소·복구 | timeout, 연결 단절, 취소, 재시작 뒤 미확정 작업의 안전한 처리 | 에픽 2 | 계획 |
-| 4 | 실제 장치 인터페이스 | 확정된 ROS 2/Nav2 및 팔 작업 인터페이스를 adapter에 연결 | 에픽 3 및 장치 정보 | 계획 |
-| 5 | 카메라 통합 마무리 | 두 카메라 동시 표시, 장착 위치와 스트림 품질 기준 확인 | 카메라 장치·영상 정보 | 진행 중 |
-| 6 | 통합 수용 검증 | 명세의 정상·장애 시나리오와 현장 절차를 확인하고 문서 반영 | 에픽 1–5 | 계획 |
+| 1 | [작업·단계 이력](epics/epic-01-task-history.md) | 표준 단계, 이벤트, 상태 전이와 추적 가능한 조회 기반 | 기존 저장 기능 | 진행 중 |
+| 2 | [모의 정상 작업 흐름](epics/epic-02-mock-happy-path.md) | 관제 화면에서 작업 시작부터 mock terminal 결과까지 확인 | 에픽 1 | 진행 중 — 구조화 대상 조건과 시작/취소 slice 구현, 확인 미실행 |
+| 3 | 실패·취소·복구 | 중복, 거절, timeout, 통신 단절, 미확정 결과를 안전하게 보존 | 에픽 2 | 진행 중 — mock 단계 시작 command-state와 취소 요청, 실패/취소 종결 처리를 같은 프로세스 lock으로 직렬화; mock 실패에서 미실행 단계 표시; 설정 가능한 mock step 실패 주입 추가; worker 소유 상태를 읽기 전용 표시; 수동 재시작 복구와 장치 이벤트 복구 미구현 |
+| 4 | 기존 ROS 2·장치 인터페이스 조사 및 어댑터 계약 | workspace, 배포판, 장치별 실제 action/topic 및 상태 신호 목록을 확인하고 공통 관제 경계 결정 | 코드/설정 및 실행 환경 관측 | 진행 중 — 정적 인벤토리와 2026-10-30 domain 0/31, 10-31 domain 0 및 31의 읽기 전용 graph 관측 기록; 관제의 명시 설정 `JointState` 구독 경계 구현(기본 비활성), 실제 OMX publisher source와 runtime 미확인 |
+| 5 | 카메라 관측 경로 완성 | 두 카메라 동시 관측, 장착 위치·스트림 특성·대상 선택 상태 확인 | 카메라 접근 정보 | 진행 중 — 픽셀 후보와 task 감사 이벤트, 색상 hint 및 명시적 ROI draft의 층 비교를 검토 전용으로 연결하고 저장 PNG의 polygon JSON 입력 도구 추가; Head/Joint feed별 선택형 YOLO 및 YOLO-World prompt mode를 같은 provenance UI/API에 연결(각 camera 별도 weights 필요, 모델 없음); 자연어 초기 대상 클래스는 Head detector로 한정; YOLO-World task observation에 요청 class one-shot prompt와 직렬화/복원 provenance를 추가했으나 모델 weights가 없어 runtime 미확인; 2026-10-31 V4L2 열거에서 numeric `/dev/video4`가 HCAM0로 재배정되어 Joint/Head alias 충돌을 확인, 이전 Joint Innomaker 선택을 보존하는 by-id 기본값과 duplicate realpath 보호를 추가; Innomaker 단일 RGB frame은 선반/역할을 식별하지 못했고 HCAM0 stream artifact는 유효 JPEG가 아니었음; 실제 물리 장착·역할은 화면/장착 대조 미완료; 실제 생활용품 정확도·분할 mask·실제 층 polygon·색상 보정·실측 3D 위치·wrist extrinsic 및 camera/joint timestamp alignment 미구현 |
+| 6 | OMX MuJoCo 모델 검증 | 공식 모델의 구조와 필요한 팔 동작을 시뮬레이션 안에서 검토 | OMX 모델/관절 사양 조사 | 진행 중 — 제한 joint step, position·선택형 world-quaternion pose IK와 입력된 link6→TCP 변환을 사용하는 TCP position/pose IK 후보, source-hash 검증 calibration artifact input 및 MuJoCo 의존 없는 artifact validator, IK JSON schema v2와 hash-guarded prior-candidate start를 통한 순차 offline waypoint 검토 추가; home→선반 앞쪽 5개에 더해 선반 전면으로 이어지는 hash-linked position chain을 검토; `link6` origin `(0.05, 0.21, 0.32) m`까지는 81/101-segment 표본 무접촉 후보이나 y=0.215/0.22 m는 link3/deck 접촉; TCP/연속 경로/grasp 또는 trajectory planning은 검증하지 않음; package build·Xacro expansion 및 joint/range mapping 확인; `/mujoco_omx` namespace, controller별 spawner parameter file, local joint-state remap/TF prefix, 명시 domain 1–232 및 package index 선행 조건 wrapper와 선택적 read-only `FollowJointTrajectory` server discovery 추가; wrapper는 domain 0을 거부하나 실제 graph 격리는 운영자 확인 대상; open-front shelf placeholder에서 schema v3 keyframe capture 9 camera artifact와 schema v4 hash-linked IK endpoint capture 9 camera + candidate artifact를 생성; v4 candidate source/model hash 및 arm joint state 대조와 scene source 10개 검증 통과; keyframe fixed-view target 1,764 px, staged endpoint fixed-view target 1,353 px→world surface z=0.295 m, 두 wrist view는 endpoint target depth 없음, 1,000개 정적 자세 중 737개 무접촉·4개에서 target ≥100 px이나 전부 경계 crop; synthetic link6 camera position 60개 탐색에서는 52개가 5개 endpoint 모두 target segmentation을, 34개가 매 endpoint에서 bbox edge margin ≥5 px를 보였으나 physical mount/field-of-view/collision은 검증 안 됨; gripper mesh angle sweep에서 jaw 간 약 −1.8 mm signed distance/0 contact; 전역 50,000 uniform 자세에서 jaw-only 접촉 1개는 7.71 mm penetration·법선 내적 −0.0094였고, IK 근방 Gaussian 표본에서도 가장 얕은 jaw-only 접촉은 0.028 mm였지만 양쪽 법선이 거의 평행했음; `dot ≤ −0.5` opposing-normal 정적 휴리스틱 통과 표본은 조사한 범위에서 0개이며 이 휴리스틱 자체도 grasp 성공을 증명하지 않음; 현 장면의 position IK 종점/이산 경로 접촉 미해결; system prefix에는 `mujoco_ros2_control` 및 `joint_trajectory_controller` 미설치(apt package 임시 overlay는 준비); physical parent↔MuJoCo `link6` 대응 및 현장 artifact 부재, TCP transform artifact·TCP IK는 입력된 실측 근거가 없어 실행하지 않았고 position IK JSON CLI/schema는 5개 waypoint에서 검증; 2026-10-31 임시 overlay runtime에서 launch/backend/controller, JointState·RGB-D·TF 및 FollowJointTrajectory discovery 확인, action goal/joint command와 실제 팔 동작은 미실행; 동역학 감사 CLI에서 정적 jaw 후보는 닫힘 시 양쪽 link 접촉이 있었으나 5/10/15/30 mm lift 및 0.30–0.52 rad close target 표본에서 settle 후 양 jaw 지지가 유지되지 않아 grasp 거부; static IK candidate와 동역학 audit는 공통 model-source hash inventory 사용, dynamic audit는 단계별 mj_step contact category 및 pair count 기록 및 opt-in no-overwrite managed JSON artifact 저장; close posture link6 방향을 목표로 하는 선택형 weighted pose-lift IK 추가; 구문 확인만 했고 해당 경로 runtime 미실행; dynamics audit에 source/hash·version·contact-free schema v2 IK candidate 입력 경계 추가(미실행); saved audit의 안전 flag·접촉 필드·source inventory를 읽기 전용 확인하는 verifier 추가(미실행) |
+| 7 | 좌표·파지 계획의 오프라인/모의 검증 | 측정 기반 좌표계, 제한된 grasp pose, 작업 공간 및 충돌 검토 | 에픽 5·6, frame/단위 계약 | 진행 중 — task에 기록된 운영자 선택과 검증된 PNG snapshot을 2D `DRAFT_ONLY` projection으로 만들고, 선택 시 pending `ESTIMATE_TARGET_POSE`에 검토 이벤트로 연결 가능; CLI index freshness 제한; 이산 joint-step 제한이 있는 position 및 선택형 world-quaternion `link6` pose IK와 schema v2 JSON 후보; 기존 5개 position-only waypoint 뒤 hash-linked staging chain에서 `link6` origin `(0.05, 0.21, 0.32) m`까지 1.552 mm 이하·무접촉 후보; y=0.215/0.22 m는 link3/deck 접촉; `(0.05, 0.25, 0.34) m` 다중 seed는 비수렴; `inspect_mujoco_omx.py` 전역 uniform 50k 및 local Gaussian 300k 조사에서 opposing-normal 기준 통과 0개였으나 후속 1M uniform에서는 깊은 침투 4개, 그 중 contact-seeded Gaussian 300k와 300k refinement에서 0.1093 mm penetration·normal dot −0.5067 정적 jaw contact 후보; 30/50/70 mm placeholder cube 조사에서 opposing-normal 표본은 0; home 동시 보간은 선반 지지대와 target에 충돌, 한 joint-at-a-time 120 순서 탐색에서 찾은 `Joint3→Joint1→Joint4→Joint5→Joint2` 경로는 1,000 segment/joint 5,001점 표본에서 환경/자기 충돌 0, target 접촉은 마지막 joint 이동 99.7%에 시작; 정적·동역학 결과는 MuJoCo placeholder 전용; 동역학 접촉이 순간 관찰됐어도 stable lift/grasp는 실패; continuous collision·실제 trajectory·힘 유지 및 실물 grasp는 미검증; 실측 물체/TCP, 연속 경로 및 실물 grasp 검증 전 |
+| 8 | Pick & Place mock 오케스트레이션 및 관제 표시 | 기존 작업 이력/API/UI에 인식·계획·실행 단계를 추가하고 mock 경로 확인 | 에픽 1–7, 데이터 계약 | 진행 중 — 대상 조건 task 단계 템플릿, mock task/step/command/robot ID, 저장소 확인을 거친 mock `PROGRESS: 50%`, 로봇별 step UI, 검토용 자연어 초안 및 읽기 전용 joint-state 표시 구현; 실제 카메라/좌표/물리 sim과 연결되지 않았고 end-to-end 확인 미실행 |
+| 9 | 제한된 실물 adapter 수용 | 명시적으로 승인된 현장 절차에서 확인된 인터페이스만 연결 | 에픽 3–8, 안전·완료 신호 확인 | 차단 조건 충족 전 미착수 |
+| 10 | 통합 수용 및 범위 확장 | 첫 고정 시나리오를 검증한 뒤 조건을 하나씩 확대 | 에픽 9 | 계획 |
 
-### 에픽 3 — 실패·취소·복구
+에픽 4의 결과로 새 ROS 2 패키지가 필요하다고 확인되기 전까지 새 패키지나 중복 인터페이스를 만들지 않습니다. 관제 작업 전체를 ROS 2 action으로 노출하는 것도 실제 소비자 요구가 확인된 경우에만 검토합니다. 긴 장치 작업은 이미 확인된 장치 action이 있으면 우선 사용합니다.
 
-mock adapter에 거절, 실패, timeout, 연결 단절, 결과 불명 상황을 추가합니다. 실패나 결과 불명인 이동 뒤에는 팔을 실행하지 않으며, 정지 여부나 작업 결과를 확인하지 못하면 임의로 성공·실패 처리하지 않고 개입 필요 상태로 둡니다. 중복·오래된 이벤트와 서버 재시작 뒤 미확정 작업도 다룹니다.
+## 6주 기준 개발안
 
-### 에픽 4 — 실제 장치 인터페이스
+기간은 가용 장비·작업 시간과 기존 조사 상태에 따라 조정합니다. 각 주의 완료 기준이 충족되지 않으면 다음 주의 의존 작업을 시작하지 않습니다.
 
-Nav2의 로봇 측 action server를 관제 이동 어댑터의 action client로 사용합니다. 관제 자체의 ROS action server는 다른 ROS 2 클라이언트가 관제 작업 전체를 호출해야 한다는 요구가 확인될 때만 별도 검토합니다. 모바일 로봇의 ROS 2 domain, Nav2 action 계약, 필요한 lifecycle readiness 진단 방법, 팔 장치의 READY와 작업 완료 회신 방식을 확정한 뒤 mock과 같은 명령·이벤트 계약에 실제 adapter를 연결합니다. 장치 인터페이스 정보가 없는 동안에는 mock 흐름을 계속할 수 있습니다.
+| 주차 | 초점 | 주요 산출물 | 완료 확인 |
+| --- | --- | --- | --- |
+| 1 | 기존 시스템 기준선·인터페이스 조사 | 패키지/launch/config/URDF/bridge 및 관제 API·상태 흐름 목록, 확인/미확인 구분, 첫 고정 작업 시나리오 | 기존 기능 재사용 경계와 미확정 인터페이스가 문서화됨; 코드 변경 없이 리뷰 가능 |
+| 2 | 데이터 계약과 모의 작업 수직 단위 | optional `pick_request`, 카메라 관측 task 이벤트, 검토 전용 제한 자연어 초안 parser, 작업·단계 이력과 연결한 mock 작업 시작·진행·취소 API/UI | 장치 없이 초안→사용자 검토→저장 및 mock 결과·오류 흐름을 구분; 기존 모의 실행 보존 |
+| 3 | MuJoCo OMX 모델 검증 및 공통 제어 경계 | 모델 구조·joint/actuator·gripper 확인, scene placeholder 분리, sim 전용 목표점 IK와 이산 관절 보간 접촉 검사, synthetic camera artifact 생성기, 후보별 동역학 접촉/lift 감사 | MuJoCo 단독 환경에서 모델 로드와 sim 관절 명령 경로를 확인; RGB/depth/segmentation 형식과 provenance를 확인; 정적 pinch 후보는 그리퍼 폐쇄 시 양쪽 link 접촉까지 도달하지만 위치 IK lift 뒤 상자를 지지하지 못함을 기록; grasp 성공으로 오인하지 않고 hardware 연결 없음 |
+| 4 | 카메라·대상 관측과 좌표 초안 | 두 카메라 동시 관측, RGB/Depth와 시야 확인, 대상 후보/모호 상태, calibration 초안과 측정 절차 | 진행 중 — ROS MuJoCo fixed RGB-D·TF provenance와 관제 QoS 기준 120초 callback/source-stamp 관측을 cloud on/off 두 차례씩 완료; fixed camera task detector/frame provenance 경로는 mock 및 isolated ROS/API runtime에서 확인. weights·실제 inference·segmentation·depth 해석·검증된 3D localization 및 실제 두 카메라 시야는 미확인 |
+| 5 | 단일 물체 grasp/motion 모의 흐름 | 실측에 맞춘 그리퍼/대상 collision geometry, tool orientation을 보존하는 접근·lift waypoint, 연속 경로/접촉 유지 검사, 이후 제한 대상 하나의 retreat·place 모의 단계 | 상자가 선반에서 유의미하게 분리되고 이동·안정화 뒤에도 jaw 지지가 유지됨을 simulator에서 확인하기 전에는 후속 place 성공을 주장하지 않음; 대상 없음·복수·stale·범위 밖·계획 실패가 후속 실행을 막고 이력에 남음 |
+| 6 | 통합 수용·실물 준비도 판정 | 기존 관제 UI/API와 mock 흐름 통합, runbook 및 위험·미확정 목록 갱신, 실물 현장 수용 체크리스트 | mock 수용 기준 통과 여부가 확인됨; 하드웨어 단계는 별도 승인·운영 절차 이후로 분리 |
 
-OMX 팔의 관절 목표 재생과 말단 좌표 제어를 검토하는 별도 [단계별 계획](plans/omx-coordinate-control.md)이 있습니다. OMX의 모델·좌표계·한계 및 LeRobot 지원을 확인하기 전까지 XYZ 제어 구현이나 실물 시험을 시작하지 않습니다.
+6주 종료 시점의 목표는 검증된 단일 물체 시나리오와 다음 실물 수용 단계의 준비 상태입니다. 미확정 장치 인터페이스나 안전 경계를 일정 때문에 추정해 실물 동작을 완료 조건으로 약속하지 않습니다.
 
-### 에픽 5 — 카메라 통합 마무리
+OMX 팔의 관절 목표 재생과 말단 좌표 제어는 별도 [단계별 좌표 제어 계획](plans/omx-coordinate-control.md)에서 다룹니다. 이 로드맵의 Pick & Place 구현은 모델·좌표계·관절 한계와 물리 측정 조건을 확인한 범위 안에서 진행합니다.
 
-현재 `/dev/video4` Joint Camera 스트림과 `HCAM0` (`/dev/video6`) 단독 프레임 수신은 확인했습니다. 남은 작업은 두 카메라 동시 표시, 장착 위치 확인, 각 스트림의 주소·프로토콜·인코딩·해상도·FPS 확인과 측정값에 기반한 stale 임계값 결정입니다. 한 피드 장애가 다른 피드나 로봇 상태에 영향을 주지 않는지 확인합니다.
+## 주요 위험과 대응
 
-### 에픽 6 — 통합 수용 검증
+| 위험 | 대응 |
+| --- | --- |
+| 현재 Gazebo 모델은 이동 플랫폼 중심이고 OMX arm 모델/제어 인터페이스와 분리됨 | Gazebo 창고 기능을 유지하고, MuJoCo OMX를 팔 시뮬레이션 후보로 별도 검증합니다. 공통 관제 계약만 공유하고 물리 adapter를 구분합니다. |
+| ROS workspace 파일에서 실행 중인 graph나 배포 환경의 실제 action/topic 전체를 알 수 없음 | 패키지·launch·bridge 정적 목록과 실행 시 관측을 구분해 기록합니다. 장치 인터페이스는 확인한 endpoint/type/feedback/result만 계약화합니다. |
+| 카메라 장착·Depth 지원·시야가 미확정 | 카메라별 관측만으로 역할을 단정하지 않고, 물리 위치·RGB/Depth·동시 프레임 조건을 확인한 뒤 보정합니다. |
+| RGB-only 또는 선반 평면 보정은 높이·가림·배치 변화에 취약 | 대상/선반 범위를 고정해 오차를 측정하고, 3D 요구가 확인되면 depth 또는 추가 센서 조건을 검토합니다. |
+| 공식 MJCF와 실물 OMX 간 기구학/마찰/그리퍼 차이 | 모델을 검증 기준으로 취급하고 sim 한계를 문서화합니다. 실물 한계는 공식 사양·URDF·장치 확인값으로 별도 관리합니다. |
+| `mujoco_ros2_control`은 Jazzy apt 후보가 있지만 미설치; ROBOTIS upstream OMX-F와 MJCF의 기구 원점/축은 일치하나 joint 이름/limit은 다름 | `omx_mujoco_sim`에 sim-only controller description/launch를 추가했고 package build, Xacro expansion, 6개 interface/actuator name, joint range, mimic 및 installed scene 경로를 정적으로 확인했습니다. 다음은 공식 backend 설치 뒤 headless launch와 controller activation을 simulation mode에서만 확인하는 일입니다. 실제 hardware mode/LeRobot과 동시 제어는 이 package 범위가 아니며, 시뮬레이션 limit을 physical controller limit으로 재사용하지 않습니다. [Jazzy 통합 문서](https://control.ros.org/jazzy/doc/mujoco_ros2_control/doc/index.html), [hardware interface](https://control.ros.org/jazzy/doc/mujoco_ros2_control/mujoco_ros2_control/docs/hardware_interface.html) |
+| LeRobot 관절 목표 쓰기는 작업 수락·취소·파지 성공 결과를 제공하지 않을 수 있음 | teleop 프로세스 관리와 자동 작업 adapter를 분리합니다. 확인된 terminal result 경로 전에는 성공 판정을 만들지 않습니다. |
+| timeout/연결 단절 시 실제 동작 결과가 불명확 | `UNKNOWN`/`NEEDS_INTERVENTION`으로 남기고 자동 재전송·후속 팔 동작을 막습니다. |
+| mock과 sim/hardware 상태가 UI에서 혼동됨 | 각 관측/명령/result에 실행 mode와 출처를 표시하고, mock을 실물 완료로 표현하지 않습니다. |
 
-[시스템 명세의 MVP 수용 기준](spec/system-spec.md#11-mvp-수용-기준)에 따라 mock 정상·장애 시나리오를 검증하고, 장치가 준비되면 실제 통신과 완료 이벤트를 별도 현장 절차로 확인합니다. 실행·복구·장치 조건을 [실행 방법](implementation/runbook.md)과 [구현 현황](implementation/current-state.md)에 반영합니다.
+## Pick & Place 작업 현황과 다음 gate
 
-## 선행 정보가 필요한 실제 연동
+2026-10-31 MuJoCo dynamics baseline과 shelf-front staged candidate audit을 managed JSON으로 저장했고, read-only verifier가 schema v1–v8 audit 구조와 현재 scene/model/mesh source 10개 hash의 일치를 확인했습니다. audit schema v2는 candidate의 requested/achieved link6 pose와 placeholder box center를, v3는 link6 body origin과 box center 사이 Euclidean 거리를 기록하되 TCP/grasp clearance와 구분하고, v4는 시간 표본별 bilateral jaw normal dot 및 penetration, v5는 close-settle object↔link6 body-origin relative pose, v6는 jaw별 solver contact-force 표본 통계를, v7은 close-settle 시점의 actuator target과 실제 arm/gripper/mimic joint state 및 접근 대비 arm 변위를, v8은 종료 순간 object/world와 jaw 접촉의 geom·거리·접점·법선을 추가합니다. 정적 opposing-normal 후보를 동역학으로 재평가했을 때 접근 오차 최대 4.34 mrad, close 중 arm 이동 최대 0.91 mrad, gripper target/실제 주 joint 차이 7.20 mrad가 기록됐고 settle 후 양 jaw 접촉은 유지되지 않았습니다. 동일 상태의 `mj_forward` 재생에서 jaw contact dot `−0.49934` 및 양 jaw의 약 0.51/0.61 mm 관통을 재현했고, artifact v8로 종료 접촉별 기하를 보존했습니다. orientation-weighted lift의 여섯 가중치, 12 staged posture, 두 27점 local joint-offset 격자 및 Joint5 yaw를 포함한 81점 격자에서도 settle 후 양 jaw 접촉을 유지한 후보는 없습니다. 한 offset 후보는 마지막에 선반보다 3.71 mm 높았지만 접촉은 link6 한쪽과 shelf뿐이어서 실패로 분류했습니다. 저장된 close pose로 shelf collision만 끄고 gravity/floor를 유지한 counterfactual에서도 bilateral contact는 close 57/1,000·settle 0/1,000이었고 물체가 floor에 닿았습니다. 다음 simulation 초점은 임의 joint-offset 확장보다 측정된 tool/TCP·finger contact geometry에 맞춘 object-relative grasp pose 수립이며, 실제 계측값은 운영자 입력 전까지 채우지 않습니다. 측정된 TCP calibration을 참조하는 `gripper-geometry-measurement.schema.json`, hash/기하 계약 validator, 그리고 운영자 measurement record를 `DRAFT_ONLY` artifact로 묶는 no-overwrite creator를 추가했지만 현장 measurement record와 geometry artifact는 아직 없습니다. 따라서 다음 grasp candidate 계산은 운영자가 TCP frame·finger contact patch·gap을 계측한 후에만 입력할 수 있습니다. 이는 실패 기준선이며 grasp 검증이나 로봇 제어 입력이 아닙니다.
 
-다음 정보가 확정되기 전까지 실제 장치 연동은 시작하지 않고, 독립적으로 진행 가능한 mock 및 카메라 통합 작업을 진행합니다.
+| 작업 | 예정 문서/파일 | 의존성 | 확인 방법 | 완료 조건 |
+| --- | --- | --- | --- | --- |
+| MuJoCo RGB-D/CameraInfo provenance 계약 확장 | `src/control_station/camera_adapters.py`, `src/control_station/models.py`, `src/control_station/app.py`, API 명세 | MuJoCo mode의 관제 `/api/cameras`·MJPEG RGB read-only slice 구현 및 runtime 확인; temporary apt-extracted overlay만 사용 가능 | 완료: depth/CameraInfo read-only metadata, 2초 freshness, missing/invalid 상태, RGB 대비 stamp/frame/dimensions 비교, RGB source stamp 기준 fixed camera→base TF2 lookup provenance를 API/UI에 노출. TF lookup 실패와 stale RGB를 분리하고 결과를 simulation placeholder로 표시. 표준 `depth_image_proc` 선택형 XYZ cloud publisher와 관제의 cloud structure/provenance metadata도 연결; target selection/pick 실행에는 연결하지 않음 | API가 RGB/depth/CameraInfo의 availability·dimensions·source frame/stamp와 필드 비교 상태를 드러내며 아직 3D target은 만들지 않음; TF lookup은 image stamp 기준 provenance만 노출하고 object pose를 만들지 않음; PointCloud2 수신 시 크기와 필드 구조만 확인하며 XYZ 좌표를 해석하거나 API에 반환하지 않음; mock/physical camera 경로 유지 |
+| RGB-D 전달률·source stamp 관측 도구 | `scripts/measure_mujoco_camera_sync.py`, `docs/implementation/simulation-setup.md`, 구현 현황 | 분리된 MuJoCo ROS domain, 관제와 같은 reliable/volatile/keep-last 1 QoS read-only subscription | 완료: cloud 변환 on/off 각 120초 2회 관측; RGB 4.407–4.556 Hz, Depth/Info 4.980–4.997 Hz, cloud on PointCloud2 4.981–4.982 Hz; 수신된 RGB-depth/Info stamp 전부 일치, RGB-cloud 합산 1,074/1,076 일치 | nearest header delta, exact-stamp pair 비율과 host callback 간격을 threshold 없이 보고하고 no-payload/no-command 유지; 두 short sample은 장기 성능·노출 동기화를 증명하지 않으므로 localization 연결 전 추가 반복/장기 측정이 남음. 이전 best-effort QoS 수치는 관제 QoS와 달라 대체 |
+| MuJoCo fixed camera와 task 관측 경로 연결 | `src/control_station/camera_adapters.py`, `src/control_station/app.py`, 관제 UI 및 interface/current-state 문서 | fixed RGB runtime, detector configuration optional, pending Pick & Place task | 완료: FIXED를 `DETECT_TARGETS`에 연결; 선택적 Head YOLO 설정은 exact retained sequence/hash frame에서만 task-POST inference; parser가 FIXED ready vocabulary를 읽음; mock detector와 실제 MuJoCo ROS/API smoke 확인 | candidate frame provenance를 event에 기록하고 provenance 소실 시 실패; no detector 상태가 명시되며 task/step transition과 motor/action command 없음. model weights가 없어 실제 detector load/인식 정확도는 미검증 |
+| MuJoCo RGB-depth 후보 영역 raw 통계 | `src/control_station/camera_adapters.py`, `src/control_station/app.py`, 관제 task event UI, interface/current-state 문서 | fixed RGB/depth exact header·frame·dimensions pair 및 ready detector candidate | 구현 및 Python 정적 구문 확인: 최근 5개/16 MiB depth frame cache, exact header pair의 bbox raw finite-positive min/median/max와 sample counts, payload hash/provenance를 task review event에 추가; UI에 단위 미해석/위치·선택 미사용 표시 | 런타임·모델 입력 검증은 미수행; 미동기화·stale·frame mismatch는 수치를 만들지 않고 상태로 반환하도록 구현; raw payload 미노출; calibration/3D/object pose/grasp로 쓰지 않음. 실측 CameraInfo·depth semantics와 camera-to-base 검증 뒤 3D 역투영 단계가 남음 |
+| 첫 고정 시나리오 및 camera/TCP/gripper 입력 확정 | `docs/epics/epic-07-episode-free-shelf-picking.md`, `docs/implementation/runbook.md`, `docs/implementation/field-measurement-sheet.md` | 운영 시나리오, 물리 카메라 위치·RGB/Depth, 설치 그리퍼 변형/기준 frame 확인 | 현장 입력표에 출처를 기록하고 camera frame/ROI, TCP 기준 pose, finger contact patch와 유효 개방 폭의 측정 방법을 확인 | 선반 한 칸·물체 한 종류·목적지 하나와 필요한 센서/보정 및 tool geometry 조건이 정의되고, 미측정/승인 필요 항목이 분리됨 |
+| Wrist camera 모델/장착 입력 재검토 | `simulation/mujoco_omx/robotis_omx/omx.xml`, `docs/implementation/mujoco-omx.md`, `docs/implementation/field-measurement-sheet.md` | 기존 baseline wrist view는 home 자세에서 target depth pixel이 없고, 1,000개 정적 자세 중 온전한 무접촉 target view 미발견; 모든 추가 camera pose는 물리 측정값 아님 | `link6` 아래 target-aimed orientation candidate를 별도 MuJoCo camera로 추가; schema v3 EGL capture에서 fixed/baseline/aimed 3 views와 9 artifacts, source hash 검증; hash-linked IK endpoint를 capture하는 schema v4 경로와 candidate JSON 사본의 hash/model/joint state 검증 추가; 다섯 대표 접근 endpoint의 baseline/aimed wrist view는 모두 target depth pixel 없음; 이를 분리해 보는 가상 local camera position 60개 탐색기를 추가했고, 52개는 다섯 endpoint 모두 target pixel, 34개는 각 target bbox가 frame edge에서 5 px 이상 떨어짐; 모든 후보는 임시 body/scene 기준이며 mount 크기·충돌·물리 시야를 확인하지 않음 | source/frame provenance와 가림 결과를 재현 가능하게 보존. simulation candidate는 현장 측정 항목을 정하는 참고값일 뿐이며 물리 camera extrinsic/grasp 검증 전까지 제어 입력으로 사용할 수 없음 |
 
-- 이동 로봇의 ROS 2 domain/배포판, Nav2 action 이름·타입·namespace·goal frame 및 테스트 환경
-- Nav2 lifecycle 노드 구성과 관제에서 상태를 읽을 수 있는 인터페이스(필요한 경우)
-- 팔 작업 명령과 작업 완료 결과를 알려주는 장치 인터페이스
-- Head Camera와 Joint Camera의 실제 장치 매핑 및 영상 전송 정보
-- 목적지 표현과 팔 작업 파라미터 형식
+저장소 기록상 simulator-only ROS runtime prerequisite는 2026-10-31 임시 apt overlay에서 launch/controller activation, JointState·RGB-D·CameraInfo·TF read-only 관측, FollowJointTrajectory server discovery까지 확인했습니다. action goal이나 joint command는 보내지 않았으며 system prefix 설치나 장기 안정성은 확인하지 않았습니다. Fixed-camera task observation과 raw depth bbox 통계도 코드/문서에 연결됐지만 detector weights가 없어 실제 모델 inference는 미확인입니다. schema v3/v4 camera capture와 다섯 IK endpoint wrist-view 검토 및 virtual camera attachment sweep도 simulation-only 자료로 남아 있습니다. scene baseline/aimed camera는 다섯 endpoint에서 target depth pixel을 만들지 못했고, 가상 local camera position 60개 중 34개가 다섯 상태 모두에서 bbox edge margin 5 px 이상을 보였습니다. 이 결과는 physical camera 장착, 카메라/그리퍼/선반 충돌, 실제 접근 가시성을 입증하지 않습니다.
+
+다음 선행 작업은 운영자가 첫 선반·물체·목적지 시나리오를 고정하고 [현장 측정표](implementation/field-measurement-sheet.md)의 카메라 역할/장착, RGB-D와 timestamp, 기준 frame·단위, TCP·그리퍼 geometry 및 안전 범위 항목에 출처가 있는 값을 제공하는 것입니다. 해당 증거가 없으면 기존 validator가 입력 artifact를 확인하는 선에서 멈추며, placeholder 값으로 physical transform이나 grasp pose를 만들지 않습니다. 자료가 확보되면 source/hash 검증된 calibration 및 geometry draft를 만들고 MuJoCo object-relative grasp 후보와 lift/contact audit를 이어갑니다. simulation package 설치와 launch는 계속 simulator-only 범위에 둡니다. 각 구현 단위는 해당 에픽 카드에 파일, 계약, 의존성, 확인 방법 및 화면/API 완료 조건을 먼저 기록합니다.
+
+## 실제 장치 연동 전 확인 항목
+
+- ROS 2 배포판/domain, 실제 graph의 action/topic/service 이름과 타입, namespace 및 frame
+- Nav2 action 수락·feedback·terminal result와 lifecycle/상태 확인 경로
+- OMX 모델/관절 제한 출처, 명령 권한자, 물리 정지 절차, READY·취소·파지 결과 제공자
+- Head/Joint 물리 장착 매핑, RGB/Depth 지원, calibration frame/단위와 오차 허용 기준
+- sim/hardware 실행 모드 분리 및 동시 제어 차단
+- 승인된 제한 시험의 대상·작업영역·감독자·중단 조건
+
+각 항목은 확인 방법과 근거를 함께 기록합니다. 미확정 값은 기본값이나 추측으로 채우지 않습니다.

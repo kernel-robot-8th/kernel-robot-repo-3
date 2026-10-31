@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kernel-robot-repo-3:schema:omx-gripper-geometry-measurement-v1",
+  "title": "OMX measured gripper geometry draft",
+  "description": "Operator-measured finger/contact geometry tied to a reviewed TCP calibration; never a robot command or grasp approval.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "status",
+    "review_required",
+    "usable_for_robot_control",
+    "arm_command_sent",
+    "geometry_id",
+    "robot_model",
+    "tcp",
+    "tool_geometry",
+    "measurement"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "omx_gripper_geometry_measurement" },
+    "status": { "const": "DRAFT_ONLY" },
+    "review_required": { "const": true },
+    "usable_for_robot_control": { "const": false },
+    "arm_command_sent": { "const": false },
+    "geometry_id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,80}$" },
+    "robot_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "revision"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "minLength": 1 }
+      }
+    },
+    "tcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frame_id", "calibration_id", "artifact"],
+      "properties": {
+        "frame_id": { "type": "string", "minLength": 1 },
+        "calibration_id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,80}$" },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256"],
+          "properties": {
+            "path": {
+              "type": "string",
+              "maxLength": 255,
+              "pattern": "^[A-Za-z0-9_.-]+\\.json$"
+            },
+            "sha256": { "$ref": "#/$defs/sha256" }
+          }
+        }
+      }
+    },
+    "tool_geometry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "coordinate_frame_id",
+        "closing_axis_tcp_unit",
+        "approach_axis_tcp_unit",
+        "measured_gap_range_m",
+        "finger_contact_patches_tcp_m"
+      ],
+      "properties": {
+        "coordinate_frame_id": { "type": "string", "minLength": 1 },
+        "closing_axis_tcp_unit": { "$ref": "#/$defs/vector3" },
+        "approach_axis_tcp_unit": { "$ref": "#/$defs/vector3" },
+        "measured_gap_range_m": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["minimum_m", "maximum_m"],
+          "properties": {
+            "minimum_m": { "type": "number", "minimum": 0 },
+            "maximum_m": { "type": "number", "minimum": 0 }
+          }
+        },
+        "finger_contact_patches_tcp_m": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["left", "right"],
+          "properties": {
+            "left": { "$ref": "#/$defs/contactPolygon" },
+            "right": { "$ref": "#/$defs/contactPolygon" }
+          }
+        }
+      }
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "measured_at",
+        "measured_by",
+        "evidence_path",
+        "evidence_sha256",
+        "axis_uncertainty_rad",
+        "gap_uncertainty_m",
+        "contact_point_uncertainty_m"
+      ],
+      "properties": {
+        "method": { "type": "string", "minLength": 1 },
+        "measured_at": { "type": "string", "format": "date-time" },
+        "measured_by": { "type": "string", "minLength": 1 },
+        "evidence_path": { "$ref": "#/$defs/evidencePath" },
+        "evidence_sha256": { "$ref": "#/$defs/sha256" },
+        "axis_uncertainty_rad": { "type": "number", "minimum": 0 },
+        "gap_uncertainty_m": { "type": "number", "minimum": 0 },
+        "contact_point_uncertainty_m": { "type": "number", "minimum": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "evidencePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"
+    },
+    "vector3": {
+      "type": "array",
+      "prefixItems": [
+        { "type": "number" },
+        { "type": "number" },
+        { "type": "number" }
+      ],
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "contactPolygon": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/vector3" }
+    }
+  }
+}

@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kernel-robot-repo-3:schema:omx-gripper-geometry-measurement-input-v1",
+  "title": "Operator gripper geometry measurement record",
+  "description": "Input record for creating a DRAFT_ONLY artifact. Values must come from physical measurement; this record is never a robot command.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "geometry_id",
+    "robot_model",
+    "tcp",
+    "tool_geometry",
+    "measurement"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "omx_gripper_geometry_measurement_input" },
+    "geometry_id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,80}$" },
+    "robot_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "revision"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "minLength": 1 }
+      }
+    },
+    "tcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frame_id", "calibration_id", "artifact_path"],
+      "properties": {
+        "frame_id": { "type": "string", "minLength": 1 },
+        "calibration_id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,80}$" },
+        "artifact_path": {
+          "type": "string",
+          "maxLength": 255,
+          "pattern": "^[A-Za-z0-9_.-]+\\.json$"
+        }
+      }
+    },
+    "tool_geometry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "coordinate_frame_id",
+        "closing_axis_tcp_unit",
+        "approach_axis_tcp_unit",
+        "measured_gap_range_m",
+        "finger_contact_patches_tcp_m"
+      ],
+      "properties": {
+        "coordinate_frame_id": { "type": "string", "minLength": 1 },
+        "closing_axis_tcp_unit": { "$ref": "#/$defs/vector3" },
+        "approach_axis_tcp_unit": { "$ref": "#/$defs/vector3" },
+        "measured_gap_range_m": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["minimum_m", "maximum_m"],
+          "properties": {
+            "minimum_m": { "type": "number", "minimum": 0 },
+            "maximum_m": { "type": "number", "minimum": 0 }
+          }
+        },
+        "finger_contact_patches_tcp_m": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["left", "right"],
+          "properties": {
+            "left": { "$ref": "#/$defs/contactPolygon" },
+            "right": { "$ref": "#/$defs/contactPolygon" }
+          }
+        }
+      }
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "measured_at",
+        "measured_by",
+        "axis_uncertainty_rad",
+        "gap_uncertainty_m",
+        "contact_point_uncertainty_m"
+      ],
+      "properties": {
+        "method": { "type": "string", "minLength": 1 },
+        "measured_at": { "type": "string", "format": "date-time" },
+        "measured_by": { "type": "string", "minLength": 1 },
+        "axis_uncertainty_rad": { "type": "number", "minimum": 0 },
+        "gap_uncertainty_m": { "type": "number", "minimum": 0 },
+        "contact_point_uncertainty_m": { "type": "number", "minimum": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "vector3": {
+      "type": "array",
+      "prefixItems": [
+        { "type": "number" },
+        { "type": "number" },
+        { "type": "number" }
+      ],
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "contactPolygon": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/vector3" }
+    }
+  }
+}
