@@ -1,3 +1,5 @@
+> 화면 캡처와 JSON·영상 실험 산출물은 로컬에서만 보관하며 저장소에는 포함하지 않습니다.
+
 # 실물 관측 자세의 MuJoCo 실험 — 2026-10-31
 
 실물 OMX 관절 snapshot을 바탕으로 MuJoCo 모델에 **근사 시작 자세**를 만들고, placeholder 선반의 물체 위 접근점으로 위치 IK를 탐색한 기록이다. 실물 동작을 재현하거나 실물 명령을 만들지 않았다.
@@ -45,10 +47,10 @@ MJCF의 fixed camera는 실물 정면 카메라와 다르게 위에서 내려다
 
 아래 렌더는 위 임시 환산 자세를 placeholder scene에 적용한 화면이다. fixed view는 top-down 합성 시점이며, 두 wrist view도 실물 카메라 보정이 아니다.
 
-- [MuJoCo fixed camera](assets/omx-live-pose-2026-10-31/mujoco-current-fixed-camera.png)
-- [MuJoCo synthetic wrist camera](assets/omx-live-pose-2026-10-31/mujoco-current-wrist-camera.png)
-- [MuJoCo wrist-aimed candidate camera](assets/omx-live-pose-2026-10-31/mujoco-current-wrist-aimed-candidate.png)
-- 대응하는 실물 시점: [정면 카메라](assets/omx-live-pose-2026-10-31/front-after-approach.png), [손목 카메라](assets/omx-live-pose-2026-10-31/wrist-after-approach.png)
+- **MuJoCo fixed camera** (로컬 캡처; 저장소 미포함)
+- **MuJoCo synthetic wrist camera** (로컬 캡처; 저장소 미포함)
+- **MuJoCo wrist-aimed candidate camera** (로컬 캡처; 저장소 미포함)
+- 대응하는 실물 시점: **정면 카메라** (로컬 캡처; 저장소 미포함), **손목 카메라** (로컬 캡처; 저장소 미포함)
 
 ## 다음 단계
 
@@ -58,9 +60,9 @@ MJCF의 fixed camera는 실물 정면 카메라와 다르게 위에서 내려다
 
 정면 사진에서 보이는 작업 배치에 맞춰 기존 IK 실험 장면은 보존하고 별도 [사진 대응 scene](../../simulation/mujoco_omx/robotis_omx/shelf_photo_match_scene.xml)을 추가했다. 이 장면은 2개 선반 단을 두고, 예전 단층 placeholder보다 아래에 배치했다. 아래/위 deck 중심 높이는 각각 0.060 m와 0.170 m이며, 딸기 모형은 위 deck에 놓았다.
 
-새 `photo_match_front_camera`는 실물 정면 카메라처럼 선반 앞쪽에서 보는 **시각 비교용 합성 시점**이다. [초기 사진 대응 렌더](assets/omx-live-pose-2026-10-31/mujoco-photo-match-two-tier-current.png)는 두 단, 딸기 proxy, 팔과 선반 간격을 한 화면에 보여준다. 선반 치수·높이, 딸기 크기, 카메라 pose는 사진에서 미터 단위로 보정한 값이 아니라 시각적 근사값이다. current pose도 encoder zero/scale 불확실성 때문에 정확한 실물 자세 복제는 아니다.
+새 `photo_match_front_camera`는 실물 정면 카메라처럼 선반 앞쪽에서 보는 **시각 비교용 합성 시점**이다. **초기 사진 대응 렌더** (로컬 캡처; 저장소 미포함)는 두 단, 딸기 proxy, 팔과 선반 간격을 한 화면에 보여준다. 선반 치수·높이, 딸기 크기, 카메라 pose는 사진에서 미터 단위로 보정한 값이 아니라 시각적 근사값이다. current pose도 encoder zero/scale 불확실성 때문에 정확한 실물 자세 복제는 아니다.
 
-사용자 피드백에 따라 선반을 멀리 옮긴 뒤 다시 가까이 조정했다. 현재 딸기 중심은 world `(0.10, 0.21, 0.215) m`이고 로봇 베이스 원점에서 수평 거리 약 `0.233 m`다. 이 값은 지금 scene의 배치값이며 실물 측정값은 아니다. [가까이 조정한 렌더](assets/omx-live-pose-2026-10-31/mujoco-photo-match-nearer.png)는 팔과 2층 선반을 한 화면에 보여준다.
+사용자 피드백에 따라 선반을 멀리 옮긴 뒤 다시 가까이 조정했다. 현재 딸기 중심은 world `(0.10, 0.21, 0.215) m`이고 로봇 베이스 원점에서 수평 거리 약 `0.233 m`다. 이 값은 지금 scene의 배치값이며 실물 측정값은 아니다. **가까이 조정한 렌더** (로컬 캡처; 저장소 미포함)는 팔과 2층 선반을 한 화면에 보여준다.
 
 사용자 설명에 따라 기본 자세의 기준을 딸기 위치에서 선반 전체로 정정했다. 로봇 베이스 정면은 선반 앞면에 수직으로 선반 안쪽을 향하고, 팔은 베이스 정면 기준 오른쪽으로 돌아간다. 이 scene에서는 로봇 정면을 local `+X`, 선반 안쪽을 world `+Y`로 정의해 베이스 yaw를 `+90°`로 둔다. `Joint1`은 약 `-65°`다. 다른 관절은 raw snapshot을 임시 환산한 값이다. 이 방향과 각도는 사진 맞춤용 추정이며, 실제 베이스 heading이나 joint zero/direction을 계측한 값은 아니다.
 
@@ -81,17 +83,17 @@ MuJoCo 기본 Simulate GUI에서 Run/Pause와 actuator control을 같은 창에�
 | 들어올린 뒤 딸기 중심의 위 선반 높이 | 92.46 mm |
 | 들어올리고 1초 유지한 뒤 접촉 | 양쪽 손끝 프록시 유지 |
 
-- [중심 높이 정렬 파지 시험 영상](assets/strawberry-vision-centerheight-test.mp4)
-- [들어올린 뒤 정지 화면](assets/strawberry-vision-centerheight-lifted-hold.png)
-- [시험 정량 결과 JSON](assets/strawberry-vision-centerheight-result.json)
+- **중심 높이 정렬 파지 시험 영상** (로컬 캡처; 저장소 미포함)
+- **들어올린 뒤 정지 화면** (로컬 캡처; 저장소 미포함)
+- **시험 정량 결과 JSON** (로컬 캡처; 저장소 미포함)
 
 이 결과는 사용자 요청에 맞춰 그리퍼 손끝을 6 mm 구형 접촉 프록시로 근사한 **시뮬레이션 전용** 시험이다. 공식 그리퍼 collision mesh의 파지 능력, 실물 카메라 보정, 실제 딸기 물성, 실물 로봇 동작을 검증한 것은 아니다. 화면에서 바닥을 뚫어 집는 것이 아니라 위 선반 위에 있는 딸기의 중심 높이에서 양쪽으로 접촉해 들어올린 결과다. 다음으로는 프록시 크기/마찰과 물체 위치 오차를 바꿔 재현성을 확인하고, 성공 판정 기준과 시험 스크립트를 고정한다.
 
-후속으로 딸기 시작 위치를 X 또는 Y 방향으로 ±6 mm 이동한 4개 배치에서도 동일한 RGB-D 중심 추정과 중심 높이 IK를 다시 계산했다. 네 경우 모두 101개 관절 보간 표본에서 선반 접촉이 없었고, 닫은 뒤 두 손끝 프록시 접촉과 55.1–56.5 mm의 중심 상승이 확인됐다. 관측 중심 대비 손끝 중간점 오차는 1.19–1.34 mm 범위였다. [네 배치의 개별 수치와 접촉 결과](assets/strawberry-offset-robustness-results.json), 시각 결과: [X −6 mm](assets/strawberry-offset-x_minus_6mm.png), [X +6 mm](assets/strawberry-offset-x_plus_6mm.png), [Y −6 mm](assets/strawberry-offset-y_minus_6mm.png), [Y +6 mm](assets/strawberry-offset-y_plus_6mm.png). 이 반복도 동일한 합성 장면·접촉 프록시를 공유하므로 실물 조건에서의 재현성을 뜻하지 않는다.
+후속으로 딸기 시작 위치를 X 또는 Y 방향으로 ±6 mm 이동한 4개 배치에서도 동일한 RGB-D 중심 추정과 중심 높이 IK를 다시 계산했다. 네 경우 모두 101개 관절 보간 표본에서 선반 접촉이 없었고, 닫은 뒤 두 손끝 프록시 접촉과 55.1–56.5 mm의 중심 상승이 확인됐다. 관측 중심 대비 손끝 중간점 오차는 1.19–1.34 mm 범위였다. **네 배치의 개별 수치와 접촉 결과** (로컬 캡처; 저장소 미포함), 시각 결과: **X −6 mm** (로컬 캡처; 저장소 미포함), **X +6 mm** (로컬 캡처; 저장소 미포함), **Y −6 mm** (로컬 캡처; 저장소 미포함), **Y +6 mm** (로컬 캡처; 저장소 미포함). 이 반복도 동일한 합성 장면·접촉 프록시를 공유하므로 실물 조건에서의 재현성을 뜻하지 않는다.
 
 ## 20회 반복성 검토
 
-재현 가능한 [실행 스크립트](../../scripts/run_mujoco_strawberry_repeatability.py)를 seed `20261031`로 독립 실행했다. 각 회차의 딸기 X/Y 시작 위치를 기준값 주변 ±6 mm 범위에서 바꾸고, 합성 고정 카메라 RGB-D 중심 관측으로 IK를 다시 계산했다. 이 검증 전에 FK 계산에서 mimic 관절 상태가 동기화되지 않던 문제를 수정했다. 따라서 과거에 기록된 20회 결과는 폐기하고 아래 표와 [현재 JSON](assets/strawberry-repeatability-20261031.json)으로 대체한다.
+재현 가능한 [실행 스크립트](../../scripts/run_mujoco_strawberry_repeatability.py)를 seed `20261031`로 독립 실행했다. 각 회차의 딸기 X/Y 시작 위치를 기준값 주변 ±6 mm 범위에서 바꾸고, 합성 고정 카메라 RGB-D 중심 관측으로 IK를 다시 계산했다. 이 검증 전에 FK 계산에서 mimic 관절 상태가 동기화되지 않던 문제를 수정했다. 따라서 과거에 기록된 20회 결과는 폐기하고 아래 표와 **현재 JSON** (로컬 캡처; 저장소 미포함)으로 대체한다.
 
 | 측정값 | 20회 범위 | 평균 |
 |---|---:|---:|
@@ -110,7 +112,7 @@ MUJOCO_GL=egl .venv-mujoco/bin/python scripts/run_mujoco_strawberry_repeatabilit
 
 현재 합성 장면과 ±6 mm 시작 위치 변형 조건에서는 `카메라 관측 → 중심 높이 접근 → 양손끝 접촉 → 들어올림 → 1초 유지`를 반복할 수 있다. 조명·가림·검출 편차, 실제 딸기 물성, 공식 collision mesh나 실물 로봇의 성공률을 뜻하지 않는다. 특히 이 성공 결과는 뒤쪽 바닥으로 운반하는 단계까지 포함하지 않는다.
 
-반복 회차별 이미지를 압축해 모은 [20회 파지 contact sheet](assets/strawberry-repeatability-20261031-contact-sheet.png)를 보존한다. 원본 회차별 PNG는 재현 명령의 `--save-frames` 옵션으로 필요할 때 다시 만들 수 있다.
+반복 회차별 이미지를 압축해 모은 **20회 파지 contact sheet** (로컬 캡처; 저장소 미포함)를 보존한다. 원본 회차별 PNG는 재현 명령의 `--save-frames` 옵션으로 필요할 때 다시 만들 수 있다.
 
 ## 딸기를 로봇 뒤쪽 바닥에 놓기
 
@@ -118,7 +120,7 @@ MUJOCO_GL=egl .venv-mujoco/bin/python scripts/run_mujoco_strawberry_repeatabilit
 
 ### 접촉만 사용하는 운반 시험
 
-기본 `--grasp-model contact` 모드는 양쪽 손끝 프록시 접촉만으로 운반한다. 6 mm 프록시, 다섯 위치, seed `20261031`에서 **0/5 성공**했다. 정적 경로 검사는 통과했지만 동적 이동 중 손끝 접촉이 풀렸다. 4 mm 프록시도 **0/5**였고, 1000 physics steps/waypoint의 매우 느린 이동도 해결하지 못했다. 결과는 [6 mm 접촉 시험](assets/strawberry-place-behind-contact-only-results.json), [4 mm 비교](assets/strawberry-place-behind-proxy4-results.json), [느린 이동](assets/strawberry-place-behind-slow-results.json)에 보존했다. 요청에 따라 접촉 상실 캡처 5장은 삭제했으며 정량 실패 기록은 JSON에 남아 있다.
+기본 `--grasp-model contact` 모드는 양쪽 손끝 프록시 접촉만으로 운반한다. 6 mm 프록시, 다섯 위치, seed `20261031`에서 **0/5 성공**했다. 정적 경로 검사는 통과했지만 동적 이동 중 손끝 접촉이 풀렸다. 4 mm 프록시도 **0/5**였고, 1000 physics steps/waypoint의 매우 느린 이동도 해결하지 못했다. 결과는 **6 mm 접촉 시험** (로컬 캡처; 저장소 미포함), **4 mm 비교** (로컬 캡처; 저장소 미포함), **느린 이동** (로컬 캡처; 저장소 미포함)에 보존했다. 요청에 따라 접촉 상실 캡처 5장은 삭제했으며 정량 실패 기록은 JSON에 남아 있다.
 
 ### 접촉 확인 후 시뮬레이터 weld로 운반
 
@@ -139,7 +141,7 @@ seed `20261031`, X/Y ±6 mm 시작 위치 변화, 바닥 목표 다섯 곳을 �
 MUJOCO_GL=egl .venv-mujoco/bin/python scripts/run_mujoco_strawberry_place_behind.py --trials 20 --seed 20261031 --grasp-model weld
 ```
 
-[20회 상세 결과 JSON](assets/strawberry-place-behind-results.json)에는 trial별 target, 물체 위치, 접촉, 안착 오차, MuJoCo/Python/NumPy 버전 및 소스 해시가 들어 있다. 눈으로 보는 완료 장면은 [측면 overview](assets/place-behind-trial-01-released-overview.png)다. [도달 직전](assets/place-behind-trial-01-rear-floor.png)과 [그리퍼 개방 후](assets/place-behind-trial-01-released.png) fixed-camera 이미지도 보존한다. 재현 명령에 `--save-frames`를 추가하면 회차별 장면을 다시 캡처한다.
+**20회 상세 결과 JSON** (로컬 캡처; 저장소 미포함)에는 trial별 target, 물체 위치, 접촉, 안착 오차, MuJoCo/Python/NumPy 버전 및 소스 해시가 들어 있다. 눈으로 보는 완료 장면은 **측면 overview** (로컬 캡처; 저장소 미포함)다. **도달 직전** (로컬 캡처; 저장소 미포함)과 **그리퍼 개방 후** (로컬 캡처; 저장소 미포함) fixed-camera 이미지도 보존한다. 재현 명령에 `--save-frames`를 추가하면 회차별 장면을 다시 캡처한다.
 
 이 20/20 결과는 MuJoCo 장면 안에서 **접촉 확인 → weld 운반 → 뒤쪽 바닥 방출** 절차가 반복된다는 뜻이다. 접촉만으로 유지하는 운반은 아직 실패하고 있으며, weld 모드 성공을 그리퍼의 물리적 파지 성공이나 실물 로봇 성공으로 해석하지 않는다. 실제 카메라·딸기 물성·공식 collision mesh·하드웨어 동작도 검증 대상에 포함되지 않았다.
 
