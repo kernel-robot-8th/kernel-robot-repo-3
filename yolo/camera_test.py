@@ -11,13 +11,13 @@ if __name__ == '__main__':  # 직접 실행할 때만 카메라 인식을 시작
     parser = argparse.ArgumentParser()  # 실행 옵션을 준비한다.
     follower_camera = '/dev/v4l/by-id/usb-Innomaker_Innomaker-U20CAM-720P_SN0001-video-index0'
     parser.add_argument('--camera', default=follower_camera)  # 카메라 경로나 /dev/video 번호다. 기본은 팔로워 카메라다.
-    parser.add_argument('--weights', type=Path)  # 모델 경로다. 생략하면 최근 추가 학습 모델이다.
+    parser.add_argument('--weights', type=Path)  # 모델 경로다. 생략하면 가장 최근 학습 모델이다.
     parser.add_argument('--conf', type=float, default=0.25)  # 이 신뢰도 이상만 표시한다.
     args = parser.parse_args()  # 옵션을 읽는다.
-    candidates = list((folder / 'runs').glob('strawberry_car_ball_expanded*/weights/best.pt'))
+    candidates = list((folder / 'runs').glob('strawberry_car_ball*/weights/best.pt'))  # 학습 결과 전체다.
     weights = args.weights or (max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None)
     if weights is None or not weights.is_file():  # 학습 완료 여부를 확인한다.
-        raise SystemExit('먼저 python yolo/train_expanded.py로 학습하세요.')
+        raise SystemExit('먼저 python yolo/train.py로 학습하세요.')
     print(f'모델: {weights}')  # 어떤 모델을 쓰는지 확인한다.
     model = YOLO(str(weights))  # 모델을 불러온다.
 
