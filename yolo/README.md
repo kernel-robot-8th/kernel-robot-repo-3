@@ -34,28 +34,49 @@ yolo/
 ## 전체 순서
 
 ```bash
+pip install -r yolo/requirements.txt   # 처음 한 번. albumentations가 추가됐다
 python yolo/camera_label.py        # 1) 카메라로 여러 물체 사진 찍고 라벨링
 python yolo/prepare_data.py        # 2) 원본 + 카메라 사진을 폴더별 8:2로 train/val 분할
-python yolo/prepare_augmented.py   # 3) 밝기·크기·회전·크롭 변형 사진 생성
-python yolo/train.py               # 4) 사전학습 모델에서 기본 학습 100회
-python yolo/train_expanded.py      # 5) 4)의 결과에서 변형 사진으로 추가 학습 20회
-python yolo/camera_test.py         # 6) 카메라 실시간 검출로 확인
+python yolo/train.py               # 3) 학습 중 무작위 증강으로 150회 학습 (최종 모델)
+python yolo/camera_test.py         # 4) 카메라 실시간 검출로 확인
 ```
+
+`prepare_augmented.py`(변형 사진 미리 생성)와 `train_expanded.py`(변형 사진으로 추가 학습)는 이전 방식이다. 회전 ±20°의 고정된 135가지 변형만 반복해서 보기 때문에, 기울거나 거꾸로 된 물체와 흐린 장면을 잘 못 잡았다. 지금은 `train.py` 하나로 학습한다.
 
 | 파일 | 하는 일 |
 |---|---|
 | `label.py` | 폴더의 사진을 한 장씩 띄워 물체 1개를 드래그로 라벨링한다. 파일 위쪽의 `class_id`·폴더를 바꿔 쓴다. |
 | `camera_label.py` | 카메라 실시간 화면에서 Space로 멈추고, 물체마다 드래그한 뒤 숫자키로 종류를 정해 S로 저장한다. |
 | `prepare_data.py` | 원본 폴더별로 마지막 약 20%를 검증용으로 나누고 `data.yaml`을 만든다. 라벨 형식과 클래스 번호를 검사한다. |
-| `prepare_augmented.py` | 사진마다 밝기 5 × 크기 9 × 회전 3 = 135가지 변형과, 물체마다 일부가 화면 끝에서 잘린 크롭 8가지를 만든다. 박스도 같이 변환한다. |
-| `train.py` | 사전학습 가중치에서 학습한다. 학습 중 밝기·회전·크기·원근 증강을 무작위로 적용한다. |
-| `train_expanded.py` | 가장 최근 `train.py` 결과에서 이어서 변형 사진으로 학습한다. 이미 변형된 사진이라 학습 중 증강은 끈다. |
+| `prepare_augmented.py` | (이전 방식) 사진마다 밝기 5 × 크기 9 × 회전 3 = 135가지 변형과, 물체마다 일부가 화면 끝에서 잘린 크롭 8가지를 만든다. |
+| `train.py` | 사전학습 가중치에서 학습한다. 매 학습마다 회전·뒤집기·원근·크기·색·흐림·노이즈·압축 증강을 무작위로 적용한다 (아래 표). |
+| `train_expanded.py` | (이전 방식) 가장 최근 `train.py` 결과에서 이어서 변형 사진으로 학습한다. |
 | `test.py` | 사진 한 장이나 폴더를 검출해 결과 사진을 `test_results/`에 저장하고, 중심 좌표를 출력한다. |
 | `camera_test.py` | 카메라 화면에서 매 프레임 검출해 박스·종류·신뢰도를 실시간으로 표시한다. S로 화면을 저장한다. |
 
-- `train_expanded.py`, `test.py`, `camera_test.py`는 가장 최근 모델을 자동으로 고른다. 직접 지정하려면 `--weights 경로/best.pt`를 붙인다.
+- `test.py`, `camera_test.py`는 `runs/strawberry_car_ball*` 중 가장 최근 모델을 자동으로 고른다. 직접 지정하려면 `--weights 경로/best.pt`를 붙인다.
 - 같은 이름의 결과 폴더가 있으면 YOLO가 `-2`, `-3`처럼 번호를 붙인다.
-- 학습 횟수는 `--epochs`로 바꾼다. 변형 사진이 약 1.5만 장이라 `train_expanded.py`는 1회에 약 8~12분 걸린다 (RTX 4060 Laptop 기준).
+- 학습 횟수는 `--epochs`로 바꾼다.
+
+## 학습 중 증강 (`train.py`)
+
+사진을 미리 만들지 않고, 매 학습마다 무작위로 변형해서 같은 사진도 매번 다르게 본다. 증강이 강한 만큼 기본 학습 횟수를 150회로 늘렸다.
+
+| 종류 | 설정 | 대응하는 장면 |
+|---|---|---|
+| 회전 | `degrees=180` | 어느 방향으로 누운 물체 |
+| 뒤집기 | `flipud=0.5`, `fliplr=0.5` | 거꾸로 된 물체 |
+| 원근·비틀기 | `perspective=0.001`, `shear=10` | 비스듬히 내려다본 모습 |
+| 크기·위치 | `scale=0.8`(약 0.2~1.8배), `translate=0.2` | 먼 거리의 작은 물체, 화면 끝에서 잘린 물체 |
+| 합성 | `mosaic=1.0`, `mixup=0.1` | 여러 물체, 겹침, 애매한 장면 |
+| 색 | `hsv_h=0.02`, `hsv_s=0.7`, `hsv_v=0.6` | 조명·색감 차이, 과노출 |
+| 흐림 | Motion·Gaussian·Median 중 하나 (30%) | 팔 움직임 흔들림, 초점 나감 |
+| 노이즈 | GaussNoise (25%) | 어두운 곳의 카메라 잡음 |
+| 노출·대비 | RandomGamma (30%), RandomBrightnessContrast (50%), CLAHE (5%) | 하얗게 날아가거나 어두운 화면 |
+| 흑백 | ToGray (5%) | 색이 약한 화면 |
+| 압축 | ImageCompression 품질 40~95 (30%) | MJPEG 스트림 압축 손상 |
+
+증강은 사진 속 물체의 방향과 화질만 바꾼다. 위에서 내려다본 3D 시점이나 실제로 가려진 모습은 만들 수 없으므로 실제 카메라 사진을 따로 모아야 한다.
 
 ## 카메라 라벨링 (`camera_label.py`)
 

@@ -12,10 +12,10 @@ if __name__ == '__main__':  # 파일을 직접 실행할 때만 테스트한다.
     parser.add_argument('--source', type=Path, default=folder / 'dataset_strawberry_car_ball_expanded' / 'images' / 'val')
     parser.add_argument('--no-show', action='store_true')  # 화면 없이 결과를 저장한다.
     args = parser.parse_args()  # 터미널 옵션을 읽는다.
-    candidates = list((folder / 'runs').glob('strawberry_car_ball_expanded*/weights/best.pt'))
+    candidates = list((folder / 'runs').glob('strawberry_car_ball*/weights/best.pt'))  # 학습 결과 전체다.
     weights = args.weights or (max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None)
     if weights is None or not weights.is_file():  # 학습 완료 여부를 확인한다.
-        raise SystemExit('먼저 python yolo/train_expanded.py로 학습하세요.')
+        raise SystemExit('먼저 python yolo/train.py로 학습하세요.')
     print(f'테스트 모델: {weights}')  # 어떤 학습 결과를 사용하는지 실행할 때 확인한다.
     model = YOLO(str(weights))  # 지정한 3클래스 모델을 불러온다.
     source = args.source  # 지정한 사진 또는 폴더를 사용한다.
