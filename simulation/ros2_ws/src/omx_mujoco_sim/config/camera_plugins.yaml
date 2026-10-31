@@ -1,0 +1,16 @@
+/**:
+  ros__parameters:
+    mujoco_plugins:
+      mujoco_camera_plugin:
+        type: "mujoco_ros2_control_plugins/CameraPlugin"
+        camera_publish_rate: 5.0
+        placeholder_fixed_camera:
+          policy: streaming
+          frame_name: placeholder_fixed_camera_optical_frame
+          info_topic: /mujoco_omx/fixed_camera/camera_info
+          image_topic: /mujoco_omx/fixed_camera/color/image_raw
+          depth_topic: /mujoco_omx/fixed_camera/depth/image_raw
+        placeholder_wrist_camera:
+          policy: disabled
+        placeholder_wrist_aimed_candidate:
+          policy: disabled

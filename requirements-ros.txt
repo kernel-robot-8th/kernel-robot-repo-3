@@ -1,0 +1,2 @@
+# rclpy and ROS 2 launch Python modules use PyYAML from the active interpreter.
+PyYAML>=6.0,<7.0

@@ -1,0 +1,109 @@
+<?xml version="1.0"?>
+<robot name="omx_mujoco_sim" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!--
+    Controller-only description. MJCF remains the sole simulation geometry,
+    collision, inertia, actuator, and contact model. Values here mirror the
+    local MJCF kinematics and simulation joint ranges; they are not hardware
+    safety limits. Effort metadata mirrors the MJCF actuator force range;
+    velocity metadata is copied from the pinned upstream OMX-F URDF for the
+    URDF joint contract. Neither value is a hardware command limit.
+  -->
+  <link name="link0"/>
+  <link name="link1"/>
+  <link name="link2"/>
+  <link name="link3"/>
+  <link name="link4"/>
+  <link name="link5"/>
+  <link name="link6"/>
+  <link name="link7"/>
+
+  <joint name="Joint1" type="revolute">
+    <parent link="link0"/>
+    <child link="link1"/>
+    <origin xyz="-0.01125 0 0.034" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-4.712389" upper="6.283185" effort="3.5" velocity="4.8"/>
+  </joint>
+  <joint name="Joint2" type="revolute">
+    <parent link="link1"/>
+    <child link="link2"/>
+    <origin xyz="0 0 0.0635" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.094395" upper="1.570796" effort="3.5" velocity="4.8"/>
+  </joint>
+  <joint name="Joint3" type="revolute">
+    <parent link="link2"/>
+    <child link="link3"/>
+    <origin xyz="0.0415 0 0.11315" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.094395" upper="1.570796" effort="3.5" velocity="4.8"/>
+  </joint>
+  <joint name="Joint4" type="revolute">
+    <parent link="link3"/>
+    <child link="link4"/>
+    <origin xyz="0.162 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.745329" upper="1.745329" effort="3.5" velocity="4.8"/>
+  </joint>
+  <joint name="Joint5" type="revolute">
+    <parent link="link4"/>
+    <child link="link5"/>
+    <origin xyz="0.0287 0 0" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-4.712389" upper="4.712389" effort="3.5" velocity="4.8"/>
+  </joint>
+  <joint name="Gripper" type="revolute">
+    <parent link="link5"/>
+    <child link="link6"/>
+    <origin xyz="0.0295 0.0075 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="1.745329" effort="3.5" velocity="4.8"/>
+  </joint>
+  <joint name="Gripper_mimic" type="revolute">
+    <parent link="link5"/>
+    <child link="link7"/>
+    <origin xyz="0.0295 -0.0108 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1.745329" upper="0" effort="3.5" velocity="4.8"/>
+    <mimic joint="Gripper" multiplier="-1"/>
+  </joint>
+
+  <ros2_control name="OMXMuJoCoSystem" type="system">
+    <hardware>
+      <plugin>mujoco_ros2_control/MujocoSystemInterface</plugin>
+      <param name="mujoco_model">$(find omx_mujoco_sim)/models/robotis_omx/shelf_pick_scene.xml</param>
+      <param name="headless">true</param>
+      <param name="initial_keyframe">home</param>
+    </hardware>
+    <joint name="Joint1">
+      <command_interface name="position"/>
+      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="Joint2">
+      <command_interface name="position"/>
+      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="Joint3">
+      <command_interface name="position"/>
+      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="Joint4">
+      <command_interface name="position"/>
+      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="Joint5">
+      <command_interface name="position"/>
+      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="Gripper">
+      <command_interface name="position"/>
+      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+</robot>
