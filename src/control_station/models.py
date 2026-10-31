@@ -62,10 +62,30 @@ class CameraSnapshot:
     stream_state: CameraStreamState
     frame_freshness: FrameFreshness = FrameFreshness.UNKNOWN
     last_frame_at: str | None = None
+    frame_sequence: int = 0
+    frame_width: int | None = None
+    frame_height: int | None = None
+    frame_sha256: str | None = None
+    pixel_transform_id: str | None = None
+    source_stamp: dict[str, int] | None = None
+    source_frame_id: str | None = None
+    depth_observation: dict[str, object] | None = None
+    camera_info_observation: dict[str, object] | None = None
+    point_cloud_observation: dict[str, object] | None = None
+    tf_observation: dict[str, object] | None = None
     frame_rate: float | None = None
     error_message: str | None = None
     stream_url: str | None = None
     detector_state: str | None = None
+    detector_model_type: str | None = None
+    detector_prompts: list[str] | None = None
+    detector_classes: list[str] | None = None
+    detector_confidence_threshold: float | None = None
+    detector_weights_sha256: str | None = None
+    detector_inference_image_size: int | None = None
+    detector_device: str | None = None
+    detector_ultralytics_version: str | None = None
+    detector_inference_frame_sequence: int | None = None
     detections: list[dict[str, object]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:

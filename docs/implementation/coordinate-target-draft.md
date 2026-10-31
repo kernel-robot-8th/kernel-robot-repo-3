@@ -1,6 +1,6 @@
 # 좌표 목표 초안
 
-관제 화면의 좌표 입력 폼은 입력한 XYZ 값과 좌표계 이름, 단위를 `.control-station/coordinate-target-drafts/` 아래 JSON 파일로 저장합니다. 파일에는 `DRAFT_ONLY` 상태와 `arm_command_sent: false`가 기록됩니다. 이 기능은 IK 계산, 팔 명령 전송, 카메라 영상의 픽셀 좌표 변환을 하지 않습니다.
+관제 화면의 좌표 입력 폼은 입력한 XYZ 값과 좌표계 이름, 단위를 `.control-station/coordinate-target-drafts/` 아래 JSON 파일로 저장합니다. API는 `frame_id`, `unit`, `position`만 받으며 `position`에는 `x`, `y`, `z`만 허용합니다. 파일에는 `DRAFT_ONLY` 상태와 `arm_command_sent: false`가 기록됩니다. 이 기능은 IK 계산, 팔 명령 전송, 카메라 영상의 픽셀 좌표 변환을 하지 않습니다.
 
 ## 사용 방법
 

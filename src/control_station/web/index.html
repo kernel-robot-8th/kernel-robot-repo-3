@@ -37,9 +37,17 @@
       <p class="note">Nav2 액션 서버 발견 여부는 통신 경로만 나타냅니다. 로봇 동작 가능 상태를 보장하지 않습니다. 이 서버는 주행 명령을 전송하지 않습니다.</p>
     </section>
     <section aria-labelledby="cameras-title">
-      <div class="section-heading"><h2 id="cameras-title">팔 로봇 카메라</h2><span class="updated">2대</span></div>
+      <div class="section-heading"><h2 id="cameras-title">카메라 관측</h2><span class="updated">실행 모드별</span></div>
+      <form id="targetObservationForm" class="task-form target-observation-form">
+        <label>관측 대상 클래스<input name="class_name" list="detectorClassOptions" maxlength="80" required placeholder="검출 모델 클래스 이름"></label>
+        <label>색상 조건 (검토용)<select name="color"><option value="">선택 안 함</option><option value="red">빨강</option><option value="blue">파랑</option><option value="green">초록</option><option value="yellow">노랑</option><option value="black">검정</option><option value="white">흰색</option></select></label>
+        <label>선반 층 (검토용)<input name="shelf_level" type="number" min="1" max="999999999" step="1" placeholder="예: 2"></label>
+        <button type="submit">카메라 관측</button>
+      </form>
+      <datalist id="detectorClassOptions"></datalist>
+      <p class="note">색상은 미보정 HSV 픽셀 힌트와, 선반 층은 명시적으로 설정한 영상 영역 초안과 비교해 검토 상태만 표시합니다. 결과는 후보를 필터링하거나 자동 선택하지 않으며, 관측 결과는 팔 명령을 보내지 않습니다.</p>
       <div id="cameraGrid" class="camera-grid"><p class="loading">상태를 불러오는 중…</p></div>
-      <p class="note">관제 서버가 카메라를 열어 영상을 표시합니다. 현재 영상 장치 경로가 확인된 카메라는 한 대입니다.</p>
+      <p class="note">실행 모드에 따라 지정된 카메라 입력을 관측합니다. MuJoCo mode는 `/mujoco_omx/fixed_camera/color/image_raw`의 ROS RGB frame만 읽고, ROS source frame ID·stamp를 보존합니다. Depth·CameraInfo·TF는 현재 관제 UI에서 소비하지 않으며 이 프리뷰를 로봇 제어에 사용하지 않습니다.</p>
     </section>
 
       </div>
@@ -72,17 +80,30 @@
       <div class="view" id="view-tasks" hidden>
     <section aria-labelledby="tasks-title">
       <div class="section-heading"><h2 id="tasks-title">작업 이력</h2><span id="taskCount" class="updated">불러오는 중</span></div>
+      <form id="commandParseForm" class="command-parse-form">
+        <label>자연어 작업 초안<textarea name="text" rows="2" maxlength="500" required placeholder="예: 2번째 선반의 빨간 상자를 집어서 왼쪽 정리함에 넣어줘"></textarea></label>
+        <button type="submit">명령 해석</button>
+      </form>
+      <p id="commandParseMessage" class="note" role="status">제한된 한국어 문형과 일부 영어 물체/색상어로 작업 폼 초안을 채웁니다. 사람이 검토하고 작업 등록을 눌러야 저장됩니다.</p>
       <form id="taskForm" class="task-form">
         <label>목적지<input name="destination" maxlength="40" required placeholder="예: 작업대 A"></label>
         <label>팔 작업<input name="arm_job" maxlength="120" required placeholder="예: 부품 옮기기"></label>
+        <label>대상 종류<input name="target_category" maxlength="80" placeholder="예: 상자"></label>
+        <label>대상 색상<input name="target_color" maxlength="40" list="targetColorOptions" placeholder="예: 빨간색"></label>
+        <datalist id="targetColorOptions">
+          <option value="빨간색"></option><option value="파란색"></option><option value="초록색"></option>
+          <option value="노란색"></option><option value="검은색"></option><option value="흰색"></option>
+        </datalist>
+        <label>선반 층<input name="shelf_level" type="number" min="1" max="999999999" step="1" placeholder="예: 2"></label>
         <button type="submit">작업 등록</button>
       </form>
+      <p class="note">대상 필드는 선택 입력입니다. 하나라도 입력하면 대상 종류가 필요합니다. 자연어 해석 값은 초안이므로 검토·수정 후 등록하세요. 색상 힌트 비교는 빨강·파랑·초록·노랑·검정·흰색만 지원하며 미보정 검토용입니다. 다른 색상은 작업 조건에 저장되지만 색상 비교는 지원되지 않는 상태로 표시됩니다.</p>
       <p id="taskMessage" class="note" role="status"></p>
       <div class="task-layout">
         <div id="taskList" class="task-list"><p class="loading">작업을 불러오는 중…</p></div>
         <article id="taskDetail" class="task-detail"><p class="loading">작업을 선택하면 단계와 생성 이력을 볼 수 있습니다.</p></article>
       </div>
-      <p class="note">작업 등록은 이력만 저장하며 로봇 명령을 보내지 않습니다.</p>
+      <p class="note">작업 등록은 기본 정보와 선택한 대상 조건을 이력에 저장할 뿐, 인식이나 로봇 명령을 실행하지 않습니다.</p>
     </section>
 
       </div>
@@ -94,6 +115,7 @@
         <div><dt>GET</dt><dd><code>/api/health</code> 서버 상태</dd></div>
         <div><dt>GET</dt><dd><code>/api/robots</code> 로봇 통신 상태</dd></div>
         <div><dt>GET</dt><dd><code>/api/cameras</code> 카메라 통신 상태</dd></div>
+        <div><dt>GET</dt><dd><code>/api/cameras/{camera_id}/target-observation?class_name=...&amp;color=...&amp;shelf_level=...</code> 대상 관측 및 선택적 색상/층 영역 힌트 비교 (관측 전용)</dd></div>
         <div><dt>GET</dt><dd><code>/streams/{camera_id}.mjpg</code> 카메라 영상</dd></div>
         <div><dt>GET</dt><dd><code>/api/arm/status</code> 팔 프로세스 상태</dd></div>
         <div><dt>POST</dt><dd><code>/api/arm/start</code> 텔레오퍼레이션 시작</dd></div>
@@ -101,9 +123,16 @@
         <div><dt>POST</dt><dd><code>/api/arm/coordinate-target-drafts</code> 미실행 좌표 초안 파일 저장</dd></div>
         <div><dt>GET</dt><dd><code>/api/tasks</code> 작업 목록</dd></div>
         <div><dt>GET</dt><dd><code>/api/tasks/{task_id}</code> 작업 상세·단계·이벤트</dd></div>
-        <div><dt>POST</dt><dd><code>/api/tasks</code> 작업 등록</dd></div>
+        <div><dt>POST</dt><dd><code>/api/tasks</code> 작업 등록 및 선택적 `pick_request` 조건 저장</dd></div>
+        <div><dt>POST</dt><dd><code>/api/tasks/parse-command</code> 자연어 작업 명령을 검토용 초안으로 해석 (저장·실행 없음)</dd></div>
+        <div><dt>POST</dt><dd><code>/api/tasks/{task_id}/target-observation</code> 대기 작업에 현재 카메라 후보 판정을 이벤트로 기록</dd></div>
+        <div><dt>POST</dt><dd><code>/api/tasks/{task_id}/target-selection</code> 특정 관측 event의 후보에 대한 운영자 review 기록 (작업 실행 없음)</dd></div>
+        <div><dt>POST</dt><dd><code>/api/tasks/{task_id}/projection-draft</code> 오프라인 2D 선반 평면 좌표 초안을 현재 작업 이력에 검토 전용으로 연결</dd></div>
+        <div><dt>GET</dt><dd><code>/api/tasks/{task_id}/projection-drafts/{event_id}/artifact</code> 이벤트에 연결된 hash 검증 2D 초안 JSON 열람</dd></div>
+        <div><dt>POST</dt><dd><code>/api/tasks/{task_id}/start</code> 모의 작업 시작 (mock 모드만)</dd></div>
+        <div><dt>POST</dt><dd><code>/api/tasks/{task_id}/cancel</code> 모의 작업 취소 (mock 모드만)</dd></div>
       </dl>
-      <p class="note">작업 등록은 저장만 합니다. 작업 오케스트레이션과 작업별 완료 신호는 아직 연결되지 않았습니다.</p>
+      <p class="note">자연어 해석은 제한된 규칙 기반 초안이며 모호하거나 검출 클래스와 맞지 않는 대상은 자동 선택하지 않습니다. 작업 등록은 저장만 하고 관측 기록은 task 이벤트를 추가할 뿐 상태를 전이하지 않습니다. 시작/취소는 mock 모드에서만 동작하며 실제 로봇 명령을 보내지 않습니다.</p>
     </section>
 
       </div>

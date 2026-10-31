@@ -29,7 +29,12 @@ class OmxJointPose:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, object]) -> "OmxJointPose":
-        if payload.get("schema_version") != 1:
+        schema_version = payload.get("schema_version")
+        if (
+            isinstance(schema_version, bool)
+            or not isinstance(schema_version, int)
+            or schema_version != 1
+        ):
             raise PoseValidationError("schema_version must be 1")
         if payload.get("robot_type") != "omx_follower":
             raise PoseValidationError("robot_type must be 'omx_follower'")
@@ -59,7 +64,10 @@ class OmxJointPose:
             value = raw_positions[key]
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise PoseValidationError(f"{key} must be a number")
-            numeric_value = float(value)
+            try:
+                numeric_value = float(value)
+            except (OverflowError, ValueError) as exc:
+                raise PoseValidationError(f"{key} must be a finite number") from exc
             if not math.isfinite(numeric_value):
                 raise PoseValidationError(f"{key} must be finite")
 
