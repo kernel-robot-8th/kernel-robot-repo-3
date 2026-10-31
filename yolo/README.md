@@ -25,8 +25,11 @@ yolo/
   camera_frames/                        camera_label.py로 찍은 여러 물체 사진 + 라벨
   dataset_strawberry_car_ball/          prepare_data.py 결과 (train/val)
   dataset_strawberry_car_ball_expanded/ prepare_augmented.py 결과
-  runs/                                 학습 결과 (weights/best.pt)
+  head_frames/                          head_capture.py로 찍은 상단 카메라 사진
+  dataset_head*/                        head_autolabel.py 결과 (train/val, review/ 검수 시트)
+  runs/                                 학습 결과 (weights/best.pt). 상단 카메라 추가 학습은 runs/head_camera_finetune*
   test_results/                         테스트 결과 사진
+  yolo11x.pt                            head_autolabel.py가 쓰는 COCO 사전학습 가중치
 ```
 
 라벨은 YOLO 형식이다. 사진과 같은 이름의 txt에 박스마다 한 줄씩 `클래스 중심x 중심y 너비 높이`(0~1 비율)를 적는다.
@@ -53,6 +56,9 @@ python yolo/camera_test.py         # 4) 카메라 실시간 검출로 확인
 | `train_expanded.py` | (이전 방식) 가장 최근 `train.py` 결과에서 이어서 변형 사진으로 학습한다. |
 | `test.py` | 사진 한 장이나 폴더를 검출해 결과 사진을 `test_results/`에 저장하고, 중심 좌표를 출력한다. |
 | `camera_test.py` | 카메라 화면에서 매 프레임 검출해 박스·종류·신뢰도를 실시간으로 표시한다. S로 화면을 저장한다. |
+| `head_capture.py` | 상단(Head) 카메라로 몇 초마다 자동으로 사진을 찍는다. 그 사이에 물체를 옮긴다. |
+| `head_autolabel.py` | 상단 카메라 사진에 자동으로 라벨을 붙이고 데이터셋과 검수 시트를 만든다 (아래 "상단 카메라 시점 추가 학습"). |
+| `train_head.py` | 기존 모델에서 이어서 상단 카메라 사진으로 추가 학습한다. |
 
 - `test.py`, `camera_test.py`는 `runs/strawberry_car_ball*` 중 가장 최근 모델을 자동으로 고른다. 직접 지정하려면 `--weights 경로/best.pt`를 붙인다.
 - 같은 이름의 결과 폴더가 있으면 YOLO가 `-2`, `-3`처럼 번호를 붙인다.
@@ -104,6 +110,39 @@ python yolo/camera_label.py --camera 2  # 다른 카메라 번호
 - **크기** 0.05 ~ 1.5배. 0.05·0.1·0.2·0.3은 아주 먼 거리로, 640 화면에서 물체가 약 10~60px로 보인다. 빈 공간은 원본의 바닥 부분을 반복해 채운다.
 - **크롭**: 물체마다 상·하·좌·우 중 한쪽을 잘라 40% 또는 70%만 보이게 하고, 나머지 방향의 배경은 남긴다. 화면 안의 다른 물체도 보이는 만큼 정답에 들어간다. 파일 이름은 `crop_<방향><남은 비율>_b<물체 번호>_원본이름.jpg`다.
 - 원본과 그 변형이 train과 val에 섞이지 않도록 분할한 뒤에 변형한다.
+
+## 상단(Head) 카메라 시점 추가 학습
+
+`train.py` 모델은 팔 카메라 시점용이라, 선반을 정면에서 보는 상단 카메라(HCAM0, 관제 `head_camera`)에서는 거의 검출하지 못했다 (2026-10-24 모델, 신뢰도 0.3 미만). 상단 카메라 사진으로 추가 학습한다.
+
+```bash
+python yolo/head_capture.py                       # 1) 2초마다 60장 촬영. 찍는 사이에 물체를 옮긴다
+python yolo/head_autolabel.py                     # 2) 자동 라벨 + 검수 시트 (dataset_head/review/)
+python yolo/head_autolabel.py --skip 5,8,15       # 3) 시트를 보고 잘못된 사진을 빼서 다시 만든다
+python yolo/train_head.py --weights runs/<기존 모델>/weights/best.pt   # 4) 추가 학습 (GPU 없으면 --device cpu)
+python yolo/camera_test.py --camera /dev/v4l/by-id/usb-Jieli_Technology_USB_Composite_Device-video-index0 \
+    --weights yolo/runs/head_camera_finetune/weights/best.pt              # 5) 상단 카메라로 확인
+```
+
+- **촬영**: 물체를 왼쪽·가운데·오른쪽 칸, 위·아래 층에 골고루 옮기고, 물체 1~2개만 있거나 빈 장면도 섞는다. 같은 배치만 찍으면 그 배치만 외운다. 찍히는 순간에는 손을 화면 밖으로 뺀다.
+- **자동 라벨**: 공·자동차는 COCO YOLO11x(`sports ball`, `car`·`truck`·`cell phone`)로 찾는다. 딸기는 COCO에 없어서 흰 선반 위의 진한 빨강 덩어리로 찾는다. COCO는 딸기도 `sports ball`로 잡기 때문에 박스 안 빨강·주황 화소 수로 다시 나눈다. 자동차를 놓친 사진은 가까운 사진의 자동차 모습을 같은 자리 주변에서 찾아 붙인다.
+- **검수는 반드시 한다**: 손에 든 물체는 라벨이 빠지고, 자동차가 돌아가면 옆 사진에서 못 찾는다. 라벨이 빠진 채 학습하면 그 물체를 배경으로 배운다. `review/` 시트를 보고 그런 사진을 `--skip`으로 뺀다.
+- **증강**: 상단 카메라에서는 물체가 선반 위에 서 있어서 `train.py`의 180도 회전·상하 뒤집기를 쓰지 않는다. 좌우 뒤집기·크기·mosaic·색만 쓴다.
+
+### 결과 (2026-10-26, `runs/head_camera_finetune`)
+
+- 시작 모델: 2026-10-24 `strawberry_car_ball_expanded` (10회 학습). 10-28 `train.py` 결과가 아니다.
+- 데이터: 1280x720으로 60장을 찍고, 손에 든 물체·자동차 라벨 누락 21장과 깨진 사진 1장을 빼 37장을 남겼다. 원본과 렌즈 왜곡을 편 사본(당시 실험용 intrinsic)을 함께 넣어 74장 (train 58 / val 16)이다.
+- CPU로 93회 학습 후 조기 종료. val: precision 0.99, recall 1.0, mAP50 0.995, mAP50-95 0.86.
+- 학습 후 같은 날 다시 찍은 상단 카메라 화면 1장에서 딸기 0.92, 자동차 0.87로 검출했다. 시작 모델은 학습 전 같은 선반 화면에서 입력 640 기준 최고 신뢰도 0.02였다 (입력 1280에서도 0.29).
+- 모델 파일은 git에 넣지 않는다. 지금은 team10-ai PC의 `yolo/runs/head_camera_finetune/weights/best.pt`에 있다.
+
+### 한계
+
+- val 사진도 같은 날 같은 선반에서 찍어서 점수가 실제보다 높게 나온다. 물체를 새로 배치해 확인한다.
+- 원본 학습 데이터 없이 상단 사진만으로 이어 학습했다. 팔 카메라 시점에서는 시작 모델보다 못할 수 있다 (확인하지 않았다). 한 모델로 두 시점을 다 보려면 상단 사진을 `prepare_data.py` 입력에 더해 `train.py`로 다시 학습한다.
+- 2026-10-26 사진은 1280x720이고 관제 서버 Head Camera는 640x480으로 캡처한다. 관제 화면에서는 따로 확인해야 한다. `head_capture.py` 기본값은 관제와 같은 640x480이다.
+- 2026-10-26 데이터의 왜곡 편 사본은 `head_autolabel.py`가 만들지 않는다. 관제 런타임은 왜곡을 펴지 않으므로 원본 사진만으로 충분하다.
 
 ## 학습 기록
 
