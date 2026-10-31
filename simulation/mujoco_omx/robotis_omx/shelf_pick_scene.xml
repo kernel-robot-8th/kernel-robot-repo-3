@@ -1,0 +1,40 @@
+<mujoco model="omx shelf-pick placeholder scene">
+  <include file="omx.xml"/>
+
+  <statistic center="0.28 0 0.28" extent="0.85"/>
+  <visual>
+    <headlight diffuse="0.65 0.65 0.65" ambient="0.35 0.35 0.35" specular="0.05 0.05 0.05"/>
+    <global azimuth="135" elevation="-25"/>
+  </visual>
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.32 0.44 0.58" rgb2="0.02 0.03 0.05" width="512" height="3072"/>
+    <texture type="2d" name="ground" builtin="checker" rgb1="0.20 0.22 0.24" rgb2="0.12 0.13 0.15" width="256" height="256"/>
+    <material name="ground" texture="ground" texuniform="true" texrepeat="4 4" reflectance="0.08"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0.2 -0.2 1.4" dir="0 0 -1" directional="true" diffuse="0.9 0.9 0.9"/>
+    <geom name="floor" type="plane" size="0 0 0.05" material="ground"/>
+
+    <!-- Synthetic top-down viewpoint for the placeholder shelf scene; not a measured camera pose. -->
+    <camera name="placeholder_fixed_camera" pos="0.05 0.25 0.85"
+            xyaxes="1 0 0 0 1 0" fovy="55" resolution="640 480"/>
+
+    <!-- Open-front access is a simulation assumption, not a measurement of the installed shelf.
+         Dimensions and offset remain placeholders and do not establish a graspable approach. -->
+    <geom name="placeholder_shelf_deck" type="box" pos="0.05 0.25 0.22" size="0.18 0.14 0.015"
+          rgba="0.38 0.39 0.41 1" friction="1.0 0.01 0.001"/>
+    <geom name="placeholder_shelf_support_front_left" type="box" pos="-0.13 0.11 0.11" size="0.012 0.012 0.11"
+          rgba="0.26 0.27 0.29 1"/>
+    <geom name="placeholder_shelf_support_front_right" type="box" pos="0.23 0.11 0.11" size="0.012 0.012 0.11"
+          rgba="0.26 0.27 0.29 1"/>
+    <geom name="placeholder_shelf_support_back" type="box" pos="0.05 0.39 0.11" size="0.18 0.012 0.11"
+          rgba="0.26 0.27 0.29 1"/>
+
+    <body name="placeholder_pick_object" pos="0.05 0.25 0.27">
+      <freejoint name="placeholder_pick_object_free"/>
+      <geom name="placeholder_pick_object_geom" type="box" size="0.025 0.025 0.025"
+            mass="0.08" rgba="0.85 0.20 0.12 1" friction="1.2 0.02 0.001"/>
+    </body>
+  </worldbody>
+</mujoco>

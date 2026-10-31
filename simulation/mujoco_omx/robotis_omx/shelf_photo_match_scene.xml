@@ -1,0 +1,47 @@
+<mujoco model="omx two-tier photo-match scene">
+  <include file="omx.xml"/>
+
+  <statistic center="0.04 0.16 0.24" extent="0.95"/>
+  <visual>
+    <headlight diffuse="0.72 0.72 0.72" ambient="0.42 0.42 0.42" specular="0.05 0.05 0.05"/>
+    <global azimuth="180" elevation="-12" offwidth="1280" offheight="720"/>
+  </visual>
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.40 0.49 0.59" rgb2="0.05 0.06 0.08" width="512" height="3072"/>
+    <texture type="2d" name="photo_match_ground_texture" builtin="checker" rgb1="0.23 0.24 0.25" rgb2="0.15 0.16 0.17" width="256" height="256"/>
+    <material name="photo_match_ground" texture="photo_match_ground_texture" texuniform="true" texrepeat="4 4" reflectance="0.05"/>
+    <material name="photo_match_shelf_white" rgba="0.82 0.83 0.81 1"/>
+    <material name="photo_match_shelf_edge" rgba="0.69 0.70 0.68 1"/>
+    <material name="photo_match_strawberry_red" rgba="0.90 0.12 0.055 1"/>
+    <material name="photo_match_stem_green" rgba="0.18 0.42 0.10 1"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0.0 -0.3 1.0" dir="0 0.4 -1" directional="true" diffuse="0.9 0.9 0.9"/>
+    <geom name="photo_match_floor" type="plane" size="0 0 0.05" material="photo_match_ground"/>
+
+    <!-- Visual-only fixed camera approximates the installed front view; its pose is not calibrated. -->
+    <camera name="photo_match_front_camera" pos="0.04 -0.65 0.48"
+            xyaxes="1 0 0 0 0.259 0.966" fovy="55" resolution="1280 720"/>
+
+    <!-- Two-tier shelf approximation. Both decks sit lower than the old single-deck placeholder. -->
+    <geom name="photo_match_lower_deck" type="box" pos="0.10 0.23 0.060" size="0.22 0.14 0.012"
+          material="photo_match_shelf_white" friction="1.0 0.01 0.001"/>
+    <geom name="photo_match_upper_deck" type="box" pos="0.10 0.23 0.170" size="0.22 0.14 0.012"
+          material="photo_match_shelf_white" friction="1.0 0.01 0.001"/>
+    <geom name="photo_match_back_panel" type="box" pos="0.10 0.365 0.245" size="0.22 0.012 0.245"
+          material="photo_match_shelf_white"/>
+    <geom name="photo_match_left_support" type="box" pos="-0.11 0.23 0.245" size="0.012 0.14 0.245"
+          material="photo_match_shelf_edge"/>
+    <geom name="photo_match_right_support" type="box" pos="0.31 0.23 0.245" size="0.012 0.14 0.245"
+          material="photo_match_shelf_edge"/>
+
+    <!-- Strawberry-shaped visual proxy on tier 2; dimensions are illustrative, not measured. -->
+    <body name="photo_match_strawberry" pos="0.10 0.21 0.215">
+      <geom name="photo_match_strawberry_body" type="ellipsoid" size="0.030 0.030 0.037"
+            material="photo_match_strawberry_red"/>
+      <geom name="photo_match_strawberry_stem" type="capsule" fromto="0.0 0.0 0.031 0.0 0.0 0.052"
+            size="0.004" material="photo_match_stem_green"/>
+    </body>
+  </worldbody>
+</mujoco>

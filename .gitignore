@@ -153,6 +153,7 @@ activemq-data/
 .env
 .envrc
 .venv
+.venv-mujoco/
 .control-station/
 env/
 venv/
@@ -222,3 +223,9 @@ __marimo__/
 
 # Local control-station data
 /data/
+
+# Local experimental manipulation attempts and generated media
+/docs/implementation/assets/*attempt*
+/docs/implementation/assets/strawberry-grasp-*-trial*.mp4
+/docs/implementation/assets/strawberry-grasp-proxy-*.mp4
+/docs/implementation/assets/strawberry-grasp-e2e-*.mp4

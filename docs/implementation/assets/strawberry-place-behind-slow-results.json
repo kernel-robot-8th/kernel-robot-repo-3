@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "simulation_only": true,
+  "scene": "simulation/mujoco_omx/robotis_omx/strawberry_pick_scene.xml",
+  "seed": 20261031,
+  "software_versions": {
+    "python": "3.12.3",
+    "mujoco": "3.17.0",
+    "numpy": "2.5.4"
+  },
+  "sha256": {
+    "scripts/run_mujoco_strawberry_place_behind.py": "c48470170516d244840f1f892d329c7c34924f695ad1d36b404777673f87552f",
+    "scripts/run_mujoco_strawberry_repeatability.py": "8f6afc4d0f56050e99c4cc16cee8251c6b534f9ba1897bbec19b6fb292f1e404",
+    "simulation/mujoco_omx/robotis_omx/strawberry_pick_scene.xml": "1cd9edc6aac9362febf2c07799ae0ea161ba64f91b34f46d7e596bf5185d8171",
+    "simulation/mujoco_omx/robotis_omx/shelf_photo_match_scene.xml": "37cc97627cd3cf73edc1144f645aefea4410d86b523a20554674516b6b60b5e2",
+    "simulation/mujoco_omx/robotis_omx/omx.xml": "70ad27711697ceac9b071bf5b721490f85204adec1ea68b0e21e3c36a15d5411",
+    "requirements-mujoco.txt": "6cfdc4c2b724775d3f2b7512004528284aff3ee4fa49fdcec493362a0b157f17"
+  },
+  "gripper_model": {
+    "contact_proxy_radius_mm": 6.0,
+    "closing_preload_rad": 0.03
+  },
+  "steps_per_waypoint": 1000,
+  "trials_requested": 1,
+  "successes": 0,
+  "success_rate": 0.0,
+  "elapsed_seconds": 0.8360579159998451,
+  "trials": [
+    {
+      "trial": 1,
+      "fruit_offset_xy_m": [
+        -0.0017422522291107283,
+        0.000851668506729678
+      ],
+      "place_target_xy_m": [
+        -0.2,
+        -0.22
+      ],
+      "success": false,
+      "failure_reasons": [
+        "RuntimeError: Lost fingertip contact during carry at sample 3: contacts=['photo_match_upper_deck'], object_xyz=[0.10999584736703334, 0.225149742365583, 0.21862746840050973], object_contacts=[['photo_match_strawberry_body', 'photo_match_upper_deck', -0.0003671870376684146]], actual_q=[-0.4812891920003036, 0.386326328729246, -1.3985986030452449, 1.082112572118593, 0.001353005202795556], target_q=[-0.4822475751516309, 0.37737478617441494, -1.4023459547237636, 1.0816984142464314, 0.000946111109423691]"
+      ]
+    }
+  ],
+  "limitations": [
+    "Synthetic fixed camera and illustrative shelf/strawberry scene only.",
+    "Contact proxies are approximate; official collision meshes are not a validated grasp model.",
+    "The rear floor place is not validated on real hardware."
+  ]
+}

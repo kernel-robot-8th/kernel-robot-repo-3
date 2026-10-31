@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>선반 영상 영역 입력 도구</title>
+  <style>
+    :root { color-scheme: light; font: 16px/1.5 system-ui, sans-serif; color: #17212b; background: #f3f6f8; }
+    body { max-width: 1100px; margin: 0 auto; padding: 1.25rem; }
+    h1 { margin-bottom: .3rem; }
+    .note { color: #425466; }
+    .controls { display: flex; flex-wrap: wrap; align-items: end; gap: .75rem; margin: 1rem 0; }
+    label { display: grid; gap: .25rem; }
+    input, button { font: inherit; padding: .45rem .65rem; }
+    button { cursor: pointer; }
+    button:disabled { cursor: default; opacity: .55; }
+    #level { width: 7rem; }
+    #imageInfo, #status { min-height: 1.5rem; }
+    .canvas-wrap { overflow: auto; max-height: 72vh; border: 1px solid #9aabb8; background: #202830; }
+    canvas { display: block; max-width: 100%; height: auto; cursor: crosshair; }
+    #regions { padding-left: 1.4rem; }
+    .region-row { display: flex; align-items: center; gap: .6rem; margin: .3rem 0; }
+    .swatch { width: 1rem; height: 1rem; border: 1px solid #333; }
+    .danger { color: #8a2525; }
+    code { background: #e7edf1; padding: .08rem .25rem; }
+  </style>
+</head>
+<body>
+  <h1>선반 영상 영역 입력 도구</h1>
+  <p class="note">저장된 관측 PNG에서 각 선반 칸의 경계를 클릭해 polygon 초안을 만듭니다. 좌표는 표시 크기가 아니라 원본 PNG 픽셀 기준입니다. 다운로드에는 원본 PNG SHA-256과 해상도를 함께 넣어 CLI가 task 관측 프레임과 대조합니다. PNG는 최대 64 MiB, 영역은 최대 64개, 영역당 512개 점, JSON은 최대 1 MB입니다. 물리 측정이나 로봇 제어 허가를 대신하지 않습니다.</p>
+
+  <div class="controls">
+    <label>관측 PNG<input id="imageFile" type="file" accept="image/png"></label>
+    <label>선반 층<input id="level" type="number" min="1" max="999999999" step="1" value="1"></label>
+    <button id="finish" type="button" disabled>현재 polygon 완료</button>
+    <button id="undo" type="button" disabled>점 하나 취소</button>
+    <button id="clearCurrent" type="button" disabled>현재 polygon 취소</button>
+    <button id="download" type="button" disabled>regions JSON 다운로드</button>
+  </div>
+
+  <p id="imageInfo" class="note" aria-live="polite">먼저 작업 이력의 프레임 링크에서 저장된 PNG를 내려받아 선택하세요.</p>
+  <div class="canvas-wrap"><canvas id="canvas" aria-label="선반 polygon을 표시하는 이미지"></canvas></div>
+  <p id="status" role="status" aria-live="polite">이미지가 선택되면 클릭으로 꼭짓점을 추가할 수 있습니다.</p>
+  <h2>완료한 영역</h2>
+  <ol id="regions"></ol>
+  <p class="note">최소 3개 점을 찍고 polygon을 완료하세요. 서로 겹치는 영역은 허용되지만 관측 비교 시 겹친 후보는 모호로 표시됩니다. JSON을 만든 뒤 저장된 task 응답과 함께 <code>scripts/calibrate_shelf_regions.py</code>에 전달하세요.</p>
+
+  <script>
+    const imageFile = document.querySelector('#imageFile');
+    const levelInput = document.querySelector('#level');
+    const canvas = document.querySelector('#canvas');
+    const context = canvas.getContext('2d');
+    const finishButton = document.querySelector('#finish');
+    const undoButton = document.querySelector('#undo');
+    const clearButton = document.querySelector('#clearCurrent');
+    const downloadButton = document.querySelector('#download');
+    const imageInfo = document.querySelector('#imageInfo');
+    const status = document.querySelector('#status');
+    const regionsList = document.querySelector('#regions');
+    const colors = ['#ff453a', '#30d158', '#0a84ff', '#ffd60a', '#bf5af2', '#64d2ff'];
+    const maxRegions = 64;
+    const maxPolygonVertices = 512;
+    const maxJsonBytes = 1_000_000;
+    const maxSourceImageBytes = 64 * 1024 * 1024;
+    const maxShelfLevel = 999_999_999;
+    const regions = [];
+    let image = null;
+    let currentPoints = [];
+    let imageUrl = null;
+    let sourceImageSha256 = null;
+
+    function redraw() {
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      if (image) {
+        context.drawImage(image, 0, 0);
+        regions.forEach((region, index) => {
+          drawPolygon(region.polygon_px, colors[index % colors.length], `${region.shelf_level}층`);
+        });
+        if (currentPoints.length) drawPolygon(currentPoints, '#ffffff', '');
+      }
+      undoButton.disabled = currentPoints.length === 0;
+      clearButton.disabled = currentPoints.length === 0;
+      finishButton.disabled = !image
+        || currentPoints.length < 3
+        || currentPoints.length > maxPolygonVertices
+        || regions.length >= maxRegions;
+      downloadButton.disabled = !image || regions.length === 0 || sourceImageSha256 === null;
+    }
+
+    function drawPolygon(points, color, label) {
+      context.save();
+      context.lineWidth = Math.max(2, canvas.width / 500);
+      context.strokeStyle = color;
+      context.fillStyle = `${color}35`;
+      context.beginPath();
+      points.forEach(([x, y], index) => index === 0 ? context.moveTo(x, y) : context.lineTo(x, y));
+      if (points.length >= 3) {
+        context.closePath();
+        context.fill();
+      }
+      context.stroke();
+      points.forEach(([x, y]) => {
+        context.beginPath();
+        context.arc(x, y, Math.max(4, canvas.width / 300), 0, 2 * Math.PI);
+        context.fillStyle = color;
+        context.fill();
+      });
+      if (label && points.length) {
+        const [x, y] = points[0];
+        context.font = `bold ${Math.max(14, canvas.width / 45)}px system-ui`;
+        context.lineWidth = Math.max(3, canvas.width / 250);
+        context.strokeStyle = '#111';
+        context.strokeText(label, x + 5, y - 5);
+        context.fillStyle = color;
+        context.fillText(label, x + 5, y - 5);
+      }
+      context.restore();
+    }
+
+    function renderRegions() {
+      regionsList.replaceChildren();
+      regions.forEach((region, index) => {
+        const row = document.createElement('li');
+        row.className = 'region-row';
+        const swatch = document.createElement('span');
+        swatch.className = 'swatch';
+        swatch.style.backgroundColor = colors[index % colors.length];
+        const label = document.createElement('span');
+        label.textContent = `${region.shelf_level}층 · ${region.polygon_px.length}개 점`;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.textContent = '삭제';
+        remove.addEventListener('click', () => {
+          regions.splice(index, 1);
+          renderRegions();
+          redraw();
+        });
+        row.append(swatch, label, remove);
+        regionsList.append(row);
+      });
+    }
+
+    imageFile.addEventListener('change', () => {
+      const file = imageFile.files?.[0];
+      image = null;
+      sourceImageSha256 = null;
+      currentPoints = [];
+      regions.splice(0, regions.length);
+      renderRegions();
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      redraw();
+      if (imageUrl) URL.revokeObjectURL(imageUrl);
+      imageUrl = null;
+      if (!file) {
+        imageInfo.textContent = '먼저 작업 이력의 프레임 링크에서 저장된 PNG를 내려받아 선택하세요.';
+        return;
+      }
+      if (file.type !== 'image/png') {
+        imageInfo.textContent = 'PNG 파일을 선택해야 합니다.';
+        imageInfo.classList.add('danger');
+        imageFile.value = '';
+        return;
+      }
+      if (file.size > maxSourceImageBytes) {
+        imageInfo.textContent = 'PNG 파일이 64 MiB 제한을 초과합니다.';
+        imageInfo.classList.add('danger');
+        imageFile.value = '';
+        return;
+      }
+      imageUrl = URL.createObjectURL(file);
+      const nextImage = new Image();
+      nextImage.onload = async () => {
+        if (imageFile.files?.[0] !== file) return;
+        image = nextImage;
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        redraw();
+        imageInfo.textContent = `원본 해상도 ${canvas.width} × ${canvas.height} px · PNG fingerprint 계산 중`;
+        imageInfo.classList.remove('danger');
+        status.textContent = '원본 PNG fingerprint를 계산 중입니다. 좌표 입력은 가능하지만 JSON은 계산이 끝난 뒤 다운로드할 수 있습니다.';
+        try {
+          if (!globalThis.crypto?.subtle) throw new Error('Web Crypto is unavailable');
+          const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+          if (imageFile.files?.[0] !== file) return;
+          sourceImageSha256 = Array.from(
+            new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')
+          ).join('');
+          imageInfo.textContent = `원본 해상도 ${canvas.width} × ${canvas.height} px · PNG SHA-256 ${sourceImageSha256}`;
+          status.textContent = '선반 한 칸의 안쪽 영역을 따라 클릭하고 “현재 polygon 완료”를 누르세요.';
+          redraw();
+        } catch (error) {
+          imageInfo.textContent = `PNG fingerprint 계산 실패 · ${error.message}`;
+          imageInfo.classList.add('danger');
+          status.textContent = 'fingerprint를 계산할 수 없어 JSON을 다운로드할 수 없습니다.';
+          redraw();
+        }
+      };
+      nextImage.onerror = () => {
+        if (imageFile.files?.[0] !== file) return;
+        image = null;
+        imageInfo.textContent = '선택한 PNG를 열 수 없습니다.';
+        imageInfo.classList.add('danger');
+        redraw();
+      };
+      nextImage.src = imageUrl;
+    });
+
+    canvas.addEventListener('click', (event) => {
+      if (!image) return;
+      if (currentPoints.length >= maxPolygonVertices) {
+        status.textContent = `polygon은 최대 ${maxPolygonVertices}개 점까지 입력할 수 있습니다.`;
+        return;
+      }
+      const bounds = canvas.getBoundingClientRect();
+      const x = Math.round((event.clientX - bounds.left) * canvas.width / bounds.width);
+      const y = Math.round((event.clientY - bounds.top) * canvas.height / bounds.height);
+      currentPoints.push([Math.max(0, Math.min(canvas.width - 1, x)), Math.max(0, Math.min(canvas.height - 1, y))]);
+      status.textContent = `현재 ${levelInput.value || '?'}층 polygon · ${currentPoints.length}개 점 · 마지막 점을 시작점에 가까이 찍을 필요 없이 완료 버튼을 누르세요.`;
+      redraw();
+    });
+
+    document.querySelector('#undo').addEventListener('click', () => {
+      currentPoints.pop();
+      redraw();
+    });
+    document.querySelector('#clearCurrent').addEventListener('click', () => {
+      currentPoints = [];
+      redraw();
+      status.textContent = '현재 polygon 점을 지웠습니다.';
+    });
+    document.querySelector('#finish').addEventListener('click', () => {
+      if (regions.length >= maxRegions) {
+        status.textContent = `영역은 최대 ${maxRegions}개까지 입력할 수 있습니다.`;
+        return;
+      }
+      const level = Number(levelInput.value);
+      if (!Number.isSafeInteger(level) || level < 1 || level > maxShelfLevel) {
+        status.textContent = `층 번호는 1부터 ${maxShelfLevel}까지의 정수여야 합니다.`;
+        return;
+      }
+      if (regions.some((region) => region.shelf_level === level)) {
+        status.textContent = `${level}층 영역이 이미 있습니다. 기존 영역을 삭제하거나 다른 층 번호를 선택하세요.`;
+        return;
+      }
+      if (currentPoints.length < 3) return;
+      regions.push({ shelf_level: level, polygon_px: currentPoints.map(([x, y]) => [x, y]) });
+      currentPoints = [];
+      regions.sort((first, second) => first.shelf_level - second.shelf_level);
+      renderRegions();
+      redraw();
+      status.textContent = `${level}층 영역을 추가했습니다. 다른 층 영역을 그리거나 JSON을 다운로드하세요.`;
+    });
+    document.querySelector('#download').addEventListener('click', () => {
+      if (!sourceImageSha256 || !image) return;
+      const payload = {
+        schema_version: 2,
+        source_image_sha256: sourceImageSha256,
+        source_image_size_px: { width: canvas.width, height: canvas.height },
+        regions,
+      };
+      const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: 'application/json' });
+      if (blob.size > maxJsonBytes) {
+        status.textContent = 'regions JSON이 1 MB 제한을 초과합니다. 점을 줄이거나 큰 영역을 간단히 그려주세요.';
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'shelf-regions.json';
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      status.textContent = 'regions JSON을 다운로드했습니다. 기존 provenance 검증 CLI에서 사용할 수 있습니다.';
+    });
+  </script>
+</body>
+</html>

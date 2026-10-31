@@ -1,0 +1,4 @@
+<mujoco model="ROBOTIS OMX dynamic strawberry pick scene">
+  <!-- Keep the established robot, shelf, strawberry appearance, and camera view. -->
+  <include file="shelf_photo_match_scene.xml"/>
+</mujoco>

@@ -1,0 +1,1759 @@
+{
+  "schema_version": 1,
+  "simulation_only": true,
+  "scene": "simulation/mujoco_omx/robotis_omx/strawberry_pick_scene.xml",
+  "seed": 20261031,
+  "software_versions": {
+    "python": "3.12.3",
+    "mujoco": "3.17.0",
+    "numpy": "2.5.4"
+  },
+  "sha256": {
+    "scripts/run_mujoco_strawberry_place_behind.py": "fae938771c680a0ba686c541ba21ee953282e538f4e12c9eab901136c995f9fd",
+    "scripts/run_mujoco_strawberry_repeatability.py": "8f6afc4d0f56050e99c4cc16cee8251c6b534f9ba1897bbec19b6fb292f1e404",
+    "simulation/mujoco_omx/robotis_omx/strawberry_pick_scene.xml": "1cd9edc6aac9362febf2c07799ae0ea161ba64f91b34f46d7e596bf5185d8171",
+    "simulation/mujoco_omx/robotis_omx/shelf_photo_match_scene.xml": "37cc97627cd3cf73edc1144f645aefea4410d86b523a20554674516b6b60b5e2",
+    "simulation/mujoco_omx/robotis_omx/omx.xml": "70ad27711697ceac9b071bf5b721490f85204adec1ea68b0e21e3c36a15d5411",
+    "requirements-mujoco.txt": "6cfdc4c2b724775d3f2b7512004528284aff3ee4fa49fdcec493362a0b157f17"
+  },
+  "gripper_model": {
+    "contact_proxy_radius_mm": 6.0,
+    "closing_preload_rad": 0.03
+  },
+  "steps_per_waypoint": 100,
+  "waypoint_spacing_mm": 5.0,
+  "proxy_contact_friction": 2.0,
+  "grasp_model": "weld",
+  "trials_requested": 20,
+  "successes": 20,
+  "success_rate": 1.0,
+  "elapsed_seconds": 20.629306196999096,
+  "trials": [
+    {
+      "trial": 1,
+      "fruit_offset_xy_m": [
+        -0.0017422522291107283,
+        0.000851668506729678
+      ],
+      "camera_estimated_pick_center_m": [
+        0.09514681369169967,
+        0.21360437980471614,
+        0.21906746453164092
+      ],
+      "pick_ik_error_mm": 0.9015887485630807,
+      "pregrasp_object_drift_mm": 0.0032126064080420544,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.04965985121149157,
+        -0.034302701319463044,
+        -0.0001999360964269857
+      ],
+      "gripper_angle_after_preload_rad": 0.42531072236426515,
+      "preload_object_shift_mm": 0.6912171360313376,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        -0.0001426853873737477,
+        -0.001312350214991237,
+        -0.0012766915806334822
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.2,
+          -0.22,
+          0.037
+        ],
+        "ik_error_mm_max": 5.986965821850486,
+        "planned_joint_samples": 188,
+        "place_joint_goal_rad": {
+          "Joint1": -3.9090718540720104,
+          "Joint2": 0.5860427645282287,
+          "Joint3": -0.5099995018171172,
+          "Joint4": 1.5974904911442058,
+          "Joint5": 2.8010859394264602
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.4494857032670057
+      },
+      "place_target_m": [
+        -0.2,
+        -0.22,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.1988758273224929,
+        -0.22083902826776075,
+        0.03777381787573866
+      ],
+      "object_after_release_m": [
+        -0.20537925688831574,
+        -0.22928425258893237,
+        0.031469291632829355
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 10.73003964603997,
+      "success": true,
+      "failure_reasons": []
+    },
+    {
+      "trial": 2,
+      "fruit_offset_xy_m": [
+        -0.004477551180931538,
+        0.0022615371506149
+      ],
+      "camera_estimated_pick_center_m": [
+        0.09333166575078446,
+        0.2149675955644954,
+        0.218654236687892
+      ],
+      "pick_ik_error_mm": 0.8648782133105769,
+      "pregrasp_object_drift_mm": 0.002954297249749485,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.048847225090892815,
+        -0.03387971613680194,
+        5.513534490387065e-05
+      ],
+      "gripper_angle_after_preload_rad": 0.42531073151667886,
+      "preload_object_shift_mm": 0.6721248722138367,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        -0.000703049955979751,
+        -0.002564683521760147,
+        -0.0010728651156886593
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.18,
+          -0.2,
+          0.037
+        ],
+        "ik_error_mm_max": 5.949121614764726,
+        "planned_joint_samples": 188,
+        "place_joint_goal_rad": {
+          "Joint1": -3.908822563508666,
+          "Joint2": 0.2945706914047792,
+          "Joint3": -0.06077593380059383,
+          "Joint4": 1.4481838736217718,
+          "Joint5": 2.793266783628963
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.4551315884640714
+      },
+      "place_target_m": [
+        -0.18,
+        -0.2,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.17855451653090104,
+        -0.19941716133428272,
+        0.0395502646273329
+      ],
+      "object_after_release_m": [
+        -0.18495875776739662,
+        -0.208093768100324,
+        0.031500328852293216
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 9.492015626701145,
+      "success": true,
+      "failure_reasons": []
+    },
+    {
+      "trial": 3,
+      "fruit_offset_xy_m": [
+        0.004623847604361315,
+        0.0022415481989046856
+      ],
+      "camera_estimated_pick_center_m": [
+        0.10096457022715907,
+        0.21466895176268685,
+        0.21675506892944432
+      ],
+      "pick_ik_error_mm": 0.9733328544339608,
+      "pregrasp_object_drift_mm": 0.0007029133918089734,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.04867496402298884,
+        -0.03389250788082028,
+        0.001999030958819148
+      ],
+      "gripper_angle_after_preload_rad": 0.4253108609167502,
+      "preload_object_shift_mm": 0.8069451148100424,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        -0.0009148676928383837,
+        -0.0027848647848591757,
+        0.0014461337168650834
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.22,
+          -0.18,
+          0.037
+        ],
+        "ik_error_mm_max": 5.97329677290231,
+        "planned_joint_samples": 188,
+        "place_joint_goal_rad": {
+          "Joint1": -4.09240078675837,
+          "Joint2": 0.41548822703128047,
+          "Joint3": -0.22814664953695318,
+          "Joint4": 1.4582058128084479,
+          "Joint5": 2.634739672095968
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.6409108744349274
+      },
+      "place_target_m": [
+        -0.22,
+        -0.18,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.21736796783577655,
+        -0.1767368716753172,
+        0.03690491282589426
+      ],
+      "object_after_release_m": [
+        -0.21317692556959436,
+        -0.16830688423634615,
+        0.03138647960542661
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 13.538216313276472,
+      "success": true,
+      "failure_reasons": []
+    },
+    {
+      "trial": 4,
+      "fruit_offset_xy_m": [
+        -0.0006544423111901915,
+        0.0022132691196890784
+      ],
+      "camera_estimated_pick_center_m": [
+        0.09523250637920985,
+        0.21490881166461373,
+        0.21867205568977852
+      ],
+      "pick_ik_error_mm": 0.8942767849388332,
+      "pregrasp_object_drift_mm": 0.002761019136993982,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.04998348438553683,
+        -0.034499571695746405,
+        0.0002818815328888176
+      ],
+      "gripper_angle_after_preload_rad": 0.4253108287703167,
+      "preload_object_shift_mm": 0.7620773083869259,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        8.290515160233602e-05,
+        -0.0008056087318273064,
+        -0.0005906564156654137
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.16,
+          -0.22,
+          0.037
+        ],
+        "ik_error_mm_max": 5.997074825467232,
+        "planned_joint_samples": 188,
+        "place_joint_goal_rad": {
+          "Joint1": -3.777635960941321,
+          "Joint2": 0.414923780867806,
+          "Joint3": -0.2293141845600158,
+          "Joint4": 1.5682493290780943,
+          "Joint5": 2.93410645847436
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.3155687636664641
+      },
+      "place_target_m": [
+        -0.16,
+        -0.22,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.1589247684943327,
+        -0.22053891185522337,
+        0.03680932101492999
+      ],
+      "object_after_release_m": [
+        -0.1634604183791088,
+        -0.22725191315089113,
+        0.03179260037810246
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 8.035218709315986,
+      "success": true,
+      "failure_reasons": []
+    },
+    {
+      "trial": 5,
+      "fruit_offset_xy_m": [
+        0.0037867498641710375,
+        0.0025127134705897544
+      ],
+      "camera_estimated_pick_center_m": [
+        0.09906919444294732,
+        0.21530112285663927,
+        0.21855313547718827
+      ],
+      "pick_ik_error_mm": 0.9497409034758721,
+      "pregrasp_object_drift_mm": 0.0007001708746492014,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.050266843991458185,
+        -0.03466801087106465,
+        0.0004722049508175362
+      ],
+      "gripper_angle_after_preload_rad": 0.42531107161201254,
+      "preload_object_shift_mm": 0.8224142098524007,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        0.0002828479163949349,
+        -0.00036713733209325916,
+        -0.0002881186296634919
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.22,
+          -0.24,
+          0.037
+        ],
+        "ik_error_mm_max": 6.024420361574465,
+        "planned_joint_samples": 188,
+        "place_joint_goal_rad": {
+          "Joint1": -3.9096779337586134,
+          "Joint2": 0.9326076913023322,
+          "Joint3": -1.084994332406567,
+          "Joint4": 1.7258010753103898,
+          "Joint5": 2.810221303426106
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.4457766887732206
+      },
+      "place_target_m": [
+        -0.22,
+        -0.24,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.21844878581128307,
+        -0.2405409907158594,
+        0.03506054488744485
+      ],
+      "object_after_release_m": [
+        -0.21515746941029898,
+        -0.233293268721988,
+        0.030865779335917647
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 8.272263713618814,
+      "success": true,
+      "failure_reasons": []
+    },
+    {
+      "trial": 6,
+      "fruit_offset_xy_m": [
+        0.0040236218956163534,
+        0.004460131226823932
+      ],
+      "camera_estimated_pick_center_m": [
+        0.09918695996112979,
+        0.21697811908394193,
+        0.21804479222336934
+      ],
+      "pick_ik_error_mm": 0.9401511528071104,
+      "pregrasp_object_drift_mm": 0.0060763228638383675,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.05009002455225697,
+        -0.03458417825441756,
+        0.0011139682519939673
+      ],
+      "gripper_angle_after_preload_rad": 0.42531121251966497,
+      "preload_object_shift_mm": 0.8432454716793014,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        0.00012596704288959926,
+        -0.0006652985878938533,
+        0.0005136870710711339
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.2,
+          -0.22,
+          0.037
+        ],
+        "ik_error_mm_max": 6.015738448068659,
+        "planned_joint_samples": 188,
+        "place_joint_goal_rad": {
+          "Joint1": -3.9080694516036725,
+          "Joint2": 0.5999780698340137,
+          "Joint3": -0.5210683072798921,
+          "Joint4": 1.5972164910742979,
+          "Joint5": 2.8113177549181456
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.4456512478371684
+      },
+      "place_target_m": [
+        -0.2,
+        -0.22,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.19839657384002998,
+        -0.2195839667658248,
+        0.03510724089706087
+      ],
+      "object_after_release_m": [
+        -0.19477190189938795,
+        -0.21204017023239027,
+        0.031358396449218014
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 9.523229477385776,
+      "success": true,
+      "failure_reasons": []
+    },
+    {
+      "trial": 7,
+      "fruit_offset_xy_m": [
+        -0.004572661003097155,
+        0.00018090368673573907
+      ],
+      "camera_estimated_pick_center_m": [
+        0.09321030302831054,
+        0.21305420815922216,
+        0.21923423654929727
+      ],
+      "pick_ik_error_mm": 0.8754160101146458,
+      "pregrasp_object_drift_mm": 0.0036166390286178724,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.049197073642242156,
+        -0.03404586142477367,
+        -0.0005440509739611174
+      ],
+      "gripper_angle_after_preload_rad": 0.4253105767142533,
+      "preload_object_shift_mm": 0.6608180033073946,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        -0.0004552577598072455,
+        -0.00203703624230292,
+        -0.0017904420282109368
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.18,
+          -0.2,
+          0.037
+        ],
+        "ik_error_mm_max": 5.962417304235667,
+        "planned_joint_samples": 188,
+        "place_joint_goal_rad": {
+          "Joint1": -3.9079685812695444,
+          "Joint2": 0.2988788497305525,
+          "Joint3": -0.07154473523808169,
+          "Joint4": 1.4555250134374316,
+          "Joint5": 2.7965368412379843
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.4517099988164461
+      },
+      "place_target_m": [
+        -0.18,
+        -0.2,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.1790199144524286,
+        -0.20068088443066057,
+        0.03965256534807665
+      ],
+      "object_after_release_m": [
+        -0.18666089667285266,
+        -0.21061868906021622,
+        0.031557804435738454
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 12.534915310602422,
+      "success": true,
+      "failure_reasons": []
+    },
+    {
+      "trial": 8,
+      "fruit_offset_xy_m": [
+        -0.004320735407134505,
+        -0.0019956190369567507
+      ],
+      "camera_estimated_pick_center_m": [
+        0.0930753473623632,
+        0.21092651634224446,
+        0.21987919791758012
+      ],
+      "pick_ik_error_mm": 0.8873800504070304,
+      "pregrasp_object_drift_mm": 0.003551462561866925,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.049858447440862805,
+        -0.03436523510423535,
+        -0.0010756132115514634
+      ],
+      "gripper_angle_after_preload_rad": 0.42531040773020234,
+      "preload_object_shift_mm": 0.649135053322958,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        6.186924725051779e-06,
+        -0.001045651697351574,
+        -0.002379252855416958
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.22,
+          -0.18,
+          0.037
+        ],
+        "ik_error_mm_max": 5.986196536005337,
+        "planned_joint_samples": 188,
+        "place_joint_goal_rad": {
+          "Joint1": -4.088578670187444,
+          "Joint2": 0.42326944911589376,
+          "Joint3": -0.2641498951473306,
+          "Joint4": 1.4837686670849108,
+          "Joint5": 2.6181641115488503
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.6274919335106874
+      },
+      "place_target_m": [
+        -0.22,
+        -0.18,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.21962046750554862,
+        -0.18240287653466694,
+        0.03890119333132268
+      ],
+      "object_after_release_m": [
+        -0.22736335197473864,
+        -0.1921897725607695,
+        0.03156037881727737
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 14.24112029958235,
+      "success": true,
+      "failure_reasons": []
+    },
+    {
+      "trial": 9,
+      "fruit_offset_xy_m": [
+        0.005832635879796908,
+        0.005792671980764056
+      ],
+      "camera_estimated_pick_center_m": [
+        0.10118758861903922,
+        0.2182386056982969,
+        0.21766270438291727
+      ],
+      "pick_ik_error_mm": 0.9613125961471677,
+      "pregrasp_object_drift_mm": 0.0037537241345249606,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.04976180345009558,
+        -0.03441467804975346,
+        0.0015340186560321989
+      ],
+      "gripper_angle_after_preload_rad": 0.4253114298394036,
+      "preload_object_shift_mm": 0.8573722482718003,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        -0.00014190775991211602,
+        -0.0012015795342400493,
+        0.0009821636510001786
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.16,
+          -0.22,
+          0.037
+        ],
+        "ik_error_mm_max": 6.00888221728019,
+        "planned_joint_samples": 189,
+        "place_joint_goal_rad": {
+          "Joint1": -3.777924376952519,
+          "Joint2": 0.42882814229480576,
+          "Joint3": -0.23879750832355684,
+          "Joint4": 1.576972198669259,
+          "Joint5": 2.948279752808169
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.318333385680702
+      },
+      "place_target_m": [
+        -0.16,
+        -0.22,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.158152084245143,
+        -0.21854251537141425,
+        0.035734028570177205
+      ],
+      "object_after_release_m": [
+        -0.15429481344588716,
+        -0.21051791697896632,
+        0.03170062448683032
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 11.066121815478317,
+      "success": true,
+      "failure_reasons": []
+    },
+    {
+      "trial": 10,
+      "fruit_offset_xy_m": [
+        -0.0040465247830808165,
+        -0.005825578501882034
+      ],
+      "camera_estimated_pick_center_m": [
+        0.09285916707174038,
+        0.20702964297196125,
+        0.2190888354901602
+      ],
+      "pick_ik_error_mm": 0.9000013599434122,
+      "pregrasp_object_drift_mm": 0.004508495548763151,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.04977262646426969,
+        -0.03437267342729789,
+        -0.0005148781413722124
+      ],
+      "gripper_angle_after_preload_rad": 0.42530984253184156,
+      "preload_object_shift_mm": 0.6429739537255882,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        -6.049513274140883e-05,
+        -0.0011925165408935845,
+        -0.0016268180702465607
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.22,
+          -0.24,
+          0.037
+        ],
+        "ik_error_mm_max": 5.992500482048745,
+        "planned_joint_samples": 187,
+        "place_joint_goal_rad": {
+          "Joint1": -3.9108401475499615,
+          "Joint2": 0.926833943152374,
+          "Joint3": -1.0833739313608324,
+          "Joint4": 1.734289291079987,
+          "Joint5": 2.799169289222572
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.450599641087864
+      },
+      "place_target_m": [
+        -0.22,
+        -0.24,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.21863641676453605,
+        -0.24109821110522833,
+        0.03747615295077119
+      ],
+      "object_after_release_m": [
+        -0.22414232614256993,
+        -0.24852512022878306,
+        0.031195017504411157
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 9.478214008273111,
+      "success": true,
+      "failure_reasons": []
+    },
+    {
+      "trial": 11,
+      "fruit_offset_xy_m": [
+        0.0035409998252785846,
+        0.0010297153478392388
+      ],
+      "camera_estimated_pick_center_m": [
+        0.09897327149467006,
+        0.21344279972342672,
+        0.2171296515920869
+      ],
+      "pick_ik_error_mm": 0.9516069526379474,
+      "pregrasp_object_drift_mm": 0.0006813612820666628,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.04944239127454665,
+        -0.03429353532551005,
+        0.0017501923294236839
+      ],
+      "gripper_angle_after_preload_rad": 0.4253106522645589,
+      "preload_object_shift_mm": 0.8317807190815822,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        -0.00033910813490664604,
+        -0.0016086400905296894,
+        0.0012682532490752574
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.2,
+          -0.22,
+          0.037
+        ],
+        "ik_error_mm_max": 5.999398925460648,
+        "planned_joint_samples": 188,
+        "place_joint_goal_rad": {
+          "Joint1": -3.909378977311477,
+          "Joint2": 0.5904923349686508,
+          "Joint3": -0.5010304347930192,
+          "Joint4": 1.5882874204317907,
+          "Joint5": 2.8140321756511724
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.4518284817989944
+      },
+      "place_target_m": [
+        -0.2,
+        -0.22,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.19773798642915985,
+        -0.21795591935263392,
+        0.03548651452699049
+      ],
+      "object_after_release_m": [
+        -0.19254311704392768,
+        -0.20883471958650723,
+        0.03150286795125743
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 13.426413896960247,
+      "success": true,
+      "failure_reasons": []
+    },
+    {
+      "trial": 12,
+      "fruit_offset_xy_m": [
+        0.003682795391004811,
+        -0.005494755321870854
+      ],
+      "camera_estimated_pick_center_m": [
+        0.10042808413066251,
+        0.2067836498233936,
+        0.21719064247575257
+      ],
+      "pick_ik_error_mm": 1.0112020959779895,
+      "pregrasp_object_drift_mm": 0.00061688423887494,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.048902597620444105,
+        -0.03399933109007808,
+        0.0014437410622164908
+      ],
+      "gripper_angle_after_preload_rad": 0.42530996484260863,
+      "preload_object_shift_mm": 0.688496771451555,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        -0.0007426741995533309,
+        -0.002374173167524224,
+        0.0008673856341231967
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.18,
+          -0.2,
+          0.037
+        ],
+        "ik_error_mm_max": 5.993322706786682,
+        "planned_joint_samples": 187,
+        "place_joint_goal_rad": {
+          "Joint1": -3.908214650389973,
+          "Joint2": 0.3132861264722403,
+          "Joint3": -0.07470433591010721,
+          "Joint4": 1.456375991950001,
+          "Joint5": 2.8290365021199313
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.4550003761298131
+      },
+      "place_target_m": [
+        -0.18,
+        -0.2,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.1778095214716737,
+        -0.19776683755403798,
+        0.03738551753640568
+      ],
+      "object_after_release_m": [
+        -0.17343689724533906,
+        -0.18959180254133257,
+        0.031716367923897336
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 12.304669524487416,
+      "success": true,
+      "failure_reasons": []
+    },
+    {
+      "trial": 13,
+      "fruit_offset_xy_m": [
+        0.00022601142197593242,
+        0.005196496653852186
+      ],
+      "camera_estimated_pick_center_m": [
+        0.09732685963642543,
+        0.21770144641122324,
+        0.217825532000156
+      ],
+      "pick_ik_error_mm": 0.90757814296462,
+      "pregrasp_object_drift_mm": 0.0007086142396753892,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.048805736250541576,
+        -0.033885936731451925,
+        0.0010593537626246013
+      ],
+      "gripper_angle_after_preload_rad": 0.4253111663742759,
+      "preload_object_shift_mm": 0.7420787254433464,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        -0.0007822214576572034,
+        -0.0026375382057756136,
+        0.00018455939676093047
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.22,
+          -0.18,
+          0.037
+        ],
+        "ik_error_mm_max": 5.960911703455707,
+        "planned_joint_samples": 188,
+        "place_joint_goal_rad": {
+          "Joint1": -4.092147141297366,
+          "Joint2": 0.4125854438078767,
+          "Joint3": -0.23177412966370725,
+          "Joint4": 1.4625006463100014,
+          "Joint5": 2.6186800854946015
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.6392403012604877
+      },
+      "place_target_m": [
+        -0.22,
+        -0.18,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.21798204184374131,
+        -0.17811534671821908,
+        0.038063656812414075
+      ],
+      "object_after_release_m": [
+        -0.22114813664027164,
+        -0.18230307224715947,
+        0.03132028429324503
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 2.5733945520208206,
+      "success": true,
+      "failure_reasons": []
+    },
+    {
+      "trial": 14,
+      "fruit_offset_xy_m": [
+        -0.0010083132535753693,
+        0.000819266679566541
+      ],
+      "camera_estimated_pick_center_m": [
+        0.09514884203191418,
+        0.2136352556200909,
+        0.21905810523065003
+      ],
+      "pick_ik_error_mm": 0.9014145476528849,
+      "pregrasp_object_drift_mm": 0.0031963198919633114,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.050051933990219274,
+        -0.03451936643296352,
+        -0.0001659483208656838
+      ],
+      "gripper_angle_after_preload_rad": 0.425310724872219,
+      "preload_object_shift_mm": 0.7294741965572314,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        0.0001405160442540243,
+        -0.0007023968958385363,
+        -0.0011638810046572523
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.16,
+          -0.22,
+          0.037
+        ],
+        "ik_error_mm_max": 6.000726359023804,
+        "planned_joint_samples": 188,
+        "place_joint_goal_rad": {
+          "Joint1": -3.7775734928562286,
+          "Joint2": 0.41623336982758335,
+          "Joint3": -0.23476624900205748,
+          "Joint4": 1.5734252469395293,
+          "Joint5": 2.935617300589944
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.314996505923582
+      },
+      "place_target_m": [
+        -0.16,
+        -0.22,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.15918295077874617,
+        -0.2212231005475207,
+        0.03723577032948809
+      ],
+      "object_after_release_m": [
+        -0.16378892759895372,
+        -0.22775829534578526,
+        0.03182329748560123
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 8.634067351054567,
+      "success": true,
+      "failure_reasons": []
+    },
+    {
+      "trial": 15,
+      "fruit_offset_xy_m": [
+        0.0037064159966782133,
+        0.0012151340041536805
+      ],
+      "camera_estimated_pick_center_m": [
+        0.09898175603053966,
+        0.2135635497753927,
+        0.2170927631194249
+      ],
+      "pick_ik_error_mm": 0.9509125368691143,
+      "pregrasp_object_drift_mm": 0.0006846665778802002,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.049543819017979926,
+        -0.0343473115801588,
+        0.001842338397922437
+      ],
+      "gripper_angle_after_preload_rad": 0.42531066216051916,
+      "preload_object_shift_mm": 0.8385240194934167,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        -0.0002689096454907558,
+        -0.0014548341257367148,
+        0.0014050889896525809
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.22,
+          -0.24,
+          0.037
+        ],
+        "ik_error_mm_max": 6.003156631452909,
+        "planned_joint_samples": 188,
+        "place_joint_goal_rad": {
+          "Joint1": -3.9110033201507517,
+          "Joint2": 0.9306638221159598,
+          "Joint3": -1.071012298810858,
+          "Joint4": 1.7251074634092876,
+          "Joint5": 2.8102662483892944
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.45269494311203
+      },
+      "place_target_m": [
+        -0.22,
+        -0.24,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.21731131740989126,
+        -0.2377051236938695,
+        0.03448225774234632
+      ],
+      "object_after_release_m": [
+        -0.2125501636222468,
+        -0.22888591960156945,
+        0.031025370635639378
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 13.379941896662814,
+      "success": true,
+      "failure_reasons": []
+    },
+    {
+      "trial": 16,
+      "fruit_offset_xy_m": [
+        -0.003939666841440934,
+        0.001211467102067554
+      ],
+      "camera_estimated_pick_center_m": [
+        0.09326934454843072,
+        0.21398504836026033,
+        0.21895207351942433
+      ],
+      "pick_ik_error_mm": 0.870263903630269,
+      "pregrasp_object_drift_mm": 0.0032317206795180473,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.049364491519168344,
+        -0.034146082177073475,
+        -0.00018575340235379295
+      ],
+      "gripper_angle_after_preload_rad": 0.42531065169062066,
+      "preload_object_shift_mm": 0.6814306175191458,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        -0.0003443744518384778,
+        -0.0017730088834558844,
+        -0.001302194988986316
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.2,
+          -0.22,
+          0.037
+        ],
+        "ik_error_mm_max": 5.967383632636002,
+        "planned_joint_samples": 188,
+        "place_joint_goal_rad": {
+          "Joint1": -3.909756374823091,
+          "Joint2": 0.5776635314429418,
+          "Joint3": -0.496884627457292,
+          "Joint4": 1.5910825051297643,
+          "Joint5": 2.7934581801566223
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.4522234744279072
+      },
+      "place_target_m": [
+        -0.2,
+        -0.22,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.19871965871554784,
+        -0.22042647377164118,
+        0.038336469384031825
+      ],
+      "object_after_release_m": [
+        -0.20641528677476564,
+        -0.23000812406089896,
+        0.031487637309777154
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 11.887743756526195,
+      "success": true,
+      "failure_reasons": []
+    },
+    {
+      "trial": 17,
+      "fruit_offset_xy_m": [
+        -0.0011644980141745044,
+        0.0015613698307994804
+      ],
+      "camera_estimated_pick_center_m": [
+        0.09519885317816454,
+        0.21439653565943173,
+        0.2188273405062187
+      ],
+      "pick_ik_error_mm": 0.8971367663001584,
+      "pregrasp_object_drift_mm": 0.0029705590357981915,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.049764601365270666,
+        -0.034380181680128075,
+        2.8807574727271468e-06
+      ],
+      "gripper_angle_after_preload_rad": 0.4253107868401822,
+      "preload_object_shift_mm": 0.7338157148095619,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        -6.38181991208242e-05,
+        -0.0011409391777713052,
+        -0.0009950188022472273
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.18,
+          -0.2,
+          0.037
+        ],
+        "ik_error_mm_max": 5.990347842481359,
+        "planned_joint_samples": 188,
+        "place_joint_goal_rad": {
+          "Joint1": -3.906437916226203,
+          "Joint2": 0.3111837265797214,
+          "Joint3": -0.08433320506504294,
+          "Joint4": 1.4583924601957097,
+          "Joint5": 2.804110289105449
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.445996796291019
+      },
+      "place_target_m": [
+        -0.18,
+        -0.2,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.1790325066033796,
+        -0.20071948134668183,
+        0.03779574655914668
+      ],
+      "object_after_release_m": [
+        -0.18360811130104412,
+        -0.20720187322239608,
+        0.03150651011281375
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 8.055150220336548,
+      "success": true,
+      "failure_reasons": []
+    },
+    {
+      "trial": 18,
+      "fruit_offset_xy_m": [
+        -0.0006191251429506963,
+        0.0031493951044408164
+      ],
+      "camera_estimated_pick_center_m": [
+        0.09529743576152963,
+        0.21589718018708948,
+        0.21837245425805932
+      ],
+      "pick_ik_error_mm": 0.8888004391477641,
+      "pregrasp_object_drift_mm": 0.0024905341054118012,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.04972030325789502,
+        -0.03438202609040942,
+        0.0005174600540253649
+      ],
+      "gripper_angle_after_preload_rad": 0.42531091024660017,
+      "preload_object_shift_mm": 0.7874795902676278,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        -0.00010172305417123495,
+        -0.0012078045543152116,
+        -0.0003327909724300526
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.22,
+          -0.18,
+          0.037
+        ],
+        "ik_error_mm_max": 5.987587997758975,
+        "planned_joint_samples": 188,
+        "place_joint_goal_rad": {
+          "Joint1": -4.088875587745893,
+          "Joint2": 0.4251678996683877,
+          "Joint3": -0.25422944569817646,
+          "Joint4": 1.4722165760156052,
+          "Joint5": 2.6192522523012154
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.62875114321842
+      },
+      "place_target_m": [
+        -0.22,
+        -0.18,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.2187467034675743,
+        -0.1801184293745604,
+        0.036934773567099906
+      ],
+      "object_after_release_m": [
+        -0.2221095118842855,
+        -0.18404149809662146,
+        0.031410030235516535
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 4.558919527139806,
+      "success": true,
+      "failure_reasons": []
+    },
+    {
+      "trial": 19,
+      "fruit_offset_xy_m": [
+        -0.0032514087260604786,
+        -0.005997181937304949
+      ],
+      "camera_estimated_pick_center_m": [
+        0.09473543180316418,
+        0.206853736897203,
+        0.2191425738225596
+      ],
+      "pick_ik_error_mm": 0.9311088321032018,
+      "pregrasp_object_drift_mm": 0.004521069088153743,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.04917933224366204,
+        -0.03404232581445796,
+        -0.0006027937327101711
+      ],
+      "gripper_angle_after_preload_rad": 0.4253099271552845,
+      "preload_object_shift_mm": 0.6246917778545156,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        -0.0004953161670942369,
+        -0.002109002456434833,
+        -0.0018066536948794787
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.16,
+          -0.22,
+          0.037
+        ],
+        "ik_error_mm_max": 5.978576718841422,
+        "planned_joint_samples": 187,
+        "place_joint_goal_rad": {
+          "Joint1": -3.7790637571375036,
+          "Joint2": 0.4062444587196794,
+          "Joint3": -0.22287636336136488,
+          "Joint4": 1.57656657071344,
+          "Joint5": 2.9403594532948176
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.3235280852726161
+      },
+      "place_target_m": [
+        -0.16,
+        -0.22,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.1590108510298163,
+        -0.22070601029603676,
+        0.03938280422142631
+      ],
+      "object_after_release_m": [
+        -0.1667333384752455,
+        -0.2307395730010841,
+        0.03205122115271175
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 12.675814580051096,
+      "success": true,
+      "failure_reasons": []
+    },
+    {
+      "trial": 20,
+      "fruit_offset_xy_m": [
+        -0.0016416785818376186,
+        -0.0018197507098498857
+      ],
+      "camera_estimated_pick_center_m": [
+        0.09498600492988661,
+        0.210665776681353,
+        0.217978016763789
+      ],
+      "pick_ik_error_mm": 0.9089718986091926,
+      "pregrasp_object_drift_mm": 0.0034096179227743923,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.04929534944009403,
+        -0.034160473918842756,
+        0.0007295817058116487
+      ],
+      "gripper_angle_after_preload_rad": 0.42531022249498873,
+      "preload_object_shift_mm": 0.6942680184705767,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        -0.00041536404594121057,
+        -0.0018533517579747971,
+        -6.542015768512544e-05
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.22,
+          -0.24,
+          0.037
+        ],
+        "ik_error_mm_max": 5.981578660037526,
+        "planned_joint_samples": 187,
+        "place_joint_goal_rad": {
+          "Joint1": -3.911601124845304,
+          "Joint2": 0.9264427257718327,
+          "Joint3": -1.0728928088353185,
+          "Joint4": 1.732016034892244,
+          "Joint5": 2.800043047175734
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.4548648130356434
+      },
+      "place_target_m": [
+        -0.22,
+        -0.24,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.2177491199531813,
+        -0.23883009286354037,
+        0.03659529101907997
+      ],
+      "object_after_release_m": [
+        -0.22141763901074019,
+        -0.24340817068660203,
+        0.031124932450937084
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 3.691250166784397,
+      "success": true,
+      "failure_reasons": []
+    }
+  ],
+  "limitations": [
+    "Synthetic fixed camera and illustrative shelf/strawberry scene only.",
+    "Contact proxies are approximate; official collision meshes are not a validated grasp model.",
+    "In weld mode the fruit is attached after dual-tip contact; this validates transport/place, not frictional grasp retention.",
+    "The rear floor place is not validated on real hardware."
+  ]
+}

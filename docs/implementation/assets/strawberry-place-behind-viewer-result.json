@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "simulation_only": true,
+  "scene": "simulation/mujoco_omx/robotis_omx/strawberry_pick_scene.xml",
+  "seed": 20261031,
+  "software_versions": {
+    "python": "3.12.3",
+    "mujoco": "3.17.0",
+    "numpy": "2.5.4"
+  },
+  "sha256": {
+    "scripts/run_mujoco_strawberry_place_behind.py": "eda9ef0c57c18c4af1432ab79dee240628b2e6293c444232f42eb02f09ae0dcf",
+    "scripts/run_mujoco_strawberry_repeatability.py": "8f6afc4d0f56050e99c4cc16cee8251c6b534f9ba1897bbec19b6fb292f1e404",
+    "simulation/mujoco_omx/robotis_omx/strawberry_pick_scene.xml": "1cd9edc6aac9362febf2c07799ae0ea161ba64f91b34f46d7e596bf5185d8171",
+    "simulation/mujoco_omx/robotis_omx/shelf_photo_match_scene.xml": "37cc97627cd3cf73edc1144f645aefea4410d86b523a20554674516b6b60b5e2",
+    "simulation/mujoco_omx/robotis_omx/omx.xml": "70ad27711697ceac9b071bf5b721490f85204adec1ea68b0e21e3c36a15d5411",
+    "requirements-mujoco.txt": "6cfdc4c2b724775d3f2b7512004528284aff3ee4fa49fdcec493362a0b157f17"
+  },
+  "gripper_model": {
+    "contact_proxy_radius_mm": 6.0,
+    "closing_preload_rad": 0.03
+  },
+  "steps_per_waypoint": 100,
+  "waypoint_spacing_mm": 5.0,
+  "proxy_contact_friction": 2.0,
+  "grasp_model": "weld",
+  "trials_requested": 1,
+  "successes": 1,
+  "success_rate": 1.0,
+  "elapsed_seconds": 5.759890461995383,
+  "trials": [
+    {
+      "trial": 1,
+      "fruit_offset_xy_m": [
+        -0.0017422522291107283,
+        0.000851668506729678
+      ],
+      "camera_estimated_pick_center_m": [
+        0.09514679494548696,
+        0.21360409444597894,
+        0.21906755103165007
+      ],
+      "pick_ik_error_mm": 0.9015903590358408,
+      "pregrasp_object_drift_mm": 0.0032126064080420544,
+      "pick_dual_contact": true,
+      "gripper_contact_proxy_radius_m": 0.006,
+      "gripper_contact_proxy_friction": 2.0,
+      "grasp_model": "weld",
+      "simulation_grasp_weld_relative_position_m": [
+        0.049660081512851686,
+        -0.034302800861588885,
+        -0.00019982766146584702
+      ],
+      "gripper_angle_after_preload_rad": 0.4253107223411232,
+      "preload_object_shift_mm": 0.6911890942209324,
+      "pick_hold_contacts": [
+        "link6_fingertip_contact_proxy",
+        "link7_fingertip_contact_proxy"
+      ],
+      "held_object_offset_from_fingertip_midpoint_m": [
+        -0.00014254508419060674,
+        -0.0013120150830007726,
+        -0.0012764567034840302
+      ],
+      "carry_plan": {
+        "cartesian_waypoints_object_center_m": [
+          [
+            0.1,
+            0.04,
+            0.36
+          ],
+          [
+            0.1,
+            -0.2,
+            0.36
+          ]
+        ],
+        "place_target_object_center_m": [
+          -0.2,
+          -0.22,
+          0.037
+        ],
+        "ik_error_mm_max": 5.986972935322615,
+        "planned_joint_samples": 188,
+        "place_joint_goal_rad": {
+          "Joint1": -3.909071321138577,
+          "Joint2": 0.5860473131058934,
+          "Joint3": -0.510005330196255,
+          "Joint4": 1.5974917921010081,
+          "Joint5": 2.8010867497928076
+        },
+        "static_collision_preflight": "clear",
+        "joint1_turn_rad": -1.4494835825029506
+      },
+      "place_target_m": [
+        -0.2,
+        -0.22,
+        0.037
+      ],
+      "object_before_release_m": [
+        -0.19887548868995414,
+        -0.22083817188954127,
+        0.037771544069088316
+      ],
+      "object_after_release_m": [
+        -0.20537912108408837,
+        -0.2292818633236819,
+        0.0314693898397535
+      ],
+      "released_object_contacts": [
+        "photo_match_floor"
+      ],
+      "floor_contact_after_release": true,
+      "release_xy_error_mm": 10.72790428726855,
+      "success": true,
+      "failure_reasons": []
+    }
+  ],
+  "limitations": [
+    "Synthetic fixed camera and illustrative shelf/strawberry scene only.",
+    "Contact proxies are approximate; official collision meshes are not a validated grasp model.",
+    "In weld mode the fruit is attached after dual-tip contact; this validates transport/place, not frictional grasp retention.",
+    "The rear floor place is not validated on real hardware."
+  ]
+}
