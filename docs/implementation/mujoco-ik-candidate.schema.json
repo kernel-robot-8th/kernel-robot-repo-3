@@ -1,0 +1,336 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kernel-robot-repo-3:schema:mujoco-ik-candidate-v2",
+  "title": "MuJoCo OMX IK candidate result",
+  "description": "Offline simulation candidate only; this record is not a robot command or grasp validation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "simulation_only",
+    "usable_for_robot_control",
+    "arm_command_sent",
+    "model",
+    "model_source_files",
+    "mujoco_version",
+    "start_state",
+    "start_candidate_sha256",
+    "start_joint_rad",
+    "pose_frame",
+    "tcp_transform",
+    "tcp_calibration",
+    "solver",
+    "frame_id",
+    "body",
+    "body_reference",
+    "target",
+    "achieved",
+    "link6_body_pose",
+    "residual",
+    "tolerance",
+    "converged",
+    "position_converged",
+    "orientation_converged",
+    "pose_converged",
+    "iterations",
+    "candidate_status",
+    "joint_candidate_rad",
+    "contacts",
+    "path_sampling",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "kind": { "const": "mujoco_ik_candidate" },
+    "simulation_only": { "const": true },
+    "usable_for_robot_control": { "const": false },
+    "arm_command_sent": { "const": false },
+    "model": { "const": "simulation/mujoco_omx/robotis_omx/shelf_pick_scene.xml" },
+    "model_source_files": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "path_base", "hash_algorithm", "sha256", "size_bytes"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "path_base": { "const": "REPOSITORY_ROOT" },
+          "hash_algorithm": { "const": "sha256" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "size_bytes": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "mujoco_version": { "type": "string", "minLength": 1 },
+    "start_state": { "enum": ["home_keyframe", "model_default", "provided_candidate"] },
+    "start_candidate_sha256": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/sha256" }
+      ]
+    },
+    "start_joint_rad": { "$ref": "#/$defs/armJointPositions" },
+    "pose_frame": { "enum": ["link6", "tcp"] },
+    "tcp_transform": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["translation_link6_m", "orientation_link6_wxyz", "source"],
+          "properties": {
+            "translation_link6_m": { "$ref": "#/$defs/vector3" },
+            "orientation_link6_wxyz": { "$ref": "#/$defs/quaternionWxyz" },
+            "source": { "const": "operator_supplied_transform" }
+          }
+        }
+      ]
+    },
+    "tcp_calibration": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["calibration_id", "status", "artifact", "robot_model", "frame_mapping", "measurement"],
+          "properties": {
+            "calibration_id": { "type": "string", "minLength": 1 },
+            "status": { "const": "DRAFT_ONLY" },
+            "artifact": { "$ref": "#/$defs/fileReference" },
+            "robot_model": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "revision"],
+              "properties": {
+                "name": { "type": "string", "minLength": 1 },
+                "revision": { "type": "string", "minLength": 1 }
+              }
+            },
+            "frame_mapping": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["physical_parent_frame", "simulator_frame", "review_status", "evidence_reference", "evidence_sha256", "evidence"],
+              "properties": {
+                "physical_parent_frame": { "type": "string", "minLength": 1 },
+                "simulator_frame": { "const": "link6" },
+                "review_status": { "const": "REVIEWED" },
+                "evidence_reference": { "type": "string", "minLength": 1 },
+                "evidence_sha256": { "$ref": "#/$defs/sha256" },
+                "evidence": { "$ref": "#/$defs/fileReference" }
+              }
+            },
+            "measurement": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["method", "measured_at", "measured_by", "source_reference", "source_sha256", "translation_uncertainty_m", "orientation_uncertainty_rad", "source"],
+              "properties": {
+                "method": { "type": "string", "minLength": 1 },
+                "measured_at": { "type": "string", "minLength": 1 },
+                "measured_by": { "type": "string", "minLength": 1 },
+                "source_reference": { "type": "string", "minLength": 1 },
+                "source_sha256": { "$ref": "#/$defs/sha256" },
+                "translation_uncertainty_m": { "type": "number", "minimum": 0 },
+                "orientation_uncertainty_rad": { "type": "number", "minimum": 0 },
+                "source": { "$ref": "#/$defs/fileReference" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "solver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "max_iterations",
+        "iterations_used",
+        "position_tolerance_mm",
+        "orientation_tolerance_deg",
+        "orientation_scale_m_per_rad",
+        "minimum_path_segments",
+        "maximum_joint_step_rad"
+      ],
+      "properties": {
+        "algorithm": { "const": "damped_least_squares" },
+        "max_iterations": { "type": "integer", "minimum": 1, "maximum": 2000 },
+        "iterations_used": { "type": "integer", "minimum": 1, "maximum": 2000 },
+        "position_tolerance_mm": { "type": "number", "minimum": 0.1, "maximum": 50 },
+        "orientation_tolerance_deg": { "type": ["number", "null"], "minimum": 0.1, "maximum": 90 },
+        "orientation_scale_m_per_rad": { "type": ["number", "null"], "minimum": 0.01, "maximum": 1 },
+        "minimum_path_segments": { "type": "integer", "minimum": 2, "maximum": 501 },
+        "maximum_joint_step_rad": { "type": "number", "minimum": 0.005, "maximum": 0.5 }
+      }
+    },
+    "frame_id": { "const": "world" },
+    "body": { "const": "link6" },
+    "body_reference": { "const": "body_origin" },
+    "target": { "$ref": "#/$defs/targetPose" },
+    "achieved": { "$ref": "#/$defs/achievedPose" },
+    "link6_body_pose": { "$ref": "#/$defs/achievedPose" },
+    "residual": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["position_m", "orientation_rad"],
+      "properties": {
+        "position_m": { "type": "number", "minimum": 0 },
+        "orientation_rad": { "type": ["number", "null"], "minimum": 0 }
+      }
+    },
+    "tolerance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["position_m", "orientation_rad"],
+      "properties": {
+        "position_m": { "type": "number", "exclusiveMinimum": 0 },
+        "orientation_rad": { "type": ["number", "null"], "exclusiveMinimum": 0 }
+      }
+    },
+    "converged": { "type": "boolean" },
+    "position_converged": { "type": "boolean" },
+    "orientation_converged": { "type": ["boolean", "null"] },
+    "pose_converged": { "type": "boolean" },
+    "iterations": { "type": "integer", "minimum": 1, "maximum": 2000 },
+    "candidate_status": { "type": "string", "minLength": 1 },
+    "joint_candidate_rad": {
+      "$ref": "#/$defs/armJointPositions"
+    },
+    "contacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start_pose", "final_pose", "final_shelf", "final_target_object", "joint_linear_path"],
+      "properties": {
+        "start_pose": { "$ref": "#/$defs/contactList" },
+        "final_pose": { "$ref": "#/$defs/contactList" },
+        "final_shelf": { "$ref": "#/$defs/contactList" },
+        "final_target_object": { "$ref": "#/$defs/contactList" },
+        "joint_linear_path": { "$ref": "#/$defs/contactList" }
+      }
+    },
+    "path_sampling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "segments",
+        "intermediate_samples",
+        "max_joint_step_rad",
+        "requested_max_joint_step_rad",
+        "first_contact_sample",
+        "continuous_collision_checked",
+        "motion_planned"
+      ],
+      "properties": {
+        "method": { "const": "discrete_joint_linear_interpolation" },
+        "segments": { "type": "integer", "minimum": 2 },
+        "intermediate_samples": { "type": "integer", "minimum": 1 },
+        "max_joint_step_rad": { "type": "number", "minimum": 0 },
+        "requested_max_joint_step_rad": { "type": "number", "minimum": 0.005, "maximum": 0.5 },
+        "first_contact_sample": { "type": ["integer", "null"], "minimum": 1 },
+        "continuous_collision_checked": { "const": false },
+        "motion_planned": { "const": false }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "pose_frame": { "const": "tcp" } }, "required": ["pose_frame"] },
+      "then": {
+        "properties": {
+          "tcp_transform": { "type": "object" },
+          "target": {
+            "properties": {
+              "orientation_quaternion_wxyz": { "$ref": "#/$defs/quaternionWxyz" }
+            }
+          }
+        }
+      },
+      "else": { "properties": { "tcp_transform": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "start_state": { "const": "provided_candidate" } }, "required": ["start_state"] },
+      "then": { "properties": { "start_candidate_sha256": { "$ref": "#/$defs/sha256" } } },
+      "else": { "properties": { "start_candidate_sha256": { "type": "null" } } }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "fileReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "vector3": {
+      "type": "array",
+      "prefixItems": [
+        { "type": "number" },
+        { "type": "number" },
+        { "type": "number" }
+      ],
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "quaternionWxyz": {
+      "type": "array",
+      "prefixItems": [
+        { "type": "number" },
+        { "type": "number" },
+        { "type": "number" },
+        { "type": "number" }
+      ],
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "targetPose": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["position_m", "orientation_quaternion_wxyz"],
+      "properties": {
+        "position_m": { "$ref": "#/$defs/vector3" },
+        "orientation_quaternion_wxyz": {
+          "oneOf": [
+            { "$ref": "#/$defs/quaternionWxyz" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "achievedPose": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["position_m", "orientation_quaternion_wxyz"],
+      "properties": {
+        "position_m": { "$ref": "#/$defs/vector3" },
+        "orientation_quaternion_wxyz": { "$ref": "#/$defs/quaternionWxyz" }
+      }
+    },
+    "contactList": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "armJointPositions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["Joint1", "Joint2", "Joint3", "Joint4", "Joint5"],
+      "properties": {
+        "Joint1": { "type": "number" },
+        "Joint2": { "type": "number" },
+        "Joint3": { "type": "number" },
+        "Joint4": { "type": "number" },
+        "Joint5": { "type": "number" }
+      }
+    }
+  }
+}

@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kernel-robot-repo-3:schema:link6-tcp-transform-v1",
+  "title": "OMX MuJoCo link6 to TCP transform draft",
+  "description": "Review-only transform for offline simulation IK; never a robot command or readiness result.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "status",
+    "calibration_scope",
+    "calibration_id",
+    "review_required",
+    "usable_for_robot_control",
+    "arm_command_sent",
+    "robot_model",
+    "frame_mapping",
+    "tcp_transform",
+    "measurement"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "omx_link6_tcp_transform" },
+    "status": { "const": "DRAFT_ONLY" },
+    "calibration_scope": { "const": "LINK6_TO_TCP" },
+    "calibration_id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,80}$" },
+    "review_required": { "const": true },
+    "usable_for_robot_control": { "const": false },
+    "arm_command_sent": { "const": false },
+    "robot_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "revision"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "minLength": 1 }
+      }
+    },
+    "frame_mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["physical_parent_frame", "simulator_frame", "review_status", "evidence_reference", "evidence_sha256"],
+      "properties": {
+        "physical_parent_frame": { "type": "string", "minLength": 1 },
+        "simulator_frame": { "const": "link6" },
+        "review_status": { "const": "REVIEWED" },
+        "evidence_reference": { "$ref": "#/$defs/evidencePath" },
+        "evidence_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "tcp_transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["translation_link6_m", "orientation_link6_wxyz"],
+      "properties": {
+        "translation_link6_m": { "$ref": "#/$defs/vector3" },
+        "orientation_link6_wxyz": { "$ref": "#/$defs/quaternionWxyz" }
+      }
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "measured_at", "measured_by", "source_reference", "source_sha256", "translation_uncertainty_m", "orientation_uncertainty_rad"],
+      "properties": {
+        "method": { "type": "string", "minLength": 1 },
+        "measured_at": { "type": "string", "format": "date-time", "minLength": 1 },
+        "measured_by": { "type": "string", "minLength": 1 },
+        "source_reference": { "$ref": "#/$defs/evidencePath" },
+        "source_sha256": { "$ref": "#/$defs/sha256" },
+        "translation_uncertainty_m": { "type": "number", "minimum": 0 },
+        "orientation_uncertainty_rad": { "type": "number", "minimum": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "evidencePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"
+    },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "vector3": {
+      "type": "array",
+      "prefixItems": [{ "type": "number" }, { "type": "number" }, { "type": "number" }],
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "quaternionWxyz": {
+      "type": "array",
+      "prefixItems": [{ "type": "number" }, { "type": "number" }, { "type": "number" }, { "type": "number" }],
+      "minItems": 4,
+      "maxItems": 4
+    }
+  }
+}

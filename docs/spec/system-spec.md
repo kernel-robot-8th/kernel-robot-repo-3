@@ -16,15 +16,21 @@
 
 - 이동 로봇과 로봇팔의 연결 및 실행 상태 조회
 - 작업 생성, 명시적 실행, 진행 상태·최종 결과·이력 조회
+- 제한된 자연어 작업 입력을 검토용 구조화 초안으로 변환 (현재 parser는 상자/병·일부 색상·숫자 및 일부 한국어 서수 층·목적지 표현을 지원하고, Head 또는 MuJoCo simulation fixed camera의 ready YOLO-World가 있을 때만 단일 미등록 한국어 대상구를 검토용 one-shot prompt 초안으로 지원)
 - 이동 명령의 접수와 최종 결과 확인
 - 이동 성공이 확인된 작업에서만 팔 작업 시작
 - 작업·단계별 오류, timeout, 취소 및 결과 불명 처리
 - Head Camera와 Joint Camera의 개별 연결·영상 상태 관리 및 영상 표시
+- 설정된 detector가 반환한 클래스·confidence·픽셀 후보의 관측 전용 조회 및 작업 이력 연결
+- 측정 보정 파일이 제공된 경우 고정 선반 평면 2D 좌표를 `DRAFT_ONLY`로 계산하는 오프라인 검토 경로
 - 실제 로봇이 없는 환경의 모의 어댑터
 
 ### MVP에서 제외할 기능
 
-- 비전 추론, 객체 검출·분류·위치 추정, 카메라 캘리브레이션
+- 실물 로봇을 위한 자동 3D localization, 검증된 카메라→로봇 좌표 변환, 안전 작업영역 및 grasp 목표 승인
+- 검증된 물체별 인식 정확도·가림 성능과 RGB-D 기반 높이 추정
+- 실물 로봇의 자동 IK·충돌 회피·접근 경로 계획 및 파지/배치 실행
+- LLM 또는 parser가 직접 생성하는 관절각·모터 목표 및 검토 없는 작업 자동 등록
 - 확인되지 않은 로봇 토픽, 서비스, 액션 또는 SDK를 가정한 연동
 - 다중 작업 동시 스케줄링과 우선순위 큐
 - 여러 대의 동일 종류 로봇을 대상으로 하는 fleet 관리
@@ -42,6 +48,10 @@
 | 로봇 상태 관리자 | heartbeat, 장치 상태 | 로봇별 연결·준비·실행 상태 및 마지막 갱신 시각 관리 |
 | 카메라 관리자 | 카메라 프레임과 연결 이벤트 | 카메라마다 연결·스트림·신선도 상태 관리 및 프레임 전달 |
 | 이력 저장소 | 작업 및 이벤트 | 작업·단계 상태, 타임스탬프, 결과, 오류 저장 |
+| 대상 관측/좌표 초안 | camera frame, task `pick_request`, 검토된 보정 파일 | 최신 detector 후보를 관측 전용으로 분류하고, 선택된 색상/층 ROI 조건을 후보별 검토 상태로 비교하며, 명시적으로 선택한 후보의 고정 평면 2D 좌표를 초안으로 저장; 실행 허가를 만들지 않음 |
+| 자연어 parser (현재 제한 초안) | 사용자 자연어, 가능한 detector 클래스 목록 | 제한된 규칙으로 task 폼 후보를 채우고 누락·모호 값을 표시; 저장이나 장치 명령 없음 |
+
+자연어 parser는 제한 문법의 검토용 초안만 지원하며 일반 문장 이해, 물체 속성 grounding, 누락 목적지 보완은 하지 않는다. 현재 카메라 후보 조회는 클래스를 분류하고, 선택적으로 미보정 색상 힌트 및 명시적 영상 ROI 초안과 요청 조건을 비교해 검토 상태만 표시한다. 비교 결과는 후보를 필터링하거나 선택하지 않으며 3D shelf localization이나 보정된 색상 판정은 제공하지 않는다.
 
 이동 로봇, 로봇팔, 카메라는 서로 다른 상태 리소스입니다. 예를 들어 카메라 끊김을 로봇 연결 끊김으로 바꾸거나, 프로세스 생존을 팔 준비 완료로 해석하지 않습니다.
 
@@ -49,11 +59,11 @@
 
 ### Task
 
-필수 필드: `id`, `status`, `destination`, `arm_task`, `created_at`. 실행 후 `started_at`, `finished_at`, `active_step_id`, `error`를 기록합니다. `destination`과 `arm_task.parameters`의 구체적인 형식은 실제 장비 인터페이스를 확인한 후 확정합니다.
+필수 필드: `id`, `status`, `destination`, `arm_task`, `created_at`. 실행 후 `started_at`, `finished_at`, `active_step_id`, `error`를 기록합니다. 선택적 `pick_request`는 `{category, color?, shelf_level?}` 형태의 사용자 대상 조건입니다. 이는 아직 검출된 물체나 추정 pose를 뜻하지 않습니다. `destination`과 `arm_task.parameters`의 구체적인 형식은 실제 장비 인터페이스를 확인한 후 확정합니다.
 
 ### TaskStep
 
-필수 필드: `id`, `task_id`, `step_type`, `status`. 실제 로봇이 수행하는 단계는 `robot_id`를 지정하고, `VALIDATE_ROBOTS`, `FINALIZE_TASK`처럼 관제 시스템이 수행하는 단계는 `robot_id: null`로 둡니다. 실행한 명령에는 `command_id`를 붙이고 `started_at`, `finished_at`, 결과 또는 오류를 기록합니다. 한 작업 안에서 단계 순서를 고정해 저장합니다.
+필수 필드: `id`, `task_id`, `step_type`, `status`. 실제 로봇이 수행하는 단계는 장치 종류(`MOBILE`/`ARM`)가 아니라 설정된 식별자(현재 로컬 mock은 `mobile-01`/`arm-01`)를 `robot_id`로 지정하고, `VALIDATE_ROBOTS`, `FINALIZE_TASK`처럼 관제 시스템이 수행하는 단계는 `robot_id: null`로 둡니다. 실행한 명령에는 `command_id`를 붙이고 `started_at`, `finished_at`, 결과 또는 오류를 기록합니다. 한 작업 안에서 단계 순서를 고정해 저장합니다.
 
 목표 단계의 기본 순서는 다음과 같습니다.
 
@@ -72,7 +82,7 @@
 
 ### Camera
 
-필수 개념은 `id`, `robot_id`, `position`(`HEAD` 또는 `JOINT`), `connection_state`, `stream_state`, `frame_freshness`, `last_frame_at`, 선택적 `frame_rate`, `error_message`, `reconnect_state`입니다.
+필수 개념은 `id`, `robot_id`, `position`(`HEAD`, `JOINT` 또는 simulation-only `FIXED`), `connection_state`, `stream_state`, `frame_freshness`, `last_frame_at`, 선택적 `frame_rate`, `error_message`, `reconnect_state`입니다. `FIXED`는 현재 MuJoCo 시뮬레이션 카메라 역할을 식별하며 실물 고정 카메라 연결을 의미하지 않습니다.
 
 ## 4. 상태와 전이 규칙
 
@@ -93,7 +103,7 @@
 
 ```text
 PENDING → VALIDATING | CANCELED
-VALIDATING → RUNNING | FAILED | CANCELED | NEEDS_INTERVENTION
+VALIDATING → RUNNING | FAILED | CANCELING | CANCELED | NEEDS_INTERVENTION
 RUNNING → SUCCEEDED | FAILED | CANCELING | NEEDS_INTERVENTION
 CANCELING → CANCELED | FAILED | NEEDS_INTERVENTION
 NEEDS_INTERVENTION → CANCELED | FAILED | RUNNING
@@ -196,15 +206,17 @@ NEEDS_INTERVENTION → CANCELED | FAILED | RUNNING
 | `GET` | `/api/health` | 서버 가동 및 실행 모드 조회 |
 | `GET` | `/api/robots` | 각 로봇의 연결·준비·실행 상태 조회 |
 | `GET` | `/api/cameras` | 카메라마다 연결·스트림·프레임 상태 조회 |
+| `POST` | `/api/tasks/{task_id}/target-observation` | 대기 중 작업에 현재 카메라 후보 판정 이벤트 저장; task/step 상태 및 로봇 명령에는 영향 없음 |
+| `POST` | `/api/tasks/parse-command` | 자연어 작업 명령의 제한 문법 초안 해석; DB·task 상태 및 로봇 명령에는 영향 없음 |
 | `POST` | `/api/tasks` | 입력 검증 후 `PENDING` 작업·표준 단계·`TASK_CREATED` 이벤트 생성; 성공은 `201 Created`; 명령은 보내지 않음 |
 | `GET` | `/api/tasks` | 작업 요약 목록 조회 |
 | `GET` | `/api/tasks/{task_id}` | 작업과 단계 이력 조회 |
-| `POST` | `/api/tasks/{task_id}/start` | 실행 요청 접수; `202 Accepted`와 작업 ID·현재 상태 반환 |
-| `POST` | `/api/tasks/{task_id}/cancel` | 취소 요청 접수; `202 Accepted`; 정지 결과는 별도 확인 |
+| `POST` | `/api/tasks/{task_id}/start` | 실행 요청 접수; 신규 요청은 `202 Accepted`, 같은 활성 작업의 중복 요청은 현재 상태와 `200 OK` 반환 |
+| `POST` | `/api/tasks/{task_id}/cancel` | 취소 요청 접수; 진행 중 작업은 `202 Accepted`; 미실행 작업의 즉시 취소 또는 반복 취소는 현재 상태와 `200 OK` 반환; 실행 중 정지 결과는 별도 확인 |
 
-비동기 실행 API의 `202` 응답은 “접수됨”을 뜻하며 작업 완료를 뜻하지 않습니다. 잘못된 필드·형식은 `400`, 없는 작업 ID는 `404`, 로봇 사용 중·상태 충돌·중복 실행은 `409`, 지원하지 않는 미디어 형식은 `415`로 응답합니다. 응답에 안정적인 `error_code`와 사람이 읽을 수 있는 `message`를 함께 담습니다. 작업 실행이 접수된 뒤 생기는 장치 오류는 HTTP 오류가 아니라 task/step 상태와 이력 이벤트로 반환합니다.
+비동기 실행 API의 `202` 응답은 “접수됨”을 뜻하며 작업 완료를 뜻하지 않습니다. 잘못된 필드·형식은 `400`, 없는 작업 ID는 `404`, 로봇 사용 중·상태 충돌·중복 실행은 `409`, 지원하지 않는 미디어 형식은 `415`로 응답합니다. 현재 task start/cancel, task target-observation, task target-selection, task projection-draft 경로의 오류 응답은 안정적인 `error_code`와 사람이 읽을 수 있는 `message`, 기존 클라이언트 호환용 `error`를 함께 반환합니다. 카메라의 GET target-observation과 나머지 API 경로는 아직 이 계약으로 일괄 정리되지 않았습니다. 작업 실행이 접수된 뒤 생기는 장치 오류는 HTTP 오류가 아니라 task/step 상태와 이력 이벤트로 반환합니다. 현재 task start/cancel은 `mock` mode 전용입니다. `mujoco` mode는 명시적 ROS domain에서 MuJoCo joint/action 상태와 fixed RGB/depth/CameraInfo metadata, 선택형 XYZ point-cloud metadata를 read-only 관측하고 `--arm` 물리 텔레오퍼레이션·물리 카메라를 비활성화하며, ROS 2 hardware-status mode에서도 task 실행 API를 거부합니다. camera metadata와 XYZ cloud field observation은 calibration validity, sample synchronization, object localization 또는 3D target을 뜻하지 않습니다.
 
-`destination`, `arm_task`의 세부 JSON 스키마, 페이지네이션, 인증, API 버저닝은 실제 목적지 표현과 배포 범위를 확정한 후 정합니다. 로컬 개발 단계의 localhost 바인딩을 외부 네트워크 접근이 가능한 서비스로 간주하지 않습니다.
+`destination`, `arm_task`의 세부 JSON 스키마, 페이지네이션, 인증, API 버저닝은 실제 목적지 표현과 배포 범위를 확정한 후 정합니다. 현재 `pick_request` 입력은 `category`(필수 문자열), `color`(선택 문자열), `shelf_level`(선택 1–999,999,999 정수)를 저장합니다. category는 `TARGET_OBSERVED` 감사 이벤트로 카메라 후보 분류에 사용됩니다. 색상은 미보정 HSV hint와, 선반 층은 명시적으로 활성화된 camera ROI draft와 비교한 검토 상태를 선택적으로 기록할 수 있지만 두 결과 모두 후보를 필터링·선택하지 않습니다. 이 감사 기록은 실행 단계 완료·3D 위치 추정·로봇 제어에 연결되지 않습니다. 로컬 개발 단계의 localhost 바인딩을 외부 네트워크 접근이 가능한 서비스로 간주하지 않습니다.
 
 ## 7. 로봇 상태 계약
 
@@ -294,7 +306,7 @@ Nav2 action 이름·타입, namespace, goal frame 및 좌표/방향 변환, resu
 - 현재 LeRobot 수동 텔레오퍼레이션을 최종 관제 기능에 포함할지 여부
 - 목적지의 waypoint/좌표 표현, 좌표계, 허용 범위
 - 팔 작업 종류와 파라미터 schema
-- Head Camera 장치 및 주소, Joint Camera의 실제 노드(`/dev/video4`/`video5`) 식별
+- Head/Joint Camera의 안정적인 by-id 경로, 실제 capture/metadata node 및 물리 장착 역할 식별 (video node 번호는 재연결 후 달라질 수 있음)
 - 카메라 전송 규격, FPS, stale 임계값, 재연결 정책
 - 작업 유형별 timeout과 수동 복구 정책
 - 배포 시 인증, 접근 제어, 로그 보존과 사용자 감사 범위
