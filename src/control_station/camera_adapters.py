@@ -131,8 +131,13 @@ class OpenCVArmCameraStreamManager:
             "/dev/v4l/by-id/usb-Jieli_Technology_USB_Composite_Device-video-index0",
         ).strip()
         head_weights = os.environ.get("CONTROL_STATION_HEAD_YOLO_WEIGHTS", "").strip()
+        # The joint camera sees the same objects, so it reuses the head model unless overridden.
+        joint_weights = os.environ.get("CONTROL_STATION_JOINT_YOLO_WEIGHTS", head_weights).strip()
         joint_feed = _CameraFeed(
-            "joint_camera", "JOINT", (joint_device or None) if joint_enabled else None
+            "joint_camera",
+            "JOINT",
+            (joint_device or None) if joint_enabled else None,
+            detector=_YoloDetector(joint_weights) if joint_enabled and joint_weights else None,
         )
         if not joint_enabled:
             joint_feed.error_message = "팔 카메라 스트림을 사용하려면 --arm 모드로 실행하세요"
