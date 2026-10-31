@@ -30,6 +30,10 @@ class CoordinateTargetDraftStore:
 
     @staticmethod
     def _validate(payload: Mapping[str, object]) -> tuple[str, str, dict[str, float]]:
+        if set(payload) != {"frame_id", "unit", "position"}:
+            raise CoordinateDraftError(
+                "request must contain exactly frame_id, unit, and position"
+            )
         frame_id = payload.get("frame_id")
         unit = payload.get("unit")
         if not isinstance(frame_id, str) or not _FRAME_ID.fullmatch(frame_id):
@@ -48,7 +52,10 @@ class CoordinateTargetDraftStore:
             value = raw_position[axis]
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise CoordinateDraftError(f"position.{axis} must be a number")
-            number = float(value)
+            try:
+                number = float(value)
+            except (OverflowError, ValueError) as exc:
+                raise CoordinateDraftError(f"position.{axis} must be finite") from exc
             if not math.isfinite(number):
                 raise CoordinateDraftError(f"position.{axis} must be finite")
             position[axis] = number

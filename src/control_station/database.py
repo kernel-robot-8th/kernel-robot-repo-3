@@ -21,6 +21,7 @@ class TaskRecord(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     destination: Mapped[str] = mapped_column(String, nullable=False)
     arm_job: Mapped[str] = mapped_column(String, nullable=False)
+    pick_request: Mapped[dict[str, object] | None] = mapped_column("pick_request_json", JSON)
     status: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
     started_at: Mapped[str | None] = mapped_column(String)

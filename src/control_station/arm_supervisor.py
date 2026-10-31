@@ -22,8 +22,14 @@ class ArmTeleopSupervisor:
     task has completed. The current LeRobot CLI does not expose those events.
     """
 
-    def __init__(self) -> None:
-        self.enabled = os.environ.get("CONTROL_STATION_ARM_ENABLED", "0").lower() in {"1", "true", "yes"}
+    def __init__(self, *, disabled_reason: str | None = None) -> None:
+        configured_enabled = os.environ.get("CONTROL_STATION_ARM_ENABLED", "0").lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        self.enabled = configured_enabled and disabled_reason is None
+        self.disabled_reason = disabled_reason
         self.program = os.environ.get("CONTROL_STATION_ARM_PROGRAM", "lerobot-teleoperate")
         self.workdir = os.environ.get("CONTROL_STATION_LEROBOT_DIR") or None
         self.follower_port = os.environ.get("CONTROL_STATION_FOLLOWER_PORT", "/dev/omx_follower")
@@ -35,7 +41,10 @@ class ArmTeleopSupervisor:
         self._process: subprocess.Popen[bytes] | None = None
         self._log_file: Any = None
         self._state = "DISABLED" if not self.enabled else "STOPPED"
-        self._detail = "실행 설정이 비활성화되어 있습니다." if not self.enabled else "텔레오퍼레이션이 실행되지 않았습니다."
+        self._detail = (
+            disabled_reason
+            or ("실행 설정이 비활성화되어 있습니다." if not self.enabled else "텔레오퍼레이션이 실행되지 않았습니다.")
+        )
         self._updated_at = _now()
         self._exit_code: int | None = None
 
@@ -93,7 +102,10 @@ class ArmTeleopSupervisor:
         with self._lock:
             self._refresh_locked()
             if not self.enabled:
-                raise RuntimeError("팔 제어가 비활성화되어 있습니다. CONTROL_STATION_ARM_ENABLED=1 설정이 필요합니다.")
+                raise RuntimeError(
+                    self.disabled_reason
+                    or "팔 제어가 비활성화되어 있습니다. CONTROL_STATION_ARM_ENABLED=1 설정이 필요합니다."
+                )
             if self._process is not None:
                 raise RuntimeError("텔레오퍼레이션 프로세스가 이미 실행 중입니다.")
             self.log_path.parent.mkdir(parents=True, exist_ok=True)

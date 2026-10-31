@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from alembic import command
@@ -24,12 +25,32 @@ from control_station.database import (
 from control_station.models import StepStatus, TaskStatus
 
 
+ROBOT_ID_BY_KIND = {"MOBILE": "mobile-01", "ARM": "arm-01"}
+
+
 DEFAULT_TASK_STEPS = (
     ("VALIDATE_ROBOTS", None),
-    ("NAVIGATE_TO_DESTINATION", "MOBILE"),
-    ("VERIFY_ARRIVAL", "MOBILE"),
-    ("EXECUTE_ARM_TASK", "ARM"),
-    ("VERIFY_ARM_RESULT", "ARM"),
+    ("NAVIGATE_TO_DESTINATION", ROBOT_ID_BY_KIND["MOBILE"]),
+    ("VERIFY_ARRIVAL", ROBOT_ID_BY_KIND["MOBILE"]),
+    ("EXECUTE_ARM_TASK", ROBOT_ID_BY_KIND["ARM"]),
+    ("VERIFY_ARM_RESULT", ROBOT_ID_BY_KIND["ARM"]),
+    ("FINALIZE_TASK", None),
+)
+
+PICK_AND_PLACE_STEPS = (
+    ("VALIDATE_REQUEST", None),
+    ("DETECT_TARGETS", None),
+    ("SELECT_TARGET", None),
+    ("ESTIMATE_TARGET_POSE", None),
+    ("VALIDATE_GRASP", None),
+    ("APPROACH_TARGET", ROBOT_ID_BY_KIND["ARM"]),
+    ("REFINE_TARGET", ROBOT_ID_BY_KIND["ARM"]),
+    ("GRASP_TARGET", ROBOT_ID_BY_KIND["ARM"]),
+    ("VERIFY_GRASP", ROBOT_ID_BY_KIND["ARM"]),
+    ("LIFT_TARGET", ROBOT_ID_BY_KIND["ARM"]),
+    ("MOVE_TO_DESTINATION", ROBOT_ID_BY_KIND["ARM"]),
+    ("PLACE_TARGET", ROBOT_ID_BY_KIND["ARM"]),
+    ("VERIFY_PLACEMENT", ROBOT_ID_BY_KIND["ARM"]),
     ("FINALIZE_TASK", None),
 )
 
@@ -38,6 +59,7 @@ TASK_TRANSITIONS = {
     TaskStatus.VALIDATING: {
         TaskStatus.RUNNING,
         TaskStatus.FAILED,
+        TaskStatus.CANCELING,
         TaskStatus.CANCELED,
         TaskStatus.NEEDS_INTERVENTION,
     },
@@ -126,7 +148,134 @@ class TaskStore:
         self.path = Path(db_path) if db_path else database_path()
         self.engine: Engine = create_database_engine(self.path)
         self._sessions: sessionmaker = make_session_factory(self.engine)
+        # The control station is a single local server process. Serialize task
+        # claims in that process while the database CAS protects each task row.
+        self._claim_lock = Lock()
         self._migrate()
+
+    def claim_task(self, task_id: str) -> tuple[dict[str, Any], bool]:
+        """Atomically reserve one pending task for this server process.
+
+        Returns (task, started). Repeated requests for an already active task
+        are idempotent; another active task prevents a new claim.
+        """
+        with self._claim_lock:
+            with self._sessions() as session:
+                task = session.get(TaskRecord, task_id)
+                if task is None:
+                    raise TaskNotFoundError(task_id)
+                current = TaskStatus(task.status)
+                if current in {
+                    TaskStatus.VALIDATING,
+                    TaskStatus.RUNNING,
+                    TaskStatus.CANCELING,
+                    TaskStatus.NEEDS_INTERVENTION,
+                }:
+                    return self._present_with_history(task), False
+                if current != TaskStatus.PENDING:
+                    raise InvalidStateTransition(
+                        f"Task cannot start from {current.value}"
+                    )
+                active = session.scalars(
+                    select(TaskRecord).where(
+                        TaskRecord.status.in_(
+                            [
+                                TaskStatus.VALIDATING.value,
+                                TaskStatus.RUNNING.value,
+                                TaskStatus.CANCELING.value,
+                                TaskStatus.NEEDS_INTERVENTION.value,
+                            ]
+                        )
+                    )
+                ).first()
+                if active is not None:
+                    raise StateTransitionConflict(
+                        f"Task {active.id} is already active"
+                    )
+            claimed = self.transition_task(
+                task_id,
+                TaskStatus.VALIDATING,
+                expected_status=TaskStatus.PENDING,
+                payload={"source": "mock", "event": "START_REQUESTED"},
+            )
+            return claimed, True
+
+    def cancel_pending_task(self, task_id: str) -> dict[str, Any]:
+        """Atomically cancel an unstarted task and all of its pending steps."""
+        started_at = datetime.now(timezone.utc)
+        with self._sessions.begin() as session:
+            task = session.get(TaskRecord, task_id)
+            if task is None:
+                raise TaskNotFoundError(task_id)
+            if task.status != TaskStatus.PENDING.value:
+                raise StateTransitionConflict(
+                    f"Expected task state PENDING, found {task.status}"
+                )
+            pending_steps = [
+                step for step in task.steps if step.status == StepStatus.PENDING.value
+            ]
+            if len(pending_steps) != len(task.steps):
+                raise StateTransitionConflict(
+                    "Pending task contains a non-pending step; operator review is required"
+                )
+            task_finished_at = (
+                started_at + timedelta(microseconds=len(pending_steps))
+            ).isoformat(timespec="microseconds")
+
+            result = session.execute(
+                update(TaskRecord)
+                .where(
+                    TaskRecord.id == task_id,
+                    TaskRecord.status == TaskStatus.PENDING.value,
+                )
+                .values(status=TaskStatus.CANCELED.value, finished_at=task_finished_at)
+            )
+            if result.rowcount != 1:
+                raise StateTransitionConflict(
+                    "Task state changed concurrently; reload before retrying"
+                )
+            session.add(
+                TaskEventRecord(
+                    id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
+                    task_id=task_id,
+                    event_type="TASK_STATUS_CHANGED",
+                    previous_status=TaskStatus.PENDING.value,
+                    new_status=TaskStatus.CANCELED.value,
+                    occurred_at=task_finished_at,
+                    received_at=task_finished_at,
+                    payload={"source": "mock", "event": "CANCEL_CONFIRMED"},
+                )
+            )
+            for index, step in enumerate(pending_steps):
+                step_finished_at = (
+                    started_at + timedelta(microseconds=index)
+                ).isoformat(timespec="microseconds")
+                step.status = StepStatus.CANCELED.value
+                step.finished_at = step_finished_at
+                step.result = {"source": "mock", "outcome": "NOT_EXECUTED"}
+                session.add(
+                    TaskEventRecord(
+                        id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
+                        task_id=task_id,
+                        step_id=step.id,
+                        event_type="STEP_STATUS_CHANGED",
+                        previous_status=StepStatus.PENDING.value,
+                        new_status=StepStatus.CANCELED.value,
+                        occurred_at=step_finished_at,
+                        received_at=step_finished_at,
+                        payload={
+                            "source": "mock",
+                            "event": "NOT_EXECUTED_AFTER_CANCEL",
+                            "task_id": task_id,
+                            "step_id": step.id,
+                            "command_id": None,
+                        },
+                    )
+                )
+            session.flush()
+            session.refresh(task)
+            session.expire(task, ["steps", "events"])
+            return self._present_with_history(task)
 
     def _migrate(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
@@ -141,6 +290,8 @@ class TaskStore:
             "id": task.id,
             "destination": task.destination,
             "arm_job": task.arm_job,
+            "pick_request": task.pick_request,
+            "workflow": "PICK_AND_PLACE" if task.pick_request else "TRANSPORT_AND_ARM",
             "status": task.status,
             "created_at": task.created_at,
             "started_at": task.started_at,
@@ -155,12 +306,15 @@ class TaskStore:
 
     @staticmethod
     def _present_step(step: TaskStepRecord) -> dict[str, Any]:
+        robot_id = step.robot_id
+        if robot_id is not None:
+            robot_id = ROBOT_ID_BY_KIND.get(robot_id, robot_id)
         return {
             "id": step.id,
             "task_id": step.task_id,
             "sequence": step.sequence,
             "step_type": step.step_type,
-            "robot_id": step.robot_id,
+            "robot_id": robot_id,
             "status": step.status,
             "command_id": step.command_id,
             "started_at": step.started_at,
@@ -208,6 +362,270 @@ class TaskStore:
                 return None
             return self._present_with_history(task)
 
+    def record_task_event(
+        self,
+        task_id: str,
+        event_type: str,
+        payload: dict[str, object],
+        *,
+        expected_status: TaskStatus,
+        step_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Append task/optional-step evidence without changing task or step state."""
+        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        with self._sessions.begin() as session:
+            result = session.execute(
+                update(TaskRecord)
+                .where(
+                    TaskRecord.id == task_id,
+                    TaskRecord.status == expected_status.value,
+                )
+                .values(status=expected_status.value)
+            )
+            if result.rowcount != 1:
+                task = session.get(TaskRecord, task_id)
+                if task is None:
+                    raise TaskNotFoundError(task_id)
+                raise StateTransitionConflict(
+                    f"Expected task state {expected_status.value}, found {task.status}"
+                )
+            task = session.get(TaskRecord, task_id)
+            if task is None:
+                raise TaskNotFoundError(task_id)
+            if step_id is not None:
+                step = session.get(TaskStepRecord, step_id)
+                if step is None or step.task_id != task_id:
+                    raise StepNotFoundError(step_id)
+                if step.status != StepStatus.PENDING.value:
+                    raise StateTransitionConflict(
+                        f"Expected step state PENDING, found {step.status}"
+                    )
+            session.add(
+                TaskEventRecord(
+                    id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
+                    task_id=task_id,
+                    step_id=step_id,
+                    event_type=event_type,
+                    previous_status=task.status,
+                    new_status=task.status,
+                    occurred_at=now,
+                    received_at=now,
+                    payload={"source": "camera_observation", **payload},
+                )
+            )
+            session.flush()
+            session.expire(task, ["events"])
+            return self._present_with_history(task)
+
+    def record_target_selection_event(
+        self,
+        task_id: str,
+        payload: dict[str, object],
+        *,
+        expected_status: TaskStatus,
+        step_id: str,
+    ) -> tuple[dict[str, Any], str, bool]:
+        """Atomically append or retrieve an identical operator selection event."""
+        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        with self._sessions.begin() as session:
+            result = session.execute(
+                update(TaskRecord)
+                .where(
+                    TaskRecord.id == task_id,
+                    TaskRecord.status == expected_status.value,
+                )
+                .values(status=expected_status.value)
+            )
+            if result.rowcount != 1:
+                task = session.get(TaskRecord, task_id)
+                if task is None:
+                    raise TaskNotFoundError(task_id)
+                raise StateTransitionConflict(
+                    f"Expected task state {expected_status.value}, found {task.status}"
+                )
+            task = session.get(TaskRecord, task_id)
+            if task is None:
+                raise TaskNotFoundError(task_id)
+
+            existing_events = session.scalars(
+                select(TaskEventRecord).where(
+                    TaskEventRecord.task_id == task_id,
+                    TaskEventRecord.event_type == "TARGET_SELECTED",
+                )
+            ).all()
+            matching_events = [
+                event
+                for event in existing_events
+                if event.step_id == step_id and event.payload == payload
+            ]
+            if matching_events:
+                existing = matching_events[-1]
+                return self._present_with_history(task), existing.id, True
+
+            step = session.get(TaskStepRecord, step_id)
+            if step is None or step.task_id != task_id:
+                raise StepNotFoundError(step_id)
+            if step.status != StepStatus.PENDING.value:
+                raise StateTransitionConflict(
+                    f"Expected step state PENDING, found {step.status}"
+                )
+            event = TaskEventRecord(
+                id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
+                task_id=task_id,
+                step_id=step_id,
+                event_type="TARGET_SELECTED",
+                previous_status=task.status,
+                new_status=task.status,
+                occurred_at=now,
+                received_at=now,
+                payload={"source": "operator_review", **payload},
+            )
+            session.add(event)
+            session.flush()
+            session.expire(task, ["events"])
+            return self._present_with_history(task), event.id, False
+
+    def record_step_event(
+        self,
+        task_id: str,
+        step_id: str,
+        command_id: str,
+        event_type: str,
+        payload: dict[str, object],
+        *,
+        expected_task_status: TaskStatus,
+        expected_step_status: StepStatus = StepStatus.RUNNING,
+    ) -> dict[str, Any]:
+        """Append evidence only while the same task step and command remain active."""
+        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        with self._sessions.begin() as session:
+            result = session.execute(
+                update(TaskRecord)
+                .where(
+                    TaskRecord.id == task_id,
+                    TaskRecord.status == expected_task_status.value,
+                )
+                .values(status=expected_task_status.value)
+            )
+            if result.rowcount != 1:
+                task = session.get(TaskRecord, task_id)
+                if task is None:
+                    raise TaskNotFoundError(task_id)
+                raise StateTransitionConflict(
+                    f"Expected task state {expected_task_status.value}, found {task.status}"
+                )
+            task = session.get(TaskRecord, task_id)
+            if task is None:
+                raise TaskNotFoundError(task_id)
+            if task.active_step_id != step_id:
+                raise StateTransitionConflict(
+                    "Step is no longer the task's active step; reload before recording event"
+                )
+            step = session.get(TaskStepRecord, step_id)
+            if step is None or step.task_id != task_id:
+                raise StepNotFoundError(step_id)
+            if step.status != expected_step_status.value:
+                raise StateTransitionConflict(
+                    f"Expected step state {expected_step_status.value}, found {step.status}"
+                )
+            if step.command_id != command_id:
+                raise StateTransitionConflict("Step command ID changed; reload before recording event")
+
+            session.add(
+                TaskEventRecord(
+                    id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
+                    task_id=task_id,
+                    step_id=step_id,
+                    event_type=event_type,
+                    previous_status=task.status,
+                    new_status=task.status,
+                    occurred_at=now,
+                    received_at=now,
+                    payload={"source": "control_station", **payload},
+                )
+            )
+            session.flush()
+            session.expire(task, ["events"])
+            return self._present_with_history(task)
+
+    def record_projection_draft_event(
+        self,
+        task_id: str,
+        payload: dict[str, object],
+        *,
+        expected_status: TaskStatus,
+        step_id: str,
+    ) -> tuple[dict[str, Any], str, bool]:
+        """Atomically append one projection review event per draft ID and artifact hash."""
+        draft_id = payload.get("draft_id")
+        artifact_sha256 = payload.get("artifact_sha256")
+        if not isinstance(draft_id, str) or not isinstance(artifact_sha256, str):
+            raise ValueError("projection event requires draft ID and artifact hash")
+        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        with self._sessions.begin() as session:
+            result = session.execute(
+                update(TaskRecord)
+                .where(
+                    TaskRecord.id == task_id,
+                    TaskRecord.status == expected_status.value,
+                )
+                .values(status=expected_status.value)
+            )
+            if result.rowcount != 1:
+                task = session.get(TaskRecord, task_id)
+                if task is None:
+                    raise TaskNotFoundError(task_id)
+                raise StateTransitionConflict(
+                    f"Expected task state {expected_status.value}, found {task.status}"
+                )
+            task = session.get(TaskRecord, task_id)
+            if task is None:
+                raise TaskNotFoundError(task_id)
+            existing_events = session.scalars(
+                select(TaskEventRecord).where(
+                    TaskEventRecord.task_id == task_id,
+                    TaskEventRecord.event_type == "TARGET_PLANE_PROJECTION_RECORDED",
+                )
+            ).all()
+            matching_events = [
+                event
+                for event in existing_events
+                if isinstance(event.payload, dict) and event.payload.get("draft_id") == draft_id
+            ]
+            if matching_events:
+                existing = matching_events[-1]
+                if (
+                    existing.payload.get("artifact_sha256") != artifact_sha256
+                    or existing.step_id != step_id
+                ):
+                    raise StateTransitionConflict(
+                        "Projection draft ID is already linked to a different artifact or step"
+                    )
+                return self._present_with_history(task), existing.id, True
+
+            step = session.get(TaskStepRecord, step_id)
+            if step is None or step.task_id != task_id:
+                raise StepNotFoundError(step_id)
+            if step.status != StepStatus.PENDING.value:
+                raise StateTransitionConflict(
+                    f"Expected step state PENDING, found {step.status}"
+                )
+            event = TaskEventRecord(
+                id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
+                task_id=task_id,
+                step_id=step_id,
+                event_type="TARGET_PLANE_PROJECTION_RECORDED",
+                previous_status=task.status,
+                new_status=task.status,
+                occurred_at=now,
+                received_at=now,
+                payload={"source": "projection_draft_review", **payload},
+            )
+            session.add(event)
+            session.flush()
+            session.expire(task, ["events"])
+            return self._present_with_history(task), event.id, False
+
     def transition_task(
         self,
         task_id: str,
@@ -217,7 +635,7 @@ class TaskStore:
         payload: dict[str, object] | None = None,
         resume_confirmed: bool = False,
     ) -> dict[str, Any]:
-        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
         with self._sessions.begin() as session:
             task = session.get(TaskRecord, task_id)
             if task is None:
@@ -240,6 +658,18 @@ class TaskStore:
                 values["started_at"] = now
             if new_status in {TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELED}:
                 values["finished_at"] = now
+            if new_status in {TaskStatus.FAILED, TaskStatus.NEEDS_INTERVENTION} and payload:
+                if "error_code" in payload:
+                    values["error_code"] = payload["error_code"]
+                if "error" in payload:
+                    values["error_message"] = payload["error"]
+            if (
+                previous == TaskStatus.NEEDS_INTERVENTION
+                and new_status == TaskStatus.RUNNING
+                and resume_confirmed
+            ):
+                values["error_code"] = None
+                values["error_message"] = None
 
             result = session.execute(
                 update(TaskRecord)
@@ -258,7 +688,7 @@ class TaskStore:
                     new_status=new_status.value,
                     occurred_at=now,
                     received_at=now,
-                    payload={**(payload or {}), "source": "control_station"},
+                    payload={"source": "control_station", **(payload or {})},
                 )
             )
             session.flush()
@@ -279,7 +709,7 @@ class TaskStore:
         error_message: str | None = None,
         event_payload: dict[str, object] | None = None,
     ) -> dict[str, Any]:
-        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
         with self._sessions.begin() as session:
             step = session.get(TaskStepRecord, step_id)
             if step is None or step.task_id != task_id:
@@ -335,24 +765,39 @@ class TaskStore:
                     new_status=new_status.value,
                     occurred_at=now,
                     received_at=now,
-                    payload={**(event_payload or {}), "source": "control_station"},
+                    payload={"source": "control_station", **(event_payload or {})},
                 )
             )
             session.flush()
             task = session.get(TaskRecord, task_id)
             assert task is not None
+            if new_status in {
+                StepStatus.COMMAND_SENT,
+                StepStatus.ACCEPTED,
+                StepStatus.RUNNING,
+            }:
+                task.active_step_id = step_id
+            elif task.active_step_id == step_id:
+                task.active_step_id = None
             session.expire(task, ["steps", "events"])
             return self._present_with_history(task)
 
-    def create_task(self, destination: str, arm_job: str) -> dict[str, Any]:
-        created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    def create_task(
+        self,
+        destination: str,
+        arm_job: str,
+        pick_request: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        created_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
         task = TaskRecord(
             id=f"TASK-{uuid.uuid4().hex[:8].upper()}",
             destination=destination,
             arm_job=arm_job,
+            pick_request=pick_request,
             status=TaskStatus.PENDING.value,
             created_at=created_at,
         )
+        step_definitions = PICK_AND_PLACE_STEPS if pick_request else DEFAULT_TASK_STEPS
         task.steps = [
             TaskStepRecord(
                 id=f"STEP-{uuid.uuid4().hex[:12].upper()}",
@@ -361,7 +806,7 @@ class TaskStore:
                 robot_id=robot_id,
                 status="PENDING",
             )
-            for sequence, (step_type, robot_id) in enumerate(DEFAULT_TASK_STEPS, start=1)
+            for sequence, (step_type, robot_id) in enumerate(step_definitions, start=1)
         ]
         task.events = [
             TaskEventRecord(
@@ -371,7 +816,10 @@ class TaskStore:
                 new_status=TaskStatus.PENDING.value,
                 occurred_at=created_at,
                 received_at=created_at,
-                payload={"step_ids": [step.id for step in task.steps]},
+                payload={
+                    "step_ids": [step.id for step in task.steps],
+                    "pick_request": pick_request,
+                },
             )
         ]
 

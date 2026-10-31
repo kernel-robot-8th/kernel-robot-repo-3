@@ -39,6 +39,8 @@ td:nth-child(2) { width: 23%; white-space: nowrap; }
 .state { display: inline-flex; align-items: center; gap: 7px; }.state::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #a0a7b0; }
 .state.available { color: #225ca8; }.state.available::before { background: #3478cb; }
 .state.waiting { color: #805b1d; }.state.waiting::before { background: #c99532; }
+.state.stale { color: #9b3b35; }.state.stale::before { background: #bf4b42; }
+.state.invalid { color: #9b3b35; }.state.invalid::before { background: #bf4b42; }
 .loading, .error-row { color: #69727d; text-align: center; }
 .note { margin: 8px 0 0; color: #6e7781; font-size: 11px; }
 .arm-control { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px; border: 1px solid #d9dde2; border-radius: 4px; background: #fff; }
@@ -48,8 +50,12 @@ button { padding: 8px 11px; border: 1px solid #2d6fbd; border-radius: 4px; backg
 button.secondary { border-color: #cbd1d8; background: #fff; color: #38414a; }
 button:disabled { border-color: #d9dde2; background: #edf0f3; color: #8a929b; cursor: not-allowed; }
 .task-form { display: grid; grid-template-columns: 1fr 1.5fr auto; align-items: end; gap: 10px; padding: 12px; border: 1px solid #d9dde2; border-radius: 4px; background: #fff; }
+.command-parse-form { display: grid; grid-template-columns: minmax(240px, 1fr) auto; align-items: end; gap: 10px; margin-bottom: 8px; padding: 12px; border: 1px solid #d9dde2; border-radius: 4px; background: #fff; }
+.command-parse-form label { display: grid; gap: 4px; color: #58616b; font-size: 11px; }
+.command-parse-form textarea { width: 100%; min-width: 0; resize: vertical; padding: 8px; border: 1px solid #cbd1d8; border-radius: 4px; color: #20252b; font: inherit; font-size: 12px; }
+.target-observation-form { grid-template-columns: minmax(180px, 1fr) minmax(120px, .55fr) minmax(120px, .45fr) auto; margin-top: 10px; }
 .task-form label, .coordinate-form label { display: grid; gap: 4px; color: #58616b; font-size: 11px; }
-.task-form input, .coordinate-form input, .coordinate-form select { width: 100%; min-width: 0; padding: 8px; border: 1px solid #cbd1d8; border-radius: 4px; color: #20252b; font: inherit; font-size: 12px; }
+.task-form input, .task-form select, .coordinate-form input, .coordinate-form select { width: 100%; min-width: 0; padding: 8px; border: 1px solid #cbd1d8; border-radius: 4px; color: #20252b; font: inherit; font-size: 12px; }
 .coordinate-form { display: grid; grid-template-columns: 1.3fr .6fr repeat(3, .7fr) auto; align-items: end; gap: 8px; padding: 12px; border: 1px solid #d9dde2; border-radius: 4px; background: #fff; }
 .coordinate-result { overflow-x: auto; padding: 10px 12px; border: 1px solid #d9dde2; border-radius: 4px; background: #fff; color: #38414a; font-size: 11px; }
 .task-layout { display: grid; grid-template-columns: minmax(200px, .8fr) minmax(0, 1.5fr); gap: 12px; margin-top: 12px; }
@@ -59,9 +65,15 @@ button:disabled { border-color: #d9dde2; background: #edf0f3; color: #8a929b; cu
 .task-item span:first-child { display: grid; min-width: 0; }.task-item strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }.task-item small, .task-detail small { color: #7a838d; font-size: 10px; }
 .task-status { flex-shrink: 0; color: #58616b; font-size: 11px; }
 .task-detail { padding: 12px; }.task-detail-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }.task-detail h3 { margin: 0; font-size: 14px; font-weight: 600; }.task-arm-job { margin: 10px 0; color: #58616b; font-size: 12px; }
+.task-error { margin: 10px 0; color: #9c3434; font-size: 12px; overflow-wrap: anywhere; }
+.task-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 10px 0; }.task-actions .note { margin: 0; }
 .task-detail h4 { margin: 13px 0 6px; font-size: 11px; font-weight: 600; }
 .step-list, .event-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
 .step-list li, .event-list li { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid #eaedf0; font-size: 11px; }.step-list strong { color: #68717b; font-weight: 500; }.event-list time { color: #7a838d; font-size: 10px; }.empty-history { color: #7a838d; }
+.step-robot { display: block; margin-top: 2px; color: #7a838d; font-size: 10px; font-weight: 400; }
+.event-list li span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.candidate-selection-controls { display: flex; flex-wrap: wrap; gap: 4px; }
+.candidate-selection-controls button { padding: 3px 6px; font-size: 10px; }
 .camera-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .camera-card { min-width: 0; border: 1px solid #d9dde2; border-radius: 4px; background: #fff; }
 .camera-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid #eaedf0; }
@@ -74,6 +86,11 @@ button:disabled { border-color: #d9dde2; background: #edf0f3; color: #8a929b; cu
 .camera-detail strong { color: #3e4750; font-weight: 500; text-align: right; }
 .camera-detail[hidden] { display: none; }
 .camera-detail[data-field="detections-row"] { grid-column: 1 / -1; }
+.camera-detail[data-field="detector-provenance-row"] { grid-column: 1 / -1; }
+.camera-detail[data-field="detector-provenance-row"] strong { overflow-wrap: anywhere; }
+.camera-detail[data-field="target-observation"] { grid-column: 1 / -1; }
+.observation-image-option { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; font-size: 0.9rem; }
+.observation-image-option input { width: auto; margin: 0; }
 .api-section { padding-top: 1px; }
 dl { margin: 10px 0 0; padding: 2px 13px; border: 1px solid #d9dde2; border-radius: 4px; background: #fff; }
 dl > div { display: flex; align-items: baseline; gap: 10px; padding: 8px 0; border-bottom: 1px solid #eaedf0; }
@@ -98,6 +115,7 @@ footer { margin-top: 34px; padding-top: 12px; border-top: 1px solid #d9dde2; col
   .arm-control { align-items: flex-start; flex-direction: column; }
   .arm-actions { width: 100%; }
   .task-form { grid-template-columns: 1fr; }
+  .command-parse-form { grid-template-columns: 1fr; }
   .coordinate-form { grid-template-columns: 1fr 1fr; }
   .task-layout { grid-template-columns: 1fr; }
 }
