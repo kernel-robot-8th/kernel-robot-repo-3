@@ -12,7 +12,7 @@
 | `src/control_station/omx_pose.py` | OMX follower 정규화 관절 목표 JSON의 오프라인 검증; 장치 연결·명령 없음 |
 | `src/control_station/coordinate_target_drafts.py` | 좌표 입력을 숨김폴더의 `DRAFT_ONLY` JSON으로 저장; IK/장치 명령 없음 |
 | `scripts/validate_omx_pose.py` | 관절 목표 JSON 형식 검사 CLI |
-| `src/control_station/camera_adapters.py` | `--arm` 모드에서 OpenCV 카메라 단독 점유 및 MJPEG 프레임 제공. YOLO 가중치를 지정하면 Head Camera 프레임에 검출 박스를 그려 표시 |
+| `src/control_station/camera_adapters.py` | `--arm` 모드에서 OpenCV 카메라 단독 점유 및 MJPEG 프레임 제공. YOLO 가중치를 지정하면 Head·Joint Camera 프레임에 검출 박스를 그려 표시 |
 | `src/control_station/models.py` | 작업·단계 상태 어휘 및 카메라 스냅샷 |
 | `src/control_station/database.py` | SQLAlchemy ORM 모델, SQLite 엔진과 세션 설정 |
 | `src/control_station/store.py` | ORM 세션을 통한 작업·단계·이벤트 생성·조회 |
@@ -25,7 +25,7 @@
 |---|---|---|
 | GET | `/api/health` | 서버 모드 반환 |
 | GET | `/api/robots` | mock 상태 또는 ROS 2 Nav2 discovery 반환 |
-| GET | `/api/cameras` | Head·Joint 카메라 상태, 설정된 스트림 주소, Head Camera YOLO 검출 결과(`detector_state`, `detections`) 반환 |
+| GET | `/api/cameras` | Head·Joint 카메라 상태, 설정된 스트림 주소, 카메라별 YOLO 검출 결과(`detector_state`, `detections`) 반환 |
 | GET | `/api/arm/status` | 팔 텔레오퍼레이션 프로세스 상태 반환 |
 | POST | `/api/arm/start` | 고정 프로필 프로세스 시작 요청 |
 | POST | `/api/arm/stop` | 프로세스 그룹에 `SIGINT` 종료 요청 |
@@ -43,7 +43,7 @@
 - 팔 제어는 기본 비활성화입니다. 활성화 시 LeRobot CLI 프로세스의 시작·생존·종료를 관리합니다.
 - 좌표 목표 초안은 입력된 좌표계 이름, 단위, XYZ를 파일로 저장할 뿐입니다. IK/좌표 변환 및 팔 동작은 구현되지 않았습니다.
 - LeRobot CLI의 프로세스 생존은 장치 준비 완료나 작업 완료 신호가 아닙니다. 별도의 작업 완료 이벤트는 아직 없습니다.
-- Head Camera YOLO 검출은 화면 표시와 API 조회만 합니다. 로봇 명령이나 작업 상태에 연결되어 있지 않습니다.
+- Head·Joint Camera YOLO 검출은 화면 표시와 API 조회만 합니다. 로봇 명령이나 작업 상태에 연결되어 있지 않습니다.
 - 텔레오퍼레이션 시작은 저장된 관제 작업을 실행하지 않습니다. `/api/tasks`는 계속 `PENDING`만 저장합니다.
 - `--arm` 모드에서는 관제 서버가 기본 `/dev/video4`를 단독으로 열어 Joint Camera 슬롯에 MJPEG로 보냅니다. LeRobot에는 카메라 설정을 전달하지 않고 Rerun 표시도 끕니다.
 - `/dev/video4`는 Joint Camera, HCAM0의 by-id 경로는 Head Camera로 설정했습니다. 두 경로 모두 영상 캡처 장치이며 `/dev/video5`는 메타데이터 노드입니다.
