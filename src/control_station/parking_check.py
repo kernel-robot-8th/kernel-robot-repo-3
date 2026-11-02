@@ -23,6 +23,10 @@ MAX_VIEW_SHIFT_PX = 3.0
 # The marker side measured on the registered plane must stay this close to the printed side;
 # otherwise the marker is not on that plane (lifted, tilted or a different print).
 MAX_SIDE_ERROR_RATIO = 0.1
+# Up to this multiple of the tolerance a misalignment counts as NEAR, beyond it as FAR.
+NEAR_LIMIT_RATIO = 2.0
+# Marker axis that points to Pinky's front -> (forward, left) unit vectors in marker (x, y), with marker +z up.
+MARKER_FORWARD_AXES = {"+x": (1.0, 0.0), "-x": (-1.0, 0.0), "+y": (0.0, 1.0), "-y": (0.0, -1.0)}
 
 
 class ParkingStatus(str, Enum):
@@ -31,6 +35,14 @@ class ParkingStatus(str, Enum):
     NOT_FOUND = "NOT_FOUND"
     AMBIGUOUS = "AMBIGUOUS"
     VIEW_UNVERIFIED = "VIEW_UNVERIFIED"
+
+
+class DeviationLevel(str, Enum):
+    """How far the measured spot is from the registered one, relative to the tolerance."""
+
+    WITHIN = "WITHIN"  # both ratios <= 1
+    NEAR = "NEAR"  # worst ratio <= NEAR_LIMIT_RATIO
+    FAR = "FAR"
 
 
 class ParkingSpotError(ValueError):
@@ -80,6 +92,9 @@ class ParkingResult:
     offset: PlanarOffset | None
     reason: str
     view_shift_px: float | None = None
+    position_ratio: float | None = None  # distance / position tolerance
+    yaw_ratio: float | None = None  # |dyaw| / yaw tolerance
+    deviation_level: DeviationLevel | None = None
 
     def to_dict(self) -> dict[str, object]:
         result: dict[str, object] = {"status": self.status.value, "reason": self.reason}
@@ -89,6 +104,12 @@ class ParkingResult:
                 dy_mm=round(self.offset.dy_mm, 1),
                 dyaw_deg=round(self.offset.dyaw_deg, 2),
                 distance_mm=round(self.offset.distance_mm, 1),
+            )
+        if self.deviation_level is not None:
+            result.update(
+                deviation_level=self.deviation_level.value,
+                position_ratio=round(self.position_ratio or 0.0, 2),
+                yaw_ratio=round(self.yaw_ratio or 0.0, 2),
             )
         if self.view_shift_px is not None:
             result["view_shift_px"] = round(self.view_shift_px, 1)
@@ -116,9 +137,11 @@ class ParkingSpot:
     plane: MarkerPose  # reference marker pose; only its plane and axes are used for measuring
     reference: PlaneMarker
     reference_corners_px: np.ndarray  # 4x2, for drawing the registered spot
-    anchors: dict[int, np.ndarray]  # fixed marker id -> registered center pixel
+    # Fixed marker id -> registered center pixel. Empty only when registered with the view check off.
+    anchors: dict[int, np.ndarray]
     tolerance: ParkingTolerance
     intrinsics: Intrinsics
+    marker_forward_axis: str | None = None  # key of MARKER_FORWARD_AXES, or None when not recorded
 
 
 @dataclass(frozen=True)
@@ -128,6 +151,8 @@ class FrameObservation:
     reason: str
     blocking_status: ParkingStatus | None  # AMBIGUOUS or VIEW_UNVERIFIED invalidates earlier frames too
     view_shift_px: float | None
+    # Status to report when this unusable frame leaves nothing to judge; a skipped frame keeps earlier ones.
+    skipped_status: ParkingStatus = ParkingStatus.NOT_FOUND
 
 
 def sha256_of(path: Path) -> str:
@@ -167,6 +192,14 @@ def load_spot(path: Path, repository_root: Path) -> ParkingSpot:
         np.array(data["reference_pose_in_camera"]["translation_mm"], dtype=np.float64),
     )
     corners = np.array(data["reference_corners_px"], dtype=np.float64)
+    if not data["anchors"] and data.get("view_check", {}).get("mode") != "OFF":
+        raise ParkingSpotError(f"고정 마커가 없는데 view_check.mode가 OFF로 기록되지 않았습니다: {path}")
+    tolerance = ParkingTolerance(float(data["tolerance"]["position_mm"]), float(data["tolerance"]["yaw_deg"]))
+    if not (tolerance.position_mm > 0 and tolerance.yaw_deg > 0):
+        raise ParkingSpotError(f"허용 오차는 0보다 커야 합니다: {data['tolerance']}")
+    forward_axis = data.get("marker_forward_axis")
+    if forward_axis is not None and forward_axis not in MARKER_FORWARD_AXES:
+        raise ParkingSpotError(f"marker_forward_axis는 {sorted(MARKER_FORWARD_AXES)} 중 하나여야 합니다: {forward_axis!r}")
     return ParkingSpot(
         spot_id=data["spot_id"],
         camera_id=data["camera_id"],
@@ -177,8 +210,9 @@ def load_spot(path: Path, repository_root: Path) -> ParkingSpot:
         reference=project_to_plane(corners, plane, intrinsics.camera_matrix, intrinsics.distortion),
         reference_corners_px=corners,
         anchors={int(a["marker_id"]): np.array(a["center_px"], dtype=np.float64) for a in data["anchors"]},
-        tolerance=ParkingTolerance(float(data["tolerance"]["position_mm"]), float(data["tolerance"]["yaw_deg"])),
+        tolerance=tolerance,
         intrinsics=intrinsics,
+        marker_forward_axis=forward_axis,
     )
 
 
@@ -257,6 +291,12 @@ def plane_offset(reference: PlaneMarker, current: PlaneMarker) -> PlanarOffset:
     return PlanarOffset(current.x_mm - reference.x_mm, current.y_mm - reference.y_mm, dyaw)
 
 
+def pinky_frame_offset(offset: PlanarOffset, forward_axis: str) -> tuple[float, float]:
+    """(forward, left) in mm from Pinky's own view; dyaw already reads as a left turn when positive."""
+    fx, fy = MARKER_FORWARD_AXES[forward_axis]
+    return offset.dx_mm * fx + offset.dy_mm * fy, -offset.dx_mm * fy + offset.dy_mm * fx
+
+
 def anchor_shift_px(anchors: dict[int, np.ndarray], found: dict[int, list[np.ndarray]]) -> np.ndarray | None:
     """Median (x, y) pixel shift of the registered fixed markers visible exactly once, or None if none are."""
     shifts = [
@@ -269,14 +309,24 @@ def anchor_shift_px(anchors: dict[int, np.ndarray], found: dict[int, list[np.nda
 
 def observe_frame(image: np.ndarray, spot: ParkingSpot) -> FrameObservation:
     found = detect_markers(image, spot.dictionary)
+    if not spot.anchors:  # view check off: a wrapped or moved view goes unnoticed and shows up as an offset
+        return _observe_marker(found, spot, np.zeros(2), None)
     view_shift = anchor_shift_px(spot.anchors, found)
-    if view_shift is None:
-        return FrameObservation(None, None, "no fixed marker visible to verify the camera view", ParkingStatus.VIEW_UNVERIFIED, None)
+    if view_shift is None:  # a small fixed marker drops out for single frames; skip it like a missed Pinky marker
+        return FrameObservation(
+            None, None, "no fixed marker visible to verify the camera view", None, None, ParkingStatus.VIEW_UNVERIFIED
+        )
     shift = float(np.linalg.norm(view_shift))
     if shift > MAX_VIEW_SHIFT_PX:
         return FrameObservation(
             None, None, f"fixed markers moved {shift:.1f} px from registration", ParkingStatus.VIEW_UNVERIFIED, shift
         )
+    return _observe_marker(found, spot, view_shift, shift)
+
+
+def _observe_marker(
+    found: dict[int, list[np.ndarray]], spot: ParkingSpot, view_shift: np.ndarray, shift: float | None
+) -> FrameObservation:
     markers = found.get(spot.marker_id, [])
     if not markers:
         return FrameObservation(None, None, "marker not visible", None, shift)
@@ -308,14 +358,21 @@ def median_offset(offsets: list[PlanarOffset]) -> PlanarOffset:
 def judge(offset: PlanarOffset | None, tolerance: ParkingTolerance, reason: str = "") -> ParkingResult:
     if offset is None:
         return ParkingResult(ParkingStatus.NOT_FOUND, None, reason or "marker not visible")
+    position_ratio = offset.distance_mm / tolerance.position_mm
+    yaw_ratio = abs(offset.dyaw_deg) / tolerance.yaw_deg
+    worst = max(position_ratio, yaw_ratio)
+    level = (
+        DeviationLevel.WITHIN if worst <= 1.0
+        else DeviationLevel.NEAR if worst <= NEAR_LIMIT_RATIO
+        else DeviationLevel.FAR
+    )
     outside = []
-    if offset.distance_mm > tolerance.position_mm:
+    if position_ratio > 1.0:
         outside.append(f"position {offset.distance_mm:.0f} mm > {tolerance.position_mm:g} mm")
-    if abs(offset.dyaw_deg) > tolerance.yaw_deg:
+    if yaw_ratio > 1.0:
         outside.append(f"yaw {offset.dyaw_deg:+.1f} deg > ±{tolerance.yaw_deg:g} deg")
-    if outside:
-        return ParkingResult(ParkingStatus.MISALIGNED, offset, "; ".join(outside))
-    return ParkingResult(ParkingStatus.ARRIVED, offset, "within tolerance")
+    status, reason = (ParkingStatus.MISALIGNED, "; ".join(outside)) if outside else (ParkingStatus.ARRIVED, "within tolerance")
+    return ParkingResult(status, offset, reason, None, position_ratio, yaw_ratio, level)
 
 
 class ParkingJudge:
@@ -343,6 +400,6 @@ class ParkingJudge:
         if self.recent:
             self.result = judge(median_offset(self.recent), self.tolerance)
         else:
-            self.result = judge(None, self.tolerance, observation.reason)
+            self.result = ParkingResult(observation.skipped_status, None, observation.reason or "marker not visible")
         self.result = replace(self.result, view_shift_px=observation.view_shift_px)
         return self.result

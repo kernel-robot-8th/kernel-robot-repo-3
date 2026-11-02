@@ -23,6 +23,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
 from control_station.parking_check import (  # noqa: E402
+    MARKER_FORWARD_AXES,
     MAX_VIEW_SHIFT_PX,
     PIXEL_TRANSFORM_ID,
     SCHEMA_VERSION,
@@ -37,6 +38,8 @@ from control_station.parking_check import (  # noqa: E402
     load_intrinsics,
     load_spot,
     observe_frame,
+    ParkingResult,
+    pinky_frame_offset,
     plane_offset,
     project_to_plane,
 )
@@ -100,6 +103,15 @@ def draw_registered(view: np.ndarray, spot: ParkingSpot) -> None:
         cv2.circle(view, tuple(int(v) for v in anchor), 6, (255, 255, 255), 1, cv2.LINE_AA)
 
 
+def result_payload(result: ParkingResult, spot: ParkingSpot) -> dict[str, object]:
+    """Judgment plus Pinky-relative forward/left when the marker mounting direction is recorded."""
+    payload = result.to_dict()
+    if result.offset is not None and spot.marker_forward_axis is not None:
+        forward, left = pinky_frame_offset(result.offset, spot.marker_forward_axis)
+        payload.update(forward_mm=round(forward, 1), left_mm=round(left, 1))
+    return payload
+
+
 def draw_lines(view: np.ndarray, lines: list[tuple[str, tuple[int, int, int]]]) -> None:
     for row, (text, color) in enumerate(lines):
         y = 26 + 24 * row
@@ -145,7 +157,8 @@ def build_registration(
     jitter_deg = max(abs(o.dyaw_deg) for o in spread)
     if jitter_mm > MAX_REGISTER_JITTER_MM or jitter_deg > MAX_REGISTER_JITTER_DEG:
         raise RegistrationRejected(f"moved while registering ({jitter_mm:.1f} mm / {jitter_deg:.1f} deg) - keep Pinky still")
-    anchors = pick_anchors(collected, args.marker_id, args.anchor_ids)
+    anchors = {} if args.no_anchors else pick_anchors(collected, args.marker_id, args.anchor_ids)
+    view_check = {"mode": "OFF"} if args.no_anchors else {"mode": "FIXED_MARKERS", "max_anchor_shift_px": MAX_VIEW_SHIFT_PX}
     return {
         "schema_version": SCHEMA_VERSION,
         "spot_id": args.spot_id,
@@ -160,6 +173,7 @@ def build_registration(
         "aruco_dictionary": args.dictionary,
         "marker_id": args.marker_id,
         "marker_side_mm": args.marker_side_mm,
+        "marker_forward_axis": args.marker_forward_axis,
         "position_method": "corner rays intersected with the registered marker plane",
         "reference_pose_in_camera": {"rotation": plane.rotation.tolist(), "translation_mm": plane.translation_mm.tolist()},
         "reference_corners_px": corners.tolist(),
@@ -167,7 +181,7 @@ def build_registration(
         "reference_frame_count": len(collected),
         "reference_jitter": {"position_mm": round(jitter_mm, 2), "yaw_deg": round(jitter_deg, 3)},
         "anchors": [{"marker_id": i, "center_px": [round(float(v), 2) for v in c]} for i, c in anchors.items()],
-        "view_check": {"max_anchor_shift_px": MAX_VIEW_SHIFT_PX},
+        "view_check": view_check,
         "tolerance": {"position_mm": args.tolerance_mm, "yaw_deg": args.tolerance_deg},
         "axes": "dx +: 마커 오른쪽 변 방향, dy +: 마커 윗변(화살표) 방향, dyaw +: 천장 카메라에서 볼 때 반시계",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -237,7 +251,10 @@ def register(args: argparse.Namespace) -> int:
     print(f"주차 위치 저장: {output}", flush=True)
     jitter = record["reference_jitter"]
     print(f"기준 프레임 {len(collected)}장, 흔들림 최대 {jitter['position_mm']:.1f} mm / {jitter['yaw_deg']:.2f}°", flush=True)
-    print(f"시야 확인 고정 마커: {[a['marker_id'] for a in record['anchors']]}", flush=True)
+    if record["anchors"]:
+        print(f"시야 확인 고정 마커: {[a['marker_id'] for a in record['anchors']]}", flush=True)
+    else:
+        print("시야 확인 꺼짐: 영상 밀림이나 카메라 이동을 감지하지 않습니다.", flush=True)
     return 0
 
 
@@ -250,6 +267,7 @@ def check(args: argparse.Namespace) -> int:
         args.tolerance_mm if args.tolerance_mm is not None else spot.tolerance.position_mm,
         args.tolerance_deg if args.tolerance_deg is not None else spot.tolerance.yaw_deg,
     )
+    view_check = "ON" if spot.anchors else "OFF"
     camera = open_camera(args.camera, spot.intrinsics.width, spot.intrinsics.height)
     window = f"parking check {args.spot_id}"
     judgment = ParkingJudge(tolerance, args.frames)
@@ -270,7 +288,8 @@ def check(args: argparse.Namespace) -> int:
                 continue
 
             if result.status != last_status:
-                print(json.dumps({"spot_id": args.spot_id, **result.to_dict()}, ensure_ascii=False), flush=True)
+                print(json.dumps({"spot_id": args.spot_id, "view_check": view_check, **result_payload(result, spot)},
+                                 ensure_ascii=False), flush=True)
                 last_status = result.status
             view = frame.copy()
             draw_registered(view, spot)
@@ -280,9 +299,14 @@ def check(args: argparse.Namespace) -> int:
             lines = [(f"{result.status.value}", color)]
             if result.offset is not None:
                 o = result.offset
-                lines.append((f"dx {o.dx_mm:+.0f} mm  dy {o.dy_mm:+.0f} mm  dyaw {o.dyaw_deg:+.1f} deg", color))
+                lines.append((f"dx {o.dx_mm:+.0f} mm  dy {o.dy_mm:+.0f} mm  dyaw {o.dyaw_deg:+.1f} deg  "
+                              f"{result.deviation_level.value if result.deviation_level else ''}", color))
+                if spot.marker_forward_axis is not None:
+                    forward, left = pinky_frame_offset(o, spot.marker_forward_axis)
+                    lines.append((f"Pinky forward {forward:+.0f} mm  left {left:+.0f} mm", color))
             lines.append((result.reason, color))
-            lines.append((f"tolerance {tolerance.position_mm:g} mm / {tolerance.yaw_deg:g} deg   white = registered   [q] quit", (220, 220, 220)))
+            lines.append((f"tolerance {tolerance.position_mm:g} mm / {tolerance.yaw_deg:g} deg   view check {view_check}   "
+                          "white = registered   [q] quit", (220, 220, 220)))
             draw_lines(view, lines)
             cv2.rectangle(view, (0, 0), (view.shape[1] - 1, view.shape[0] - 1), color, 6)
             cv2.imshow(window, view)
@@ -293,7 +317,10 @@ def check(args: argparse.Namespace) -> int:
         cv2.destroyAllWindows()
 
     if args.once:
-        print(json.dumps({"spot_id": args.spot_id, "frames": len(judgment.recent), **result.to_dict()}, ensure_ascii=False))
+        print(json.dumps(
+            {"spot_id": args.spot_id, "frames": len(judgment.recent), "view_check": view_check, **result_payload(result, spot)},
+            ensure_ascii=False,
+        ))
     return {ParkingStatus.ARRIVED: 0, ParkingStatus.MISALIGNED: 1}.get(result.status, 2)
 
 
@@ -311,6 +338,10 @@ def main() -> int:
     parser.add_argument("--marker-side-mm", type=float, help="register: 인쇄된 마커 검은 테두리 한 변 길이(mm)")
     parser.add_argument("--anchor-ids", type=lambda text: [int(v) for v in text.split(",")],
                         help="register: 시야 확인에 쓸 바닥 고정 마커 ID (예: 1,3,4). 기본은 등록 중 고정돼 보인 모든 다른 마커")
+    parser.add_argument("--marker-forward-axis", choices=sorted(MARKER_FORWARD_AXES),
+                        help="register: Pinky 앞쪽을 향하는 마커 축 (+x: 마커 오른쪽 변, +y: 윗변). 주면 판정에 Pinky 기준 앞/왼쪽 mm를 함께 출력")
+    parser.add_argument("--no-anchors", action="store_true",
+                        help="register: 고정 마커 없이 Pinky 마커만으로 판정 (영상 밀림·카메라 이동을 감지하지 않음)")
     parser.add_argument("--tolerance-mm", type=float, help="허용 위치 오차 (register 기본 30)")
     parser.add_argument("--tolerance-deg", type=float, help="허용 방향 오차 (register 기본 5)")
     parser.add_argument("--frames", type=int, default=15, help="기준 등록·판정에 모을 프레임 수")
@@ -325,6 +356,8 @@ def main() -> int:
             parser.error("register에는 --marker-id와 --marker-side-mm가 필요합니다")
         if args.anchor_ids and args.marker_id in args.anchor_ids:
             parser.error("--anchor-ids에 Pinky 마커 ID를 넣을 수 없습니다")
+        if args.anchor_ids and args.no_anchors:
+            parser.error("--anchor-ids와 --no-anchors는 함께 쓸 수 없습니다")
         args.tolerance_mm = 30.0 if args.tolerance_mm is None else args.tolerance_mm
         args.tolerance_deg = 5.0 if args.tolerance_deg is None else args.tolerance_deg
         return register(args)

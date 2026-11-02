@@ -4,12 +4,15 @@ import json
 import math
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 import cv2
 import numpy as np
 
 from control_station.parking_check import (
+    PIXEL_TRANSFORM_ID,
+    DeviationLevel,
     FrameObservation,
     Intrinsics,
     MarkerPose,
@@ -27,8 +30,10 @@ from control_station.parking_check import (
     marker_object_points,
     median_offset,
     observe_frame,
+    pinky_frame_offset,
     plane_offset,
     project_to_plane,
+    sha256_of,
 )
 
 CAMERA = np.array([[980.0, 0.0, 320.0], [0.0, 980.0, 240.0], [0.0, 0.0, 1.0]])
@@ -185,9 +190,11 @@ class ObserveFrameTest(unittest.TestCase):
         self.assertIsNone(observation.offset)
         self.assertAlmostEqual(observation.view_shift_px or 0.0, 96.0, delta=1.0)
 
-    def test_no_fixed_marker_is_not_judged(self) -> None:
+    def test_no_fixed_marker_frame_is_skipped(self) -> None:
         observation = observe_frame(render_scene({21: SCENE[21]}), self.spot)
-        self.assertEqual(observation.blocking_status, ParkingStatus.VIEW_UNVERIFIED)
+        self.assertIsNone(observation.blocking_status)
+        self.assertIsNone(observation.offset)
+        self.assertEqual(observation.skipped_status, ParkingStatus.VIEW_UNVERIFIED)
 
     def test_one_fixed_marker_is_enough(self) -> None:
         observation = observe_frame(render_scene({21: SCENE[21], 1: SCENE[1]}), self.spot)
@@ -204,6 +211,20 @@ class ObserveFrameTest(unittest.TestCase):
         observation = observe_frame(anchors_only & render_scene({21: SCENE[21]}, size=80), self.spot)
         self.assertIsNone(observation.offset)
         self.assertIn("marker side", observation.reason)
+
+    def test_view_check_off_judges_pinky_marker_only(self) -> None:
+        spot = replace(self.spot, anchors={})
+        observation = observe_frame(render_scene({21: SCENE[21]}), spot)
+        assert observation.offset is not None
+        self.assertAlmostEqual(observation.offset.distance_mm, 0.0, delta=0.5)
+        self.assertIsNone(observation.view_shift_px)
+
+    def test_view_check_off_misses_wrapped_frame(self) -> None:
+        # Known limit: without fixed markers a wrapped view is measured as if Pinky had moved.
+        observation = observe_frame(np.roll(render_scene(SCENE), 96, axis=1), replace(self.spot, anchors={}))
+        self.assertIsNone(observation.blocking_status)
+        assert observation.offset is not None
+        self.assertGreater(observation.offset.distance_mm, 50.0)
 
     def test_detects_rendered_marker(self) -> None:
         found = detect_markers(render_scene({20: (170, 140)}, size=200), "DICT_4X4_50")
@@ -244,6 +265,38 @@ class JudgeTest(unittest.TestCase):
         self.assertEqual(result.status, ParkingStatus.MISALIGNED)
         self.assertIn("yaw", result.reason)
 
+    def test_ratios_and_levels(self) -> None:
+        # Tolerance 20 mm / 10°: the worse of the two ratios sets the level.
+        cases = [
+            (PlanarOffset(12.0, 16.0, 5.0), DeviationLevel.WITHIN, 1.0, 0.5),
+            (PlanarOffset(30.0, 0.0, 0.0), DeviationLevel.NEAR, 1.5, 0.0),
+            (PlanarOffset(0.0, 0.0, -20.0), DeviationLevel.NEAR, 0.0, 2.0),
+            (PlanarOffset(0.0, 41.0, 0.0), DeviationLevel.FAR, 2.05, 0.0),
+        ]
+        for offset, level, position_ratio, yaw_ratio in cases:
+            result = judge(offset, TOLERANCE)
+            self.assertEqual(result.deviation_level, level, offset)
+            self.assertAlmostEqual(result.position_ratio or 0.0, position_ratio)
+            self.assertAlmostEqual(result.yaw_ratio or 0.0, yaw_ratio)
+            self.assertEqual(result.status == ParkingStatus.ARRIVED, level == DeviationLevel.WITHIN)
+        self.assertEqual(judge(PlanarOffset(0.0, 41.0, 0.0), TOLERANCE).to_dict()["deviation_level"], "FAR")
+
+    def test_not_found_has_no_level(self) -> None:
+        self.assertNotIn("deviation_level", judge(None, TOLERANCE).to_dict())
+
+
+class PinkyFrameTest(unittest.TestCase):
+    def test_marker_right_edge_is_front(self) -> None:
+        # Marker +x forward, +y left, +z up: Pinky's own axes match the marker axes.
+        self.assertEqual(pinky_frame_offset(PlanarOffset(30.0, -5.0, 0.0), "+x"), (30.0, -5.0))
+
+    def test_marker_top_edge_is_front(self) -> None:
+        # Marker +y forward: marker -x is then Pinky's left.
+        self.assertEqual(pinky_frame_offset(PlanarOffset(30.0, -5.0, 0.0), "+y"), (-5.0, -30.0))
+
+    def test_marker_left_edge_is_front(self) -> None:
+        self.assertEqual(pinky_frame_offset(PlanarOffset(30.0, -5.0, 0.0), "-x"), (-30.0, 5.0))
+
 
 class ParkingJudgeTest(unittest.TestCase):
     def test_brief_miss_keeps_recent_frames(self) -> None:
@@ -258,6 +311,13 @@ class ParkingJudgeTest(unittest.TestCase):
         judgment.add(FrameObservation(None, None, "marker not visible", None, 0.0))
         result = judgment.add(FrameObservation(None, None, "marker not visible", None, 0.0))
         self.assertEqual(result.status, ParkingStatus.NOT_FOUND)
+
+    def test_fixed_marker_dropout_keeps_recent_frames(self) -> None:
+        judgment = ParkingJudge(TOLERANCE, frames=2)
+        unverified = FrameObservation(None, None, "no fixed marker", None, None, ParkingStatus.VIEW_UNVERIFIED)
+        judgment.add(FrameObservation(PlanarOffset(1.0, 0.0, 0.0), None, "", None, 0.0))
+        self.assertEqual(judgment.add(unverified).status, ParkingStatus.ARRIVED)
+        self.assertEqual(judgment.add(unverified).status, ParkingStatus.VIEW_UNVERIFIED)
 
     def test_view_change_clears_earlier_frames(self) -> None:
         judgment = ParkingJudge(TOLERANCE, frames=3)
@@ -280,6 +340,35 @@ class MedianOffsetTest(unittest.TestCase):
         self.assertAlmostEqual(abs(median_offset(offsets).dyaw_deg), 179.0, places=6)
 
 
+def write_spot(directory: Path, anchors: list[dict], view_check: dict, **extra: object) -> Path:
+    intrinsics = directory / "ceiling_camera.json"
+    intrinsics.write_text(json.dumps({
+        "camera_id": "ceiling_camera",
+        "pixel_transform_id": PIXEL_TRANSFORM_ID,
+        "camera_matrix": CAMERA.tolist(),
+        "distortion_coefficients": NO_DISTORTION.tolist(),
+        "image_size_px": {"width": 640, "height": 480},
+    }), encoding="utf-8")
+    pose = floor_pose(0.0, 0.0, 0.0)
+    path = directory / "spot.json"
+    path.write_text(json.dumps({
+        "schema_version": 2,
+        "spot_id": "spot",
+        "camera_id": "ceiling_camera",
+        "intrinsic_calibration": {"path": intrinsics.name, "sha256": sha256_of(intrinsics)},
+        "aruco_dictionary": "DICT_4X4_50",
+        "marker_id": 21,
+        "marker_side_mm": SIDE_MM,
+        "reference_pose_in_camera": {"rotation": pose.rotation.tolist(), "translation_mm": pose.translation_mm.tolist()},
+        "reference_corners_px": project_corners(pose).tolist(),
+        "anchors": anchors,
+        "view_check": view_check,
+        "tolerance": {"position_mm": 20.0, "yaw_deg": 2.0},
+        **extra,
+    }), encoding="utf-8")
+    return path
+
+
 class LoadSpotTest(unittest.TestCase):
     def test_schema_1_needs_registering_again(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -287,6 +376,36 @@ class LoadSpotTest(unittest.TestCase):
             path.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
             with self.assertRaisesRegex(ParkingSpotError, "다시 등록"):
                 load_spot(path, Path(directory))
+
+    def test_fixed_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            anchors = [{"marker_id": 3, "center_px": [500.0, 250.0]}]
+            path = write_spot(Path(directory), anchors, {"mode": "FIXED_MARKERS", "max_anchor_shift_px": 3.0})
+            spot = load_spot(path, Path(directory))
+            np.testing.assert_allclose(spot.anchors[3], [500.0, 250.0])
+            self.assertEqual(spot.tolerance, ParkingTolerance(20.0, 2.0))
+
+    def test_view_check_off_must_be_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(load_spot(write_spot(Path(directory), [], {"mode": "OFF"}), Path(directory)).anchors, {})
+            with self.assertRaisesRegex(ParkingSpotError, "OFF"):
+                load_spot(write_spot(Path(directory), [], {}), Path(directory))
+
+    def test_marker_forward_axis(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertIsNone(load_spot(write_spot(root, [], {"mode": "OFF"}), root).marker_forward_axis)
+            spot = load_spot(write_spot(root, [], {"mode": "OFF"}, marker_forward_axis="+x"), root)
+            self.assertEqual(spot.marker_forward_axis, "+x")
+            with self.assertRaisesRegex(ParkingSpotError, "marker_forward_axis"):
+                load_spot(write_spot(root, [], {"mode": "OFF"}, marker_forward_axis="front"), root)
+
+    def test_tolerance_must_be_positive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = write_spot(root, [], {"mode": "OFF"}, tolerance={"position_mm": 0, "yaw_deg": 10})
+            with self.assertRaisesRegex(ParkingSpotError, "0보다"):
+                load_spot(path, root)
 
 
 if __name__ == "__main__":

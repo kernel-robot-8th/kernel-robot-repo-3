@@ -28,7 +28,7 @@
 | 선반 평면 | `scripts/calibrate_shelf_plane.py` | 내부 보정, 대응점 JSON(fit 4개 + validation 2개 이상) | `camera-calibrations/<camera_id>-plane-<id>.json` | [카메라 좌표 초안](camera-intrinsic-calibration.md#고정-선반-평면-변환-초안) |
 | 선반 층 영역 | `scripts/calibrate_shelf_regions.py` (`scripts/shelf_region_editor.html`) | 관측 frame, 층별 polygon | `camera-calibrations/<camera_id>-shelf-regions-<id>.json` | [선반 층 영상 영역](shelf-image-regions.md) |
 | 후보 평면 좌표 | `scripts/project_observation_to_shelf_plane.py` | 관측 event, 내부 보정, 선반 평면 | `camera-calibrations/<camera_id>-projection-<id>.json` | [카메라 좌표 초안](camera-intrinsic-calibration.md#task-관측-후보의-2d-평면-좌표-초안) |
-| Pinky 주차 위치 | `scripts/pinky_parking.py register` | 천장 카메라 내부 보정, Pinky 마커 | `parking-spots/<spot_id>.json` | [실행 방법](runbook.md#천장-카메라-pinky-주차-판정) |
+| Pinky 주차 위치 | `scripts/pinky_parking.py register` | 천장 카메라 내부 보정, Pinky 마커, (선택) 바닥 고정 마커 | `parking-spots/<spot_id>.json` | [실행 방법](runbook.md#천장-카메라-pinky-주차-판정) |
 
 공용 검증 코드는 `scripts/calibration_artifacts.py`에 있으며 MuJoCo·그리퍼·TCP 스크립트도 함께 씁니다.
 
