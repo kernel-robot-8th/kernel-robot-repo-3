@@ -17,6 +17,7 @@
 - [시뮬레이션 설정](implementation/simulation-setup.md): MuJoCo ROS 2 선행조건, 분리 domain 실행과 관제 read-only 상태 확인
 - [좌표 목표 초안](implementation/coordinate-target-draft.md): 관제 입력을 미실행 JSON 초안으로 저장하는 임시 기능
 - [카메라 좌표 초안](implementation/camera-intrinsic-calibration.md): 체커보드/선반 평면 보정 및 fresh task 관측 후보를 2D 평면 draft로 투영하는 오프라인 도구와 제한
+- [캘리브레이션 파일 지도](implementation/calibration-files.md): 카메라별 보정 스크립트, 결과 파일 위치와 현황, 팀 체커보드 인쇄 파일
 - [선반 층 영상 영역 초안](implementation/shelf-image-regions.md): 저장된 관측 frame에 polygon 좌표를 입력하는 브라우저 도구와 provenance를 확인해 review-only ROI artifact를 만드는 CLI
 - [Pick & Place 현장 입력표](implementation/field-measurement-sheet.md): 첫 고정 시나리오, 카메라/선반 측정 및 OMX 기준 확인을 위한 빈 기록표
 - [OMX MuJoCo 실행 안내](../simulation/mujoco_omx/README.md): 공식 OMX MJCF 기반 단독 시뮬레이터, Python 제어 및 카메라 이미지 실행 방법
