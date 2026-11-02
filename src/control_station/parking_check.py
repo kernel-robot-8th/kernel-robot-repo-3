@@ -142,6 +142,8 @@ class ParkingSpot:
     tolerance: ParkingTolerance
     intrinsics: Intrinsics
     marker_forward_axis: str | None = None  # key of MARKER_FORWARD_AXES, or None when not recorded
+    # Corner detection differs slightly between OpenCV releases (~1 mm here between 4.6 and 4.14).
+    registration_opencv_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -213,6 +215,7 @@ def load_spot(path: Path, repository_root: Path) -> ParkingSpot:
         tolerance=tolerance,
         intrinsics=intrinsics,
         marker_forward_axis=forward_axis,
+        registration_opencv_version=data.get("opencv_version"),
     )
 
 

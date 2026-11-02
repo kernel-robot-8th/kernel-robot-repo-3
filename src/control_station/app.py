@@ -29,6 +29,7 @@ from control_station.command_parser import (
 )
 from control_station.coordinate_target_drafts import CoordinateDraftError, CoordinateTargetDraftStore
 from control_station.models import CameraSnapshot, TaskStatus
+from control_station.parking_observation import ParkingObservationError, observe_parking
 from control_station.projection_drafts import (
     ProjectionDraftError,
     read_projection_draft_artifact,
@@ -389,6 +390,19 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
             self._json(200, {"artifact": artifact, "review_event_id": parts[4]})
         elif route == "/api/arm/status":
             self._json(200, {"arm": self.app.arm_supervisor.snapshot()})
+        elif route.startswith("/api/parking-spots/") and route.endswith("/check"):
+            spot_id = route.removeprefix("/api/parking-spots/").removesuffix("/check")
+            try:
+                observation = observe_parking(
+                    spot_id,
+                    self.app.parking_camera_id,
+                    getattr(self.app.camera_manager, "raw_frames_after", None),
+                    Path(__file__).resolve().parents[2],
+                )
+            except ParkingObservationError as exc:
+                self._json_error(exc.http_status, exc.error_code, exc.message)
+                return
+            self._json(200, {"observation": observation})
         elif route == "/api/tasks":
             self._json(200, {"tasks": self.app.task_store.list_tasks()})
         elif route.startswith("/api/tasks/"):
@@ -1609,12 +1623,14 @@ def main() -> None:
             "CONTROL_STATION_HEAD_YOLO_WORLD_PROMPTS",
         )
     )
+    # Pinky parking judgment reads this physical feed (the ceiling view is the Head Camera); unset = off.
+    server.parking_camera_id = os.environ.get("CONTROL_STATION_PARKING_CAMERA", "").strip() or None
     if mode == "mujoco":
         raw_domain = os.environ.get("CONTROL_STATION_MOBILE_DOMAIN", os.environ.get("ROS_DOMAIN_ID"))
         if raw_domain is None:
             raise RuntimeError("MuJoCo 카메라 구독에 ROS domain ID를 지정해야 합니다.")
         server.camera_manager = Ros2SimulationCameraStreamManager(int(raw_domain))
-    elif not (server.arm_supervisor.enabled or head_detector_configured):
+    elif not (server.arm_supervisor.enabled or head_detector_configured or server.parking_camera_id):
         server.camera_manager = UnconfiguredArmCameraStreamManager()
     else:
         server.camera_manager = OpenCVArmCameraStreamManager(

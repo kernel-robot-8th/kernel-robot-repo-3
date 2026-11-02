@@ -179,7 +179,7 @@ Ultralytics는 YOLO-World prompt class를 `set_classes()`로 지정하는 API를
 - 천장 카메라 내부 보정 파일 `.control-station/camera-calibrations/ceiling_camera.json`. `camera_id`가 `ceiling_camera`이고 `pixel_transform_id`가 `opencv-v4l2-capture-no-app-geometry-v1`이어야 합니다. 만드는 방법은 [카메라 내부 보정](camera-intrinsic-calibration.md)을 따릅니다. 캡처 해상도가 보정 해상도(현재 640×480)와 다르면 판정하지 않고 종료합니다.
 - Pinky 윗면의 ArUco 마커. 기본 사전은 `DICT_4X4_50`입니다. 마커 한 변 길이는 인쇄물의 검은 테두리 기준으로 mm 단위로 잽니다.
 - (선택) 화면에 함께 보이는 바닥 고정 ArUco 마커. 이 마커로 카메라 시야가 등록할 때와 같은지 확인합니다. 쓰려면 바닥에 테이프로 고정하고, Pinky가 지나가거나 서는 자리와 사람이 가리는 자리에서 떨어뜨려 둡니다. 놓아만 둔 카드나 Pinky 바퀴 옆 마커는 밀려서 판정이 멈춥니다. 쓰지 않으면 `--no-anchors`로 등록합니다.
-- `cv2.aruco`를 지원하는 OpenCV. `--once` 판정은 `opencv-python-headless`로도 됩니다. `register`와 실시간 `check`는 창을 띄우므로 GUI를 지원하는 OpenCV가 필요합니다.
+- `cv2.aruco`를 지원하는 OpenCV. `--once` 판정은 창을 띄우지 않으므로 `opencv-python-headless`로도 됩니다. `register`와 실시간 `check`는 창을 띄우므로 GUI를 지원하는 OpenCV가 필요합니다.
 - 카메라 경로. `--camera` 또는 환경 변수 `CONTROL_STATION_CEILING_CAMERA`로 지정합니다. 천장 카메라는 관제의 Head Camera와 같은 실물 카메라(HCAM0)입니다. 2026-11-02 현장에서는 USB 포트 4에 연결됐고, 이름은 Head Camera 기본 by-id(`usb-Jieli_Technology_USB_Composite_Device-video-index0`)로 잡혔습니다. 같은 모델이 여러 대 꽂혀 있으면 by-id로는 구분되지 않으므로 포트 기준 `/dev/v4l/by-path/...` 경로를 씁니다. 실제로 19:36에 다른 HCAM0이 USB 포트 10에 연결되자 by-id 링크가 그 카메라(선반을 옆에서 보는 시점)로 바뀌었습니다. by-path는 꽂은 USB 포트가 바뀌면 달라집니다.
 - 카메라는 한 프로그램만 열 수 있습니다. 관제 서버가 Head Camera로 이 카메라를 열고 있으면 서버를 먼저 종료합니다. 점유 여부는 `fuser -v /dev/videoN`으로 확인합니다.
 
@@ -255,6 +255,26 @@ python3 scripts/pinky_parking.py check --spot-id pinky_dock_1 \
 | `FAR` | r > 2 | 많이 벗어남. 다른 위치에 섰거나 이동이 잘못됐을 수 있음 |
 
 경계 2는 초안 값입니다. 판정 불가 상태에서는 오프셋, 비율, 등급을 출력하지 않습니다.
+
+### 관제 API로 판정
+
+관제 서버를 켤 때 `CONTROL_STATION_PARKING_CAMERA`에 판정에 쓸 feed ID를 지정하면, 관제가 그 실물 카메라를 열고 주차 판정 API를 제공합니다. 천장 카메라는 Head Camera와 같은 카메라이므로 `head_camera`를 쓰고, Head Camera 경로는 포트 기준 by-path로 지정합니다. 2026-11-02 기준 Head Camera 기본 by-id 경로는 포트 10에 연결된 다른 HCAM0을 가리킵니다.
+
+```bash
+CONTROL_STATION_HEAD_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:4:1.0-video-index0 \
+CONTROL_STATION_PARKING_CAMERA=head_camera \
+./run-control-station.sh
+
+curl -s http://127.0.0.1:8000/api/parking-spots/pinky_dock_1/check
+```
+
+- 요청을 받은 뒤에 찍힌 프레임만 최대 3초 동안 15프레임까지 모아 CLI와 같은 방식으로 판정합니다. 판정에 쓴 프레임이 5장보다 적으면 `NOT_FOUND`입니다.
+- 응답은 `{"observation": {...}}`이며, 필드는 [주차 정렬 관측 계약 초안](../spec/interface-contracts.md#pinky-주차-정렬-관측-초안)을 따릅니다. 오류는 `error_code`/`message`/`error`로 반환합니다.
+- 판정 결과를 작업 이력에 남기지 않고, 로봇 명령도 만들지 않습니다.
+- 관제가 카메라를 열고 있는 동안에는 CLI로 같은 카메라를 열 수 없습니다.
+- 관제 가상환경의 `opencv-python-headless`와 CLI로 등록할 때 쓴 GUI OpenCV의 버전이 다르면 모서리 검출이 조금 달라집니다. 2026-11-02 같은 화면에서 OpenCV 4.6(등록)과 4.14(판정) 사이에 약 1 mm·0.2°·고정 마커 0.8 px 차이가 났습니다. 응답의 `opencv_version`과 `registration_opencv_version`으로 확인합니다.
+
+2026-11-02에 mock 모드, 임시 DB, 포트 8765로 관제를 띄워 실제 천장 카메라로 확인했습니다. `/api/cameras`의 `head_camera`는 640×480, 29.7 fps였습니다. 판정 API를 5회 호출했고 모두 약 0.5초 걸렸습니다. 결과는 모두 `ARRIVED`/`WITHIN`(앞 0.4 mm·왼쪽 1.5 mm·yaw 0.23° 이내)이었고, 15프레임 모두 요청 시각 이후 프레임이었으며, 호출 간 프레임 sequence는 겹치지 않았습니다. 없는 등록 ID는 404, 형식이 틀린 ID는 400으로 응답했습니다. 이때 밀림은 일어나지 않았습니다.
 
 ### 카메라 영상 밀림
 

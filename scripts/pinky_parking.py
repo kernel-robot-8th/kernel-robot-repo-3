@@ -175,6 +175,7 @@ def build_registration(
         "marker_side_mm": args.marker_side_mm,
         "marker_forward_axis": args.marker_forward_axis,
         "position_method": "corner rays intersected with the registered marker plane",
+        "opencv_version": cv2.__version__,
         "reference_pose_in_camera": {"rotation": plane.rotation.tolist(), "translation_mm": plane.translation_mm.tolist()},
         "reference_corners_px": corners.tolist(),
         "reference_marker_side_on_plane_mm": round(reference.side_mm, 2),
@@ -314,7 +315,8 @@ def check(args: argparse.Namespace) -> int:
                 break
     finally:
         camera.release()
-        cv2.destroyAllWindows()
+        if not args.once:  # --once never opens a window, and headless OpenCV cannot destroy one
+            cv2.destroyAllWindows()
 
     if args.once:
         print(json.dumps(
