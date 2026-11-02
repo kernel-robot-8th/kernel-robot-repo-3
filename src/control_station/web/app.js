@@ -124,7 +124,7 @@ function renderCameras(cameras) {
     cameraGrid.dataset.cameraIds = cameraIds;
     cameraGrid.innerHTML = cameras.map((camera) => `
       <article class="camera-card" data-camera-id="${escapeHtml(camera.id)}">
-        <header class="camera-head"><h3>${escapeHtml(camera.id === parkingCameraId ? `Pinky 도착 카메라 (${names[camera.position] || camera.id})` : names[camera.position] || camera.id)}</h3><span class="camera-position">${escapeHtml(camera.position)}</span></header>
+        <header class="camera-head"><h3>${escapeHtml(names[camera.position] || camera.id)}</h3><span class="camera-position">${escapeHtml(camera.position)}</span></header>
         <div class="camera-preview" data-field="preview"><span>영상 스트림 미연결</span></div>
         <div class="camera-details">
           <div class="camera-detail"><span>연결</span><strong data-field="connection"></strong></div>
@@ -526,7 +526,7 @@ const parkingHelp = {
   NOT_FOUND: 'Pinky가 주차 구역에 있는지, 윗면 마커가 사람·물건에 가려졌는지 확인하세요.',
   AMBIGUOUS: '화면에 같은 ID 마커가 둘 이상 있습니다. 다른 Pinky나 인쇄물을 치우세요.',
   VIEW_UNVERIFIED: '영상이 밀린 채 열렸으면 관제 서버를 다시 시작해 카메라를 다시 엽니다. 카메라를 건드렸으면 주차 위치를 다시 등록하세요.',
-  CAMERA_UNAVAILABLE: '관제 서버의 Pinky 도착 카메라 연결을 확인하세요.',
+  CAMERA_UNAVAILABLE: '관제 서버의 Head Camera 연결을 확인하세요.',
   SPOT_INVALID: '주차 위치를 다시 등록하거나 등록 파일을 확인하세요.',
 };
 
@@ -664,7 +664,7 @@ function renderParkingFields(data, level, overlayLabel, extraRows = []) {
     ['시야 확인', data.view_check === 'ON' ? `고정 마커로 확인 · 이동 ${data.view_shift_px ?? '-'} px` : '꺼짐 (영상 밀림 감지 안 함)'],
     ...extraRows,
     ['주차 위치', data.spot_id],
-    ['카메라', `${data.feed_camera_id} (Pinky 도착 카메라)`],
+    ['카메라', data.feed_camera_id],
   ];
   parkingDetails.innerHTML = rows.map(([label, value]) => `<div class="camera-detail"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
   showParkingStream(data.feed_camera_id);
@@ -808,7 +808,7 @@ function updateParkingConfig(parking) {
   parkingLiveMode.classList.toggle('on', parkingLive);
   parkingLiveMode.textContent = parkingLive ? '실시간 추적 중' : '실시간 추적 꺼짐 · 확정 판정만 가능';
   if (!parkingCameraId && parkingStatus.textContent === '판정 전') {
-    parkingSummary.textContent = 'Pinky 도착 카메라가 설정되지 않았습니다 (CONTROL_STATION_PARKING_CAMERA).';
+    parkingSummary.textContent = '주차 판정 카메라가 설정되지 않았습니다 (CONTROL_STATION_PARKING_CAMERA).';
   }
 }
 

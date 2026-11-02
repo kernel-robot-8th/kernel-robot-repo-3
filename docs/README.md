@@ -32,6 +32,7 @@
 - [실행 방법](implementation/runbook.md): 모의 서버와 팔 텔레오퍼레이션 실행
 - [개발 로드맵](development-plan.md): 에픽 순서, 목적, 의존성 및 전체 진행 상황
 - [Pinky 도착 판정과 로봇 진행 계획](plans/pinky-arrival-gate.md): 천장 카메라 주차 판정을 팔 단계 시작 조건으로 쓰는 흐름, 미정 항목과 실물 적용 전 조건
+- [Pinky 주차 판정 C++ ROS 2 노드 전환 계획](plans/pinky-parking-ros2-node.md): 카메라 드라이버·C++ 판정 노드·YOLO를 영상 토픽 하나로 나눠 쓰고, 관제는 토픽·서비스로 받아 웹 화면을 유지하는 구조
 - [OMX 로봇팔 좌표 제어 계획](plans/omx-coordinate-control.md): 관절 목표부터 검증된 말단 좌표 제어까지의 단계별 계획
 - [에픽 1 — 작업·단계 이력](epics/epic-01-task-history.md): 첫 구현 묶음의 세부 작업과 확인 기준
 - [에픽 2 — 모의 정상 작업 흐름](epics/epic-02-mock-happy-path.md): mock 기반 실행 흐름의 세부 작업과 확인 기준
