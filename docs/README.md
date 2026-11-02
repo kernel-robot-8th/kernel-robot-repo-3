@@ -31,6 +31,7 @@
 - [OMX 실물 자세 기록 — 2026-10-31](implementation/omx-live-pose-record-2026-10-31.md): 딸기를 손목 카메라 시야에 넣기까지의 초기/현재 관측, 엔코더 snapshot 및 재현 제한
 - [실행 방법](implementation/runbook.md): 모의 서버와 팔 텔레오퍼레이션 실행
 - [개발 로드맵](development-plan.md): 에픽 순서, 목적, 의존성 및 전체 진행 상황
+- [Pinky 도착 판정과 로봇 진행 계획](plans/pinky-arrival-gate.md): 천장 카메라 주차 판정을 팔 단계 시작 조건으로 쓰는 흐름, 미정 항목과 실물 적용 전 조건
 - [OMX 로봇팔 좌표 제어 계획](plans/omx-coordinate-control.md): 관절 목표부터 검증된 말단 좌표 제어까지의 단계별 계획
 - [에픽 1 — 작업·단계 이력](epics/epic-01-task-history.md): 첫 구현 묶음의 세부 작업과 확인 기준
 - [에픽 2 — 모의 정상 작업 흐름](epics/epic-02-mock-happy-path.md): mock 기반 실행 흐름의 세부 작업과 확인 기준
