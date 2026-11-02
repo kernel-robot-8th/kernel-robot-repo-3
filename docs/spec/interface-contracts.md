@@ -64,7 +64,7 @@ HTTP 서버 생존, 카메라 프레임 수신, Nav2 action server 발견, LeRob
 | 오케스트레이터 → Pinky 어댑터 | task/step/command ID, 목적지, deadline | 수락/거절, 진행, terminal 성공·실패, 취소 결과 | 공통 의미 확정; ROS 2 action 이름·타입·namespace·frame 미확정 |
 | 오케스트레이터 → OMX 어댑터 | task/step/command ID, 작업 종류·파라미터 | 수락/거절, 진행, 파지·적재 최종 결과 또는 실패 | 공통 의미 확정; 관제 자동 명령은 미연결. 로컬 LeRobot `OmxFollower.send_action()`은 `*.pos` 관절 목표를 쓰지만 task 수락/terminal 파지 결과를 제공하지 않음 |
 | 로봇 어댑터 → 이벤트 처리기 | robot/task/step/command ID, 장치 결과 | `ACCEPTED`, `EXECUTION_STARTED`, `PROGRESS`, `SUCCEEDED`, `FAILED`, `CANCELED` 또는 미확정 | 공통 이벤트 의미 확정; 장치별 실제 메시지 미확정 |
-| 천장 카메라 주차 판정 → 관제 | spot·marker ID, 등록 위치 대비 dx·dy·dyaw와 허용 오차·비율, 시야 확인 여부, 프레임 출처 | `ARRIVED`, `MISALIGNED`, 판정 불가(`NOT_FOUND`/`AMBIGUOUS`/`VIEW_UNVERIFIED`); Nav2 결과와 별개의 관측 | 초안: CLI와 관제 GET 관측 구현, task event·화면·팔 조건 연결 미구현 ([주차 정렬 관측](#pinky-주차-정렬-관측-초안)) |
+| 천장 카메라 주차 판정 → 관제 | spot·marker ID, 등록 위치 대비 dx·dy·dyaw와 허용 오차·비율, 시야 확인 여부, 프레임 출처 | `ARRIVED`, `MISALIGNED`, 판정 불가(`NOT_FOUND`/`AMBIGUOUS`/`VIEW_UNVERIFIED`); Nav2 결과와 별개의 관측 | 초안: CLI, 관제 GET 관측, 모의 작업 `VERIFY_ARRIVAL`의 `PARKING_OBSERVED` event·팔 단계 조건·이력 화면 구현 ([주차 정렬 관측](#pinky-주차-정렬-관측-초안)) |
 | Head/Joint Camera → 관제 UI | 카메라별 프레임·연결·스트림·프레임 sequence/해상도·마지막 프레임 시각, closed-set YOLO 또는 선택 YOLO-World의 camera/frame 출처·고정 prompt vocabulary·픽셀 영역 | 카메라별 오류; 다른 카메라나 로봇 상태에 전파하지 않음; 검출 후보는 자동 선택/명령 신호가 아님 | API 관측 필드 구현; 가중치 미포함; 실제 장착 위치·실물 객체별 검출 적합성은 미검증 |
 | 설정된 ROS 2 `sensor_msgs/msg/JointState` → `/api/robots` | 명시적으로 설정한 topic의 관절명·유효한 position, ROS 메시지 원본 `header.stamp`의 sec/nanosec와 `frame_id`, 관제 수신시각/나이 | 미설정, 아직 미수신, fresh `observed`, stale, 또는 배열 불일치·이름 오류·비유한 위치가 있는 `invalid` 관측 | ROS 2 상태 adapter의 읽기 전용 subscription; topic source는 운영자가 확인해야 하며 joint-state 수신은 arm readiness/safety/command acceptance가 아님; ROS goal/command 전송 없음 |
 | 선택 설정 ROS 2 `FollowJointTrajectory` action → `/api/robots` | absolute action name과 ROS graph의 server 발견 여부 | `unconfigured`, `not_discovered`, `discovered` | 선택형 discovery-only `ActionClient`; goal을 보내지 않으며 server discovery는 controller/arm readiness, safety 또는 command acceptance가 아님 |
@@ -170,7 +170,7 @@ MuJoCo FIXED 카메라의 `depth_region_observation`은 일반 GET에서 `NOT_RE
 
 ### Pinky 주차 정렬 관측 (초안)
 
-Pinky가 멈춘 뒤 천장 카메라로 "등록된 주차 위치와 얼마나 다른지"를 재서 관제에 올리는 계약 초안입니다. 관제는 이 값을 화면에 보여 주고, 다음 단계를 진행할지 판단하는 입력 중 하나로 씁니다. `GET /api/parking-spots/{spot_id}/check`가 아래 관측 객체를 `{"observation": ...}`로 반환하도록 구현돼 있습니다(관제가 `CONTROL_STATION_PARKING_CAMERA`로 feed를 연 경우). `PARKING_OBSERVED` task event, 관제 화면 표시, 팔 단계 진행 조건 연결은 아직 구현 전 제안입니다. 측정 방식과 현장 기록은 [실행 방법](../implementation/runbook.md#천장-카메라-pinky-주차-판정)에 있습니다.
+Pinky가 멈춘 뒤 천장 카메라로 "등록된 주차 위치와 얼마나 다른지"를 재서 관제에 올리는 계약 초안입니다. 관제는 이 값을 화면에 보여 주고, 다음 단계를 진행할지 판단하는 입력 중 하나로 씁니다. `GET /api/parking-spots/{spot_id}/check`가 아래 관측 객체를 `{"observation": ...}`로 반환하도록 구현돼 있습니다(관제가 `CONTROL_STATION_PARKING_CAMERA`로 feed를 연 경우). `CONTROL_STATION_PARKING_SPOT`을 지정하면 모의 작업의 `VERIFY_ARRIVAL` 단계가 같은 관측을 `PARKING_OBSERVED` event로 남기고 `ARRIVED`일 때만 팔 단계로 진행하며, 작업 이력 화면에 결과를 표시합니다. 측정 방식과 현장 기록은 [실행 방법](../implementation/runbook.md#천장-카메라-pinky-주차-판정)에 있습니다.
 
 천장 카메라는 관제 Head Camera와 같은 실물 카메라입니다. 관제 구현에서는 별도 장치를 열지 않고 Head Camera feed의 프레임을 씁니다. 주차 위치 등록 파일의 보정 `camera_id`(`ceiling_camera`)와 관제 feed ID(`head_camera`)가 다르므로, 결과에 둘을 함께 기록합니다.
 

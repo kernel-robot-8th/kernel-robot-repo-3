@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import threading
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 from control_station.models import StepStatus, TaskStatus
 from control_station.store import (
@@ -21,6 +21,19 @@ from control_station.store import (
 
 class MockScenarioFailure(RuntimeError):
     """An explicitly configured mock-only failure at one workflow step."""
+
+
+# Returns one parking observation (interface-contracts "Pinky 주차 정렬 관측"); raises with
+# an error_code attribute when the observation could not start.
+ArrivalCheck = Callable[[], dict[str, Any]]
+
+
+class ArrivalNotConfirmed(RuntimeError):
+    """The parking observation after navigation did not show Pinky on its registered spot."""
+
+    def __init__(self, error_code: str, message: str) -> None:
+        super().__init__(message)
+        self.error_code = error_code
 
 
 class TaskExecutionConflict(RuntimeError):
@@ -39,9 +52,16 @@ class TaskExecutionConflict(RuntimeError):
 class MockTaskOrchestrator:
     """Run the persisted workflow without opening a device or ROS connection."""
 
-    def __init__(self, task_store: TaskStore, mode: str = "mock") -> None:
+    def __init__(
+        self,
+        task_store: TaskStore,
+        mode: str = "mock",
+        arrival_check: ArrivalCheck | None = None,
+    ) -> None:
         self.task_store = task_store
         self.mode = mode
+        # When set, VERIFY_ARRIVAL succeeds only on an ARRIVED parking observation.
+        self.arrival_check = arrival_check
         self.step_delay = self._read_step_delay()
         self.fail_step = self._read_failure_step() if mode == "mock" else None
         self._lock = threading.RLock()
@@ -378,15 +398,62 @@ class MockTaskOrchestrator:
             raise MockScenarioFailure(
                 f"Configured mock scenario failure at step {self.fail_step}"
             )
+        result_payload: dict[str, Any] = {"source": "mock", "outcome": "SIMULATED_SUCCESS"}
+        if step.get("step_type") == "VERIFY_ARRIVAL" and self.arrival_check is not None:
+            result_payload = self._verify_arrival(task_id, step_id, command_id, base)
         self.task_store.transition_step(
             task_id,
             step_id,
             StepStatus.SUCCEEDED,
             expected_status=StepStatus.RUNNING,
-            result_payload={"source": "mock", "outcome": "SIMULATED_SUCCESS"},
+            result_payload=result_payload,
             event_payload={**base, "event": "MOCK_STEP_COMPLETED"},
         )
         return True
+
+    def _verify_arrival(
+        self,
+        task_id: str,
+        step_id: str,
+        command_id: str,
+        base: dict[str, Any],
+    ) -> dict[str, Any]:
+        # Navigation has already succeeded, so the check judges only frames captured from now on.
+        assert self.arrival_check is not None
+        try:
+            observation = self.arrival_check()
+        except Exception as exc:
+            raise ArrivalNotConfirmed(
+                getattr(exc, "error_code", "PARKING_CHECK_ERROR"),
+                f"주차 판정을 시작하지 못했습니다: {exc}",
+            ) from exc
+        self.task_store.record_step_event(
+            task_id,
+            step_id,
+            command_id,
+            "PARKING_OBSERVED",
+            {
+                **base,
+                "source": "parking_check",
+                "event": "PARKING_OBSERVED",
+                "observation": observation,
+                "task_state_changed": False,
+                "arm_command_sent": False,
+            },
+            expected_task_status=TaskStatus.RUNNING,
+        )
+        status = observation.get("status")
+        if status != "ARRIVED":
+            # No automatic re-drive: the operator sees the offset and decides (pinky-arrival-gate plan).
+            raise ArrivalNotConfirmed(
+                "PARKING_MISALIGNED" if status == "MISALIGNED" else "PARKING_NOT_VERIFIED",
+                f"주차 판정 {status}: {observation.get('reason')}",
+            )
+        return {
+            "source": "parking_check",
+            "outcome": "PARKING_ARRIVED",
+            "spot_id": observation.get("spot_id"),
+        }
 
     def _finish_cancel(self, task_id: str, active_step_id: str | None) -> None:
         task = self.task_store.get_task(task_id)
@@ -470,16 +537,13 @@ class MockTaskOrchestrator:
         task = self.task_store.get_task(task_id)
         if task is None:
             return
-        error_code = (
-            "MOCK_SCENARIO_FAILURE"
-            if isinstance(error, MockScenarioFailure)
-            else "MOCK_EXECUTION_ERROR"
-        )
-        event_name = (
-            "MOCK_SCENARIO_FAILURE"
-            if isinstance(error, MockScenarioFailure)
-            else "MOCK_EXECUTION_FAILED"
-        )
+        source = "mock"
+        if isinstance(error, ArrivalNotConfirmed):
+            source, error_code, event_name = "parking_check", error.error_code, "ARRIVAL_NOT_CONFIRMED"
+        elif isinstance(error, MockScenarioFailure):
+            error_code = event_name = "MOCK_SCENARIO_FAILURE"
+        else:
+            error_code, event_name = "MOCK_EXECUTION_ERROR", "MOCK_EXECUTION_FAILED"
         if task["status"] == TaskStatus.CANCELING.value:
             self._finish_cancel(task_id, active_step_id)
             return
@@ -499,7 +563,7 @@ class MockTaskOrchestrator:
                     error_code=error_code,
                     error_message=str(error),
                     event_payload={
-                        "source": "mock",
+                        "source": source,
                         "robot_id": self._mock_robot_id(step),
                         "event": event_name,
                         "task_id": task_id,
@@ -520,7 +584,7 @@ class MockTaskOrchestrator:
                 TaskStatus.FAILED,
                 expected_status=TaskStatus(task["status"]),
                 payload={
-                    "source": "mock",
+                    "source": source,
                     "error_code": error_code,
                     "error": str(error),
                     "event": event_name,

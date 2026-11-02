@@ -270,11 +270,33 @@ curl -s http://127.0.0.1:8000/api/parking-spots/pinky_dock_1/check
 
 - 요청을 받은 뒤에 찍힌 프레임만 최대 3초 동안 15프레임까지 모아 CLI와 같은 방식으로 판정합니다. 판정에 쓴 프레임이 5장보다 적으면 `NOT_FOUND`입니다.
 - 응답은 `{"observation": {...}}`이며, 필드는 [주차 정렬 관측 계약 초안](../spec/interface-contracts.md#pinky-주차-정렬-관측-초안)을 따릅니다. 오류는 `error_code`/`message`/`error`로 반환합니다.
-- 판정 결과를 작업 이력에 남기지 않고, 로봇 명령도 만들지 않습니다.
+- 이 API 호출은 판정 결과를 작업 이력에 남기지 않고, 로봇 명령도 만들지 않습니다.
 - 관제가 카메라를 열고 있는 동안에는 CLI로 같은 카메라를 열 수 없습니다.
 - 관제 가상환경의 `opencv-python-headless`와 CLI로 등록할 때 쓴 GUI OpenCV의 버전이 다르면 모서리 검출이 조금 달라집니다. 2026-11-02 같은 화면에서 OpenCV 4.6(등록)과 4.14(판정) 사이에 약 1 mm·0.2°·고정 마커 0.8 px 차이가 났습니다. 응답의 `opencv_version`과 `registration_opencv_version`으로 확인합니다.
 
 2026-11-02에 mock 모드, 임시 DB, 포트 8765로 관제를 띄워 실제 천장 카메라로 확인했습니다. `/api/cameras`의 `head_camera`는 640×480, 29.7 fps였습니다. 판정 API를 5회 호출했고 모두 약 0.5초 걸렸습니다. 결과는 모두 `ARRIVED`/`WITHIN`(앞 0.4 mm·왼쪽 1.5 mm·yaw 0.23° 이내)이었고, 15프레임 모두 요청 시각 이후 프레임이었으며, 호출 간 프레임 sequence는 겹치지 않았습니다. 없는 등록 ID는 404, 형식이 틀린 ID는 400으로 응답했습니다. 이때 밀림은 일어나지 않았습니다.
+
+### 작업 흐름의 도착 확인 단계
+
+`CONTROL_STATION_PARKING_SPOT`에 주차 위치 ID를 더 지정하면, 모의 작업의 `VERIFY_ARRIVAL` 단계가 위 API와 같은 방식으로 판정합니다. 판정 결과는 그 단계의 `PARKING_OBSERVED` event로 작업 이력에 남고 화면의 이벤트 목록에 표시됩니다.
+
+```bash
+CONTROL_STATION_HEAD_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:4:1.0-video-index0 \
+CONTROL_STATION_PARKING_CAMERA=head_camera \
+CONTROL_STATION_PARKING_SPOT=pinky_dock_1 \
+./run-control-station.sh
+```
+
+| 판정 | 단계·작업 | 오류 코드 |
+| --- | --- | --- |
+| `ARRIVED` | `VERIFY_ARRIVAL` 성공 → 팔 단계 진행 | 없음 |
+| `MISALIGNED` | `FAILED`, 팔 단계 미실행 | `PARKING_MISALIGNED` |
+| `NOT_FOUND`/`AMBIGUOUS`/`VIEW_UNVERIFIED` | `FAILED`, 팔 단계 미실행 | `PARKING_NOT_VERIFIED` |
+| 판정 시작 실패(등록 파일·카메라 오류) | `FAILED`, 팔 단계 미실행, `PARKING_OBSERVED` 없음 | 관측 오류 코드(예: `PARKING_CAMERA_UNAVAILABLE`) |
+
+자동 재주행이나 재판정은 하지 않습니다. 주차 위치만 지정하고 `CONTROL_STATION_PARKING_CAMERA`를 지정하지 않으면 서버가 시작을 거부합니다. 이동 단계는 아직 모의이므로, 판정은 Pinky가 실제로 서 있는 위치를 봅니다.
+
+2026-11-02 실제 천장 카메라로 확인했습니다. `pinky_dock_1`로 작업을 실행하면 `ARRIVED`(1.1 mm, 0.24°, 15프레임, 시야 확인 ON)로 모든 단계가 성공했습니다. 허용 오차를 0.1 mm/0.01°로 줄인 임시 등록으로 실행하면 `MISALIGNED`/`FAR`로 `VERIFY_ARRIVAL`이 실패하고, 팔 작업 이후 단계는 `NOT_EXECUTED_AFTER_FAILURE`로 끝났습니다.
 
 ### 카메라 영상 밀림
 

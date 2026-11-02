@@ -1625,6 +1625,12 @@ def main() -> None:
     )
     # Pinky parking judgment reads this physical feed (the ceiling view is the Head Camera); unset = off.
     server.parking_camera_id = os.environ.get("CONTROL_STATION_PARKING_CAMERA", "").strip() or None
+    # Gate VERIFY_ARRIVAL on this registered spot; never let a missing camera silently skip the gate.
+    parking_spot_id = os.environ.get("CONTROL_STATION_PARKING_SPOT", "").strip() or None
+    if parking_spot_id and not server.parking_camera_id:
+        raise RuntimeError(
+            "CONTROL_STATION_PARKING_SPOT을 쓰려면 CONTROL_STATION_PARKING_CAMERA도 지정해야 합니다."
+        )
     if mode == "mujoco":
         raw_domain = os.environ.get("CONTROL_STATION_MOBILE_DOMAIN", os.environ.get("ROS_DOMAIN_ID"))
         if raw_domain is None:
@@ -1637,7 +1643,20 @@ def main() -> None:
             joint_enabled=server.arm_supervisor.enabled
         )
     server.task_store = task_store
-    server.task_orchestrator = MockTaskOrchestrator(task_store, mode=mode)
+    arrival_check = (
+        partial(
+            observe_parking,
+            parking_spot_id,
+            server.parking_camera_id,
+            getattr(server.camera_manager, "raw_frames_after", None),
+            Path(__file__).resolve().parents[2],
+        )
+        if parking_spot_id
+        else None
+    )
+    server.task_orchestrator = MockTaskOrchestrator(
+        task_store, mode=mode, arrival_check=arrival_check
+    )
     draft_dir = os.environ.get(
         "CONTROL_STATION_COORDINATE_DRAFT_DIR", ".control-station/coordinate-target-drafts"
     )

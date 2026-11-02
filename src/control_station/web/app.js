@@ -440,13 +440,43 @@ const stepOutcomeLabels = {
   CANCEL_CONFIRMED: '취소 확인',
   NOT_EXECUTED_AFTER_CANCEL: '취소 뒤 미실행',
   NOT_EXECUTED_AFTER_FAILURE: '실패 뒤 미실행',
+  PARKING_ARRIVED: '주차 판정 도착',
 };
 const taskEventLabels = {
   MOCK_SCENARIO_FAILURE: '모의 실패 시나리오 발생',
   MOCK_EXECUTION_FAILED: '모의 실행 오류',
   MOCK_TASK_COMPLETED: '모의 작업 완료',
   TARGET_PLANE_PROJECTION_RECORDED: '선반 평면 좌표 초안 기록',
+  ARRIVAL_NOT_CONFIRMED: '도착 미확인 · 팔 단계 시작 안 함',
 };
+const parkingStatusLabels = {
+  ARRIVED: '도착',
+  MISALIGNED: '어긋남',
+  NOT_FOUND: '확인 못 함(마커 안 보임)',
+  AMBIGUOUS: '확인 못 함(같은 마커 여러 개)',
+  VIEW_UNVERIFIED: '확인 못 함(카메라 시야 미확인)',
+};
+const parkingDeviationLabels = { WITHIN: '범위 안', NEAR: '조금 벗어남', FAR: '많이 벗어남' };
+
+function formatParkingObservation(observation) {
+  const parts = [`주차 판정 · ${observation.spot_id} · ${parkingStatusLabels[observation.status] || observation.status}`];
+  const offset = observation.offset;
+  if (offset) {
+    if (observation.deviation_level) {
+      parts.push(parkingDeviationLabels[observation.deviation_level] || observation.deviation_level);
+    }
+    parts.push(offset.forward_mm != null
+      ? `앞 ${Number(offset.forward_mm).toFixed(1)} mm · 왼쪽 ${Number(offset.left_mm).toFixed(1)} mm`
+      : `dx ${Number(offset.dx_mm).toFixed(1)} mm · dy ${Number(offset.dy_mm).toFixed(1)} mm`);
+    parts.push(`yaw ${Number(offset.dyaw_deg).toFixed(1)}°`);
+    if (observation.tolerance) {
+      parts.push(`허용 ${observation.tolerance.position_mm} mm / ${observation.tolerance.yaw_deg}°`);
+    }
+  }
+  if (observation.status !== 'ARRIVED' && observation.reason) parts.push(observation.reason);
+  parts.push(`시야 확인 ${observation.view_check}`, `프레임 ${observation.frames_used}장`);
+  return parts.join(' · ');
+}
 
 function renderTasks(tasks) {
   taskCount.textContent = `${tasks.length}개 작업`;
@@ -521,6 +551,7 @@ function renderTaskDetail(task) {
     <ol class="event-list">${events.map((event) => {
       const projection = event.event_type === 'TARGET_PLANE_PROJECTION_RECORDED' ? event.payload : null;
       const observation = event.event_type === 'TARGET_OBSERVED' ? event.payload?.observation : null;
+      const parking = event.event_type === 'PARKING_OBSERVED' ? event.payload?.observation : null;
       const selection = event.event_type === 'TARGET_SELECTED' ? event.payload : null;
       const candidateCount = observation?.candidate_count == null ? '후보 수 미확정' : `후보 ${observation.candidate_count}개`;
       const candidateHints = observation?.candidates?.map(formatDetectionCandidate).join('; ');
@@ -547,7 +578,9 @@ function renderTaskDetail(task) {
       const stepContext = linkedStep
         ? ` · 연결 단계 ${stepLabels[linkedStep.step_type] || linkedStep.step_type}`
         : '';
-      const detail = projection
+      const detail = parking
+        ? formatParkingObservation(parking)
+        : projection
         ? `2D 선반 평면 좌표 초안 · ${projection.plane_frame?.frame_id || 'frame 미지정'} · x=${Number(projection.plane_xy?.x).toFixed(3)}, y=${Number(projection.plane_xy?.y).toFixed(3)} ${projection.plane_frame?.unit || ''} · bbox 하단 중앙 proxy · 후보 #${Number(projection.candidate_index) + 1} · 로봇 목표로 사용 불가`
         : observation
         ? `대상 관측 · ${event.payload?.pick_request?.category || observation.target_class} · ${observation.camera_id} · ${observation.status}${requestPrompt} · ${candidateCount}${colorEvaluation ? ` · ${colorEvaluation}` : ''}${shelfEvaluation ? ` · ${shelfEvaluation}` : ''}${depthRegionText} · frame ${observation.frame_sequence}${sourceStamp}${candidateHints ? ` · ${candidateHints}` : ''}`
