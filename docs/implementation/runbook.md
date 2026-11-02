@@ -125,6 +125,23 @@ LeRobot이 설치된 Python 환경에서 follower의 현재 관절 raw 값, torq
 
 출력은 한 시점의 관측값입니다. `readiness_state`는 항상 `UNKNOWN`으로 남으며, torque 비활성화·hardware error 0·USB 응답은 비상정지, 작업공간 clear, 동작 가능 상태 또는 집기 성공을 증명하지 않습니다. register `Min_Position_Limit`/`Max_Position_Limit`은 OMX-F의 확장 위치 모드에서 안전한 선반 작업 한계로 간주하지 않습니다. 읽기 전용 probe를 실물 준비 상태 API 대신 사용하지 않습니다.
 
+## 선반 카메라 표시
+
+선반과 팔을 앞에서 보는 선반 카메라(정면 카메라)를 관제 화면에 함께 띄우려면 `CONTROL_STATION_SHELF_CAMERA`에 장치 경로를 지정합니다. feed ID는 내부 보정 파일 `shelf_camera.json`과 같은 `shelf_camera`입니다. 2026-11-02 기준 이 카메라는 USB 포트 10의 HCAM0입니다. 천장 카메라와 모델이 같아 by-id로는 구분되지 않으므로 by-path를 씁니다.
+
+```bash
+CONTROL_STATION_HEAD_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:4:1.0-video-index0 \
+CONTROL_STATION_SHELF_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:10:1.0-video-index0 \
+CONTROL_STATION_PARKING_CAMERA=head_camera CONTROL_STATION_PARKING_SPOT=pinky_dock_1 \
+./run-control-station.sh
+```
+
+선반 카메라는 `shelf_camera`(`SHELF`) 카드로 영상과 연결 상태를 보여 줍니다. `CONTROL_STATION_SHELF_YOLO_WEIGHTS`(또는 `CONTROL_STATION_SHELF_YOLO_WORLD_PROMPTS`)를 주면 Head Camera와 같은 방식으로 YOLO 검출을 표시합니다. `_CONF`, `_DEVICE` 설정도 `CONTROL_STATION_SHELF_YOLO_` 접두어로 같습니다. 작업 관측 단계에는 연결하지 않습니다.
+
+2026-11-02 기준 두 카메라 모두 팀 기준 모델을 씁니다. `feat/yolo-object-detection` 브랜치의 `e252f4e` "2회차 YOLO26n 학습 모델"(`yolo/runs/strawberry_car_ball/weights/best.pt`, SHA-256 `42c88046…`)입니다. 모델 파일은 Git에서 제외되는 `.control-station/models/strawberry_car_ball_r2_e252f4e.pt`에 두고, `CONTROL_STATION_HEAD_YOLO_WEIGHTS`와 `CONTROL_STATION_SHELF_YOLO_WEIGHTS`에 같은 경로를 지정합니다.
+
+클래스는 strawberry, car, ball입니다. 관제 가상환경에 `requirements-vision.txt`를 설치하면 ultralytics가 `opencv-python`을 함께 설치해 `cv2`가 OpenCV 5.0으로 바뀝니다. 이 저장소는 `opencv-python-headless<5`를 쓰므로, 설치 뒤 `opencv-python`을 지우고 `opencv-python-headless`를 다시 설치했습니다. 이 PC(RTX 5080, PyTorch 2.15 CUDA 13.2)에서 두 카메라 모두 YOLO를 켠 채 29.7 fps를 유지했습니다. Head는 strawberry·ball을 검출했고, 선반 카메라는 이 시점에 검출이 없었습니다(모델이 선반 정면 시점으로 학습됐는지 미확인). 다른 카메라와 같은 장치로 지정하면 선반 카메라만 열지 않고 오류를 표시합니다. 2026-11-02에 천장·선반 카메라를 함께 열어 두 카드 모두 640×480, 29.7 fps로 수신되는 것을 확인했습니다. Joint Camera(손목 카메라)는 별도 장치이며 `--arm` 모드에서만 엽니다.
+
 ## 카메라별 YOLO 검출 표시
 
 Physical Head Camera와 Joint Camera에 각각 별도의 로컬 YOLO 모델과 YOLO-World vocabulary를 opt-in 설정할 수 있습니다. Head model은 `--arm` 없이도 Head Camera 피드와 함께 열립니다. Joint Camera와 그 detector는 `--arm` 모드에서만 열립니다. `mujoco` mode에서는 같은 Head YOLO 설정을 simulation fixed-camera detector에 적용할 수 있고, 모델은 background loader가 준비합니다. 각 feed에 별도 model instance를 로드하므로 동시에 켜면 추가 메모리와 추론 자원이 필요합니다.
@@ -227,8 +244,8 @@ python3 scripts/pinky_parking.py check --spot-id pinky_dock_1 \
 
 프레임마다 다음 순서로 확인합니다.
 
-1. 고정 마커를 등록했으면 고정 마커들의 픽셀 이동 중앙값을 구합니다(`--no-anchors` 등록이면 1·2단계를 건너뜁니다). 3 px를 넘으면 시야가 바뀐 것으로 보고 판정을 멈춥니다. 보이는 고정 마커가 없는 프레임은 Pinky 마커를 놓친 프레임처럼 건너뜁니다.
-2. 3 px 이하의 이동은 카메라 시야가 조금 흐른 것으로 보고, 그만큼 Pinky 마커 좌표에서 뺍니다.
+1. 고정 마커를 등록했으면 고정 마커들의 픽셀 이동 중앙값을 구합니다(`--no-anchors` 등록이면 1·2단계를 건너뜁니다). 등록 파일의 `view_check.max_anchor_shift_px`(기본 15 px)를 넘으면 시야가 바뀐 것으로 보고 판정을 멈춥니다. 보이는 고정 마커가 없는 프레임은 Pinky 마커를 놓친 프레임처럼 건너뜁니다.
+2. 그 이하의 이동은 카메라 거치대가 조금 흐른 것으로 보고, 그만큼 Pinky 마커 좌표에서 뺍니다. 처음에는 기준이 3 px였는데, 2026-11-02 21:12에 정상 주차 상태에서 거치대가 약 5 px 흘러(1번 마커·Pinky 마커·선반이 같은 방향으로 (−2, +5) px) 판정이 막혔습니다. 그래서 기본값을 15 px로 올렸습니다. 영상 밀림(약 96 px)은 여전히 막습니다. 넓힌 뒤 같은 장면은 고정 마커 이동 5.7 px를 보정해 정상 위치(앞 −0.6 mm, 왼쪽 +0.4 mm)로 판정했습니다.
 3. Pinky 마커의 네 모서리 광선을 등록된 마커 평면과 교차시켜 평면 위 위치와 방향을 구합니다. 프레임마다 PnP로 깊이를 다시 추정하지 않습니다.
 4. 평면 위에서 잰 마커 한 변이 인쇄 크기와 10 % 넘게 다르면, 마커가 등록 평면 위에 있지 않은 것으로 보고 그 프레임을 쓰지 않습니다.
 
@@ -240,9 +257,9 @@ python3 scripts/pinky_parking.py check --spot-id pinky_dock_1 \
 | `MISALIGNED` | 마커는 보이지만 위치 또는 방향이 허용 범위 밖 | 1 |
 | `NOT_FOUND` | 판정에 쓸 프레임이 없음. 마커가 안 보이거나 등록 평면 밖으로 측정되는 상태가 15프레임(`--frames`) 연속되면 이전 값을 버리고 이 상태가 됨 | 2 |
 | `AMBIGUOUS` | 같은 ID 마커가 화면에 둘 이상 보여 어느 쪽이 Pinky인지 모름 | 2 |
-| `VIEW_UNVERIFIED` | 고정 마커로 등록한 경우에만 나옴. 카메라 시야가 등록 때와 같은지 확인하지 못함. 고정 마커가 등록 위치에서 3 px 넘게 움직였거나, 고정 마커가 안 보이는 프레임만 이어져 판정할 값이 없음 | 2 |
+| `VIEW_UNVERIFIED` | 고정 마커로 등록한 경우에만 나옴. 카메라 시야가 등록 때와 같은지 확인하지 못함. 고정 마커가 등록 위치에서 기준(기본 15 px) 넘게 움직였거나, 고정 마커가 안 보이는 프레임만 이어져 판정할 값이 없음 | 2 |
 
-`AMBIGUOUS` 프레임이나 고정 마커가 3 px 넘게 움직인 프레임이 나오면 이전 프레임 값도 버립니다. 출력 JSON의 `view_check`는 시야 확인 여부(`ON`/`OFF`)이고, `view_shift_px`는 고정 마커 이동량입니다. `view_check`가 `OFF`인 판정은 영상 밀림이나 카메라 이동을 확인하지 않은 결과입니다. 등록 파일 오류나 카메라 열기 실패처럼 판정을 시작하지 못한 경우에도 종료 코드는 2이고, 사유는 표준 오류로 출력합니다.
+`AMBIGUOUS` 프레임이나 고정 마커가 기준보다 많이 움직인 프레임이 나오면 이전 프레임 값도 버립니다. 출력 JSON의 `view_check`는 시야 확인 여부(`ON`/`OFF`)이고, `view_shift_px`는 고정 마커 이동량입니다. `view_check`가 `OFF`인 판정은 영상 밀림이나 카메라 이동을 확인하지 않은 결과입니다. 등록 파일 오류나 카메라 열기 실패처럼 판정을 시작하지 못한 경우에도 종료 코드는 2이고, 사유는 표준 오류로 출력합니다.
 
 오프셋은 등록된 마커 축을 기준으로 합니다. `dx`는 마커 오른쪽 변 방향, `dy`는 윗변 방향이 +이고, `dyaw`는 천장 카메라에서 볼 때 반시계 방향이 +입니다. 위치 판정에는 평면 거리 `distance_mm`를 씁니다. 등록할 때 `--marker-forward-axis`를 줬으면 Pinky 기준 `forward_mm`(앞 +)와 `left_mm`(왼쪽 +)도 출력합니다. Pinky 기준으로도 `dyaw`가 +이면 왼쪽(반시계)으로 돌아간 것입니다.
 
@@ -298,6 +315,16 @@ CONTROL_STATION_PARKING_SPOT=pinky_dock_1 \
 
 2026-11-02 실제 천장 카메라로 확인했습니다. `pinky_dock_1`로 작업을 실행하면 `ARRIVED`(1.1 mm, 0.24°, 15프레임, 시야 확인 ON)로 모든 단계가 성공했습니다. 허용 오차를 0.1 mm/0.01°로 줄인 임시 등록으로 실행하면 `MISALIGNED`/`FAR`로 `VERIFY_ARRIVAL`이 실패하고, 팔 작업 이후 단계는 `NOT_EXECUTED_AFTER_FAILURE`로 끝났습니다.
 
+관제 화면 **현황** 탭 아래쪽의 **Pinky 도착 확인** 패널에서 볼 수 있습니다.
+
+- **실시간 상태:** `CONTROL_STATION_PARKING_SPOT`까지 설정하면 관제가 그 위치를 계속 추적합니다(`GET /api/parking-spots/{spot_id}/live`, 화면은 0.5초마다 갱신). 상태는 화면 밖 → 이동 중 → 정상 위치 / 위치 벗어남이며, 같은 마커 여러 개·시야 미확인·카메라 없음·등록 파일 오류는 확인 불가로 표시합니다. 최근 1초 동안 5 mm·2° 안에서 멈춰 있어야 정상 위치/위치 벗어남을 판정합니다. 멈춘 Pinky도 프레임 하나하나는 약 ±1.5 mm·±0.55° 흔들려서, 처음 정한 2 mm·0.5°로는 계속 이동 중으로 나왔습니다(2026-11-02).
+- **화면 구성:** 왼쪽은 천장 카메라 실시간 영상입니다. 그 위에 등록 위치(흰 점선)와 지금 Pinky 마커·앞쪽 방향(상태 색)을 겹쳐 그립니다. 오른쪽은 진행 단계, 상태, 앞·왼쪽·회전 수치, 허용 오차 대비 배수, 위치 벗어남일 때의 보정 방향 안내, 위에서 본 그림입니다. 색은 정상 위치 초록, 조금 벗어남 주황, 많이 벗어남 빨강, 이동 중 파랑, 확인 불가 회색입니다.
+- **확정 판정:** 버튼을 누르면 `/check`로 요청 이후 프레임 15장을 판정해 결과를 한 줄로 보여 줍니다. 실시간 추적이 꺼져 있으면 이 결과로 패널 전체를 그립니다.
+- 실시간 상태는 화면 표시용입니다. 지나가는 도중 잠깐 범위 안에 든 프레임을 도착으로 착각하지 않도록, 팔 단계 진행은 작업 흐름의 도착 확인(도착 신호 이후 프레임으로 하는 판정)만 씁니다. 패널은 로봇 명령을 보내지 않습니다.
+- 주차 판정 카메라의 카메라 카드 제목에는 "Pinky 도착 카메라"가 붙습니다.
+
+2026-11-02에 실행 중인 관제의 천장 카메라 스트림을 추적기에 넣어 확인했습니다. 시작 약 1.8초 뒤 `IN_POSITION`(앞 −1.0 mm, 왼쪽 +1.0 mm, 회전 −0.3°)이 됐고 이후 유지됐습니다. 이동 중·위치 벗어남 화면은 예시 데이터로 렌더링만 확인했습니다.
+
 ### 카메라 영상 밀림
 
 2026-11-02에 카메라를 10번 열었을 때, 한 번은 영상 전체가 가로로 96 px 말린 채 들어왔습니다. 오른쪽 끝 96 px가 왼쪽에 붙어 보였고, 같은 시점에 OpenCV가 `Corrupt JPEG data` 경고를 냈습니다. 이 상태는 카메라를 닫을 때까지 이어지므로 프레임 중앙값으로 걸러지지 않습니다. 이전 판정 방식에서 Pinky가 정지해 있는데 dy가 −66 mm와 +85 mm로 갈렸던 원인입니다.
@@ -325,7 +352,7 @@ Pinky를 움직이지 않은 상태에서 확인했습니다.
 - `ARRIVED`는 마커가 허용 범위 안에 보인다는 뜻일 뿐입니다. Nav2 이동 성공, 로봇 정지, 팔 작업 가능 여부를 뜻하지 않습니다.
 - 기본 허용 오차 30 mm / 5°는 측정 반복성(1 mm, 0.1° 수준)보다 충분히 큰 출발값입니다. 실제 값은 Pinky 재주차 반복성과 팔 작업이 감당할 수 있는 어긋남을 측정한 뒤 정합니다. Nav2 goal checker의 기본 허용값(위치 0.25 m, yaw 0.25 rad)을 그대로 쓰면 Nav2가 목표 도착으로 끝내도 이 판정은 `MISALIGNED`일 수 있습니다. Pinky의 실제 Nav2 설정은 확인하지 않았습니다.
 - 마커 평면은 등록할 때 한 번 PnP로 정합니다. 평면 깊이가 틀린 만큼 오프셋 크기가 비례해 달라집니다. 예를 들어 깊이가 3 % 틀리면 90 mm 오프셋이 약 93 mm로 측정됩니다.
-- 시야 흐름 보정은 고정 마커와 Pinky 마커가 같은 바닥 높이에 있고 이동이 작다는 가정에 기댑니다. 3 px를 넘는 이동은 보정하지 않고 거부합니다.
+- 시야 흐름 보정은 고정 마커와 Pinky 마커가 같은 바닥 높이에 있고 이동이 작다는 가정에 기댑니다. 기준을 넘는 이동은 보정하지 않고 거부합니다. 고정 마커가 하나뿐이면 그 마커가 밀린 것과 카메라가 흐른 것을 구분하지 못하므로, 고정 마커는 단단히 붙여 둡니다.
 - `--no-anchors` 등록에서는 카메라 시야가 흐른 만큼 오프셋이 그대로 판정에 들어갑니다. 70 mm 마커가 약 40 px로 보이므로 1 px는 약 1.75 mm입니다. 카메라나 거치대를 건드렸으면 다시 등록합니다.
 
 ## ROS 2 Nav2 검색 모드

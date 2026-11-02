@@ -121,6 +121,13 @@ class ObserveParkingTest(unittest.TestCase):
         assert isinstance(offset, dict)
         self.assertIn("forward_mm", offset)
         self.assertAlmostEqual(offset["distance_mm"], 0.0, delta=0.5)
+        overlay = observation["image_overlay"]
+        assert isinstance(overlay, dict)
+        self.assertEqual(overlay["image_size_px"], {"width": 640, "height": 480})
+        self.assertEqual(len(overlay["registered_corners_px"]), 4)
+        np.testing.assert_allclose(overlay["marker_corners_px"], overlay["registered_corners_px"], atol=0.5)
+        np.testing.assert_allclose(overlay["anchor_centers_px"], [[109.5, 89.5]], atol=0.5)
+        np.testing.assert_allclose(overlay["view_shift_xy_px"], [0.0, 0.0], atol=0.3)
 
     def test_frames_from_before_the_request_are_ignored(self) -> None:
         write_spot(self.root, self.image)

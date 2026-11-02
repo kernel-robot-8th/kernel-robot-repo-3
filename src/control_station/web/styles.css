@@ -91,6 +91,66 @@ button:disabled { border-color: #d9dde2; background: #edf0f3; color: #8a929b; cu
 .camera-detail[data-field="target-observation"] { grid-column: 1 / -1; }
 .observation-image-option { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; font-size: 0.9rem; }
 .observation-image-option input { width: auto; margin: 0; }
+.parking-panel { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 14px; padding: 12px; border: 1px solid #d9dde2; border-radius: 4px; background: #fff; }
+.parking-camera { position: relative; align-self: start; aspect-ratio: 4 / 3; overflow: hidden; border-radius: 4px; background: #1f2328; }
+.parking-camera img, .parking-overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
+.parking-camera img { object-fit: contain; }
+.parking-stream-empty { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; color: #a7afb8; font-size: 12px; }
+.parking-stream-empty[hidden], .parking-camera img[hidden] { display: none; }
+.parking-legend { position: absolute; left: 8px; bottom: 8px; display: flex; gap: 10px; padding: 4px 8px; border-radius: 3px; background: rgba(20, 23, 27, .72); color: #e8ebee; font-size: 10px; }
+.parking-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.parking-legend i { display: inline-block; width: 14px; height: 9px; border-radius: 2px; }
+.legend-registered { border: 1.5px dashed #fff; }
+.legend-current { border: 2px solid #3fbf6a; background: rgba(63, 191, 106, .3); }
+.parking-info { display: grid; align-content: start; gap: 10px; min-width: 0; }
+.parking-banner { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #d9dde2; border-left-width: 5px; border-radius: 4px; background: #f5f6f8; }
+.parking-banner strong { display: block; font-size: 16px; line-height: 1.3; }
+.parking-banner small { display: block; color: #58616b; font-size: 11px; }
+.parking-banner-dot { flex-shrink: 0; width: 12px; height: 12px; border-radius: 50%; background: #a0a7b0; }
+.parking-banner.within { border-color: #9fd3b0; border-left-color: #2f8f4e; background: #eef7f1; }
+.parking-banner.within strong { color: #23703c; } .parking-banner.within .parking-banner-dot { background: #2f8f4e; box-shadow: 0 0 0 4px rgba(47, 143, 78, .18); }
+.parking-banner.near { border-color: #ecd39f; border-left-color: #c98a1a; background: #fbf4e6; }
+.parking-banner.near strong { color: #85590c; } .parking-banner.near .parking-banner-dot { background: #c98a1a; box-shadow: 0 0 0 4px rgba(201, 138, 26, .18); }
+.parking-banner.far { border-color: #e8caca; border-left-color: #bd4242; background: #fbeeee; }
+.parking-banner.far strong { color: #9c3434; } .parking-banner.far .parking-banner-dot { background: #bd4242; box-shadow: 0 0 0 4px rgba(189, 66, 66, .18); }
+.parking-banner.unknown { border-left-color: #7a838d; }
+.parking-banner.checking .parking-banner-dot { animation: parking-pulse 1s ease-in-out infinite; }
+@keyframes parking-pulse { 50% { opacity: .35; } }
+.parking-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.parking-metric { display: grid; gap: 1px; padding: 8px 10px; border: 1px solid #eaedf0; border-radius: 4px; background: #fafbfc; }
+.parking-metric span { color: #68717b; font-size: 11px; }
+.parking-metric strong { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.parking-metric small { color: #7a838d; font-size: 10px; }
+.parking-gauges { display: grid; gap: 8px; }
+.parking-gauge .gauge-head { display: flex; justify-content: space-between; gap: 8px; color: #58616b; font-size: 11px; }
+.parking-gauge .gauge-head strong { color: #3e4750; font-weight: 500; font-variant-numeric: tabular-nums; }
+.gauge-track { position: relative; height: 10px; margin-top: 4px; overflow: hidden; border-radius: 5px; background: linear-gradient(to right, #d6eedd 0 33.33%, #f6e6c4 33.33% 66.66%, #f3d3d3 66.66% 100%); }
+.gauge-needle { position: absolute; top: -1px; width: 4px; height: 12px; margin-left: -2px; border-radius: 2px; background: #20252b; }
+.gauge-scale { display: flex; justify-content: space-between; color: #9aa1a9; font-size: 9px; }
+.parking-advice { margin: 0; padding: 8px 10px; border: 1px dashed #cbd1d8; border-radius: 4px; background: #fff; color: #3e4750; font-size: 12px; }
+.parking-bottom { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 10px; align-items: start; }
+.parking-map { width: 100%; aspect-ratio: 1; border: 1px solid #eaedf0; border-radius: 4px; background: #fafbfc; }
+.parking-details { display: grid; gap: 4px; }
+.parking-details .camera-detail { font-size: 10px; }
+.parking-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; padding-top: 10px; border-top: 1px solid #eaedf0; }
+.parking-controls label { display: grid; gap: 4px; color: #58616b; font-size: 11px; }
+.parking-controls input:not([type="checkbox"]) { width: 150px; padding: 8px; border: 1px solid #cbd1d8; border-radius: 4px; color: #20252b; font: inherit; font-size: 12px; }
+.parking-live-mode { padding-bottom: 9px; color: #7a838d; font-size: 11px; }
+.parking-live-mode.on { color: #225ca8; }
+.parking-live-mode.on::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: #3478cb; animation: parking-pulse 1.4s ease-in-out infinite; }
+.parking-confirm { margin: 0; padding: 7px 10px; border-radius: 4px; background: #f5f6f8; color: #3e4750; font-size: 12px; }
+.parking-confirm.within { background: #eef7f1; color: #23703c; }
+.parking-confirm.near { background: #fbf4e6; color: #85590c; }
+.parking-confirm.far { background: #fbeeee; color: #9c3434; }
+.parking-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; margin: 0; padding: 0; list-style: none; counter-reset: parking-step; }
+.parking-steps li { position: relative; padding: 6px 8px 6px 26px; border: 1px solid #e1e5ea; border-radius: 4px; background: #fafbfc; color: #8a929b; font-size: 11px; counter-increment: parking-step; }
+.parking-steps li::before { content: counter(parking-step); position: absolute; left: 7px; top: 50%; display: grid; place-items: center; width: 14px; height: 14px; margin-top: -7px; border-radius: 50%; background: #d9dde2; color: #fff; font-size: 9px; }
+.parking-steps li.done { color: #58616b; }
+.parking-steps li.done::before { background: #9aa6b4; }
+.parking-steps li.current { border-color: #9cbde6; background: #f0f5fb; color: #225ca8; font-weight: 600; }
+.parking-steps li.current::before { background: #3478cb; }
+.parking-banner.moving { border-color: #c6d8f1; border-left-color: #3478cb; background: #f0f5fb; }
+.parking-banner.moving strong { color: #225ca8; } .parking-banner.moving .parking-banner-dot { background: #3478cb; animation: parking-pulse 1s ease-in-out infinite; }
 .api-section { padding-top: 1px; }
 dl { margin: 10px 0 0; padding: 2px 13px; border: 1px solid #d9dde2; border-radius: 4px; background: #fff; }
 dl > div { display: flex; align-items: baseline; gap: 10px; padding: 8px 0; border-bottom: 1px solid #eaedf0; }
@@ -112,6 +172,7 @@ footer { margin-top: 34px; padding-top: 12px; border-top: 1px solid #d9dde2; col
   th { font-size: 10px; } td { font-size: 11px; }
   td:first-child, td:nth-child(2) { width: auto; }
   .camera-grid { grid-template-columns: 1fr; }
+  .parking-panel { grid-template-columns: 1fr; }
   .arm-control { align-items: flex-start; flex-direction: column; }
   .arm-actions { width: 100%; }
   .task-form { grid-template-columns: 1fr; }

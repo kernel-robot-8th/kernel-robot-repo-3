@@ -183,6 +183,18 @@ class ObserveFrameTest(unittest.TestCase):
         self.assertAlmostEqual(observation.offset.distance_mm, 0.0, delta=0.5)
         self.assertAlmostEqual(observation.view_shift_px or 0.0, math.hypot(2, 1), delta=0.3)
 
+    def test_camera_drift_within_the_spot_limit_is_subtracted(self) -> None:
+        # The ceiling mount drifted 5 px within an hour; that must not block a correctly parked Pinky.
+        observation = observe_frame(np.roll(render_scene(SCENE), (10, -4), axis=(0, 1)), self.spot)
+        self.assertIsNone(observation.blocking_status)
+        assert observation.offset is not None
+        self.assertAlmostEqual(observation.offset.distance_mm, 0.0, delta=0.5)
+        np.testing.assert_allclose(observation.view_shift_xy_px, (-4.0, 10.0), atol=0.3)
+
+    def test_spot_limit_is_used(self) -> None:
+        observation = observe_frame(np.roll(render_scene(SCENE), 10, axis=0), replace(self.spot, max_view_shift_px=3.0))
+        self.assertEqual(observation.blocking_status, ParkingStatus.VIEW_UNVERIFIED)
+
     def test_wrapped_frame_is_not_judged(self) -> None:
         # The ceiling camera sometimes opens with the whole picture wrapped 96 px sideways.
         observation = observe_frame(np.roll(render_scene(SCENE), 96, axis=1), self.spot)
@@ -384,6 +396,9 @@ class LoadSpotTest(unittest.TestCase):
             spot = load_spot(path, Path(directory))
             np.testing.assert_allclose(spot.anchors[3], [500.0, 250.0])
             self.assertEqual(spot.tolerance, ParkingTolerance(20.0, 2.0))
+            self.assertEqual(spot.max_view_shift_px, 3.0)
+            default = load_spot(write_spot(Path(directory), anchors, {"mode": "FIXED_MARKERS"}), Path(directory))
+            self.assertEqual(default.max_view_shift_px, 15.0)
 
     def test_view_check_off_must_be_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

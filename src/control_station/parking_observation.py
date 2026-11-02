@@ -18,6 +18,7 @@ import numpy as np
 from control_station.parking_check import (
     ParkingJudge,
     ParkingResult,
+    ParkingSpot,
     ParkingSpotError,
     ParkingStatus,
     load_spot,
@@ -37,6 +38,51 @@ POLL_SECONDS = 0.01
 # (sequence, sha256, BGR pixels, width, height, captured_at, captured_monotonic)
 RawFrame = tuple[int, str, bytes, int, int, str, float]
 FramesAfter = Callable[[str, int], "list[RawFrame] | None"]
+
+
+def _rounded_points(points) -> list[list[float]]:  # type: ignore[no-untyped-def]
+    return [[round(float(x), 1), round(float(y), 1)] for x, y in np.asarray(points, dtype=np.float64).reshape(-1, 2)]
+
+
+def judgment_fields(result: ParkingResult, spot: ParkingSpot) -> dict[str, object]:
+    """Offset, tolerance and deviation fields shared by the one-shot check and the live tracker."""
+    offset: dict[str, object] | None = None
+    if result.offset is not None:
+        offset = {
+            "frame": "REGISTERED_SPOT_MARKER_AXES",
+            "dx_mm": round(result.offset.dx_mm, 1),
+            "dy_mm": round(result.offset.dy_mm, 1),
+            "distance_mm": round(result.offset.distance_mm, 1),
+            "dyaw_deg": round(result.offset.dyaw_deg, 2),
+            "marker_forward_axis": spot.marker_forward_axis,
+        }
+        if spot.marker_forward_axis is not None:
+            forward, left = pinky_frame_offset(result.offset, spot.marker_forward_axis)
+            offset.update(forward_mm=round(forward, 1), left_mm=round(left, 1))
+    return {
+        "offset": offset,
+        "tolerance": {"position_mm": spot.tolerance.position_mm, "yaw_deg": spot.tolerance.yaw_deg},
+        "position_ratio": None if result.position_ratio is None else round(result.position_ratio, 2),
+        "yaw_ratio": None if result.yaw_ratio is None else round(result.yaw_ratio, 2),
+        "deviation_level": result.deviation_level.value if result.deviation_level else None,
+        "view_check": "ON" if spot.anchors else "OFF",
+        "view_shift_px": None if result.view_shift_px is None else round(result.view_shift_px, 1),
+    }
+
+
+def image_overlay(spot: ParkingSpot, marker_corners_px, view_shift_xy_px=None) -> dict[str, object]:  # type: ignore[no-untyped-def]
+    """Raw feed pixels for display only; the stream and these points share the feed's image size.
+
+    view_shift_xy_px is the camera drift measured on the fixed markers; drawing the registered spot moved by it
+    keeps the picture consistent with the judgment, which subtracts the same drift.
+    """
+    return {
+        "view_shift_xy_px": None if view_shift_xy_px is None else _rounded_points([view_shift_xy_px])[0],
+        "image_size_px": {"width": spot.intrinsics.width, "height": spot.intrinsics.height},
+        "registered_corners_px": _rounded_points(spot.reference_corners_px),
+        "marker_corners_px": None if marker_corners_px is None else _rounded_points(marker_corners_px),
+        "anchor_centers_px": [_rounded_points([center])[0] for center in spot.anchors.values()],
+    }
 
 
 class ParkingObservationError(Exception):
@@ -76,6 +122,8 @@ def observe_parking(
     result = judgment.result
     last_sequence = 0
     used: list[RawFrame] = []
+    marker_corners_px = None  # latest frame where the Pinky marker was seen, for drawing over the stream
+    view_shift_xy_px = None
     while len(judgment.recent) < MAX_FRAMES and time.monotonic() < deadline:
         frames = frames_after(feed_camera_id, last_sequence)
         if frames is None:
@@ -91,7 +139,12 @@ def observe_parking(
                     f"프레임 해상도 {width}x{height}가 보정 해상도 {spot.intrinsics.width}x{spot.intrinsics.height}와 다릅니다",
                 )
             image = np.frombuffer(pixels, dtype=np.uint8).reshape(height, width, 3)
-            result = judgment.add(observe_frame(image, spot))
+            observation = observe_frame(image, spot)
+            result = judgment.add(observation)
+            if observation.corners is not None:
+                marker_corners_px = observation.corners
+            if observation.view_shift_xy_px is not None:
+                view_shift_xy_px = observation.view_shift_xy_px
             used.append(frame)
             if len(judgment.recent) >= MAX_FRAMES:
                 break
@@ -105,32 +158,13 @@ def observe_parking(
             ParkingStatus.NOT_FOUND, None, f"only {len(judgment.recent)} usable frames (< {MIN_FRAMES})", result.view_shift_px
         )
 
-    offset: dict[str, object] | None = None
-    if result.offset is not None:
-        offset = {
-            "frame": "REGISTERED_SPOT_MARKER_AXES",
-            "dx_mm": round(result.offset.dx_mm, 1),
-            "dy_mm": round(result.offset.dy_mm, 1),
-            "distance_mm": round(result.offset.distance_mm, 1),
-            "dyaw_deg": round(result.offset.dyaw_deg, 2),
-            "marker_forward_axis": spot.marker_forward_axis,
-        }
-        if spot.marker_forward_axis is not None:
-            forward, left = pinky_frame_offset(result.offset, spot.marker_forward_axis)
-            offset.update(forward_mm=round(forward, 1), left_mm=round(left, 1))
     return {
         "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
         "spot_id": spot.spot_id,
         "marker_id": spot.marker_id,
         "status": result.status.value,
         "reason": result.reason,
-        "offset": offset,
-        "tolerance": {"position_mm": spot.tolerance.position_mm, "yaw_deg": spot.tolerance.yaw_deg},
-        "position_ratio": None if result.position_ratio is None else round(result.position_ratio, 2),
-        "yaw_ratio": None if result.yaw_ratio is None else round(result.yaw_ratio, 2),
-        "deviation_level": result.deviation_level.value if result.deviation_level else None,
-        "view_check": "ON" if spot.anchors else "OFF",
-        "view_shift_px": None if result.view_shift_px is None else round(result.view_shift_px, 1),
+        **judgment_fields(result, spot),
         "frames_used": len(judgment.recent),
         "frames_examined": len(used),
         "feed_camera_id": feed_camera_id,
@@ -143,5 +177,6 @@ def observe_parking(
         "intrinsic_calibration_sha256": spot.intrinsics.sha256,
         "opencv_version": cv2.__version__,
         "registration_opencv_version": spot.registration_opencv_version,
+        "image_overlay": image_overlay(spot, marker_corners_px, view_shift_xy_px),
         "usable_for_robot_control": False,
     }

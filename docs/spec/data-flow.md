@@ -96,6 +96,7 @@ flowchart LR
 | 중앙 오케스트레이터 | 주문/작업 조건 확인, Pinky·OMX 단계 순서와 완료 조건 관리 | mock 단계 실행과 저장은 구현됨; 실제 이동·팔 adapter 실행은 미구현 |
 | 물품 인식·좌표 계산 | 고정/손목 카메라에서 대상 후보 확인, 3D 위치 및 OMX 목표 계산 | Head Camera YOLO 픽셀 후보 관측, `--arm`과 별도 가중치 설정 시 Joint Camera 재관측 후보, YOLO-World task 관측 POST의 요청 class one-shot prompt, task 감사 이벤트 및 측정값을 입력받는 고정 평면 2D draft 계산 도구까지 구현; 물체별 인식 검증·RGB-D/TF·camera/joint time alignment·카메라→OMX 변환은 미구현 |
 | Pinky 어댑터 | Nav2 목적지 요청, 수락·진행·최종 결과를 공통 모델로 변환 | ROS 2 action server 발견만 구현; goal 전송 미구현 |
+| Pinky 주차 판정 | B 적재 위치에 Pinky가 등록된 자리에 섰는지 천장 카메라 ArUco 마커로 확인하고 어긋난 양을 보고 | CLI, 관제 `GET /api/parking-spots/{spot_id}/check`, 현황 화면 패널, mock 작업 `VERIFY_ARRIVAL` 연결 구현; 실제 Nav2 결과 이후 호출과 수레 정렬 확인은 미구현 |
 | OMX 어댑터 | 집기·수레 적재 명령과 완료/실패 결과 변환 | LeRobot 수동 텔레오퍼레이션만 관리; 자동 작업 인터페이스 미확정 |
 | 이벤트·상태·이력 | 장치 결과를 해당 작업과 연결해 상태·이력으로 저장 | 작업/단계 상태 저장과 조회 구현; 장치 이벤트 연동 미구현 |
 | 팔 카메라 관리자 | 로봇팔 Head/Joint 카메라를 개별 수집하고 UI로 전달 | 두 카메라 경로 설정 및 MJPEG 수집 경로 구현; Head YOLO 입력과 task 관측 이벤트 연결, 별도 가중치 설정 시 Joint detector 및 camera별 step review link 구현. 실장 위치·접근 시점 재인식 동작은 미확인 |
@@ -106,16 +107,20 @@ flowchart LR
 flowchart LR
     subgraph B[B · OMX 적재 구역]
         ARRIVE[Pinky + 별도 수레 도착]
-        ALIGN[정차·수레 정렬 확인]
-        ALIGN_OK{정차·정렬 허용?}
+        ALIGN[Pinky 정차 확인<br/>천장 카메라 주차 판정]
+        ALIGN_OK{주차 판정 ARRIVED?}
+        CART[수레 정렬 확인<br/>방법 미확정]
+        CART_OK{수레 정렬 허용?}
         RECOGNIZE[대상 물품 인식·집기 위치 계산]
         TARGET_OK{물품·좌표 유효?}
         LOAD[OMX 집기·수레 적재]
         COUNT{목표 수량 적재 성공 확인?}
         HOLD[작업 보류·관리자 알림]
         ARRIVE --> ALIGN --> ALIGN_OK
-        ALIGN_OK -->|예| RECOGNIZE --> TARGET_OK
-        ALIGN_OK -->|아니오·미확정| HOLD
+        ALIGN_OK -->|예| CART --> CART_OK
+        ALIGN_OK -->|MISALIGNED·판정 불가| HOLD
+        CART_OK -->|예| RECOGNIZE --> TARGET_OK
+        CART_OK -->|아니오·미확정| HOLD
         TARGET_OK -->|예| LOAD --> COUNT
         TARGET_OK -->|아니오·미확정| HOLD
         COUNT -->|아니오·미확정| HOLD
@@ -134,7 +139,9 @@ MORE -->|예 · B로 복귀| ARRIVE
     MORE -->|아니오| PARK[빈 P1 / P2 / P3로 복귀]
 ```
 
-운송 위치와 순서는 요구사항에 따른 목표 흐름입니다. 실제 지도 waypoint, 정차·정렬 센서, 적재 한도, 빈 주차 위치 감지는 장치·현장 확인이 필요합니다. 실패나 미확정 결과에서는 목표 수량을 완료 처리하지 않고 다음 이동을 시작하지 않습니다.
+운송 위치와 순서는 요구사항에 따른 목표 흐름입니다. 실제 지도 waypoint, 수레 정렬 센서, 적재 한도, 빈 주차 위치 감지는 장치·현장 확인이 필요합니다.
+
+B의 Pinky 정차 확인은 천장 카메라 주차 판정으로 합니다. OMX 작업대 옆 적재 위치를 주차 위치(현재 `pinky_dock_1`)로 등록해 두고, Nav2 도착 성공 결과를 받은 뒤 찍힌 프레임으로 판정합니다. `ARRIVED`가 아니면 팔 단계를 시작하지 않고 자동으로 다시 주행하지도 않습니다([시스템 명세 4.4](system-spec.md#44-이동에서-팔로-넘어가는-조건), [주차 정렬 관측 계약](interface-contracts.md#pinky-주차-정렬-관측-초안)). 이 판정은 Pinky에 붙인 마커의 위치만 확인하며, Pinky에 연결한 수레의 정렬은 확인하지 않습니다. 실패나 미확정 결과에서는 목표 수량을 완료 처리하지 않고 다음 이동을 시작하지 않습니다.
 
 ### 실행 trigger 확인 필요
 
@@ -164,8 +171,11 @@ sequenceDiagram
     API->>O: 실행 접수
     O->>P: B 목적지 이동 요청
     P-->>O: 수락·진행·최종 도착 결과
+    O->>V: 주차 판정 요청 (도착 결과 이후 프레임만)
+    V-->>O: ARRIVED / MISALIGNED / 판정 불가, 앞·왼쪽 차이
+    O->>H: PARKING_OBSERVED 기록
 
-    alt B 도착 및 정렬 확인
+    alt B 도착 성공 · 주차 판정 ARRIVED · 수레 정렬 확인(미확정)
         V-->>O: 대상 검출·좌표 후보 (구현 미확정)
         O->>X: 집기·수레 적재 요청
         X-->>O: 파지·적재 성공/실패 결과
@@ -180,7 +190,7 @@ sequenceDiagram
             O-->>Admin: 보류 사유와 단계 표시
             Note over O,P: 확인 전 후속 이동 명령을 보내지 않음
         end
-    else 도착·정렬 미확인
+    else 도착 미확인 · 주차 MISALIGNED·판정 불가 · 수레 정렬 미확인
         O->>H: 보류 및 확인 필요 기록
         O-->>Admin: 작업 보류 표시
     end
@@ -196,7 +206,7 @@ sequenceDiagram
 | B 비전 입력 | 카메라의 실제 장착 위치/장치, Head·Joint 카메라와 관계, 영상 endpoint | 현장에서 카메라 물리 위치와 영상 소스를 대조 |
 | 좌표 변환 | source/target frame, 단위, 축, 원점, calibration, 허용 오차 | OMX 제어 입력·카메라 보정 정보를 확인하고 고정된 물품으로 비교 측정 |
 | Pinky 이동 | ROS 2 domain/배포판, Nav2 action 이름·타입, map/waypoint, A·B·P 위치 | 로봇에서 ROS graph/action/interface와 지도 좌표 조사 |
-| 정차·정렬 | B 도착, 카트 정렬과 작업 허가 판정 신호 | Pinky/수레에 제공되는 센서·상태 인터페이스 확인 |
+| 정차·정렬 | Pinky 정차는 천장 카메라 주차 판정으로 확인(임시 허용 50 mm / 10°, 근거 측정 전). 수레 정렬 신호는 없음 | 팔이 감당할 어긋남과 Nav2 재주차 반복성을 재서 허용 오차 결정; 수레 정렬 확인 방법(수레 마커 추가 등) 결정 |
 | OMX 자동 작업 | 명령 형식, READY, 파지·적재 완료, 오류 결과 | 자동 작업용 API/Action과 결과를 제공하는 OMX 인터페이스 확인; 텔레오퍼레이션과 분리 |
 | 물량 정책 | 카트 1회 적재 한도, 운송분 분할, 재고 차감 이벤트 | 현장 적재 시험과 주문 정책 합의 |
 | 실행 trigger | SR-27의 주문 접수 후 운송 작업 배정과 저장소 명세의 명시적 실행 요청 사이 연결 | 작업 자동 배정 이후 로봇 이동을 자동 시작할지 운영자 요청을 기다릴지 제품·운영 합의 |

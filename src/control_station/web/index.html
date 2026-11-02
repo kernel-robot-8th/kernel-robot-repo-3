@@ -49,6 +49,44 @@
       <div id="cameraGrid" class="camera-grid"><p class="loading">상태를 불러오는 중…</p></div>
       <p class="note">실행 모드에 따라 지정된 카메라 입력을 관측합니다. MuJoCo mode는 `/mujoco_omx/fixed_camera/color/image_raw`의 ROS RGB frame만 읽고, ROS source frame ID·stamp를 보존합니다. Depth·CameraInfo·TF는 현재 관제 UI에서 소비하지 않으며 이 프리뷰를 로봇 제어에 사용하지 않습니다.</p>
     </section>
+    <section aria-labelledby="parking-title">
+      <div class="section-heading"><h2 id="parking-title">Pinky 도착 확인</h2><span id="parkingUpdated" class="updated">판정 전</span></div>
+      <div class="parking-panel">
+        <div class="parking-camera">
+          <img id="parkingStream" alt="천장 카메라 실시간 영상" hidden>
+          <svg id="parkingOverlay" class="parking-overlay" viewBox="0 0 640 480" preserveAspectRatio="xMidYMid meet" aria-hidden="true"></svg>
+          <p id="parkingStreamEmpty" class="parking-stream-empty">천장 카메라 영상 없음</p>
+          <div class="parking-legend"><span><i class="legend-registered"></i>등록 위치</span><span><i class="legend-current"></i>판정한 Pinky 위치</span></div>
+        </div>
+        <div class="parking-info">
+          <ol id="parkingSteps" class="parking-steps" aria-label="Pinky 도착 진행 단계">
+            <li data-step="NOT_IN_VIEW">화면 밖</li><li data-step="MOVING">이동 중</li><li data-step="STOPPED">정지 · 위치 판정</li>
+          </ol>
+          <div id="parkingBanner" class="parking-banner unknown" role="status">
+            <span class="parking-banner-dot" aria-hidden="true"></span>
+            <div><strong id="parkingStatus">판정 전</strong><small id="parkingSummary">지금 판정을 누르면 천장 카메라로 Pinky 위치를 확인합니다.</small></div>
+          </div>
+          <div class="parking-metrics">
+            <div class="parking-metric"><span>앞</span><strong id="parkingForward">–</strong><small>mm</small></div>
+            <div class="parking-metric"><span>왼쪽</span><strong id="parkingLeft">–</strong><small>mm</small></div>
+            <div class="parking-metric"><span>회전</span><strong id="parkingYaw">–</strong><small>° (반시계 +)</small></div>
+          </div>
+          <div id="parkingGauges" class="parking-gauges"></div>
+          <p id="parkingAdvice" class="parking-advice" hidden></p>
+          <div class="parking-bottom">
+            <svg id="parkingMap" class="parking-map" viewBox="-160 -160 320 320" role="img" aria-label="등록된 주차 위치 대비 Pinky 위치 (위쪽이 Pinky 앞)"></svg>
+            <div id="parkingDetails" class="parking-details"></div>
+          </div>
+          <div class="parking-controls">
+            <label>주차 위치<input id="parkingSpot" maxlength="80" placeholder="예: pinky_dock_1"></label>
+            <button id="parkingCheck" type="button">확정 판정</button>
+            <span id="parkingLiveMode" class="parking-live-mode">실시간 추적 확인 중</span>
+          </div>
+          <p id="parkingConfirm" class="parking-confirm" hidden></p>
+        </div>
+      </div>
+      <p class="note">천장 카메라로 Pinky 윗면 마커를 재서 등록된 주차 위치와 비교한 관측값입니다. 실시간 상태는 화면 표시용이며, 팔 단계 진행은 Pinky 도착 신호 이후 프레임으로 내리는 확정 판정으로만 정합니다. 보정 안내는 운영자 참고용이고, 이 화면은 로봇 명령을 보내지 않습니다.</p>
+    </section>
 
       </div>
 

@@ -409,6 +409,33 @@ class OpenCVArmCameraStreamManager:
                     feed.connection_state = CameraConnectionState.DISCONNECTED
                     feed.stream_state = CameraStreamState.ERROR
                     feed.error_message = message
+        # Optional shelf camera looking at the shelf and arms from the front; its id matches the
+        # shelf_camera intrinsic calibration. Its YOLO detections are shown like the other feeds, but it has
+        # no Pick & Place task observation step.
+        shelf_device = os.environ.get("CONTROL_STATION_SHELF_CAMERA", "").strip()
+        if shelf_device:
+            shelf_weights = os.environ.get("CONTROL_STATION_SHELF_YOLO_WEIGHTS", "").strip()
+            shelf_prompts = os.environ.get("CONTROL_STATION_SHELF_YOLO_WORLD_PROMPTS", "").strip()
+            shelf_feed = _CameraFeed(
+                "shelf_camera",
+                "SHELF",
+                shelf_device,
+                detector=(
+                    _YoloDetector(shelf_weights, "CONTROL_STATION_SHELF_YOLO")
+                    if shelf_weights or shelf_prompts
+                    else None
+                ),
+            )
+            self._feeds["shelf_camera"] = shelf_feed
+            for other in (head_feed, joint_feed):
+                if other.device and os.path.realpath(other.device) == os.path.realpath(shelf_device):
+                    shelf_feed.device = None
+                    shelf_feed.connection_state = CameraConnectionState.DISCONNECTED
+                    shelf_feed.stream_state = CameraStreamState.ERROR
+                    shelf_feed.error_message = (
+                        f"선반 카메라 경로가 {other.camera_id}와 같은 V4L2 장치입니다. "
+                        "CONTROL_STATION_SHELF_CAMERA를 다른 장치로 설정하세요."
+                    )
         self._closed = threading.Event()
         for feed in self._feeds.values():
             if feed.device:

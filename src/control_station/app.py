@@ -30,6 +30,7 @@ from control_station.command_parser import (
 from control_station.coordinate_target_drafts import CoordinateDraftError, CoordinateTargetDraftStore
 from control_station.models import CameraSnapshot, TaskStatus
 from control_station.parking_observation import ParkingObservationError, observe_parking
+from control_station.parking_tracker import ParkingTracker
 from control_station.projection_drafts import (
     ProjectionDraftError,
     read_projection_draft_artifact,
@@ -261,7 +262,18 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
             self._stream_camera(camera_id)
             return
         if route == "/api/health":
-            self._json(200, {"status": "ok", "mode": self.app.mode})
+            self._json(
+                200,
+                {
+                    "status": "ok",
+                    "mode": self.app.mode,
+                    "parking": {
+                        "camera_id": self.app.parking_camera_id,
+                        "spot_id": self.app.parking_spot_id,
+                        "live_tracking": self.app.parking_tracker is not None,
+                    },
+                },
+            )
         elif route == "/api/robots":
             self._json(200, {"robots": self.app.robot_provider.snapshots()})
         elif route == "/api/cameras":
@@ -390,6 +402,17 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
             self._json(200, {"artifact": artifact, "review_event_id": parts[4]})
         elif route == "/api/arm/status":
             self._json(200, {"arm": self.app.arm_supervisor.snapshot()})
+        elif route.startswith("/api/parking-spots/") and route.endswith("/live"):
+            spot_id = route.removeprefix("/api/parking-spots/").removesuffix("/live")
+            tracker = self.app.parking_tracker
+            if tracker is None or tracker.spot_id != spot_id:
+                self._json_error(
+                    404,
+                    "PARKING_TRACKING_NOT_CONFIGURED",
+                    "이 주차 위치는 실시간 추적 중이 아닙니다 (CONTROL_STATION_PARKING_SPOT·CONTROL_STATION_PARKING_CAMERA)",
+                )
+                return
+            self._json(200, {"live": tracker.snapshot()})
         elif route.startswith("/api/parking-spots/") and route.endswith("/check"):
             spot_id = route.removeprefix("/api/parking-spots/").removesuffix("/check")
             try:
@@ -1627,6 +1650,7 @@ def main() -> None:
     server.parking_camera_id = os.environ.get("CONTROL_STATION_PARKING_CAMERA", "").strip() or None
     # Gate VERIFY_ARRIVAL on this registered spot; never let a missing camera silently skip the gate.
     parking_spot_id = os.environ.get("CONTROL_STATION_PARKING_SPOT", "").strip() or None
+    server.parking_spot_id = parking_spot_id
     if parking_spot_id and not server.parking_camera_id:
         raise RuntimeError(
             "CONTROL_STATION_PARKING_SPOT을 쓰려면 CONTROL_STATION_PARKING_CAMERA도 지정해야 합니다."
@@ -1636,7 +1660,12 @@ def main() -> None:
         if raw_domain is None:
             raise RuntimeError("MuJoCo 카메라 구독에 ROS domain ID를 지정해야 합니다.")
         server.camera_manager = Ros2SimulationCameraStreamManager(int(raw_domain))
-    elif not (server.arm_supervisor.enabled or head_detector_configured or server.parking_camera_id):
+    elif not (
+        server.arm_supervisor.enabled
+        or head_detector_configured
+        or server.parking_camera_id
+        or os.environ.get("CONTROL_STATION_SHELF_CAMERA", "").strip()
+    ):
         server.camera_manager = UnconfiguredArmCameraStreamManager()
     else:
         server.camera_manager = OpenCVArmCameraStreamManager(
@@ -1657,6 +1686,15 @@ def main() -> None:
     server.task_orchestrator = MockTaskOrchestrator(
         task_store, mode=mode, arrival_check=arrival_check
     )
+    # Display-only live state of the same spot; the arrival gate above stays the only decision path.
+    frames_after = getattr(server.camera_manager, "raw_frames_after", None)
+    server.parking_tracker = (
+        ParkingTracker(
+            parking_spot_id, server.parking_camera_id, frames_after, Path(__file__).resolve().parents[2]
+        ).start()
+        if parking_spot_id and server.parking_camera_id and frames_after
+        else None
+    )
     draft_dir = os.environ.get(
         "CONTROL_STATION_COORDINATE_DRAFT_DIR", ".control-station/coordinate-target-drafts"
     )
@@ -1673,6 +1711,8 @@ def main() -> None:
         print("\nControl station stopped.", flush=True)
     finally:
         server.server_close()
+        if server.parking_tracker is not None:
+            server.parking_tracker.close()
         server.camera_manager.close()
         server.arm_supervisor.close()
         server.task_orchestrator.close()

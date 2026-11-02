@@ -19,9 +19,29 @@ const taskDetail = document.querySelector('#taskDetail');
 const taskCount = document.querySelector('#taskCount');
 const taskMessage = document.querySelector('#taskMessage');
 const viewTitle = document.querySelector('#viewTitle');
+const parkingSpotInput = document.querySelector('#parkingSpot');
+const parkingCheckButton = document.querySelector('#parkingCheck');
+const parkingSteps = document.querySelector('#parkingSteps');
+const parkingConfirm = document.querySelector('#parkingConfirm');
+const parkingLiveMode = document.querySelector('#parkingLiveMode');
+const parkingMap = document.querySelector('#parkingMap');
+const parkingStatus = document.querySelector('#parkingStatus');
+const parkingDetails = document.querySelector('#parkingDetails');
+const parkingUpdated = document.querySelector('#parkingUpdated');
+const parkingBanner = document.querySelector('#parkingBanner');
+const parkingSummary = document.querySelector('#parkingSummary');
+const parkingForward = document.querySelector('#parkingForward');
+const parkingLeft = document.querySelector('#parkingLeft');
+const parkingYaw = document.querySelector('#parkingYaw');
+const parkingGauges = document.querySelector('#parkingGauges');
+const parkingAdvice = document.querySelector('#parkingAdvice');
+const parkingStream = document.querySelector('#parkingStream');
+const parkingStreamEmpty = document.querySelector('#parkingStreamEmpty');
+const parkingOverlay = document.querySelector('#parkingOverlay');
 const navItems = [...document.querySelectorAll('.nav-item[data-view]')];
 const views = [...document.querySelectorAll('.view[id^="view-"]')];
 let selectedTaskId = null;
+let parkingCameraId = null;
 let controlMode = 'unknown';
 let targetObservationClass = '';
 let targetObservationColor = '';
@@ -75,7 +95,7 @@ function renderRobots(robots) {
 }
 
 function renderCameras(cameras) {
-  const names = { HEAD: 'Head Camera', JOINT: 'Joint Camera', FIXED: 'MuJoCo Fixed Camera' };
+  const names = { HEAD: 'Head Camera', JOINT: 'Joint Camera', FIXED: 'MuJoCo Fixed Camera', SHELF: '선반 카메라 (정면)' };
   const connectionLabel = {
     CONNECTED: '연결됨', DISCONNECTED: '연결 끊김', UNKNOWN: '확인 필요',
   };
@@ -104,7 +124,7 @@ function renderCameras(cameras) {
     cameraGrid.dataset.cameraIds = cameraIds;
     cameraGrid.innerHTML = cameras.map((camera) => `
       <article class="camera-card" data-camera-id="${escapeHtml(camera.id)}">
-        <header class="camera-head"><h3>${escapeHtml(names[camera.position] || camera.id)}</h3><span class="camera-position">${escapeHtml(camera.position)}</span></header>
+        <header class="camera-head"><h3>${escapeHtml(camera.id === parkingCameraId ? `Pinky 도착 카메라 (${names[camera.position] || camera.id})` : names[camera.position] || camera.id)}</h3><span class="camera-position">${escapeHtml(camera.position)}</span></header>
         <div class="camera-preview" data-field="preview"><span>영상 스트림 미연결</span></div>
         <div class="camera-details">
           <div class="camera-detail"><span>연결</span><strong data-field="connection"></strong></div>
@@ -478,6 +498,323 @@ function formatParkingObservation(observation) {
   return parts.join(' · ');
 }
 
+let parkingBusy = false;
+let parkingLiveBusy = false;
+let parkingLive = false;
+let parkingStreamCamera = null;
+const clockFormat = new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+const parkingColors = { within: '#2f8f4e', near: '#c98a1a', far: '#bd4242', moving: '#3478cb', unknown: '#7a838d' };
+const parkingOverlayColors = { within: '#3fbf6a', near: '#f0a830', far: '#f05a5a', moving: '#5aa2f0', unknown: '#c3c9cf' };
+const parkingCheckTitles = {
+  ARRIVED: '도착',
+  NOT_FOUND: '확인 불가(마커 안 보임)',
+  AMBIGUOUS: '확인 불가(같은 마커 여러 개)',
+  VIEW_UNVERIFIED: '확인 불가(카메라 시야 미확인)',
+};
+const parkingLiveTitles = {
+  NOT_IN_VIEW: '화면 밖 · Pinky 마커가 보이지 않음',
+  MOVING: '이동 중',
+  IN_POSITION: '정상 위치',
+  OFF_POSITION: '위치 벗어남',
+  AMBIGUOUS: '확인 불가 · 같은 마커가 여러 개',
+  VIEW_UNVERIFIED: '확인 불가 · 카메라 시야가 등록 때와 다름',
+  CAMERA_UNAVAILABLE: '확인 불가 · 카메라 영상 없음',
+  SPOT_INVALID: '확인 불가 · 주차 위치 파일 오류',
+};
+const parkingHelp = {
+  NOT_IN_VIEW: 'Pinky가 주차 구역 밖에 있거나 윗면 마커가 사람·물건에 가려졌습니다.',
+  NOT_FOUND: 'Pinky가 주차 구역에 있는지, 윗면 마커가 사람·물건에 가려졌는지 확인하세요.',
+  AMBIGUOUS: '화면에 같은 ID 마커가 둘 이상 있습니다. 다른 Pinky나 인쇄물을 치우세요.',
+  VIEW_UNVERIFIED: '영상이 밀린 채 열렸으면 관제 서버를 다시 시작해 카메라를 다시 엽니다. 카메라를 건드렸으면 주차 위치를 다시 등록하세요.',
+  CAMERA_UNAVAILABLE: '관제 서버의 Pinky 도착 카메라 연결을 확인하세요.',
+  SPOT_INVALID: '주차 위치를 다시 등록하거나 등록 파일을 확인하세요.',
+};
+
+function signedNumber(value, digits = 1) {
+  const number = Number(value);
+  return `${number > 0 ? '+' : ''}${number.toFixed(digits)}`;
+}
+
+function parkingLevel(data) {
+  if (!data?.offset) return 'unknown';
+  return { WITHIN: 'within', NEAR: 'near', FAR: 'far' }[data.deviation_level] || 'unknown';
+}
+
+function parkingAxes(offset) {
+  const pinkyAxes = offset.forward_mm != null;
+  return {
+    pinkyAxes,
+    forward: Number(pinkyAxes ? offset.forward_mm : offset.dx_mm),
+    left: Number(pinkyAxes ? offset.left_mm : offset.dy_mm),
+  };
+}
+
+// Small top view in Pinky's own axes: up = Pinky front, left = Pinky left, counterclockwise yaw turns the arrow left.
+function drawParkingMap(data, level) {
+  const tolerance = Number(data?.tolerance?.position_mm) || 50;
+  const offset = data?.offset;
+  const { pinkyAxes, forward, left } = offset ? parkingAxes(offset) : { pinkyAxes: true, forward: 0, left: 0 };
+  const scale = 140 / Math.max(tolerance * 2.3, Math.abs(forward) * 1.25, Math.abs(left) * 1.25, 40);
+  const toleranceRadius = tolerance * scale;
+  const nearRadius = 2 * toleranceRadius;
+  const color = parkingColors[level] || parkingColors.unknown;
+  const arrow = 'M0,-22 L15,16 L0,8 L-15,16 Z';
+  const x = -left * scale;
+  const y = -forward * scale;
+  parkingMap.innerHTML = `
+    <line x1="-150" y1="0" x2="150" y2="0" stroke="#e1e5ea"/><line x1="0" y1="-150" x2="0" y2="150" stroke="#e1e5ea"/>
+    <text x="0" y="-140" text-anchor="middle" font-size="20" fill="#7a838d">${pinkyAxes ? '앞' : '+x'}</text>
+    <text x="-150" y="-8" font-size="20" fill="#7a838d">${pinkyAxes ? '왼쪽' : '+y'}</text>
+    ${nearRadius < 150 ? `<circle r="${nearRadius}" fill="none" stroke="#c98a1a" stroke-width="2" stroke-dasharray="6 6" opacity=".55"/>` : ''}
+    <circle r="${toleranceRadius}" fill="#2f8f4e" fill-opacity=".08" stroke="#2f8f4e" stroke-width="2" stroke-dasharray="8 6"/>
+    <path d="${arrow}" fill="none" stroke="#7a838d" stroke-width="2.5" stroke-dasharray="5 3"/>
+    ${offset ? `<line x1="0" y1="0" x2="${x}" y2="${y}" stroke="${color}" stroke-width="2" opacity=".6"/>
+    <path d="${arrow}" transform="translate(${x} ${y}) rotate(${-Number(offset.dyaw_deg)})" fill="${color}" fill-opacity=".9" stroke="${color}"/>` : ''}`;
+}
+
+function markerGeometry(corners, forwardAxis) {
+  const point = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+  const center = [0, 1].map((i) => corners.reduce((sum, corner) => sum + corner[i], 0) / 4);
+  const rightMid = point(corners[1], corners[2], 0.5);
+  const topMid = point(corners[0], corners[1], 0.5);
+  const axisEnd = { '+x': rightMid, '-x': point(rightMid, center, 2), '+y': topMid, '-y': point(topMid, center, 2) }[forwardAxis || '+y'];
+  return { center, front: point(center, axisEnd, 2.4) };
+}
+
+function drawParkingOverlay(data, level, label) {
+  const overlay = data?.image_overlay;
+  if (!overlay) {
+    parkingOverlay.innerHTML = '';
+    return;
+  }
+  const { width, height } = overlay.image_size_px;
+  parkingOverlay.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  const forwardAxis = data.offset?.marker_forward_axis;
+  const color = parkingOverlayColors[level] || parkingOverlayColors.unknown;
+  const polygon = (corners) => corners.map(([x, y]) => `${x},${y}`).join(' ');
+  // The judgment subtracts the camera drift measured on the fixed markers, so draw the registered spot moved by it too.
+  const [shiftX, shiftY] = overlay.view_shift_xy_px || [0, 0];
+  const moved = (points) => points.map(([x, y]) => [x + shiftX, y + shiftY]);
+  const registeredCorners = moved(overlay.registered_corners_px);
+  const registered = markerGeometry(registeredCorners, forwardAxis);
+  let svg = moved(overlay.anchor_centers_px).map(([x, y]) => `<circle cx="${x}" cy="${y}" r="9" fill="none" stroke="#fff" stroke-width="1.5" stroke-dasharray="3 2"/>`).join('');
+  svg += `<polygon points="${polygon(registeredCorners)}" fill="none" stroke="#000" stroke-opacity=".45" stroke-width="5"/>
+    <polygon points="${polygon(registeredCorners)}" fill="none" stroke="#fff" stroke-width="2" stroke-dasharray="6 4"/>
+    <line x1="${registered.center[0]}" y1="${registered.center[1]}" x2="${registered.front[0]}" y2="${registered.front[1]}" stroke="#fff" stroke-width="2" stroke-dasharray="4 3"/>`;
+  if (overlay.marker_corners_px) {
+    const current = markerGeometry(overlay.marker_corners_px, forwardAxis);
+    svg += `<line x1="${registered.center[0]}" y1="${registered.center[1]}" x2="${current.center[0]}" y2="${current.center[1]}" stroke="${color}" stroke-width="2" stroke-dasharray="3 3"/>
+      <polygon points="${polygon(overlay.marker_corners_px)}" fill="${color}" fill-opacity=".28" stroke="${color}" stroke-width="3"/>
+      <line x1="${current.center[0]}" y1="${current.center[1]}" x2="${current.front[0]}" y2="${current.front[1]}" stroke="${color}" stroke-width="3" marker-end="url(#parkingArrow)"/>`;
+  }
+  parkingOverlay.innerHTML = `<defs><marker id="parkingArrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="${color}"/></marker></defs>${svg}
+    <rect x="${width - 168}" y="8" width="160" height="22" rx="3" fill="rgba(20,23,27,.72)"/>
+    <text x="${width - 88}" y="23" text-anchor="middle" font-size="12" fill="#e8ebee">${escapeHtml(label)}</text>
+    ${Math.hypot(shiftX, shiftY) >= 1 ? `<rect x="${width - 168}" y="34" width="160" height="20" rx="3" fill="rgba(20,23,27,.72)"/>
+    <text x="${width - 88}" y="48" text-anchor="middle" font-size="11" fill="#e8ebee">카메라 흐름 ${Math.hypot(shiftX, shiftY).toFixed(1)} px 보정</text>` : ''}`;
+}
+
+function showParkingStream(cameraId) {
+  if (!cameraId || cameraId === parkingStreamCamera) return;
+  parkingStreamCamera = cameraId;
+  parkingStream.hidden = false;
+  parkingStreamEmpty.hidden = true;
+  parkingStream.src = `/streams/${encodeURIComponent(cameraId)}.mjpg`;
+}
+
+parkingStream.addEventListener('error', () => {
+  parkingStream.hidden = true;
+  parkingStreamEmpty.hidden = false;
+  parkingStreamCamera = null;
+});
+
+function gaugeHtml(label, value, tolerance, ratio, unit) {
+  const position = Math.min(Number(ratio), 3) / 3 * 100;
+  return `<div class="parking-gauge"><div class="gauge-head"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)} / 허용 ${escapeHtml(tolerance)}${unit} · ${Number(ratio).toFixed(2)}배</strong></div>
+    <div class="gauge-track"><span class="gauge-needle" style="left:${position}%"></span></div>
+    <div class="gauge-scale"><span>0</span><span>허용</span><span>2배</span><span>3배+</span></div></div>`;
+}
+
+function correctionAdvice(offset) {
+  const { pinkyAxes, forward, left } = parkingAxes(offset);
+  const steps = [];
+  if (Math.abs(forward) >= 1) steps.push(`${pinkyAxes ? (forward > 0 ? '뒤로' : '앞으로') : (forward > 0 ? '마커 -x로' : '마커 +x로')} ${Math.abs(forward).toFixed(0)} mm`);
+  if (Math.abs(left) >= 1) steps.push(`${pinkyAxes ? (left > 0 ? '오른쪽으로' : '왼쪽으로') : (left > 0 ? '마커 -y로' : '마커 +y로')} ${Math.abs(left).toFixed(0)} mm`);
+  if (Math.abs(Number(offset.dyaw_deg)) >= 0.5) steps.push(`${Number(offset.dyaw_deg) > 0 ? '시계 방향' : '반시계 방향'}으로 ${Math.abs(Number(offset.dyaw_deg)).toFixed(1)}°`);
+  return steps.length ? `등록 위치로 맞추려면 ${steps.join(' · ')} 옮겨야 합니다.` : '';
+}
+
+// Numbers, gauges, top view, camera overlay and details shared by live states and confirmed checks.
+function renderParkingFields(data, level, overlayLabel, extraRows = []) {
+  const offset = data.offset;
+  if (offset) {
+    const { forward, left } = parkingAxes(offset);
+    parkingForward.textContent = signedNumber(forward);
+    parkingLeft.textContent = signedNumber(left);
+    parkingYaw.textContent = signedNumber(offset.dyaw_deg, 1);
+    parkingGauges.innerHTML = gaugeHtml('위치 오차', `${Number(offset.distance_mm).toFixed(1)} mm`, data.tolerance.position_mm, data.position_ratio, ' mm')
+      + gaugeHtml('회전 오차', `${Math.abs(Number(offset.dyaw_deg)).toFixed(1)}°`, data.tolerance.yaw_deg, data.yaw_ratio, '°');
+  } else {
+    parkingForward.textContent = '–';
+    parkingLeft.textContent = '–';
+    parkingYaw.textContent = '–';
+    parkingGauges.innerHTML = '';
+  }
+  const rows = [
+    ['시야 확인', data.view_check === 'ON' ? `고정 마커로 확인 · 이동 ${data.view_shift_px ?? '-'} px` : '꺼짐 (영상 밀림 감지 안 함)'],
+    ...extraRows,
+    ['주차 위치', data.spot_id],
+    ['카메라', `${data.feed_camera_id} (Pinky 도착 카메라)`],
+  ];
+  parkingDetails.innerHTML = rows.map(([label, value]) => `<div class="camera-detail"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
+  showParkingStream(data.feed_camera_id);
+  drawParkingMap(data, level);
+  drawParkingOverlay(data, level, overlayLabel);
+}
+
+function setParkingAdvice(text) {
+  parkingAdvice.hidden = !text;
+  parkingAdvice.textContent = text || '';
+}
+
+function setParkingSteps(state) {
+  const order = { NOT_IN_VIEW: 0, MOVING: 1, IN_POSITION: 2, OFF_POSITION: 2 };
+  const current = order[state];
+  [...parkingSteps.children].forEach((step, index) => {
+    step.classList.toggle('current', current === index);
+    step.classList.toggle('done', current !== undefined && index < current);
+  });
+}
+
+function renderParkingLive(live) {
+  const state = live.state;
+  const stopped = state === 'IN_POSITION' || state === 'OFF_POSITION';
+  const level = state === 'MOVING' ? 'moving' : stopped ? parkingLevel(live) : 'unknown';
+  const seconds = Math.max(0, (Date.parse(live.updated_at) - Date.parse(live.since)) / 1000);
+  const duration = Number.isFinite(seconds) ? ` · ${seconds.toFixed(0)}초째` : '';
+  parkingBanner.className = `parking-banner ${level}`;
+  parkingStatus.textContent = state === 'OFF_POSITION'
+    ? `위치 벗어남 · ${parkingDeviationLabels[live.deviation_level] || live.deviation_level}`
+    : parkingLiveTitles[state] || state;
+  parkingSummary.textContent = {
+    IN_POSITION: `멈춘 상태로 허용 범위 안에 있습니다${duration}`,
+    OFF_POSITION: `멈췄지만 허용 범위를 벗어났습니다${duration}`,
+    MOVING: '마커가 움직이고 있습니다. 1초 이상 멈추면 위치를 판정합니다.',
+  }[state] || live.reason;
+  setParkingSteps(state);
+  setParkingAdvice(state === 'OFF_POSITION' && live.offset ? correctionAdvice(live.offset) : parkingHelp[state]);
+  const time = clockFormat.format(new Date(live.updated_at));
+  renderParkingFields(live, level, `실시간 ${time}`);
+  parkingUpdated.textContent = `실시간 ${time}`;
+}
+
+function confirmLine(observation) {
+  const title = observation.status === 'MISALIGNED'
+    ? `어긋남(${parkingDeviationLabels[observation.deviation_level] || observation.deviation_level})`
+    : parkingCheckTitles[observation.status] || observation.status;
+  const distance = observation.offset ? ` · 거리 ${Number(observation.offset.distance_mm).toFixed(1)} mm / 허용 ${observation.tolerance.position_mm} mm · 회전 ${signedNumber(observation.offset.dyaw_deg, 1)}°` : ` · ${observation.reason}`;
+  return `확정 판정 ${clockFormat.format(new Date(observation.captured_until))} · ${title}${distance} · ${observation.frames_used}프레임`;
+}
+
+// Without live tracking (older server or no configured spot) the confirmed check fills the whole panel.
+function renderParkingCheck(observation) {
+  const level = parkingLevel(observation);
+  parkingBanner.className = `parking-banner ${level}`;
+  parkingStatus.textContent = observation.status === 'MISALIGNED'
+    ? `어긋남 · ${parkingDeviationLabels[observation.deviation_level] || observation.deviation_level}`
+    : parkingCheckTitles[observation.status] || observation.status;
+  parkingSummary.textContent = observation.status === 'ARRIVED' ? '등록된 주차 위치의 허용 범위 안에 있습니다.' : observation.reason;
+  setParkingSteps(null);
+  setParkingAdvice(observation.offset ? (observation.status === 'ARRIVED' ? '' : correctionAdvice(observation.offset)) : parkingHelp[observation.status]);
+  const time = clockFormat.format(new Date(observation.captured_until));
+  renderParkingFields(observation, level, `판정 ${time} 기준`, [['프레임', `${observation.frames_used}장 판정 / ${observation.frames_examined}장 확인`]]);
+  parkingUpdated.textContent = `판정 ${time}`;
+}
+
+function renderParkingError(message) {
+  parkingConfirm.hidden = false;
+  parkingConfirm.className = 'parking-confirm';
+  parkingConfirm.textContent = `확정 판정 실패 · ${message}`;
+  if (parkingLive) return;
+  parkingBanner.className = 'parking-banner unknown';
+  parkingStatus.textContent = '판정하지 못함';
+  parkingSummary.textContent = message;
+  parkingForward.textContent = '–';
+  parkingLeft.textContent = '–';
+  parkingYaw.textContent = '–';
+  parkingGauges.innerHTML = '';
+  setParkingAdvice('');
+  parkingDetails.innerHTML = '';
+  drawParkingMap(null, 'unknown');
+  drawParkingOverlay(null);
+}
+
+async function checkParking() {
+  const spotId = parkingSpotInput.value.trim();
+  if (parkingBusy) return;
+  if (!spotId) {
+    renderParkingError('주차 위치 ID를 입력하세요.');
+    return;
+  }
+  parkingBusy = true;
+  parkingCheckButton.disabled = true;
+  parkingCheckButton.textContent = '판정 중…';
+  try {
+    const response = await fetch(`/api/parking-spots/${encodeURIComponent(spotId)}/check`, { cache: 'no-store' });
+    const result = await response.json();
+    if (!response.ok) {
+      renderParkingError(apiErrorMessage(result, '주차 판정 실패'));
+      return;
+    }
+    parkingConfirm.hidden = false;
+    parkingConfirm.className = `parking-confirm ${parkingLevel(result.observation)}`;
+    parkingConfirm.textContent = confirmLine(result.observation);
+    if (!parkingLive) renderParkingCheck(result.observation);
+  } catch {
+    renderParkingError('주차 판정 API에 연결할 수 없습니다.');
+  } finally {
+    parkingBusy = false;
+    parkingCheckButton.disabled = false;
+    parkingCheckButton.textContent = '확정 판정';
+  }
+}
+
+async function pollParkingLive() {
+  const spotId = parkingSpotInput.value.trim();
+  if (!parkingLive || parkingLiveBusy || !spotId || document.hidden || document.querySelector('#view-overview').hidden) return;
+  parkingLiveBusy = true;
+  try {
+    const response = await fetch(`/api/parking-spots/${encodeURIComponent(spotId)}/live`, { cache: 'no-store' });
+    const result = await response.json();
+    if (response.ok) renderParkingLive(result.live);
+    else {
+      parkingBanner.className = 'parking-banner unknown';
+      parkingStatus.textContent = '실시간 추적 없음';
+      parkingSummary.textContent = apiErrorMessage(result, '이 주차 위치는 실시간 추적 중이 아닙니다.');
+      setParkingSteps(null);
+    }
+  } catch {
+    parkingSummary.textContent = '실시간 상태를 가져오지 못했습니다.';
+  } finally {
+    parkingLiveBusy = false;
+  }
+}
+
+function updateParkingConfig(parking) {
+  parkingCameraId = parking?.camera_id || null;
+  parkingLive = Boolean(parking?.live_tracking);
+  if (parking?.spot_id && !parkingSpotInput.value) parkingSpotInput.value = parking.spot_id;
+  if (parkingCameraId) showParkingStream(parkingCameraId);
+  parkingLiveMode.classList.toggle('on', parkingLive);
+  parkingLiveMode.textContent = parkingLive ? '실시간 추적 중' : '실시간 추적 꺼짐 · 확정 판정만 가능';
+  if (!parkingCameraId && parkingStatus.textContent === '판정 전') {
+    parkingSummary.textContent = 'Pinky 도착 카메라가 설정되지 않았습니다 (CONTROL_STATION_PARKING_CAMERA).';
+  }
+}
+
+parkingCheckButton.addEventListener('click', checkParking);
+drawParkingMap(null, 'unknown');
+
 function renderTasks(tasks) {
   taskCount.textContent = `${tasks.length}개 작업`;
   if (!tasks.length) {
@@ -662,7 +999,8 @@ async function observeTaskTarget(taskId, pickRequest, button) {
     if (!camerasResponse.ok) throw new Error(camerasResult.error || '카메라 목록을 불러오지 못했습니다.');
     const observations = [];
     let recordedCount = 0;
-    for (const camera of camerasResult.cameras || []) {
+    // The shelf camera is display only; only these positions map to a Pick & Place observation step.
+    for (const camera of (camerasResult.cameras || []).filter((item) => ['HEAD', 'JOINT', 'FIXED'].includes(item.position))) {
       const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/target-observation`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -832,6 +1170,7 @@ async function refresh() {
       healthResponse.json(), robotsResponse.json(), camerasResponse.json(), armResponse.json(),
     ]);
     controlMode = health.mode;
+    updateParkingConfig(health.parking);
     serverStatus.className = 'server-status ok';
     serverStatus.innerHTML = `<span class="dot"></span> API 정상 · ${escapeHtml(controlModeLabels[health.mode] || health.mode)} 모드`;
     renderRobots(robotData.robots);
@@ -851,3 +1190,4 @@ refresh();
 refreshTasks();
 window.setInterval(refresh, 3000);
 window.setInterval(refreshTasks, 1000);
+window.setInterval(pollParkingLive, 500);

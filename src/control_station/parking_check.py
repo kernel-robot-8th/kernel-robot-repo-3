@@ -16,10 +16,11 @@ SCHEMA_VERSION = 2
 PIXEL_TRANSFORM_ID = "opencv-v4l2-capture-no-app-geometry-v1"
 # A pose that reprojects the four corners worse than this is treated as a failed estimate.
 MAX_REPROJECTION_ERROR_PX = 3.0
-# Fixed floor markers moving more than this means the frame is not the registered view. The ceiling
-# camera sometimes opens with the whole image wrapped sideways by ~96 px for the entire session.
-# Smaller shifts are the camera view drifting (~2 px seen over half an hour) and are subtracted.
-MAX_VIEW_SHIFT_PX = 3.0
+# Default for a spot's view_check.max_anchor_shift_px. Fixed markers moving more than this means the frame
+# is not the registered view: the ceiling camera sometimes opens with the whole image wrapped sideways by
+# ~96 px for the entire session. Smaller shifts are the camera mount drifting and are subtracted; that drift
+# reached 2-6 px within an hour on 2026-11-02, so the first 3 px limit blocked correctly parked Pinkys.
+MAX_VIEW_SHIFT_PX = 15.0
 # The marker side measured on the registered plane must stay this close to the printed side;
 # otherwise the marker is not on that plane (lifted, tilted or a different print).
 MAX_SIDE_ERROR_RATIO = 0.1
@@ -142,6 +143,7 @@ class ParkingSpot:
     tolerance: ParkingTolerance
     intrinsics: Intrinsics
     marker_forward_axis: str | None = None  # key of MARKER_FORWARD_AXES, or None when not recorded
+    max_view_shift_px: float = MAX_VIEW_SHIFT_PX
     # Corner detection differs slightly between OpenCV releases (~1 mm here between 4.6 and 4.14).
     registration_opencv_version: str | None = None
 
@@ -155,6 +157,7 @@ class FrameObservation:
     view_shift_px: float | None
     # Status to report when this unusable frame leaves nothing to judge; a skipped frame keeps earlier ones.
     skipped_status: ParkingStatus = ParkingStatus.NOT_FOUND
+    view_shift_xy_px: tuple[float, float] | None = None  # fixed-marker drift subtracted from this frame
 
 
 def sha256_of(path: Path) -> str:
@@ -199,6 +202,9 @@ def load_spot(path: Path, repository_root: Path) -> ParkingSpot:
     tolerance = ParkingTolerance(float(data["tolerance"]["position_mm"]), float(data["tolerance"]["yaw_deg"]))
     if not (tolerance.position_mm > 0 and tolerance.yaw_deg > 0):
         raise ParkingSpotError(f"허용 오차는 0보다 커야 합니다: {data['tolerance']}")
+    max_view_shift = float(data.get("view_check", {}).get("max_anchor_shift_px", MAX_VIEW_SHIFT_PX))
+    if not max_view_shift > 0:
+        raise ParkingSpotError(f"view_check.max_anchor_shift_px는 0보다 커야 합니다: {max_view_shift}")
     forward_axis = data.get("marker_forward_axis")
     if forward_axis is not None and forward_axis not in MARKER_FORWARD_AXES:
         raise ParkingSpotError(f"marker_forward_axis는 {sorted(MARKER_FORWARD_AXES)} 중 하나여야 합니다: {forward_axis!r}")
@@ -215,6 +221,7 @@ def load_spot(path: Path, repository_root: Path) -> ParkingSpot:
         tolerance=tolerance,
         intrinsics=intrinsics,
         marker_forward_axis=forward_axis,
+        max_view_shift_px=max_view_shift,
         registration_opencv_version=data.get("opencv_version"),
     )
 
@@ -320,11 +327,13 @@ def observe_frame(image: np.ndarray, spot: ParkingSpot) -> FrameObservation:
             None, None, "no fixed marker visible to verify the camera view", None, None, ParkingStatus.VIEW_UNVERIFIED
         )
     shift = float(np.linalg.norm(view_shift))
-    if shift > MAX_VIEW_SHIFT_PX:
+    vector = (float(view_shift[0]), float(view_shift[1]))
+    if shift > spot.max_view_shift_px:
         return FrameObservation(
-            None, None, f"fixed markers moved {shift:.1f} px from registration", ParkingStatus.VIEW_UNVERIFIED, shift
+            None, None, f"fixed markers moved {shift:.1f} px from registration", ParkingStatus.VIEW_UNVERIFIED, shift,
+            view_shift_xy_px=vector,
         )
-    return _observe_marker(found, spot, view_shift, shift)
+    return replace(_observe_marker(found, spot, view_shift, shift), view_shift_xy_px=vector)
 
 
 def _observe_marker(
