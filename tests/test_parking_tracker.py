@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -16,13 +17,14 @@ from control_station.parking_tracker import LiveState, ParkingTracker
 CAMERA = np.array([[980.0, 0.0, 320.0], [0.0, 980.0, 240.0], [0.0, 0.0, 1.0]])
 PINKY_AT = (420, 140)
 ANCHOR_AT = (80, 60)
+SECOND_ANCHOR_AT = (100, 380)  # two fixed markers, so a camera drift can be told from a moved marker
 
 
 def render(pinky: tuple[int, int] | None, anchor: bool = True) -> np.ndarray:
     dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
     draw = getattr(cv2.aruco, "generateImageMarker", None) or cv2.aruco.drawMarker
     canvas = np.full((480, 640), 255, dtype=np.uint8)
-    for marker_id, at in ((21, pinky), (1, ANCHOR_AT if anchor else None)):
+    for marker_id, at in ((21, pinky), (1, ANCHOR_AT if anchor else None), (2, SECOND_ANCHOR_AT if anchor else None)):
         if at is not None:
             canvas[at[1]:at[1] + 60, at[0]:at[0] + 60] = draw(dictionary, marker_id, 60)
     return cv2.cvtColor(canvas, cv2.COLOR_GRAY2BGR)
@@ -44,7 +46,7 @@ def write_spot(root: Path, tolerance_mm: float = 50.0) -> Path:
         "aruco_dictionary": "DICT_4X4_50", "marker_id": 21, "marker_side_mm": 70.0,
         "reference_pose_in_camera": {"rotation": plane.rotation.tolist(), "translation_mm": plane.translation_mm.tolist()},
         "reference_corners_px": found[21][0].tolist(),
-        "anchors": [{"marker_id": 1, "center_px": found[1][0].mean(axis=0).tolist()}],
+        "anchors": [{"marker_id": i, "center_px": found[i][0].mean(axis=0).tolist()} for i in (1, 2)],
         "view_check": {"mode": "FIXED_MARKERS"},
         "tolerance": {"position_mm": tolerance_mm, "yaw_deg": 10.0},
         "marker_forward_axis": "-x",
@@ -137,6 +139,49 @@ class ParkingTrackerTest(unittest.TestCase):
         stamp = path.stat().st_mtime + 10
         os.utime(path, (stamp, stamp))
         self.assertEqual(self.rig.run(render((PINKY_AT[0] + 60, PINKY_AT[1])), 6.5)["state"], LiveState.IN_POSITION.value)
+
+    def test_marker_missing_right_after_a_blocking_frame_does_not_crash(self) -> None:
+        # Seen -> same id twice (AMBIGUOUS clears the samples) -> marker hidden within a second used to raise IndexError.
+        self.rig.run(render(PINKY_AT), 0.5)
+        doubled = render(PINKY_AT) & render((PINKY_AT[0] + 120, PINKY_AT[1] + 120))
+        self.assertEqual(self.rig.run(doubled, 0.1)["state"], LiveState.AMBIGUOUS.value)
+        hidden = self.rig.run(render(None), 0.1)
+        self.assertEqual(hidden["state"], LiveState.NOT_IN_VIEW.value)
+        self.assertIsNone(hidden["image_overlay"]["marker_corners_px"])
+
+    def test_blocked_view_draws_no_marker_or_drift(self) -> None:
+        self.rig.run(render(PINKY_AT), 1.2)
+        wrapped = self.rig.run(np.roll(render(PINKY_AT), 96, axis=1), 0.1)
+        self.assertEqual(wrapped["state"], LiveState.VIEW_UNVERIFIED.value)
+        self.assertIsNone(wrapped["image_overlay"]["marker_corners_px"])
+        self.assertIsNone(wrapped["image_overlay"]["view_shift_xy_px"])
+
+    def test_software_fault_is_not_reported_as_a_camera_problem(self) -> None:
+        def broken(camera_id: str, after: int):  # type: ignore[no-untyped-def]
+            raise RuntimeError("boom")
+        self.rig.tracker._frames_after = broken
+        self.rig.now = 10.0
+        self.rig.tracker.start()  # the real loop, which must survive the fault and report it
+        try:
+            for _ in range(50):
+                if self.rig.tracker.snapshot()["state"] == LiveState.TRACKING_ERROR.value:
+                    break
+                time.sleep(0.02)
+        finally:
+            self.rig.tracker.close()
+        snapshot = self.rig.tracker.snapshot()
+        self.assertEqual(snapshot["state"], LiveState.TRACKING_ERROR.value)
+        self.assertIn("boom", snapshot["reason"])
+
+    def test_recalibrated_camera_invalidates_the_spot(self) -> None:
+        self.assertEqual(self.rig.run(render(PINKY_AT), 1.2)["state"], LiveState.IN_POSITION.value)
+        intrinsics = self.root / "ceiling_camera.json"
+        data = json.loads(intrinsics.read_text(encoding="utf-8"))
+        data["camera_matrix"][0][0] = 990.0
+        intrinsics.write_text(json.dumps(data), encoding="utf-8")
+        stamp = intrinsics.stat().st_mtime + 10
+        os.utime(intrinsics, (stamp, stamp))
+        self.assertEqual(self.rig.run(render(PINKY_AT), 5.5)["state"], LiveState.SPOT_INVALID.value)
 
     def test_spot_missing(self) -> None:
         (self.root / SPOT_DIR / "dock.json").unlink()

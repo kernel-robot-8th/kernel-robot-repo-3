@@ -21,6 +21,13 @@ MAX_REPROJECTION_ERROR_PX = 3.0
 # ~96 px for the entire session. Smaller shifts are the camera mount drifting and are subtracted; that drift
 # reached 2-6 px within an hour on 2026-11-02, so the first 3 px limit blocked correctly parked Pinkys.
 MAX_VIEW_SHIFT_PX = 15.0
+# The drift is subtracted only when the fixed markers agree on it. Visible markers whose shifts differ from
+# their median by more than this mean one of them was moved, not the camera (a tilted camera spread ~1.5 px).
+ANCHOR_AGREE_PX = 3.0
+# With a single visible fixed marker a moved marker and a drifted camera look the same, so only a shift up to
+# this much is subtracted; beyond it the view is unverified. A spot whose operator confirmed the marker is
+# fastened down (view_check.single_anchor_trusted) uses the full max_anchor_shift_px instead.
+SINGLE_ANCHOR_MAX_SHIFT_PX = 3.0
 # The marker side measured on the registered plane must stay this close to the printed side;
 # otherwise the marker is not on that plane (lifted, tilted or a different print).
 MAX_SIDE_ERROR_RATIO = 0.1
@@ -144,6 +151,7 @@ class ParkingSpot:
     intrinsics: Intrinsics
     marker_forward_axis: str | None = None  # key of MARKER_FORWARD_AXES, or None when not recorded
     max_view_shift_px: float = MAX_VIEW_SHIFT_PX
+    single_anchor_trusted: bool = False
     # Corner detection differs slightly between OpenCV releases (~1 mm here between 4.6 and 4.14).
     registration_opencv_version: str | None = None
 
@@ -203,15 +211,21 @@ def load_spot(path: Path, repository_root: Path) -> ParkingSpot:
     if not (tolerance.position_mm > 0 and tolerance.yaw_deg > 0):
         raise ParkingSpotError(f"허용 오차는 0보다 커야 합니다: {data['tolerance']}")
     max_view_shift = float(data.get("view_check", {}).get("max_anchor_shift_px", MAX_VIEW_SHIFT_PX))
+    single_anchor_trusted = data.get("view_check", {}).get("single_anchor_trusted", False)
+    if not isinstance(single_anchor_trusted, bool):
+        raise ParkingSpotError(f"view_check.single_anchor_trusted는 true/false여야 합니다: {single_anchor_trusted!r}")
     if not max_view_shift > 0:
         raise ParkingSpotError(f"view_check.max_anchor_shift_px는 0보다 커야 합니다: {max_view_shift}")
+    dictionary = data["aruco_dictionary"]
+    if not isinstance(dictionary, str) or not dictionary.startswith("DICT_") or not hasattr(cv2.aruco, dictionary):
+        raise ParkingSpotError(f"지원하지 않는 ArUco 사전입니다: {dictionary!r}")
     forward_axis = data.get("marker_forward_axis")
     if forward_axis is not None and forward_axis not in MARKER_FORWARD_AXES:
         raise ParkingSpotError(f"marker_forward_axis는 {sorted(MARKER_FORWARD_AXES)} 중 하나여야 합니다: {forward_axis!r}")
     return ParkingSpot(
         spot_id=data["spot_id"],
         camera_id=data["camera_id"],
-        dictionary=data["aruco_dictionary"],
+        dictionary=dictionary,
         marker_id=int(data["marker_id"]),
         marker_side_mm=float(data["marker_side_mm"]),
         plane=plane,
@@ -222,6 +236,7 @@ def load_spot(path: Path, repository_root: Path) -> ParkingSpot:
         intrinsics=intrinsics,
         marker_forward_axis=forward_axis,
         max_view_shift_px=max_view_shift,
+        single_anchor_trusted=single_anchor_trusted,
         registration_opencv_version=data.get("opencv_version"),
     )
 
@@ -307,13 +322,18 @@ def pinky_frame_offset(offset: PlanarOffset, forward_axis: str) -> tuple[float, 
     return offset.dx_mm * fx + offset.dy_mm * fy, -offset.dx_mm * fy + offset.dy_mm * fx
 
 
-def anchor_shift_px(anchors: dict[int, np.ndarray], found: dict[int, list[np.ndarray]]) -> np.ndarray | None:
-    """Median (x, y) pixel shift of the registered fixed markers visible exactly once, or None if none are."""
-    shifts = [
+def anchor_shifts(anchors: dict[int, np.ndarray], found: dict[int, list[np.ndarray]]) -> list[np.ndarray]:
+    """(x, y) pixel shift of each registered fixed marker that is visible exactly once."""
+    return [
         found[marker_id][0].mean(axis=0) - center
         for marker_id, center in anchors.items()
         if len(found.get(marker_id, [])) == 1
     ]
+
+
+def anchor_shift_px(anchors: dict[int, np.ndarray], found: dict[int, list[np.ndarray]]) -> np.ndarray | None:
+    """Median (x, y) pixel shift of the registered fixed markers visible exactly once, or None if none are."""
+    shifts = anchor_shifts(anchors, found)
     return np.median(shifts, axis=0) if shifts else None
 
 
@@ -321,17 +341,26 @@ def observe_frame(image: np.ndarray, spot: ParkingSpot) -> FrameObservation:
     found = detect_markers(image, spot.dictionary)
     if not spot.anchors:  # view check off: a wrapped or moved view goes unnoticed and shows up as an offset
         return _observe_marker(found, spot, np.zeros(2), None)
-    view_shift = anchor_shift_px(spot.anchors, found)
-    if view_shift is None:  # a small fixed marker drops out for single frames; skip it like a missed Pinky marker
+    shifts = anchor_shifts(spot.anchors, found)
+    if not shifts:  # a small fixed marker drops out for single frames; skip it like a missed Pinky marker
         return FrameObservation(
             None, None, "no fixed marker visible to verify the camera view", None, None, ParkingStatus.VIEW_UNVERIFIED
         )
+    view_shift = np.median(shifts, axis=0)
     shift = float(np.linalg.norm(view_shift))
     vector = (float(view_shift[0]), float(view_shift[1]))
+
+    def unverified(reason: str) -> FrameObservation:
+        return FrameObservation(None, None, reason, ParkingStatus.VIEW_UNVERIFIED, shift, view_shift_xy_px=vector)
+
     if shift > spot.max_view_shift_px:
-        return FrameObservation(
-            None, None, f"fixed markers moved {shift:.1f} px from registration", ParkingStatus.VIEW_UNVERIFIED, shift,
-            view_shift_xy_px=vector,
+        return unverified(f"fixed markers moved {shift:.1f} px from registration")
+    disagreement = max(float(np.linalg.norm(s - view_shift)) for s in shifts)
+    if disagreement > ANCHOR_AGREE_PX:
+        return unverified(f"fixed markers moved differently ({disagreement:.1f} px apart); one may have been moved")
+    if len(shifts) == 1 and not spot.single_anchor_trusted and shift > SINGLE_ANCHOR_MAX_SHIFT_PX:
+        return unverified(
+            f"only one fixed marker visible and it moved {shift:.1f} px; cannot tell camera drift from a moved marker"
         )
     return replace(_observe_marker(found, spot, view_shift, shift), view_shift_xy_px=vector)
 
@@ -348,7 +377,9 @@ def _observe_marker(
     current = project_to_plane(
         markers[0] - view_shift, spot.plane, spot.intrinsics.camera_matrix, spot.intrinsics.distortion
     )
-    if abs(current.side_mm - spot.marker_side_mm) > MAX_SIDE_ERROR_RATIO * spot.marker_side_mm:
+    finite = all(math.isfinite(v) for v in (current.x_mm, current.y_mm, current.yaw_deg, current.side_mm))
+    # Written as "not within" so a NaN side from a degenerate projection is rejected instead of passing.
+    if not finite or not abs(current.side_mm - spot.marker_side_mm) <= MAX_SIDE_ERROR_RATIO * spot.marker_side_mm:
         return FrameObservation(
             None, markers[0], f"marker side {current.side_mm:.1f} mm on the registered plane (printed {spot.marker_side_mm:g} mm)",
             None, shift,
@@ -370,6 +401,9 @@ def median_offset(offsets: list[PlanarOffset]) -> PlanarOffset:
 def judge(offset: PlanarOffset | None, tolerance: ParkingTolerance, reason: str = "") -> ParkingResult:
     if offset is None:
         return ParkingResult(ParkingStatus.NOT_FOUND, None, reason or "marker not visible")
+    if not all(math.isfinite(v) for v in (offset.dx_mm, offset.dy_mm, offset.dyaw_deg)):
+        # NaN compares false against every limit and would otherwise read as ARRIVED.
+        return ParkingResult(ParkingStatus.NOT_FOUND, None, "non-finite offset (marker projection failed)")
     position_ratio = offset.distance_mm / tolerance.position_mm
     yaw_ratio = abs(offset.dyaw_deg) / tolerance.yaw_deg
     worst = max(position_ratio, yaw_ratio)

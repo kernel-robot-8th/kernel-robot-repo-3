@@ -77,6 +77,7 @@ def image_overlay(spot: ParkingSpot, marker_corners_px, view_shift_xy_px=None) -
     keeps the picture consistent with the judgment, which subtracts the same drift.
     """
     return {
+        "marker_forward_axis": spot.marker_forward_axis,
         "view_shift_xy_px": None if view_shift_xy_px is None else _rounded_points([view_shift_xy_px])[0],
         "image_size_px": {"width": spot.intrinsics.width, "height": spot.intrinsics.height},
         "registered_corners_px": _rounded_points(spot.reference_corners_px),
@@ -141,9 +142,10 @@ def observe_parking(
             image = np.frombuffer(pixels, dtype=np.uint8).reshape(height, width, 3)
             observation = observe_frame(image, spot)
             result = judgment.add(observation)
-            if observation.corners is not None:
+            if observation.blocking_status is not None:  # earlier frames no longer describe this view
+                marker_corners_px = view_shift_xy_px = None
+            elif observation.offset is not None:  # only judged frames feed the picture
                 marker_corners_px = observation.corners
-            if observation.view_shift_xy_px is not None:
                 view_shift_xy_px = observation.view_shift_xy_px
             used.append(frame)
             if len(judgment.recent) >= MAX_FRAMES:

@@ -153,6 +153,9 @@ class ObserveParkingTest(unittest.TestCase):
         write_spot(self.root, self.image)
         observation = self.observe(FakeFeed(np.roll(self.image, 96, axis=1)))
         self.assertEqual(observation["status"], "VIEW_UNVERIFIED")
+        # The rejected drift must not be drawn as a correction, nor the rejected marker as the judged one.
+        self.assertIsNone(observation["image_overlay"]["view_shift_xy_px"])
+        self.assertIsNone(observation["image_overlay"]["marker_corners_px"])
         self.assertAlmostEqual(observation["view_shift_px"], 96.0, delta=1.0)  # type: ignore[arg-type]
         self.assertIsNone(observation["deviation_level"])
 

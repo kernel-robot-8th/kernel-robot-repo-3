@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 
 from control_station.parking_check import (
+    ParkingResult,
     ParkingSpot,
     ParkingSpotError,
     ParkingStatus,
@@ -51,6 +52,7 @@ class LiveState(str, Enum):
     VIEW_UNVERIFIED = "VIEW_UNVERIFIED"
     CAMERA_UNAVAILABLE = "CAMERA_UNAVAILABLE"
     SPOT_INVALID = "SPOT_INVALID"
+    TRACKING_ERROR = "TRACKING_ERROR"  # a software fault in the tracker, not a camera or registration problem
 
 
 class ParkingTracker:
@@ -69,7 +71,7 @@ class ParkingTracker:
         self._root = repository_root
         self._clock = clock
         self._spot: ParkingSpot | None = None
-        self._spot_mtime: float | None = None
+        self._source_mtimes: tuple[float, float | None] | None = None
         self._spot_checked = -SPOT_RELOAD_S
         self._last_sequence = 0
         self._started_at: float | None = None
@@ -102,7 +104,8 @@ class ParkingTracker:
             try:
                 self.tick()
             except Exception as exc:  # keep tracking; one bad frame must not stop the display
-                self._publish(self._state(LiveState.CAMERA_UNAVAILABLE, f"추적 오류: {exc}"))
+                self._reset_samples()
+                self._publish(self._state(LiveState.TRACKING_ERROR, f"추적 오류: {exc!r}"))
             self._closed.wait(TRACK_INTERVAL_S)
 
     def tick(self) -> None:
@@ -128,31 +131,31 @@ class ParkingTracker:
             self._publish(self._state(LiveState.CAMERA_UNAVAILABLE, f"프레임 해상도 {width}x{height}가 보정 해상도와 다릅니다"))
             return
         observation = observe_frame(np.frombuffer(pixels, dtype=np.uint8).reshape(height, width, 3), spot)
-        if observation.corners is not None:
-            self._marker_corners = observation.corners
-        self._view_shift_xy = observation.view_shift_xy_px
         if observation.blocking_status is not None:
-            self._samples.clear()
+            # Earlier frames no longer describe the current view, so nothing from them may be judged or drawn.
+            self._reset_samples()
             state = LiveState.AMBIGUOUS if observation.blocking_status == ParkingStatus.AMBIGUOUS else LiveState.VIEW_UNVERIFIED
             self._publish(self._state(state, observation.reason, observation=observation, sequence=sequence, captured_at=captured_at))
             return
-        if observation.offset is not None:
+        if observation.offset is not None:  # only judged frames feed the picture
             self._last_seen = now
             self._samples.append((now, observation.offset))
+            self._marker_corners = observation.corners
+            self._view_shift_xy = observation.view_shift_xy_px
         while self._samples and now - self._samples[0][0] > STILL_WINDOW_S:
             self._samples.popleft()
-        if self._last_seen is None or now - self._last_seen > LOST_AFTER_S:
-            self._samples.clear()
-            self._marker_corners = None
+        if not self._samples or self._last_seen is None or now - self._last_seen > LOST_AFTER_S:
+            self._reset_samples()
             state = LiveState.VIEW_UNVERIFIED if observation.skipped_status == ParkingStatus.VIEW_UNVERIFIED else LiveState.NOT_IN_VIEW
             self._publish(self._state(state, observation.reason, sequence=sequence, captured_at=captured_at))
             return
         offsets = [offset for _, offset in self._samples]
+        spread = _spread(offsets)
         still = (
             len(offsets) >= MIN_STILL_FRAMES
             and now - self._samples[0][0] >= 0.8 * STILL_WINDOW_S
-            and max(o.distance_mm for o in _spread(offsets)) <= STILL_POSITION_MM
-            and max(abs(o.dyaw_deg) for o in _spread(offsets)) <= STILL_YAW_DEG
+            and max(o.distance_mm for o in spread) <= STILL_POSITION_MM
+            and max(abs(o.dyaw_deg) for o in spread) <= STILL_YAW_DEG
         )
         if still:
             result = judge(median_offset(offsets), spot.tolerance)
@@ -164,17 +167,31 @@ class ParkingTracker:
         result = replace(result, view_shift_px=observation.view_shift_px)
         self._publish(self._state(state, reason, judged=result, sequence=sequence, captured_at=captured_at))
 
+    def _reset_samples(self) -> None:
+        self._samples.clear()
+        self._last_seen = None
+        self._marker_corners = None
+        self._view_shift_xy = None
+
+    def _mtimes(self) -> tuple[float, float | None]:
+        intrinsics = None if self._spot is None else self._spot.intrinsics.path
+        return self._path.stat().st_mtime, None if intrinsics is None else intrinsics.stat().st_mtime
+
     def _reload_spot(self, now: float) -> bool:
-        if self._spot is not None and now - self._spot_checked < SPOT_RELOAD_S:
-            return True
+        if now - self._spot_checked < SPOT_RELOAD_S:  # also while invalid, so a bad file is not re-read every tick
+            return self._spot is not None
         self._spot_checked = now
         try:
-            mtime = self._path.stat().st_mtime
-            if self._spot is None or mtime != self._spot_mtime:  # re-registered or edited tolerance
-                self._spot, self._spot_mtime = load_spot(self._path, self._root), mtime
-                self._samples.clear()
+            # A re-registration, an edited tolerance or a recalibrated camera all reload the spot. A changed
+            # calibration then fails the SHA-256 check in load_spot, as the one-shot check does.
+            if self._spot is None or self._mtimes() != self._source_mtimes:
+                self._spot = load_spot(self._path, self._root)
+                self._source_mtimes = self._mtimes()
+                self._reset_samples()
         except (ParkingSpotError, ValueError, KeyError, TypeError, OSError) as exc:
             self._spot = None
+            self._source_mtimes = None
+            self._reset_samples()
             self._publish(self._state(LiveState.SPOT_INVALID, f"주차 위치 파일을 쓸 수 없습니다: {exc}"))
             return False
         return True
@@ -193,14 +210,10 @@ class ParkingTracker:
             "usable_for_robot_control": False,
         }
         if spot is not None:
-            if judged is not None:
-                payload.update(judgment_fields(judged, spot))
-            else:
-                payload.update(offset=None, position_ratio=None, yaw_ratio=None, deviation_level=None,
-                               tolerance={"position_mm": spot.tolerance.position_mm, "yaw_deg": spot.tolerance.yaw_deg},
-                               view_check="ON" if spot.anchors else "OFF",
-                               view_shift_px=None if observation is None or observation.view_shift_px is None
-                               else round(observation.view_shift_px, 1))
+            if judged is None:  # same contract fields as a judged state, with no offset
+                shift = None if observation is None else observation.view_shift_px
+                judged = ParkingResult(ParkingStatus.NOT_FOUND, None, reason, shift)
+            payload.update(judgment_fields(judged, spot))
             payload["image_overlay"] = image_overlay(spot, self._marker_corners, self._view_shift_xy)
         return payload
 

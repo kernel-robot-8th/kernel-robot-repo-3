@@ -159,6 +159,8 @@ def build_registration(
         raise RegistrationRejected(f"moved while registering ({jitter_mm:.1f} mm / {jitter_deg:.1f} deg) - keep Pinky still")
     anchors = {} if args.no_anchors else pick_anchors(collected, args.marker_id, args.anchor_ids)
     view_check = {"mode": "OFF"} if args.no_anchors else {"mode": "FIXED_MARKERS", "max_anchor_shift_px": MAX_VIEW_SHIFT_PX}
+    if getattr(args, "trust_single_anchor", False):  # the operator confirmed the one fixed marker is fastened down
+        view_check["single_anchor_trusted"] = True
     return {
         "schema_version": SCHEMA_VERSION,
         "spot_id": args.spot_id,
@@ -342,6 +344,9 @@ def main() -> int:
                         help="register: 시야 확인에 쓸 바닥 고정 마커 ID (예: 1,3,4). 기본은 등록 중 고정돼 보인 모든 다른 마커")
     parser.add_argument("--marker-forward-axis", choices=sorted(MARKER_FORWARD_AXES),
                         help="register: Pinky 앞쪽을 향하는 마커 축 (+x: 마커 오른쪽 변, +y: 윗변). 주면 판정에 Pinky 기준 앞/왼쪽 mm를 함께 출력")
+    parser.add_argument("--trust-single-anchor", action="store_true",
+                        help="register: 고정 마커가 하나뿐이어도 바닥에 고정돼 있음을 확인했으면, 그 마커 이동을 카메라 흐름으로 보고 "
+                             "기준(15 px)까지 보정 (없으면 3 px까지만)")
     parser.add_argument("--no-anchors", action="store_true",
                         help="register: 고정 마커 없이 Pinky 마커만으로 판정 (영상 밀림·카메라 이동을 감지하지 않음)")
     parser.add_argument("--tolerance-mm", type=float, help="허용 위치 오차 (register 기본 30)")
@@ -360,6 +365,8 @@ def main() -> int:
             parser.error("--anchor-ids에 Pinky 마커 ID를 넣을 수 없습니다")
         if args.anchor_ids and args.no_anchors:
             parser.error("--anchor-ids와 --no-anchors는 함께 쓸 수 없습니다")
+        if args.trust_single_anchor and args.no_anchors:
+            parser.error("--trust-single-anchor와 --no-anchors는 함께 쓸 수 없습니다")
         args.tolerance_mm = 30.0 if args.tolerance_mm is None else args.tolerance_mm
         args.tolerance_deg = 5.0 if args.tolerance_deg is None else args.tolerance_deg
         return register(args)

@@ -191,6 +191,30 @@ class ObserveFrameTest(unittest.TestCase):
         self.assertAlmostEqual(observation.offset.distance_mm, 0.0, delta=0.5)
         np.testing.assert_allclose(observation.view_shift_xy_px, (-4.0, 10.0), atol=0.3)
 
+    def test_one_moved_fixed_marker_is_not_taken_for_camera_drift(self) -> None:
+        # Marker 3 kicked 10 px while marker 1 stayed: subtracting the median would shift Pinky by a wrong amount.
+        kicked = render_scene({**SCENE, 3: (SCENE[3][0] + 10, SCENE[3][1])})
+        observation = observe_frame(kicked, self.spot)
+        self.assertEqual(observation.blocking_status, ParkingStatus.VIEW_UNVERIFIED)
+        self.assertIn("moved differently", observation.reason)
+
+    def test_single_fixed_marker_allows_only_a_small_drift(self) -> None:
+        only_one = replace(self.spot, anchors={1: self.spot.anchors[1]})
+        small = observe_frame(np.roll(render_scene(SCENE), 2, axis=0), only_one)
+        self.assertIsNone(small.blocking_status)
+        self.assertIsNotNone(small.offset)
+        large = observe_frame(np.roll(render_scene(SCENE), 10, axis=0), only_one)
+        self.assertEqual(large.blocking_status, ParkingStatus.VIEW_UNVERIFIED)
+        self.assertIn("only one fixed marker", large.reason)
+
+    def test_trusted_single_fixed_marker_takes_the_full_drift(self) -> None:
+        # pinky_dock_1: marker 1 is taped to the board, so its shift is the camera drifting.
+        trusted = replace(self.spot, anchors={1: self.spot.anchors[1]}, single_anchor_trusted=True)
+        observation = observe_frame(np.roll(render_scene(SCENE), 10, axis=0), trusted)
+        self.assertIsNone(observation.blocking_status)
+        assert observation.offset is not None
+        self.assertAlmostEqual(observation.offset.distance_mm, 0.0, delta=0.5)
+
     def test_spot_limit_is_used(self) -> None:
         observation = observe_frame(np.roll(render_scene(SCENE), 10, axis=0), replace(self.spot, max_view_shift_px=3.0))
         self.assertEqual(observation.blocking_status, ParkingStatus.VIEW_UNVERIFIED)
@@ -271,6 +295,13 @@ class JudgeTest(unittest.TestCase):
         result = judge(PlanarOffset(15.0, 15.0, 0.0), TOLERANCE)
         self.assertEqual(result.status, ParkingStatus.MISALIGNED)
         self.assertIn("position", result.reason)
+
+    def test_non_finite_offset_is_never_arrived(self) -> None:
+        # NaN compares false against every limit; it must not read as ARRIVED.
+        for offset in (PlanarOffset(float("nan"), 0.0, 0.0), PlanarOffset(0.0, 0.0, float("inf"))):
+            result = judge(offset, TOLERANCE)
+            self.assertEqual(result.status, ParkingStatus.NOT_FOUND)
+            self.assertIsNone(result.deviation_level)
 
     def test_misaligned_yaw(self) -> None:
         result = judge(PlanarOffset(0.0, 0.0, -11.0), TOLERANCE)
@@ -397,6 +428,12 @@ class LoadSpotTest(unittest.TestCase):
             np.testing.assert_allclose(spot.anchors[3], [500.0, 250.0])
             self.assertEqual(spot.tolerance, ParkingTolerance(20.0, 2.0))
             self.assertEqual(spot.max_view_shift_px, 3.0)
+            self.assertFalse(spot.single_anchor_trusted)
+            trusted = write_spot(Path(directory), anchors, {"mode": "FIXED_MARKERS", "single_anchor_trusted": True})
+            self.assertTrue(load_spot(trusted, Path(directory)).single_anchor_trusted)
+            bad = write_spot(Path(directory), anchors, {"mode": "FIXED_MARKERS", "single_anchor_trusted": "yes"})
+            with self.assertRaisesRegex(ParkingSpotError, "single_anchor_trusted"):
+                load_spot(bad, Path(directory))
             default = load_spot(write_spot(Path(directory), anchors, {"mode": "FIXED_MARKERS"}), Path(directory))
             self.assertEqual(default.max_view_shift_px, 15.0)
 
@@ -414,6 +451,13 @@ class LoadSpotTest(unittest.TestCase):
             self.assertEqual(spot.marker_forward_axis, "+x")
             with self.assertRaisesRegex(ParkingSpotError, "marker_forward_axis"):
                 load_spot(write_spot(root, [], {"mode": "OFF"}, marker_forward_axis="front"), root)
+
+    def test_unknown_aruco_dictionary_is_rejected_at_load(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = write_spot(root, [], {"mode": "OFF"}, aruco_dictionary="DICT_NOT_A_REAL_ONE")
+            with self.assertRaisesRegex(ParkingSpotError, "ArUco"):
+                load_spot(path, root)
 
     def test_tolerance_must_be_positive(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

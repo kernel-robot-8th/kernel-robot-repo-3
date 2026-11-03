@@ -217,7 +217,7 @@ Pinky가 멈춘 뒤 천장 카메라로 "등록된 주차 위치와 얼마나 �
 
 | 필드 | 의미 |
 |---|---|
-| `status` | `ARRIVED`, `MISALIGNED`, `NOT_FOUND`, `AMBIGUOUS`, `VIEW_UNVERIFIED` 중 하나. 의미는 CLI와 같음 |
+| `status` | `ARRIVED`, `MISALIGNED`, `NOT_FOUND`, `AMBIGUOUS`, `VIEW_UNVERIFIED` 중 하나. 의미는 CLI와 같음. 오프셋이 유한한 값이 아니면(측정 실패) `NOT_FOUND`로 두고 도착으로 보지 않음 |
 | `offset` | 등록된 주차 마커 축 기준 차이. `dx_mm`는 마커 오른쪽 변 방향, `dy_mm`는 윗변 방향, `dyaw_deg`는 카메라에서 볼 때 반시계가 +. 판정 불가 상태에서는 `null` |
 | `forward_mm`, `left_mm` | Pinky 기준 앞(+)·왼쪽(+) 차이. 등록 파일에 마커 장착 방향 `marker_forward_axis`(`+x`/`-x`/`+y`/`-y`, 마커 면이 위를 향한다고 가정)가 있을 때만 포함 |
 | `position_ratio`, `yaw_ratio` | "얼마나 다른가"를 허용 오차 대비 비율로 나타낸 값(`distance_mm / position_mm`, `abs(dyaw_deg) / yaw_deg`). 1 이하면 범위 안. 허용 오차를 바꿔도 화면과 이력에서 어긋난 정도를 같은 척도로 비교하기 위한 값 |
@@ -240,7 +240,7 @@ Pinky가 멈춘 뒤 천장 카메라로 "등록된 주차 위치와 얼마나 �
    | `NOT_FOUND`, `AMBIGUOUS`, `VIEW_UNVERIFIED` | 판정 불가입니다. 팔 단계를 시작하지 않고, "어긋남"과 구분해 "확인 못 함"으로 표시합니다. |
 
 3. **관측을 시작하지 못한 경우**는 관측 객체 대신 오류로 반환하고 task event를 남기지 않습니다. `spot_id` 형식이 틀리면 `PARKING_SPOT_ID_INVALID`(400), 등록 파일이 없으면 `PARKING_SPOT_NOT_FOUND`(404), schema·보정 SHA-256이 맞지 않으면 `PARKING_SPOT_INVALID`(409), 주차 카메라가 설정되지 않았거나 feed가 없거나 3초 안에 새 프레임이 없거나 해상도가 보정과 다르면 `PARKING_CAMERA_UNAVAILABLE`(503)입니다. `CONTROL_STATION_PARKING_SOURCE=ros`로 C++ 판정 노드에 물을 때는 노드에 연결하지 못하면 `PARKING_NODE_UNAVAILABLE`(503), 6초 안에 응답이 없으면 `PARKING_NODE_TIMEOUT`(503)이고 자동 재시도는 없습니다. 이때 관측 객체에는 `judgment_source`와 노드가 구독한 영상 토픽 `node_image_topic`이 붙고(`feed_camera_id`는 같은 카메라를 보여 주는 관제 feed, 기본 `head_camera`), `/live`는 노드 상태가 없거나 2초 넘게 갱신되지 않으면 `NODE_UNAVAILABLE`입니다.
-4. **화면 표시용 실시간 상태.** `GET /api/parking-spots/{spot_id}/live`는 같은 판정 방식으로 최신 프레임을 계속 보며 `NOT_IN_VIEW`/`MOVING`/`IN_POSITION`/`OFF_POSITION`/판정 불가 상태와 같은 오프셋·등급 필드, `since`(그 상태가 시작된 시각), `display_only: true`를 반환합니다. 이 값은 팔 단계 진행 조건으로 쓰지 않습니다.
+4. **화면 표시용 실시간 상태.** `GET /api/parking-spots/{spot_id}/live`는 같은 판정 방식으로 최신 프레임을 계속 보며 `NOT_IN_VIEW`/`MOVING`/`IN_POSITION`/`OFF_POSITION`/판정 불가(`AMBIGUOUS`, `VIEW_UNVERIFIED`, `CAMERA_UNAVAILABLE`, `SPOT_INVALID`, 추적 코드 오류 `TRACKING_ERROR`) 상태와 같은 오프셋·등급 필드, `since`(그 상태가 시작된 시각), `display_only: true`를 반환합니다. 이 값은 팔 단계 진행 조건으로 쓰지 않습니다.
 5. **작업 이력 연결.** 작업 실행 중의 관측은 `PARKING_OBSERVED` event로 task/step/robot ID와 함께 남깁니다. 이 event는 task·step 상태를 바꾸지 않습니다.
 6. **방향 표현.** `dx`/`dy`는 마커 축 기준입니다. 등록 파일에 `marker_forward_axis`가 있으면 Pinky 기준 `forward_mm`/`left_mm`를 함께 냅니다. 현재 `pinky_dock_1`은 `-x`(마커 왼쪽 변이 Pinky 앞쪽)로 기록돼 있습니다. 2026-11-02에 Pinky를 손으로 앞으로 약 5 cm 밀어, 마커 -x 방향으로 53.7 mm 이동한 것을 확인하고 정했습니다.
 7. 이 관측은 `usable_for_robot_control: false`입니다. 좌표로 Pinky를 보정 이동시키는 명령은 만들지 않습니다.
