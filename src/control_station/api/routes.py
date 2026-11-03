@@ -1,9 +1,4 @@
-"""Route tables: which handler answers each request, in match order.
-
-The matchers keep the path tests the routes have always used (prefix/suffix checks, not templates), so the same
-paths reach the same handlers. POST routes that browsers can trigger reject cross-origin requests; some answer with
-the error_code envelope and older ones with a plain {"error"} body, as before.
-"""
+"""GET/POST 경로 표 (위에서부터 순서대로 판별)"""
 
 from __future__ import annotations
 
@@ -22,6 +17,7 @@ Matcher = Callable[[str, list[str]], bool]
 
 @dataclass(frozen=True)
 class Route:
+    """경로 하나: 판별 조건, 처리 함수, 다른 출처 거부, 본문 읽기 여부"""
     matches: Matcher
     handle: Handler
     cross_origin_message: str | None = None  # reject requests from another origin with this message
@@ -30,14 +26,17 @@ class Route:
 
 
 def _path(expected: str) -> Matcher:
+    """경로가 정확히 같은지"""
     return lambda route, parts: route == expected
 
 
 def _prefix_suffix(prefix: str, suffix: str, contains: str = "") -> Matcher:
+    """경로의 앞·뒤(와 중간 포함 문자열)로 판별"""
     return lambda route, parts: route.startswith(prefix) and contains in route and route.endswith(suffix)
 
 
 def _task_action(*actions: str) -> Matcher:
+    """작업 동작 경로 /api/tasks/{task_id}/{동작}"""
     return lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "tasks"] and parts[3] in actions
 
 
@@ -91,4 +90,5 @@ POST_ROUTES: tuple[Route, ...] = (
 
 
 def find(routes: tuple[Route, ...], route: str, parts: list[str]) -> Route | None:
+    """요청에 맞는 경로 찾기"""
     return next((entry for entry in routes if entry.matches(route, parts)), None)

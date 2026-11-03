@@ -1,1 +1,1 @@
-"""HTTP route handlers of the control station, grouped by area; app.py dispatches to them through routes.py."""
+"""관제 HTTP 경로 처리 (영역별 모듈)"""

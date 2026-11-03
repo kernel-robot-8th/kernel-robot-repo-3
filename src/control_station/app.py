@@ -1,7 +1,4 @@
-"""HTTP API and small status page for the robot control station.
-
-ControlStationHandler only dispatches: route matching lives in api/routes.py and the handlers in the api/ modules.
-"""
+"""관제 HTTP 서버: 서버 조립(main)과 요청 분배"""
 
 from __future__ import annotations
 
@@ -36,11 +33,13 @@ WEB_DIR = Path(__file__).with_name("web")
 
 
 class ControlStationServer(ThreadingHTTPServer):
+    """관제 HTTP 서버 (요청마다 스레드)"""
     daemon_threads = True
     allow_reuse_address = True
 
 
 class ControlStationHandler(SimpleHTTPRequestHandler):
+    """요청을 api/routes.py 경로 표대로 처리 함수에 넘김"""
     server_version = "ControlStation/0.2"
 
     # Kept on the handler for callers that classify observations directly.
@@ -55,6 +54,7 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
         super().log_message(format, *args)
 
     def _json(self, status: int, body: dict[str, Any]) -> None:
+        """JSON 응답"""
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -70,6 +70,7 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
         message: str,
         **details: object,
     ) -> None:
+        """오류 응답 (error_code, message, error)"""
         body: dict[str, Any] = {
             "error_code": error_code,
             "message": message,
@@ -79,6 +80,7 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
         self._json(status, body)
 
     def _image(self, payload: bytes) -> None:
+        """PNG 응답"""
         self.send_response(200)
         self.send_header("Content-Type", "image/png")
         self.send_header("Content-Length", str(len(payload)))
@@ -88,6 +90,7 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
         self.wfile.write(payload)
 
     def do_GET(self) -> None:
+        """GET 분배, 맞는 경로가 없으면 웹 화면 파일"""
         route = urlsplit(self.path).path
         parts = route.strip("/").split("/")
         entry = routes.find(routes.GET_ROUTES, route, parts)
@@ -102,6 +105,7 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self) -> None:
+        """POST 분배: 다른 출처 거부, JSON 본문 읽기"""
         route = urlsplit(self.path).path
         parts = route.strip("/").split("/")
         entry = routes.find(routes.POST_ROUTES, route, parts)
@@ -123,6 +127,7 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
 
 
 def main() -> None:
+    """관제 서버 실행"""
     mode = os.environ.get("CONTROL_STATION_MODE", "mock").strip().lower()
     provider = make_status_provider(mode)
     task_store = TaskStore()

@@ -1,4 +1,4 @@
-"""Arm teleoperation process control, the OMX command queue and coordinate target drafts."""
+"""팔 텔레오퍼레이션, OMX 명령 큐, 선반 칸, 좌표 초안"""
 
 from __future__ import annotations
 
@@ -13,11 +13,12 @@ if TYPE_CHECKING:
 
 
 def get_status(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
+    """팔 텔레오퍼레이션 상태"""
     h._json(200, {"arm": h.app.arm_supervisor.snapshot()})
 
 
 def post_teleop(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
-    """POST /api/arm/start|stop: the configured teleoperation process (no body read)."""
+    """팔 텔레오퍼레이션 시작·정지"""
     try:
         state = h.app.arm_supervisor.start() if route == "/api/arm/start" else h.app.arm_supervisor.stop()
     except RuntimeError as exc:
@@ -27,10 +28,12 @@ def post_teleop(h: ControlStationHandler, route: str, parts: list[str], body: No
 
 
 def get_commands(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
+    """OMX 명령 목록"""
     h._json(200, h.app.arm_commands.list_recent())
 
 
 def get_command(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
+    """OMX 명령 하나 조회"""
     command_id = route.removeprefix("/api/arm/commands/")
     try:
         h._json(200, {"command": h.app.arm_commands.get(command_id)})
@@ -39,6 +42,7 @@ def get_command(h: ControlStationHandler, route: str, parts: list[str], body: No
 
 
 def get_shelf_slots(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
+    """선반 칸 정의"""
     slot_map = h.app.arm_commands.slot_map
     if slot_map is None:
         h._json_error(
@@ -51,7 +55,7 @@ def get_shelf_slots(h: ControlStationHandler, route: str, parts: list[str], body
 
 
 def get_next_command(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
-    """Worker long-poll: 200 with one frozen command, or 204 when none arrived in time."""
+    """워커가 다음 명령 받기 (기다리다 없으면 204)"""
     robot_id = route.split("/")[3]
     query = parse_qs(urlsplit(h.path).query)
     try:
@@ -72,7 +76,7 @@ def get_next_command(h: ControlStationHandler, route: str, parts: list[str], bod
 
 
 def post_command(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:
-    """POST /api/arm/commands and /api/arm/commands/{id}/events|cancel|clear-unknown."""
+    """OMX 명령 등록·진행 이벤트·취소·불명 해제"""
     store = h.app.arm_commands
     try:
         if len(parts) == 3:
@@ -97,6 +101,7 @@ def post_command(h: ControlStationHandler, route: str, parts: list[str], body: d
 
 
 def post_coordinate_draft(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:
+    """좌표 목표 초안 저장"""
     try:
         draft = h.app.coordinate_target_drafts.create(body)
     except CoordinateDraftError as exc:

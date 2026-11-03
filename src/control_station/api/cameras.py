@@ -1,4 +1,4 @@
-"""Camera list, MJPEG streams and the on-demand camera target observation (observation only)."""
+"""카메라 목록, 영상 스트림, 카메라 대상 관측"""
 
 from __future__ import annotations
 
@@ -15,12 +15,13 @@ if TYPE_CHECKING:
 
 
 def get_cameras(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
+    """카메라 목록"""
     zones = h.app.shelf_slot_zones
     h._json(200, {"cameras": [zones.annotate(camera.to_dict()) for camera in h.app.camera_manager.snapshots()]})
 
 
 def get_camera_target_observation(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
-    """GET /api/cameras/{camera_id}/target-observation?class_name=&color=&shelf_level="""
+    """카메라 대상 관측 (기록 안 함)"""
     camera_id = route.removeprefix("/api/cameras/").removesuffix("/target-observation")
     query = parse_qs(urlsplit(h.path).query, keep_blank_values=True)
     class_names = query.get("class_name", [])
@@ -64,7 +65,7 @@ def get_camera_target_observation(h: ControlStationHandler, route: str, parts: l
 
 
 def get_stream(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
-    """GET /streams/{camera_id}.mjpg: the camera's latest JPEG frames as multipart MJPEG until the client leaves."""
+    """카메라 MJPEG 스트림"""
     camera_id = route.removeprefix("/streams/").removesuffix(".mjpg")
     manager = h.app.camera_manager
     known_ids = {camera.id for camera in manager.snapshots()}

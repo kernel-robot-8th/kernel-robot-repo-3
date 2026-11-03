@@ -1,4 +1,4 @@
-"""Server health, robot status and Pinky parking routes (parking is judged by the C++ node, see parking_ros.py)."""
+"""서버 상태, 로봇 상태, 주차 판정"""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 
 def get_health(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
+    """서버 상태와 주차 설정"""
     h._json(
         200,
         {
@@ -27,11 +28,12 @@ def get_health(h: ControlStationHandler, route: str, parts: list[str], body: Non
 
 
 def get_robots(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
+    """로봇 상태"""
     h._json(200, {"robots": h.app.robot_provider.snapshots()})
 
 
 def get_parking_live(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
-    """Display-only live state of the configured spot; never an arm-step condition."""
+    """주차 실시간 상태 (화면 표시용)"""
     spot_id = route.removeprefix("/api/parking-spots/").removesuffix("/live")
     tracker = h.app.parking_tracker
     if tracker is None or tracker.spot_id != spot_id:
@@ -45,7 +47,7 @@ def get_parking_live(h: ControlStationHandler, route: str, parts: list[str], bod
 
 
 def get_parking_check(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
-    """Confirmed judgment from frames captured after this request."""
+    """주차 확정 판정 (요청 이후 프레임)"""
     spot_id = route.removeprefix("/api/parking-spots/").removesuffix("/check")
     if h.app.parking_check is None:
         h._json_error(

@@ -1,4 +1,4 @@
-"""Request helpers and validation shared by the route modules."""
+"""경로 처리 공통: 다른 출처 확인, JSON 본문, 집기 조건·관측 프레임 검증"""
 
 from __future__ import annotations
 
@@ -22,12 +22,13 @@ SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 def is_cross_origin(handler: ControlStationHandler) -> bool:
-    """Browsers send Origin; a plain HTTP client such as the arm worker sends none."""
+    """다른 출처(브라우저) 요청인지"""
     origin = handler.headers.get("Origin")
     return bool(origin) and urlsplit(origin).netloc != handler.headers.get("Host")
 
 
 def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """중복 키를 거부하는 JSON 객체 읽기"""
     value: dict[str, Any] = {}
     for key, item in pairs:
         if key in value:
@@ -37,7 +38,7 @@ def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def read_json_object(handler: ControlStationHandler) -> dict[str, Any] | None:
-    """The request body as a JSON object, or None after answering why it was rejected."""
+    """요청 본문을 JSON 객체로 읽기, 실패하면 오류 응답 후 None"""
     if handler.headers.get("Content-Type", "").split(";", 1)[0].strip() != "application/json":
         handler._json(415, {"error": "Content-Type must be application/json"})
         return None
@@ -61,6 +62,7 @@ def read_json_object(handler: ControlStationHandler) -> dict[str, Any] | None:
 
 
 def validate_pick_request(value: object) -> dict[str, object] | None:
+    """집기 조건(종류, 색, 선반 층) 검증"""
     if value is None:
         return None
     if not isinstance(value, dict):
@@ -106,7 +108,7 @@ def validate_pick_request(value: object) -> dict[str, object] | None:
 
 
 def validate_stored_pick_request(value: object) -> dict[str, object]:
-    """Reject persisted task conditions that do not match the current API contract."""
+    """저장된 집기 조건 검증"""
     try:
         validated = validate_pick_request(value)
     except ValueError as exc:
@@ -117,7 +119,7 @@ def validate_stored_pick_request(value: object) -> dict[str, object]:
 
 
 def pending_pick_step_id(task: dict[str, Any], step_type: str) -> str | None:
-    """Return the unique pending workflow step used to scope review evidence."""
+    """대기 중인 작업 단계 ID"""
     steps = task.get("steps")
     if not isinstance(steps, list):
         return None
@@ -133,10 +135,7 @@ def pending_pick_step_id(task: dict[str, Any], step_type: str) -> str | None:
 
 
 def read_observation_png(task_id: str, file_name: str) -> bytes | None:
-    """Bytes of .control-station/observations/<task_id>/<file_name> (a .png within the size limit).
-
-    None when any part of the path is a symlink or resolves elsewhere, the file is missing, too large or unreadable.
-    """
+    """저장된 관측 PNG 안전하게 읽기"""
     try:
         control_directory = REPOSITORY_ROOT / ".control-station"
         artifact_root = control_directory / "observations"
@@ -174,7 +173,7 @@ def verified_observation_frame(
     frame_width: object,
     frame_height: object,
 ) -> bool:
-    """The saved observation frame exists where it should and still has its recorded hash and size."""
+    """저장된 관측 프레임 확인 (경로, 해시, 크기)"""
     if not TASK_ID.fullmatch(task_id) or not isinstance(artifact, dict):
         return False
     relative_path = artifact.get("path")

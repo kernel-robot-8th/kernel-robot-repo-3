@@ -1,4 +1,4 @@
-"""Task list, creation, mock execution control and pick-command preview."""
+"""작업 목록·생성·시작·취소, 명령 해석"""
 
 from __future__ import annotations
 
@@ -13,10 +13,12 @@ if TYPE_CHECKING:
 
 
 def get_tasks(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
+    """작업 목록"""
     h._json(200, {"tasks": h.app.task_store.list_tasks()})
 
 
 def get_task(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
+    """작업 하나 조회"""
     task_id = route.removeprefix("/api/tasks/")
     if not task_id or "/" in task_id:
         h._json(404, {"error": "Task not found"})
@@ -30,7 +32,7 @@ def get_task(h: ControlStationHandler, route: str, parts: list[str], body: None)
 
 
 def post_task(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:
-    """POST /api/tasks: a pending task, with an optional structured pick request."""
+    """작업 생성 (선택: 집기 조건)"""
     unsupported_fields = set(body) - {"destination", "arm_job", "pick_request"}
     if unsupported_fields:
         h._json(400, {"error": "Unsupported task fields: " + ", ".join(sorted(unsupported_fields))})
@@ -57,7 +59,7 @@ def post_task(h: ControlStationHandler, route: str, parts: list[str], body: dict
 
 
 def post_task_control(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
-    """POST /api/tasks/{task_id}/start|cancel: hand the task to the mock executor or cancel it (no body read)."""
+    """작업 시작·취소 (모의 실행)"""
     task_id = parts[2]
     if not task_id:
         h._json_error(404, "TASK_NOT_FOUND", "Task not found")
@@ -83,7 +85,7 @@ def post_task_control(h: ControlStationHandler, route: str, parts: list[str], bo
 
 
 def post_parse_command(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:
-    """POST /api/tasks/parse-command: a pick-request draft from free text, checked against the detector classes."""
+    """명령 문장 해석 → 집기 조건 초안"""
     text = body.get("text")
     if set(body) != {"text"} or not isinstance(text, str) or not text.strip() or len(text) > 500:
         h._json(400, {"error": "text must contain 1 to 500 characters"})

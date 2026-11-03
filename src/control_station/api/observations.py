@@ -1,8 +1,4 @@
-"""Target observation, operator selection and projection-draft review routes.
-
-Every record here is review evidence for a pending Pick & Place task; nothing changes task state or sends an arm
-command.
-"""
+"""대상 관측·선택, 투영 초안, 관측 이미지 (검토 기록만, 로봇 명령 없음)"""
 
 from __future__ import annotations
 
@@ -41,6 +37,7 @@ _NAME = re.compile(r"[A-Za-z0-9_.-]{1,80}")
 
 
 def evaluate_color_hints(candidates: list[dict[str, object]], requested_color: str) -> dict[str, object]:
+    """후보 색 힌트와 요청 색 비교"""
     canonical_color = canonicalize_color(requested_color)
     if canonical_color is None:
         status = "UNSUPPORTED_REQUEST_COLOR"
@@ -85,7 +82,7 @@ def target_observation(
     requested_color: str | None = None,
     requested_shelf_level: int | None = None,
 ) -> dict[str, Any]:
-    """Classify a camera observation without creating a robot-control signal."""
+    """카메라 관측을 대상 후보로 분류"""
     detector_state = camera.detector_state
     candidates: list[dict[str, object]] = []
     candidate_count: int | None = None
@@ -200,7 +197,7 @@ def target_observation(
 
 
 def get_observation_image(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
-    """GET /api/tasks/{task_id}/observations/{event_id}/image: the saved, hash-verified frame of an observation."""
+    """저장된 관측 이미지"""
     if len(parts) != 6 or parts[:2] != ["api", "tasks"] or parts[3] != "observations" or parts[5] != "image":
         h._json(404, {"error": "Observation image not found"})
         return
@@ -256,7 +253,7 @@ def get_observation_image(h: ControlStationHandler, route: str, parts: list[str]
 
 
 def get_projection_artifact(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
-    """GET /api/tasks/{task_id}/projection-drafts/{event_id}/artifact: the reviewed draft behind a projection event."""
+    """투영 초안 파일"""
     if (
         len(parts) != 6
         or parts[:2] != ["api", "tasks"]
@@ -310,7 +307,7 @@ def get_projection_artifact(h: ControlStationHandler, route: str, parts: list[st
 
 
 def post_projection_draft(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:
-    """POST /api/tasks/{task_id}/projection-draft: attach a reviewed shelf-plane projection draft."""
+    """투영 초안 검토 기록"""
     task_id = parts[2]
     if set(body) != {"artifact_path", "artifact_sha256"}:
         h._json_error(
@@ -382,7 +379,7 @@ def _selectable_observation(
     detection_step_id: str,
     pick_request: dict[str, object],
 ) -> bool:
-    """The source event is a fresh TARGET_OBSERVED observation of this task's requested class."""
+    """선택할 수 있는 관측 이벤트인지"""
     source_payload = source_event.get("payload")
     observation = source_payload.get("observation") if isinstance(source_payload, dict) else None
     return not (
@@ -431,7 +428,7 @@ def _selectable_observation(
 
 
 def post_target_selection(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:
-    """POST /api/tasks/{task_id}/target-selection: record the operator's choice among observed candidates."""
+    """운영자 대상 선택 기록"""
     task_id = parts[2]
     observation_event_id = body.get("observation_event_id")
     candidate_index = body.get("candidate_index")
@@ -616,10 +613,7 @@ def post_target_selection(h: ControlStationHandler, route: str, parts: list[str]
 def _observe_with_detectors(
     h: ControlStationHandler, camera: CameraSnapshot, target_class: str
 ) -> tuple[CameraSnapshot, bool, str | None, bool, str | None]:
-    """Run the FIXED camera's on-request detector and a one-shot YOLO-World prompt for an unknown class.
-
-    Returns the camera plus (fixed attempted, fixed error, prompt attempted, prompt error).
-    """
+    """고정 카메라 추론, YOLO-World 요청 프롬프트 추론"""
     request_prompt_attempted = False
     request_prompt_error: str | None = None
     fixed_detector_attempted = False
@@ -677,7 +671,7 @@ def _observe_with_detectors(
 
 
 def post_target_observation(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:
-    """POST /api/tasks/{task_id}/target-observation: record what a camera sees of the requested class."""
+    """대상 관측 기록 (선택: 프레임 저장)"""
     task_id = parts[2]
     camera_id = body.get("camera_id")
     save_frame = body.get("save_frame", False)
