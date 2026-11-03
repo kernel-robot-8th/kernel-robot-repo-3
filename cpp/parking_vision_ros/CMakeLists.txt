@@ -43,14 +43,16 @@ install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  # Keep test discovery on this host so test topics and services never reach robots on the network.
+  # Keep test discovery on this host so test topics and services never reach robots on the network, and off
+  # domain 87, where the runbook starts the real parking node and control station: the test node serves the same
+  # /pinky_parking/state and /pinky_parking/check names.
   ament_add_gtest(test_parking_vision_node test/test_parking_vision_node.cpp TIMEOUT 120
-    ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST ROS_DOMAIN_ID=87)
+    ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST ROS_DOMAIN_ID=97)
   target_link_libraries(test_parking_vision_node parking_vision_component)
   target_compile_definitions(test_parking_vision_node PRIVATE
     PARKING_VISION_FIXTURE_DIR="${parking_vision_FIXTURE_DIR}")
   ament_add_gtest(test_ceiling_camera_node test/test_ceiling_camera_node.cpp TIMEOUT 120
-    ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST ROS_DOMAIN_ID=88)
+    ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST ROS_DOMAIN_ID=98)
   target_link_libraries(test_ceiling_camera_node parking_vision_component)
   target_compile_definitions(test_ceiling_camera_node PRIVATE
     PARKING_VISION_FIXTURE_DIR="${parking_vision_FIXTURE_DIR}")

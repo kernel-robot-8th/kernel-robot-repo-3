@@ -8,8 +8,10 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <cv_bridge/cv_bridge.hpp>
 #include <gtest/gtest.h>
@@ -121,10 +123,14 @@ class ParkingVisionNodeTest : public ::testing::Test {
     return state;
   }
 
-  CheckParking::Response check(const std::string& spot_id = "parity_dock") {
+  rclcpp::Client<CheckParking>::SharedFuture send_check(const std::string& spot_id = "parity_dock") {
     auto request = std::make_shared<CheckParking::Request>();
     request->spot_id = spot_id;
-    auto future = client->async_send_request(request);
+    return client->async_send_request(request).future.share();
+  }
+
+  CheckParking::Response check(const std::string& spot_id = "parity_dock") {
+    auto future = send_check(spot_id);
     EXPECT_EQ(future.wait_for(15s), std::future_status::ready);
     return *future.get();
   }
@@ -143,12 +149,24 @@ class ParkingVisionNodeTest : public ::testing::Test {
   std::optional<ParkingState> state;
 };
 
+TEST_F(ParkingVisionNodeTest, TrackRateOutsideTheStillWindowIsRejected) {
+  // Below 8 Hz the 1 s still window cannot hold its 5 frames; 0 Hz would not even make a timer.
+  for (const double rate : {0.0, 3.0, 1000.0}) {
+    rclcpp::NodeOptions options;
+    options.parameter_overrides({{"spot_id", "parity_dock"}, {"track_rate_hz", rate}});
+    EXPECT_THROW(std::make_shared<ParkingVisionNode>(options), std::invalid_argument) << rate;
+  }
+}
+
 TEST_F(ParkingVisionNodeTest, NoImagePublisherIsCameraUnavailable) {
   start();
   const auto current = wait_for_state("CAMERA_UNAVAILABLE");
   ASSERT_TRUE(current);
   EXPECT_EQ(current->state, "CAMERA_UNAVAILABLE");
   EXPECT_NE(current->reason.find(kImageTopic), std::string::npos);
+  // Times are on the node clock even before the tracker has a state of its own, never 1970-01-01.
+  EXPECT_GT(rclcpp::Time(current->updated_at).seconds(), 1e9);
+  EXPECT_GT(rclcpp::Time(current->since).seconds(), 1e9);
   const auto response = check();
   EXPECT_FALSE(response.ok);
   EXPECT_EQ(response.error_code, "PARKING_CAMERA_UNAVAILABLE");
@@ -242,6 +260,37 @@ TEST_F(ParkingVisionNodeTest, CheckIgnoresFramesCapturedBeforeTheRequest) {
   const auto response = check();
   EXPECT_FALSE(response.ok);
   EXPECT_EQ(response.error_code, "PARKING_CAMERA_UNAVAILABLE");
+  // Says the frames were old, which is what a rosbag replayed without use_sim_time looks like.
+  EXPECT_NE(response.message.find("요청 전에 찍힌"), std::string::npos) << response.message;
+  EXPECT_NE(response.message.find("use_sim_time"), std::string::npos) << response.message;
+}
+
+TEST_F(ParkingVisionNodeTest, CheckReturnsTheSpotIdInTheFile) {
+  fs::copy_file(kFixtures / "spot" / "spot.json", root / ".control-station" / "parking-spots" / "alias_dock.json");
+  start();
+  start_publishing(fixture_frame("camera_like_registered"));
+  const auto response = check("alias_dock");
+  ASSERT_TRUE(response.ok) << response.error_code << " " << response.message;
+  EXPECT_EQ(response.spot_id, "parity_dock");
+}
+
+TEST_F(ParkingVisionNodeTest, ChecksBeyondTheLimitAreBusy) {
+  start();
+  // Old frames keep every check collecting for its full 3 s, so the fifth arrives while four are in flight.
+  start_publishing(fixture_frame("registered"), rclcpp::Duration(-5s));
+  std::vector<rclcpp::Client<CheckParking>::SharedFuture> pending;
+  for (int i = 0; i < 4; ++i) pending.push_back(send_check());
+  std::this_thread::sleep_for(500ms);
+  const auto busy = check();
+  EXPECT_FALSE(busy.ok);
+  EXPECT_EQ(busy.error_code, "PARKING_CHECK_BUSY");
+  for (auto& future : pending) {
+    ASSERT_EQ(future.wait_for(15s), std::future_status::ready);
+    EXPECT_EQ(future.get()->error_code, "PARKING_CAMERA_UNAVAILABLE");
+  }
+  start_publishing(fixture_frame("camera_like_registered"));
+  const auto after = check();  // finished checks free their slots
+  EXPECT_TRUE(after.ok) << after.error_code << " " << after.message;
 }
 
 TEST_F(ParkingVisionNodeTest, CheckSpotErrors) {

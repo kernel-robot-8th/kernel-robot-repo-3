@@ -34,7 +34,7 @@
 | `/pinky_parking/state` | 발행 `ParkingState` | `spot_id` 파라미터로 지정한 주차 위치를 10Hz로 추적한 화면 표시용 상태입니다. QoS는 reliable, keep-last 1, transient_local이라 나중에 붙은 구독자도 마지막 상태를 바로 받습니다. 팔 단계 진행 조건으로 쓰지 않습니다. |
 | `/pinky_parking/check` | 서비스 `CheckParking` | 요청한 `spot_id`에 대해, 요청 뒤에 찍힌 프레임만 최대 3초, 15프레임 모아서 판정합니다. 5프레임 미만이면 `NOT_FOUND`입니다. |
 
-그 밖의 파라미터는 `repository_root`(기본 `.`)와 `feed_camera_id`(기본은 구독 토픽 이름)입니다. 주차 위치 파일은 `<repository_root>/.control-station/parking-spots/<spot_id>.json`에서 읽고, 요청마다 다시 읽습니다. 파일 안의 내부 보정 경로도 `repository_root` 기준입니다.
+그 밖의 파라미터는 `repository_root`(기본 `.`), `feed_camera_id`(기본은 구독 토픽 이름), `track_rate_hz`(기본 10, 8~60만 허용)입니다. `track_rate_hz`가 8 Hz보다 낮으면 1초 정지 판정 창에 5프레임을 못 채우므로 노드가 시작하지 않습니다. launch 인자는 문자열로 넘기므로 `spot_id:=1`도 정수가 아니라 `"1"`로 들어갑니다. 주차 위치 파일은 `<repository_root>/.control-station/parking-spots/<spot_id>.json`에서 읽고, 요청마다 다시 읽습니다. 파일 안의 내부 보정 경로도 `repository_root` 기준입니다.
 
 **결과 해석**
 
@@ -45,25 +45,28 @@
   - `PARKING_SPOT_INVALID`: schema가 맞지 않거나, 등록 이후 내부 보정 파일이 바뀜
   - `PARKING_CAMERA_UNAVAILABLE`: 영상 토픽 발행자가 없거나, 3초 안에 새 프레임이 없거나, 해상도가 보정값과 다름
   - `PARKING_OBSERVATION_ERROR`: 그 밖의 처리 오류
-- 응답에는 주차 위치 파일과 내부 보정 파일의 SHA-256, 판정 때와 등록 때의 OpenCV 버전이 함께 들어갑니다.
-- 서비스는 deferred response로 별도 스레드에서 응답합니다. 프레임을 모으는 동안에도 executor가 막히지 않아서, 단일 스레드 컨테이너에서도 영상 구독이 계속 돌아갑니다.
+  - `PARKING_CHECK_BUSY`: 판정 요청이 이미 4개 진행 중 (관제 API는 429)
+- 응답의 `spot_id`는 주차 위치 파일에 기록된 값이고, 주차 위치 파일 SHA-256은 판정에 쓴 바로 그 바이트로 계산합니다(내부 보정 파일도 같음). 판정 때와 등록 때의 OpenCV 버전도 함께 들어갑니다.
+- 서비스는 deferred response로 별도 스레드에서 응답합니다. 프레임을 모으는 동안에도 executor가 막히지 않아서, 단일 스레드 컨테이너에서도 영상 구독이 계속 돌아갑니다. 동시에 4개까지 받고, 새 프레임은 condition variable로 기다립니다. 응답 전송이나 판정 중 예외는 스레드 밖으로 나가지 않고 `PARKING_OBSERVATION_ERROR` 응답이나 로그로 남습니다.
+- 영상은 메시지 그대로 버퍼에 두고, 추적(10 Hz)과 판정에 실제로 쓰는 프레임만 BGR로 변환합니다.
 
 **프레임 촬영 시각 판단**
 
-"요청 이후에 찍힌 프레임"인지는 이미지 header stamp와 노드가 프레임을 받은 시각 중 **더 이른 쪽**을 기준으로 판단합니다. 카메라 드라이버를 다른 호스트에서 띄운다면 두 호스트의 시계가 동기화돼 있어야 합니다.
+"요청 이후에 찍힌 프레임"인지는 노드가 프레임을 받은 시각에서 header stamp가 뒤처진 만큼을 뺀 시각으로 판단합니다. stamp가 받은 시각보다 앞서면 뒤처짐을 0으로 봅니다(받은 시각보다 늦게 찍혔다고 보지 않음). 카메라 드라이버를 다른 호스트에서 띄운다면 두 호스트의 시계가 동기화돼 있어야 합니다.
+
+- 수집 마감(3초), 요청 시각 비교, 추적기의 정지·사라짐 판단은 모두 `steady_clock`으로 합니다. NTP가 시스템 시계를 옮겨도 판정이 끝나지 않거나 일찍 끝나지 않습니다. 메시지와 응답에 넣는 시각(`since`, `updated_at`, `requested_at`, `captured_from`, `captured_until`)은 노드 시계(ROS time) 기준입니다.
+- rosbag을 재생할 때는 `ros2 bag play --clock`과 `use_sim_time:=true`로 실행합니다. 그렇지 않으면 녹화된 stamp가 모두 요청 전으로 판단되어, `PARKING_CAMERA_UNAVAILABLE`과 함께 "N프레임이 들어왔지만 모두 요청 전에 찍힌 것 ... use_sim_time:=true" 메시지가 나옵니다.
 
 ## 빌드, 테스트, 실행
 
 ```bash
 cd cpp
 source /opt/ros/jazzy/setup.bash
-# 테스트 토픽과 서비스가 같은 네트워크의 로봇에 닿지 않게 discovery를 이 호스트로 제한한다.
-export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST ROS_DOMAIN_ID=87
 colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
 colcon test && colcon test-result --verbose
 ```
 
-`parking_vision_ros`의 테스트는 CMake에서 직접 `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`, `ROS_DOMAIN_ID=87`을 지정해서 돌립니다.
+`parking_vision_ros`의 테스트는 CMake가 `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`와 테스트 전용 `ROS_DOMAIN_ID`(판정 노드 97, 카메라 노드 98)를 직접 지정해서 돌리므로 셸에서 따로 export하지 않습니다. 실물 판정 노드와 관제는 [실행 문서](../docs/implementation/runbook.md)대로 87에서 띄웁니다. 테스트 노드도 이름이 `pinky_parking`이라 같은 domain에 있으면 관제가 테스트 상태를 받거나, 테스트 노드가 관제의 판정 요청에 먼저 답합니다. 2026-11-03에 테스트가 87을 쓰던 때 실물 노드가 87에서 돌고 있어서, 테스트 요청에 실물 노드가 `PARKING_SPOT_NOT_FOUND`로 먼저 답한 일이 있었습니다.
 
 실행은 저장소 루트에서 합니다.
 

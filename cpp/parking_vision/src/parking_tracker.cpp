@@ -13,8 +13,7 @@ std::vector<PlanarOffset> spread(const std::vector<PlanarOffset>& offsets) {
   const PlanarOffset center = median_offset(offsets);
   std::vector<PlanarOffset> result;
   for (const auto& o : offsets) {
-    const double dyaw = o.dyaw_deg - center.dyaw_deg + 180.0;
-    result.push_back({o.dx_mm - center.dx_mm, o.dy_mm - center.dy_mm, dyaw - 360.0 * std::floor(dyaw / 360.0) - 180.0});
+    result.push_back({o.dx_mm - center.dx_mm, o.dy_mm - center.dy_mm, wrap_degrees(o.dyaw_deg - center.dyaw_deg)});
   }
   return result;
 }

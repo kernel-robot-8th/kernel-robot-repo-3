@@ -7,7 +7,7 @@ string spot_id
 ---
 bool ok                             # false: nothing was judged; error_code and message say why
 string error_code                   # PARKING_SPOT_ID_INVALID, PARKING_SPOT_NOT_FOUND, PARKING_SPOT_INVALID,
-                                    # PARKING_CAMERA_UNAVAILABLE, PARKING_OBSERVATION_ERROR
+                                    # PARKING_CAMERA_UNAVAILABLE, PARKING_OBSERVATION_ERROR, PARKING_CHECK_BUSY
 string message
 
 int32 observation_schema_version

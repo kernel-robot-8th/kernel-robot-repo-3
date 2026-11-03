@@ -454,6 +454,14 @@ TEST_F(LoadSpot, SingleAnchorTrusted) {
   EXPECT_NE(error_of(bad, directory).find("single_anchor_trusted"), std::string::npos);
 }
 
+TEST_F(LoadSpot, HashesTheBytesItParsed) {
+  const fs::path path = write_spot(json::array(), {{"mode", "OFF"}});
+  std::string registration_sha256;
+  const ParkingSpot spot = load_spot(path, directory, &registration_sha256);
+  EXPECT_EQ(registration_sha256, sha256_of(path));
+  EXPECT_EQ(spot.intrinsics.sha256, sha256_of(directory / "ceiling_camera.json"));
+}
+
 TEST_F(LoadSpot, ChangedCalibrationIsRejected) {
   const fs::path path = write_spot(json::array(), {{"mode", "OFF"}});
   std::ofstream(directory / "ceiling_camera.json", std::ios::app) << "\n";

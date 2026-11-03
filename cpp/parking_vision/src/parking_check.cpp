@@ -56,7 +56,6 @@ const std::map<std::string, int> kArucoDictionaries = {
 // Python's float %: the result takes the sign of the divisor, unlike std::fmod.
 double floor_mod(double value, double divisor) { return value - divisor * std::floor(value / divisor); }
 
-double wrap_degrees(double degrees) { return floor_mod(degrees + 180.0, 360.0) - 180.0; }
 
 // numpy.median: the mean of the two middle values for an even count.
 double median(std::vector<double> values) {
@@ -104,10 +103,21 @@ cv::Matx33d matx33(const json& rows) {
 
 cv::Point2d point2(const json& xy) { return {xy.at(0).get<double>(), xy.at(1).get<double>()}; }
 
-json read_json(const fs::path& path) {
-  std::ifstream stream(path);
+std::string read_bytes(const fs::path& path) {
+  std::ifstream stream(path, std::ios::binary);
   if (!stream) throw ParkingSpotError("파일을 열 수 없습니다: " + path.string());
-  return json::parse(stream);
+  return std::string((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+}
+
+std::string sha256_hex(const std::string& bytes, const fs::path& path) {
+  unsigned char digest[EVP_MAX_MD_SIZE];
+  unsigned int length = 0;
+  if (EVP_Digest(bytes.data(), bytes.size(), digest, &length, EVP_sha256(), nullptr) != 1) {
+    throw std::runtime_error("SHA-256 계산 실패: " + path.string());
+  }
+  std::string hex;
+  for (unsigned int i = 0; i < length; ++i) hex += format("%02x", digest[i]);
+  return hex;
 }
 
 FrameObservation observe_marker(const MarkerDetections& found, const ParkingSpot& spot, cv::Point2d view_shift,
@@ -167,22 +177,13 @@ std::string to_string(DeviationLevel level) {
 
 double PlanarOffset::distance_mm() const { return std::hypot(dx_mm, dy_mm); }
 
-std::string sha256_of(const fs::path& path) {
-  std::ifstream stream(path, std::ios::binary);
-  if (!stream) throw ParkingSpotError("파일을 열 수 없습니다: " + path.string());
-  const std::string bytes((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
-  unsigned char digest[EVP_MAX_MD_SIZE];
-  unsigned int length = 0;
-  if (EVP_Digest(bytes.data(), bytes.size(), digest, &length, EVP_sha256(), nullptr) != 1) {
-    throw std::runtime_error("SHA-256 계산 실패: " + path.string());
-  }
-  std::string hex;
-  for (unsigned int i = 0; i < length; ++i) hex += format("%02x", digest[i]);
-  return hex;
-}
+double wrap_degrees(double degrees) { return floor_mod(degrees + 180.0, 360.0) - 180.0; }
+
+std::string sha256_of(const fs::path& path) { return sha256_hex(read_bytes(path), path); }
 
 Intrinsics load_intrinsics(const fs::path& path, const std::string& camera_id) {
-  const json data = read_json(path);
+  const std::string bytes = read_bytes(path);
+  const json data = json::parse(bytes);
   const json found_camera = value_or_null(data, "camera_id");
   if (found_camera != json(camera_id)) {
     throw ParkingSpotError("내부 보정 파일의 camera_id가 " + repr(found_camera) + "입니다 ('" + camera_id +
@@ -200,15 +201,17 @@ Intrinsics load_intrinsics(const fs::path& path, const std::string& camera_id) {
   const json calibration_id = value_or_null(data, "calibration_id");
   if (calibration_id.is_string()) intrinsics.calibration_id = calibration_id.get<std::string>();
   intrinsics.path = path;
-  intrinsics.sha256 = sha256_of(path);
+  intrinsics.sha256 = sha256_hex(bytes, path);
   return intrinsics;
 }
 
-ParkingSpot load_spot(const fs::path& path, const fs::path& repository_root) {
-  if (!fs::is_regular_file(path)) {
+ParkingSpot load_spot(const fs::path& path, const fs::path& repository_root, std::string* registration_sha256) {
+  std::error_code error;
+  if (!fs::is_regular_file(path, error)) {
     throw ParkingSpotError("등록된 주차 위치가 없습니다: " + path.string() + " (먼저 register)");
   }
-  const json data = read_json(path);
+  const std::string bytes = read_bytes(path);
+  const json data = json::parse(bytes);
   const json schema = value_or_null(data, "schema_version");
   if (schema != json(kSchemaVersion)) {
     throw ParkingSpotError("지원하지 않는 주차 위치 schema " + (schema.is_null() ? "None" : schema.dump()) +
@@ -279,6 +282,7 @@ ParkingSpot load_spot(const fs::path& path, const fs::path& repository_root) {
   spot.single_anchor_trusted = trusted.is_boolean() && trusted.get<bool>();
   const json opencv_version = value_or_null(data, "opencv_version");
   if (opencv_version.is_string()) spot.registration_opencv_version = opencv_version.get<std::string>();
+  if (registration_sha256) *registration_sha256 = sha256_hex(bytes, path);
   return spot;
 }
 

@@ -135,8 +135,14 @@ struct FrameObservation {
 };
 
 std::string sha256_of(const std::filesystem::path& path);
+// Both loaders hash the same bytes they parse, so a recorded SHA-256 always names the content actually used.
 Intrinsics load_intrinsics(const std::filesystem::path& path, const std::string& camera_id);
-ParkingSpot load_spot(const std::filesystem::path& path, const std::filesystem::path& repository_root);
+// registration_sha256, when given, receives the SHA-256 of the spot file bytes that were parsed.
+ParkingSpot load_spot(const std::filesystem::path& path, const std::filesystem::path& repository_root,
+                      std::string* registration_sha256 = nullptr);
+
+// Wraps an angle to [-180, 180) with Python's % semantics, shared by the judgment and the tracker.
+double wrap_degrees(double degrees);
 
 // Accepts a BGR or grayscale image. Throws std::invalid_argument for an unknown dictionary name.
 MarkerDetections detect_markers(const cv::Mat& image, const std::string& dictionary_name);

@@ -15,12 +15,17 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import ComposableNodeContainer
 from launch_ros.descriptions import ComposableNode
+from launch_ros.parameter_descriptions import ParameterValue
 
 DEFAULT_DEVICE = "/dev/v4l/by-path/pci-0000:80:14.0-usb-0:4:1.0-video-index0"
 
 
 def generate_launch_description() -> LaunchDescription:
     intra = {"use_intra_process_comms": True}
+
+    def text(name: str) -> ParameterValue:  # spot_id:=1 stays a string instead of becoming an integer
+        return ParameterValue(LaunchConfiguration(name), value_type=str)
+
     return LaunchDescription([
         DeclareLaunchArgument("video_device", default_value=DEFAULT_DEVICE,
                               description="Ceiling camera by-path device (two HCAM0 share one by-id)"),
@@ -38,7 +43,7 @@ def generate_launch_description() -> LaunchDescription:
                     plugin="parking_vision_ros::CeilingCameraNode",
                     name="ceiling_camera",
                     namespace="ceiling_camera",
-                    parameters=[{"device": LaunchConfiguration("video_device"), "frame_id": "ceiling_camera"}],
+                    parameters=[{"device": text("video_device"), "frame_id": "ceiling_camera"}],
                     extra_arguments=[intra],
                 ),
                 ComposableNode(
@@ -46,8 +51,8 @@ def generate_launch_description() -> LaunchDescription:
                     plugin="parking_vision_ros::ParkingVisionNode",
                     name="pinky_parking",
                     parameters=[{
-                        "repository_root": LaunchConfiguration("repository_root"),
-                        "spot_id": LaunchConfiguration("spot_id"),
+                        "repository_root": text("repository_root"),
+                        "spot_id": text("spot_id"),
                         "image_topic": "/ceiling_camera/image_raw",
                     }],
                     extra_arguments=[intra],

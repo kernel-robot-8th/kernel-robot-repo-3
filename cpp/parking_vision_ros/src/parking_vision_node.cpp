@@ -2,10 +2,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstdio>
 #include <filesystem>
+#include <stdexcept>
 #include <utility>
 
-#include <cv_bridge/cv_bridge.hpp>
 #include <opencv2/core/version.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/image_encodings.hpp>
@@ -19,9 +21,14 @@ using parking_vision::Corners;
 using parking_vision::ParkingResult;
 using parking_vision::ParkingSpot;
 
-// The check loop polls every 10 ms and the tracker takes only the newest frame, so a short buffer is enough.
+// A check wakes when a frame arrives and the tracker takes only the newest frame, so a short buffer is enough.
 constexpr std::size_t kBufferedFrames = 10;
-constexpr auto kPollInterval = std::chrono::milliseconds(10);
+constexpr auto kFrameWait = std::chrono::milliseconds(100);
+// Checks each hold a thread for up to 3 s; beyond this many in flight a request is answered PARKING_CHECK_BUSY.
+constexpr std::size_t kMaxConcurrentChecks = 4;
+// The stillness test needs kMinStillFrames frames inside 0.8 of the still window; 8 Hz leaves margin for jitter.
+constexpr double kMinTrackRateHz = 8.0;
+constexpr double kMaxTrackRateHz = 60.0;
 
 rclcpp::Time to_time(double seconds, rcl_clock_type_t clock_type) {
   return rclcpp::Time(static_cast<int64_t>(seconds * 1e9), clock_type);
@@ -98,6 +105,12 @@ ParkingVisionNode::ParkingVisionNode(const rclcpp::NodeOptions& options) : rclcp
   live_spot_id_ = declare_parameter<std::string>("spot_id", "");
   const std::string image_topic = declare_parameter<std::string>("image_topic", "image_raw");
   const double track_rate_hz = declare_parameter<double>("track_rate_hz", 1.0 / parking_vision::kTrackIntervalS);
+  if (!std::isfinite(track_rate_hz) || track_rate_hz < kMinTrackRateHz || track_rate_hz > kMaxTrackRateHz) {
+    char message[160];
+    std::snprintf(message, sizeof(message), "track_rate_hz는 %g~%g Hz여야 합니다 (받은 값 %g): 정지 판정에 1초 창 안 %d프레임이 필요",
+                  kMinTrackRateHz, kMaxTrackRateHz, track_rate_hz, parking_vision::kMinStillFrames);
+    throw std::invalid_argument(message);
+  }
 
   image_subscription_ = create_subscription<sensor_msgs::msg::Image>(
       image_topic, rclcpp::SensorDataQoS(),
@@ -123,31 +136,50 @@ ParkingVisionNode::ParkingVisionNode(const rclcpp::NodeOptions& options) : rclcp
 
 ParkingVisionNode::~ParkingVisionNode() {
   shutting_down_ = true;
+  frames_arrived_.notify_all();
   std::lock_guard<std::mutex> lock(workers_mutex_);
   for (auto& worker : workers_) worker.thread.join();
 }
 
+double ParkingVisionNode::steady_seconds() {
+  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+cv_bridge::CvImageConstPtr ParkingVisionNode::to_bgr(const Frame& frame) {
+  // Shares the message buffer when it is already bgr8; only frames that are judged pay for a conversion.
+  return cv_bridge::toCvShare(frame.message, sensor_msgs::image_encodings::BGR8);
+}
+
 void ParkingVisionNode::on_image(const sensor_msgs::msg::Image::ConstSharedPtr& message) {
+  const double arrived_steady = steady_seconds();
   const rclcpp::Time received = now();
-  cv_bridge::CvImageConstPtr converted;
-  try {
-    converted = cv_bridge::toCvCopy(message, sensor_msgs::image_encodings::BGR8);
-  } catch (const cv_bridge::Exception& error) {
-    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "이미지 변환 실패 (%s): %s", message->encoding.c_str(),
-                         error.what());
-    return;
-  }
   const rclcpp::Time stamp(message->header.stamp, received.get_clock_type());
-  // A frame counts as captured at its stamp, but never later than it arrived: a driver clock running ahead must
-  // not let a frame captured before a request look newer. Drivers on another host need a synchronised clock.
-  const rclcpp::Time captured = stamp.nanoseconds() == 0 ? received : std::min(stamp, received);
-  std::lock_guard<std::mutex> lock(frames_mutex_);
-  frames_.push_back({++sequence_, captured, stamp, message->header.frame_id, converted->image});
-  while (frames_.size() > kBufferedFrames) frames_.pop_front();
+  // A frame counts as captured at its stamp, but never later than it arrived: a stamp ahead of the arrival (a
+  // driver clock running fast) counts as no lag, and a zero stamp means the driver gave none. A stamp far behind
+  // the arrival keeps the frame old, so a late or replayed frame is not taken for one captured after a request.
+  const double lag = stamp.nanoseconds() == 0 ? 0.0 : std::max(0.0, (received - stamp).seconds());
+  {
+    std::lock_guard<std::mutex> lock(frames_mutex_);
+    frames_.push_back({++sequence_, arrived_steady - lag, received - rclcpp::Duration::from_seconds(lag), lag, stamp,
+                       message->header.frame_id, message});
+    while (frames_.size() > kBufferedFrames) frames_.pop_front();
+  }
+  frames_arrived_.notify_all();
 }
 
 std::vector<ParkingVisionNode::Frame> ParkingVisionNode::frames_after(std::uint64_t sequence) const {
   std::lock_guard<std::mutex> lock(frames_mutex_);
+  std::vector<Frame> newer;
+  for (const auto& frame : frames_) {
+    if (frame.sequence > sequence) newer.push_back(frame);
+  }
+  return newer;
+}
+
+std::vector<ParkingVisionNode::Frame> ParkingVisionNode::wait_for_frames_after(std::uint64_t sequence,
+                                                                                std::chrono::milliseconds timeout) {
+  std::unique_lock<std::mutex> lock(frames_mutex_);
+  frames_arrived_.wait_for(lock, timeout, [&] { return sequence_ > sequence || shutting_down_; });
   std::vector<Frame> newer;
   for (const auto& frame : frames_) {
     if (frame.sequence > sequence) newer.push_back(frame);
@@ -160,8 +192,7 @@ bool ParkingVisionNode::has_image_publisher() const {
 }
 
 void ParkingVisionNode::on_tick() {
-  const rclcpp::Time now = this->now();
-  const double now_s = now.seconds();
+  const double now_s = steady_seconds();
   try {
     if (!parking_vision::is_valid_spot_id(live_spot_id_)) {
       tracker_.on_spot_invalid(now_s, "spot_id must be 1-80 letters, digits, '_', '.' or '-'");
@@ -170,8 +201,12 @@ void ParkingVisionNode::on_tick() {
       if (!newer.empty()) {
         const Frame& frame = newer.back();  // only the newest frame matters for display
         tracked_sequence_ = frame.sequence;
-        tracked_frame_ = frame;
-        tracker_.on_frame(now_s, frame.sequence, frame.image);
+        tracked_frame_ = TrackedFrame{frame.sequence, frame.stamp, frame.frame_id};
+        try {
+          tracker_.on_frame(now_s, frame.sequence, to_bgr(frame)->image);
+        } catch (const cv_bridge::Exception& error) {  // a camera format problem, not a tracker fault
+          tracker_.on_camera_unavailable(now_s, "이미지 변환 실패 (" + frame.message->encoding + "): " + error.what());
+        }
       } else if (!has_image_publisher()) {
         tracker_.on_camera_unavailable(now_s, "카메라 feed가 없습니다: " + feed_camera_id_);
       } else {
@@ -181,19 +216,25 @@ void ParkingVisionNode::on_tick() {
   } catch (const std::exception& error) {  // keep tracking; one bad frame must not stop the display
     tracker_.on_tracking_error(now_s, std::string("추적 오류: ") + error.what());
   }
-  publish_state(now);
+  publish_state(now());
 }
 
 void ParkingVisionNode::publish_state(const rclcpp::Time& now) {
   const parking_vision::LiveSnapshot& snapshot = tracker_.snapshot();
   const auto& spot = tracker_.spot();
+  // The tracker keeps steady-clock seconds; the message carries node-clock times. Before the tracker has
+  // published anything its times are 0, which must not go out as 1970-01-01.
+  const double steady_now = steady_seconds();
+  const double to_node_clock = now.seconds() - steady_now;
+  const double updated_s = snapshot.updated_s > 0.0 ? snapshot.updated_s : steady_now;
+  const double since_s = snapshot.since_s > 0.0 ? snapshot.since_s : updated_s;
   ParkingState message;
   message.header.stamp = now;
   message.spot_id = live_spot_id_;
   message.state = parking_vision::to_string(snapshot.state);
   message.reason = snapshot.reason;
-  message.since = to_time(snapshot.since_s, now.get_clock_type());
-  message.updated_at = to_time(snapshot.updated_s, now.get_clock_type());
+  message.since = to_time(since_s + to_node_clock, now.get_clock_type());
+  message.updated_at = to_time(updated_s + to_node_clock, now.get_clock_type());
   message.feed_camera_id = feed_camera_id_;
   if (snapshot.frame_sequence) {
     message.has_frame = true;
@@ -217,6 +258,14 @@ void ParkingVisionNode::publish_state(const rclcpp::Time& now) {
   state_publisher_->publish(message);
 }
 
+void ParkingVisionNode::send_response(rmw_request_id_t& header, CheckParking::Response& response) {
+  try {
+    check_service_->send_response(header, response);
+  } catch (const std::exception& error) {  // e.g. the node is shutting down; never let this end the process
+    RCLCPP_ERROR(get_logger(), "주차 판정 응답을 보내지 못했습니다: %s", error.what());
+  }
+}
+
 void ParkingVisionNode::on_check(const std::shared_ptr<rmw_request_id_t>& header,
                                  const std::shared_ptr<CheckParking::Request>& request) {
   // Answered from a worker thread (deferred response) so collecting frames never blocks the executor.
@@ -229,64 +278,118 @@ void ParkingVisionNode::on_check(const std::shared_ptr<rmw_request_id_t>& header
       ++worker;
     }
   }
+  if (workers_.size() >= kMaxConcurrentChecks) {
+    CheckParking::Response busy = failed(base_response(request->spot_id), "PARKING_CHECK_BUSY",
+                                         "주차 판정 요청이 이미 " + std::to_string(workers_.size()) + "개 진행 중입니다");
+    send_response(*header, busy);
+    return;
+  }
   auto finished = std::make_shared<std::atomic<bool>>(false);
   workers_.push_back({std::thread([this, header, spot_id = request->spot_id, finished] {
-                        CheckParking::Response response = check(spot_id);
-                        check_service_->send_response(*header, response);
+                        CheckParking::Response response;
+                        try {
+                          response = check(spot_id);
+                        } catch (const std::exception& error) {  // nothing may escape a worker thread
+                          response = failed(base_response(spot_id), "PARKING_OBSERVATION_ERROR", error.what());
+                        } catch (...) {
+                          response = failed(base_response(spot_id), "PARKING_OBSERVATION_ERROR", "알 수 없는 오류");
+                        }
+                        // Free the slot first: a client that sends its next check as soon as this answer arrives
+                        // must not find it still taken. on_check then only waits out the send when joining.
                         *finished = true;
+                        send_response(*header, response);
                       }),
                       finished});
 }
 
-ParkingVisionNode::CheckParking::Response ParkingVisionNode::check(const std::string& spot_id) {
+ParkingVisionNode::CheckParking::Response ParkingVisionNode::base_response(const std::string& spot_id) const {
   CheckParking::Response response;
   response.observation_schema_version = parking_vision::kObservationSchemaVersion;
   response.spot_id = spot_id;
   response.feed_camera_id = feed_camera_id_;
   response.opencv_version = CV_VERSION;
   response.usable_for_robot_control = false;
+  return response;
+}
+
+ParkingVisionNode::CheckParking::Response ParkingVisionNode::failed(CheckParking::Response response,
+                                                                    const std::string& error_code,
+                                                                    const std::string& message) const {
+  response.ok = false;
+  response.error_code = error_code;
+  response.message = message;
+  RCLCPP_WARN(get_logger(), "주차 판정 실패 %s: %s", error_code.c_str(), message.c_str());
+  return response;
+}
+
+ParkingVisionNode::CheckParking::Response ParkingVisionNode::check(const std::string& spot_id) {
+  CheckParking::Response response = base_response(spot_id);
   const auto fail = [&](const std::string& error_code, const std::string& message) {
-    response.ok = false;
-    response.error_code = error_code;
-    response.message = message;
-    RCLCPP_WARN(get_logger(), "주차 판정 실패 %s: %s", error_code.c_str(), message.c_str());
-    return response;
+    return failed(response, error_code, message);
   };
 
   if (!parking_vision::is_valid_spot_id(spot_id)) {
     return fail("PARKING_SPOT_ID_INVALID", "spot_id must be 1-80 letters, digits, '_', '.' or '-'");
   }
   const std::filesystem::path path = parking_vision::spot_file(repository_root_, spot_id);
-  if (!std::filesystem::is_regular_file(path)) {
+  std::error_code filesystem_error;  // the non-throwing overload: an unreadable directory is "not found", not a crash
+  if (!std::filesystem::is_regular_file(path, filesystem_error)) {
     return fail("PARKING_SPOT_NOT_FOUND", "등록된 주차 위치가 없습니다: " + spot_id);
   }
-  // The spot is read per request, so the response names the exact files it used.
+  // The spot is read per request; its SHA-256 comes from the same bytes that were parsed, so the response names
+  // exactly the registration it judged against.
   ParkingSpot spot;
   try {
-    response.spot_registration_sha256 = parking_vision::sha256_of(path);
-    spot = parking_vision::load_spot(path, repository_root_);
+    spot = parking_vision::load_spot(path, repository_root_, &response.spot_registration_sha256);
   } catch (const std::exception& error) {
     return fail("PARKING_SPOT_INVALID", std::string("주차 위치 파일을 쓸 수 없습니다: ") + error.what());
   }
+  response.spot_id = spot.spot_id;  // the id recorded in the file, as the control-station JSON returns it
   response.calibration_camera_id = spot.camera_id;
   response.intrinsic_calibration_sha256 = spot.intrinsics.sha256;
   response.registration_opencv_version = spot.registration_opencv_version.value_or("");
   if (!has_image_publisher()) return fail("PARKING_CAMERA_UNAVAILABLE", "카메라 feed가 없습니다: " + feed_camera_id_);
 
-  const rclcpp::Time requested = now();
-  response.requested_at = requested;
-  parking_vision::ParkingObservationCollector collector(spot, requested.seconds());
+  response.requested_at = now();
+  const double requested = steady_seconds();
+  parking_vision::ParkingObservationCollector collector(spot, requested);
   std::uint64_t last_sequence = 0;
+  rclcpp::Time captured_from;
+  rclcpp::Time captured_until;
+  int captured_before_request = 0;
+  double largest_lag_s = 0.0;
   try {
-    while (!collector.done(now().seconds())) {
+    while (!collector.done(steady_seconds())) {
       if (shutting_down_) return fail("PARKING_CAMERA_UNAVAILABLE", "노드가 종료되는 중입니다");
-      for (const Frame& frame : frames_after(last_sequence)) {
+      for (const Frame& frame : wait_for_frames_after(last_sequence, kFrameWait)) {
         last_sequence = frame.sequence;
-        if (collector.add(frame.sequence, frame.captured.seconds(), frame.image) && collector.done(now().seconds())) {
-          break;
+        if (frame.captured_steady_s < requested) {  // 요청 전에 찍힌 프레임은 쓰지 않는다
+          ++captured_before_request;
+          largest_lag_s = std::max(largest_lag_s, frame.stamp_lag_s);
+          continue;
         }
+        cv_bridge::CvImageConstPtr image;
+        try {
+          image = to_bgr(frame);
+        } catch (const cv_bridge::Exception& error) {
+          return fail("PARKING_CAMERA_UNAVAILABLE",
+                      "이미지 변환 실패 (" + frame.message->encoding + "): " + error.what());
+        }
+        if (collector.add(frame.sequence, frame.captured_steady_s, image->image)) {
+          if (collector.frames_examined() == 1) captured_from = frame.captured;
+          captured_until = frame.captured;
+        }
+        if (collector.done(steady_seconds())) break;
       }
-      std::this_thread::sleep_for(kPollInterval);
+    }
+    if (collector.frames_examined() == 0 && captured_before_request > 0) {
+      // Frames did arrive, but every one was stamped before the request: say so rather than "no new frame".
+      char message[256];
+      std::snprintf(message, sizeof(message),
+                    "%d프레임이 들어왔지만 모두 요청 전에 찍힌 것이라 쓰지 않았습니다 (stamp가 최대 %.1f초 뒤처짐). "
+                    "rosbag 재생이면 use_sim_time:=true로 실행하세요",
+                    captured_before_request, largest_lag_s);
+      return fail("PARKING_CAMERA_UNAVAILABLE", std::string(message) + ": " + feed_camera_id_);
     }
     const parking_vision::ParkingObservation observation = collector.finish();
     response.ok = true;
@@ -299,8 +402,8 @@ ParkingVisionNode::CheckParking::Response ParkingVisionNode::check(const std::st
     response.frames_examined = observation.frames_examined;
     response.first_frame_sequence = observation.first_sequence;
     response.last_frame_sequence = observation.last_sequence;
-    response.captured_from = to_time(observation.captured_from_s, requested.get_clock_type());
-    response.captured_until = to_time(observation.captured_until_s, requested.get_clock_type());
+    response.captured_from = captured_from;
+    response.captured_until = captured_until;
     RCLCPP_INFO(get_logger(), "주차 판정 %s (%d/%d 프레임): %s", response.status.c_str(), observation.frames_used,
                 observation.frames_examined, observation.result.reason.c_str());
     return response;
