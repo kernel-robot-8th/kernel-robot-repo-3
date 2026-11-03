@@ -7,7 +7,8 @@
 | 파일 | 현재 책임 |
 |---|---|
 | `run-control-station.sh` | mock/ROS 실행 mode와 팔 process flag를 분리하고 Python entry point를 선택 |
-| `src/control_station/app.py` | localhost HTTP 서버, API 라우팅 |
+| `src/control_station/app.py` | localhost HTTP 서버 조립(`main`)과 요청 분배. 경로 판별은 `api/routes.py`의 표, 처리 코드는 영역별 `api/` 모듈 |
+| `src/control_station/api/` | HTTP 경로 처리: `tasks.py`(작업 목록·생성·시작·취소, 명령 해석), `observations.py`(대상 관측·선택, 투영 초안, 관측 이미지), `cameras.py`(카메라 목록, MJPEG 스트림, 카메라 대상 관측), `arm.py`(팔 텔레오퍼레이션, OMX 명령 큐, 선반 칸, 좌표 초안), `status.py`(health, 로봇 상태, 주차 `/live`·`/check`), `common.py`(교차 출처 확인, JSON 본문 규칙, 작업 조건·관측 프레임 검증). 경로별 상태 코드·오류 코드는 `tests/test_api_routes.py`로 고정 |
 | `src/control_station/robot_adapters.py` | mock 상태, ROS 2 Nav2 action server discovery, MuJoCo 분리 domain의 기본 controller/action read-only 관측, 설정된 OMX `JointState` freshness 표시; position 단위 미확정; ROS 명령 없음 |
 | `src/control_station/arm_supervisor.py` | 고정 LeRobot 프로세스 시작·종료·상태; MuJoCo mode에서는 물리 팔 제어 비활성 |
 | `src/control_station/omx_pose.py` | OMX follower 정규화 관절 목표 JSON의 오프라인 검증; bool schema version과 float 변환 overflow 거부; 장치 연결·명령 없음 |
