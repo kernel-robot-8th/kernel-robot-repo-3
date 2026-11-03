@@ -1214,6 +1214,192 @@
    }
   },
   {
+   "name": "registered/anchor_moved",
+   "image": "frames/anchor_moved.png",
+   "spot": "registered",
+   "expected": {
+    "offset": null,
+    "corners": null,
+    "reason": "fixed markers moved differently (4.0 px apart); one may have been moved",
+    "blocking_status": "VIEW_UNVERIFIED",
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 4.0000152587890625,
+    "view_shift_xy_px": [
+     4.0000152587890625,
+     0.0
+    ]
+   }
+  },
+  {
+   "name": "single_anchor/registered",
+   "image": "frames/registered.png",
+   "spot": "single_anchor",
+   "expected": {
+    "offset": {
+     "dx_mm": -1.7838464495767425e-05,
+     "dy_mm": -1.2112035818745426e-09,
+     "dyaw_deg": 1.5660361896152608e-11
+    },
+    "corners": [
+     [
+      419.5577392578125,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      199.44227600097656
+     ],
+     [
+      419.5577392578125,
+      199.44227600097656
+     ]
+    ],
+    "reason": "",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 1.52587890625e-05,
+    "view_shift_xy_px": [
+     1.52587890625e-05,
+     0.0
+    ]
+   }
+  },
+  {
+   "name": "single_anchor/drift_2_1",
+   "image": "frames/drift_2_1.png",
+   "spot": "single_anchor",
+   "expected": {
+    "offset": {
+     "dx_mm": -1.7838464495767425e-05,
+     "dy_mm": -1.2112035818745426e-09,
+     "dyaw_deg": 1.5660361896152608e-11
+    },
+    "corners": [
+     [
+      420.5577392578125,
+      141.55772399902344
+     ],
+     [
+      480.4422912597656,
+      141.55772399902344
+     ],
+     [
+      480.4422912597656,
+      201.44227600097656
+     ],
+     [
+      420.5577392578125,
+      201.44227600097656
+     ]
+    ],
+    "reason": "",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 2.236074801479359,
+    "view_shift_xy_px": [
+     1.0000152587890625,
+     2.0
+    ]
+   }
+  },
+  {
+   "name": "single_anchor/drift_10_-4",
+   "image": "frames/drift_10_-4.png",
+   "spot": "single_anchor",
+   "expected": {
+    "offset": null,
+    "corners": null,
+    "reason": "only one fixed marker visible and it moved 10.8 px; cannot tell camera drift from a moved marker",
+    "blocking_status": "VIEW_UNVERIFIED",
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 10.770323947306336,
+    "view_shift_xy_px": [
+     -3.9999847412109375,
+     10.0
+    ]
+   }
+  },
+  {
+   "name": "single_anchor_trusted/drift_2_1",
+   "image": "frames/drift_2_1.png",
+   "spot": "single_anchor_trusted",
+   "expected": {
+    "offset": {
+     "dx_mm": -1.7838464495767425e-05,
+     "dy_mm": -1.2112035818745426e-09,
+     "dyaw_deg": 1.5660361896152608e-11
+    },
+    "corners": [
+     [
+      420.5577392578125,
+      141.55772399902344
+     ],
+     [
+      480.4422912597656,
+      141.55772399902344
+     ],
+     [
+      480.4422912597656,
+      201.44227600097656
+     ],
+     [
+      420.5577392578125,
+      201.44227600097656
+     ]
+    ],
+    "reason": "",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 2.236074801479359,
+    "view_shift_xy_px": [
+     1.0000152587890625,
+     2.0
+    ]
+   }
+  },
+  {
+   "name": "single_anchor_trusted/drift_10_-4",
+   "image": "frames/drift_10_-4.png",
+   "spot": "single_anchor_trusted",
+   "expected": {
+    "offset": {
+     "dx_mm": -1.7838464495767425e-05,
+     "dy_mm": -1.2112035818745426e-09,
+     "dyaw_deg": 1.5660361896152608e-11
+    },
+    "corners": [
+     [
+      415.5577392578125,
+      149.55772399902344
+     ],
+     [
+      475.4422912597656,
+      149.55772399902344
+     ],
+     [
+      475.4422912597656,
+      209.44227600097656
+     ],
+     [
+      415.5577392578125,
+      209.44227600097656
+     ]
+    ],
+    "reason": "",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 10.770323947306336,
+    "view_shift_xy_px": [
+     -3.9999847412109375,
+     10.0
+    ]
+   }
+  },
+  {
    "name": "view_check_off/registered",
    "image": "frames/registered.png",
    "spot": "view_check_off",
@@ -5670,6 +5856,745 @@
     "view_shift_px": null,
     "marker_corners_px": null,
     "view_shift_xy_px": null
+   }
+  }
+ ],
+ "registration_cases": [
+  {
+   "name": "steady",
+   "frames": [
+    "frames/reg_0.png",
+    "frames/reg_1.png",
+    "frames/reg_2.png",
+    "frames/reg_3.png",
+    "frames/reg_4.png"
+   ],
+   "options": {
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "anchor_ids": null,
+    "trust_single_anchor": false,
+    "no_anchors": false,
+    "tolerance_mm": 30.0,
+    "tolerance_deg": 5.0
+   },
+   "expected": {
+    "schema_version": 2,
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "pixel_transform_id": "opencv-v4l2-capture-no-app-geometry-v1",
+    "image_size_px": {
+     "width": 640,
+     "height": 480
+    },
+    "aruco_dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "position_method": "corner rays intersected with the registered marker plane",
+    "opencv_version": "4.6.0",
+    "reference_pose_in_camera": {
+     "rotation": [
+      [
+       0.9658495828559234,
+       -0.018591537644577747,
+       -0.2584355587473408
+      ],
+      [
+       0.018591537644580065,
+       -0.9898787393860652,
+       0.14069270073271284
+      ],
+      [
+       -0.2584355587473406,
+       -0.14069270073271317,
+       -0.955728322241988
+      ]
+     ],
+     "translation_mm": [
+      151.09825361677701,
+      -82.25811293300065,
+      1145.5375001847347
+     ]
+    },
+    "reference_corners_px": [
+     [
+      419.5577392578125,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      199.44227600097656
+     ],
+     [
+      419.5577392578125,
+      199.44227600097656
+     ]
+    ],
+    "reference_marker_side_on_plane_mm": 70.0,
+    "reference_frame_count": 5,
+    "reference_jitter": {
+     "position_mm": 0.31,
+     "yaw_deg": 0.003
+    },
+    "anchors": [
+     {
+      "marker_id": 1,
+      "center_px": [
+       109.5,
+       89.5
+      ]
+     },
+     {
+      "marker_id": 3,
+      "center_px": [
+       149.5,
+       389.5
+      ]
+     }
+    ],
+    "view_check": {
+     "mode": "FIXED_MARKERS",
+     "max_anchor_shift_px": 15.0
+    },
+    "tolerance": {
+     "position_mm": 30.0,
+     "yaw_deg": 5.0
+    },
+    "axes": "dx +: \ub9c8\ucee4 \uc624\ub978\ucabd \ubcc0 \ubc29\ud5a5, dy +: \ub9c8\ucee4 \uc717\ubcc0(\ud654\uc0b4\ud45c) \ubc29\ud5a5, dyaw +: \ucc9c\uc7a5 \uce74\uba54\ub77c\uc5d0\uc11c \ubcfc \ub54c \ubc18\uc2dc\uacc4",
+    "status": "DRAFT_ONLY",
+    "review_required": true,
+    "usable_for_robot_control": false,
+    "keys": [
+     "schema_version",
+     "spot_id",
+     "camera_id",
+     "pixel_transform_id",
+     "image_size_px",
+     "intrinsic_calibration",
+     "aruco_dictionary",
+     "marker_id",
+     "marker_side_mm",
+     "marker_forward_axis",
+     "position_method",
+     "opencv_version",
+     "reference_pose_in_camera",
+     "reference_corners_px",
+     "reference_marker_side_on_plane_mm",
+     "reference_frame_count",
+     "reference_jitter",
+     "anchors",
+     "view_check",
+     "tolerance",
+     "axes",
+     "created_at",
+     "status",
+     "review_required",
+     "usable_for_robot_control"
+    ],
+    "intrinsic_calibration_sha256": "04bbe7b66d20364301c8103d6b327d9f889dfca8d8e72ee0c6bb4866b8751d06"
+   }
+  },
+  {
+   "name": "requested_anchor",
+   "frames": [
+    "frames/reg_0.png",
+    "frames/reg_1.png",
+    "frames/reg_2.png",
+    "frames/reg_3.png",
+    "frames/reg_4.png"
+   ],
+   "options": {
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "anchor_ids": [
+     3
+    ],
+    "trust_single_anchor": false,
+    "no_anchors": false,
+    "tolerance_mm": 30.0,
+    "tolerance_deg": 5.0
+   },
+   "expected": {
+    "schema_version": 2,
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "pixel_transform_id": "opencv-v4l2-capture-no-app-geometry-v1",
+    "image_size_px": {
+     "width": 640,
+     "height": 480
+    },
+    "aruco_dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "position_method": "corner rays intersected with the registered marker plane",
+    "opencv_version": "4.6.0",
+    "reference_pose_in_camera": {
+     "rotation": [
+      [
+       0.9658495828559234,
+       -0.018591537644577747,
+       -0.2584355587473408
+      ],
+      [
+       0.018591537644580065,
+       -0.9898787393860652,
+       0.14069270073271284
+      ],
+      [
+       -0.2584355587473406,
+       -0.14069270073271317,
+       -0.955728322241988
+      ]
+     ],
+     "translation_mm": [
+      151.09825361677701,
+      -82.25811293300065,
+      1145.5375001847347
+     ]
+    },
+    "reference_corners_px": [
+     [
+      419.5577392578125,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      199.44227600097656
+     ],
+     [
+      419.5577392578125,
+      199.44227600097656
+     ]
+    ],
+    "reference_marker_side_on_plane_mm": 70.0,
+    "reference_frame_count": 5,
+    "reference_jitter": {
+     "position_mm": 0.31,
+     "yaw_deg": 0.003
+    },
+    "anchors": [
+     {
+      "marker_id": 3,
+      "center_px": [
+       149.5,
+       389.5
+      ]
+     }
+    ],
+    "view_check": {
+     "mode": "FIXED_MARKERS",
+     "max_anchor_shift_px": 15.0
+    },
+    "tolerance": {
+     "position_mm": 30.0,
+     "yaw_deg": 5.0
+    },
+    "axes": "dx +: \ub9c8\ucee4 \uc624\ub978\ucabd \ubcc0 \ubc29\ud5a5, dy +: \ub9c8\ucee4 \uc717\ubcc0(\ud654\uc0b4\ud45c) \ubc29\ud5a5, dyaw +: \ucc9c\uc7a5 \uce74\uba54\ub77c\uc5d0\uc11c \ubcfc \ub54c \ubc18\uc2dc\uacc4",
+    "status": "DRAFT_ONLY",
+    "review_required": true,
+    "usable_for_robot_control": false,
+    "keys": [
+     "schema_version",
+     "spot_id",
+     "camera_id",
+     "pixel_transform_id",
+     "image_size_px",
+     "intrinsic_calibration",
+     "aruco_dictionary",
+     "marker_id",
+     "marker_side_mm",
+     "marker_forward_axis",
+     "position_method",
+     "opencv_version",
+     "reference_pose_in_camera",
+     "reference_corners_px",
+     "reference_marker_side_on_plane_mm",
+     "reference_frame_count",
+     "reference_jitter",
+     "anchors",
+     "view_check",
+     "tolerance",
+     "axes",
+     "created_at",
+     "status",
+     "review_required",
+     "usable_for_robot_control"
+    ],
+    "intrinsic_calibration_sha256": "04bbe7b66d20364301c8103d6b327d9f889dfca8d8e72ee0c6bb4866b8751d06"
+   }
+  },
+  {
+   "name": "no_anchors",
+   "frames": [
+    "frames/reg_0.png",
+    "frames/reg_1.png",
+    "frames/reg_2.png",
+    "frames/reg_3.png",
+    "frames/reg_4.png"
+   ],
+   "options": {
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "anchor_ids": null,
+    "trust_single_anchor": false,
+    "no_anchors": true,
+    "tolerance_mm": 30.0,
+    "tolerance_deg": 5.0
+   },
+   "expected": {
+    "schema_version": 2,
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "pixel_transform_id": "opencv-v4l2-capture-no-app-geometry-v1",
+    "image_size_px": {
+     "width": 640,
+     "height": 480
+    },
+    "aruco_dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "position_method": "corner rays intersected with the registered marker plane",
+    "opencv_version": "4.6.0",
+    "reference_pose_in_camera": {
+     "rotation": [
+      [
+       0.9658495828559234,
+       -0.018591537644577747,
+       -0.2584355587473408
+      ],
+      [
+       0.018591537644580065,
+       -0.9898787393860652,
+       0.14069270073271284
+      ],
+      [
+       -0.2584355587473406,
+       -0.14069270073271317,
+       -0.955728322241988
+      ]
+     ],
+     "translation_mm": [
+      151.09825361677701,
+      -82.25811293300065,
+      1145.5375001847347
+     ]
+    },
+    "reference_corners_px": [
+     [
+      419.5577392578125,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      199.44227600097656
+     ],
+     [
+      419.5577392578125,
+      199.44227600097656
+     ]
+    ],
+    "reference_marker_side_on_plane_mm": 70.0,
+    "reference_frame_count": 5,
+    "reference_jitter": {
+     "position_mm": 0.31,
+     "yaw_deg": 0.003
+    },
+    "anchors": [],
+    "view_check": {
+     "mode": "OFF"
+    },
+    "tolerance": {
+     "position_mm": 30.0,
+     "yaw_deg": 5.0
+    },
+    "axes": "dx +: \ub9c8\ucee4 \uc624\ub978\ucabd \ubcc0 \ubc29\ud5a5, dy +: \ub9c8\ucee4 \uc717\ubcc0(\ud654\uc0b4\ud45c) \ubc29\ud5a5, dyaw +: \ucc9c\uc7a5 \uce74\uba54\ub77c\uc5d0\uc11c \ubcfc \ub54c \ubc18\uc2dc\uacc4",
+    "status": "DRAFT_ONLY",
+    "review_required": true,
+    "usable_for_robot_control": false,
+    "keys": [
+     "schema_version",
+     "spot_id",
+     "camera_id",
+     "pixel_transform_id",
+     "image_size_px",
+     "intrinsic_calibration",
+     "aruco_dictionary",
+     "marker_id",
+     "marker_side_mm",
+     "marker_forward_axis",
+     "position_method",
+     "opencv_version",
+     "reference_pose_in_camera",
+     "reference_corners_px",
+     "reference_marker_side_on_plane_mm",
+     "reference_frame_count",
+     "reference_jitter",
+     "anchors",
+     "view_check",
+     "tolerance",
+     "axes",
+     "created_at",
+     "status",
+     "review_required",
+     "usable_for_robot_control"
+    ],
+    "intrinsic_calibration_sha256": "04bbe7b66d20364301c8103d6b327d9f889dfca8d8e72ee0c6bb4866b8751d06"
+   }
+  },
+  {
+   "name": "trusted_single_anchor",
+   "frames": [
+    "frames/reg_0.png",
+    "frames/reg_1.png",
+    "frames/reg_2.png",
+    "frames/reg_3.png",
+    "frames/reg_4.png"
+   ],
+   "options": {
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "anchor_ids": [
+     1
+    ],
+    "trust_single_anchor": true,
+    "no_anchors": false,
+    "tolerance_mm": 30.0,
+    "tolerance_deg": 5.0
+   },
+   "expected": {
+    "schema_version": 2,
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "pixel_transform_id": "opencv-v4l2-capture-no-app-geometry-v1",
+    "image_size_px": {
+     "width": 640,
+     "height": 480
+    },
+    "aruco_dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "position_method": "corner rays intersected with the registered marker plane",
+    "opencv_version": "4.6.0",
+    "reference_pose_in_camera": {
+     "rotation": [
+      [
+       0.9658495828559234,
+       -0.018591537644577747,
+       -0.2584355587473408
+      ],
+      [
+       0.018591537644580065,
+       -0.9898787393860652,
+       0.14069270073271284
+      ],
+      [
+       -0.2584355587473406,
+       -0.14069270073271317,
+       -0.955728322241988
+      ]
+     ],
+     "translation_mm": [
+      151.09825361677701,
+      -82.25811293300065,
+      1145.5375001847347
+     ]
+    },
+    "reference_corners_px": [
+     [
+      419.5577392578125,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      199.44227600097656
+     ],
+     [
+      419.5577392578125,
+      199.44227600097656
+     ]
+    ],
+    "reference_marker_side_on_plane_mm": 70.0,
+    "reference_frame_count": 5,
+    "reference_jitter": {
+     "position_mm": 0.31,
+     "yaw_deg": 0.003
+    },
+    "anchors": [
+     {
+      "marker_id": 1,
+      "center_px": [
+       109.5,
+       89.5
+      ]
+     }
+    ],
+    "view_check": {
+     "mode": "FIXED_MARKERS",
+     "max_anchor_shift_px": 15.0,
+     "single_anchor_trusted": true
+    },
+    "tolerance": {
+     "position_mm": 30.0,
+     "yaw_deg": 5.0
+    },
+    "axes": "dx +: \ub9c8\ucee4 \uc624\ub978\ucabd \ubcc0 \ubc29\ud5a5, dy +: \ub9c8\ucee4 \uc717\ubcc0(\ud654\uc0b4\ud45c) \ubc29\ud5a5, dyaw +: \ucc9c\uc7a5 \uce74\uba54\ub77c\uc5d0\uc11c \ubcfc \ub54c \ubc18\uc2dc\uacc4",
+    "status": "DRAFT_ONLY",
+    "review_required": true,
+    "usable_for_robot_control": false,
+    "keys": [
+     "schema_version",
+     "spot_id",
+     "camera_id",
+     "pixel_transform_id",
+     "image_size_px",
+     "intrinsic_calibration",
+     "aruco_dictionary",
+     "marker_id",
+     "marker_side_mm",
+     "marker_forward_axis",
+     "position_method",
+     "opencv_version",
+     "reference_pose_in_camera",
+     "reference_corners_px",
+     "reference_marker_side_on_plane_mm",
+     "reference_frame_count",
+     "reference_jitter",
+     "anchors",
+     "view_check",
+     "tolerance",
+     "axes",
+     "created_at",
+     "status",
+     "review_required",
+     "usable_for_robot_control"
+    ],
+    "intrinsic_calibration_sha256": "04bbe7b66d20364301c8103d6b327d9f889dfca8d8e72ee0c6bb4866b8751d06"
+   }
+  },
+  {
+   "name": "moved_while_registering",
+   "frames": [
+    "frames/reg_0.png",
+    "frames/reg_1.png",
+    "frames/reg_2.png",
+    "frames/reg_3.png",
+    "frames/moved.png"
+   ],
+   "options": {
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "anchor_ids": null,
+    "trust_single_anchor": false,
+    "no_anchors": false,
+    "tolerance_mm": 30.0,
+    "tolerance_deg": 5.0
+   },
+   "expected": {
+    "rejected": "moved while registering (26.0 mm / 0.0 deg) - keep Pinky still"
+   }
+  },
+  {
+   "name": "unsteady_anchor_skipped",
+   "frames": [
+    "frames/reg_0.png",
+    "frames/reg_1.png",
+    "frames/reg_2.png",
+    "frames/reg_3.png",
+    "frames/anchor_moved.png"
+   ],
+   "options": {
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "anchor_ids": null,
+    "trust_single_anchor": false,
+    "no_anchors": false,
+    "tolerance_mm": 30.0,
+    "tolerance_deg": 5.0
+   },
+   "expected": {
+    "schema_version": 2,
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "pixel_transform_id": "opencv-v4l2-capture-no-app-geometry-v1",
+    "image_size_px": {
+     "width": 640,
+     "height": 480
+    },
+    "aruco_dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "position_method": "corner rays intersected with the registered marker plane",
+    "opencv_version": "4.6.0",
+    "reference_pose_in_camera": {
+     "rotation": [
+      [
+       0.9658495828559234,
+       -0.018591537644577747,
+       -0.2584355587473408
+      ],
+      [
+       0.018591537644580065,
+       -0.9898787393860652,
+       0.14069270073271284
+      ],
+      [
+       -0.2584355587473406,
+       -0.14069270073271317,
+       -0.955728322241988
+      ]
+     ],
+     "translation_mm": [
+      151.09825361677701,
+      -82.25811293300065,
+      1145.5375001847347
+     ]
+    },
+    "reference_corners_px": [
+     [
+      419.5577392578125,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      199.44227600097656
+     ],
+     [
+      419.5577392578125,
+      199.44227600097656
+     ]
+    ],
+    "reference_marker_side_on_plane_mm": 70.0,
+    "reference_frame_count": 5,
+    "reference_jitter": {
+     "position_mm": 0.31,
+     "yaw_deg": 0.003
+    },
+    "anchors": [
+     {
+      "marker_id": 1,
+      "center_px": [
+       109.5,
+       89.5
+      ]
+     }
+    ],
+    "view_check": {
+     "mode": "FIXED_MARKERS",
+     "max_anchor_shift_px": 15.0
+    },
+    "tolerance": {
+     "position_mm": 30.0,
+     "yaw_deg": 5.0
+    },
+    "axes": "dx +: \ub9c8\ucee4 \uc624\ub978\ucabd \ubcc0 \ubc29\ud5a5, dy +: \ub9c8\ucee4 \uc717\ubcc0(\ud654\uc0b4\ud45c) \ubc29\ud5a5, dyaw +: \ucc9c\uc7a5 \uce74\uba54\ub77c\uc5d0\uc11c \ubcfc \ub54c \ubc18\uc2dc\uacc4",
+    "status": "DRAFT_ONLY",
+    "review_required": true,
+    "usable_for_robot_control": false,
+    "keys": [
+     "schema_version",
+     "spot_id",
+     "camera_id",
+     "pixel_transform_id",
+     "image_size_px",
+     "intrinsic_calibration",
+     "aruco_dictionary",
+     "marker_id",
+     "marker_side_mm",
+     "marker_forward_axis",
+     "position_method",
+     "opencv_version",
+     "reference_pose_in_camera",
+     "reference_corners_px",
+     "reference_marker_side_on_plane_mm",
+     "reference_frame_count",
+     "reference_jitter",
+     "anchors",
+     "view_check",
+     "tolerance",
+     "axes",
+     "created_at",
+     "status",
+     "review_required",
+     "usable_for_robot_control"
+    ],
+    "intrinsic_calibration_sha256": "04bbe7b66d20364301c8103d6b327d9f889dfca8d8e72ee0c6bb4866b8751d06"
+   }
+  },
+  {
+   "name": "unsteady_requested_anchor",
+   "frames": [
+    "frames/reg_0.png",
+    "frames/reg_1.png",
+    "frames/reg_2.png",
+    "frames/reg_3.png",
+    "frames/anchor_moved.png"
+   ],
+   "options": {
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "anchor_ids": [
+     3
+    ],
+    "trust_single_anchor": false,
+    "no_anchors": false,
+    "tolerance_mm": 30.0,
+    "tolerance_deg": 5.0
+   },
+   "expected": {
+    "rejected": "fixed marker 3 was not seen steadily in every frame"
    }
   }
  ]

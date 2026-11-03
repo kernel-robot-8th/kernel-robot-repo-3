@@ -1,6 +1,6 @@
 // Continuous, display-only Pinky parking state from the ceiling camera feed.
 //
-// C++ port of the state machine in src/control_station/parking_tracker.py: NOT_IN_VIEW -> MOVING ->
+// C++ port of the state machine in the former src/control_station/parking_tracker.py: NOT_IN_VIEW -> MOVING ->
 // IN_POSITION / OFF_POSITION. It never gates the arm step; ParkingObservationCollector judges only frames captured
 // after an arrival result, so a frame where a moving Pinky briefly passes through the tolerance cannot count as an
 // arrival. The caller owns the thread, the clock and the feed, and calls one on_* method per tick.
@@ -96,7 +96,7 @@ class ParkingTracker {
 };
 
 // Re-reads a spot file when it or its intrinsic calibration changes, checking at most every kSpotReloadS.
-// Mirrors ParkingTracker._reload_spot in the Python tracker.
+// Mirrors ParkingTracker._reload_spot of the former Python tracker.
 class SpotReloader {
  public:
   SpotReloader(std::filesystem::path spot_path, std::filesystem::path repository_root);

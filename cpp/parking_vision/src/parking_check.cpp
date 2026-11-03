@@ -241,6 +241,10 @@ ParkingSpot load_spot(const fs::path& path, const fs::path& repository_root) {
   if (!(tolerance.position_mm > 0 && tolerance.yaw_deg > 0)) {
     throw ParkingSpotError("허용 오차는 0보다 커야 합니다: " + tolerance_data.dump());
   }
+  const json trusted = value_or_null(view_check, "single_anchor_trusted");
+  if (!trusted.is_null() && !trusted.is_boolean()) {
+    throw ParkingSpotError("view_check.single_anchor_trusted는 true/false여야 합니다: " + repr(trusted));
+  }
   const json shift_data = value_or_null(view_check, "max_anchor_shift_px");
   const double max_view_shift = shift_data.is_null() ? kMaxViewShiftPx : shift_data.get<double>();
   if (!(max_view_shift > 0)) {
@@ -272,6 +276,7 @@ ParkingSpot load_spot(const fs::path& path, const fs::path& repository_root) {
   spot.intrinsics = std::move(intrinsics);
   if (forward_axis.is_string()) spot.marker_forward_axis = forward_axis.get<std::string>();
   spot.max_view_shift_px = max_view_shift;
+  spot.single_anchor_trusted = trusted.is_boolean() && trusted.get<bool>();
   const json opencv_version = value_or_null(data, "opencv_version");
   if (opencv_version.is_string()) spot.registration_opencv_version = opencv_version.get<std::string>();
   return spot;
@@ -392,18 +397,33 @@ std::pair<double, double> pinky_frame_offset(const PlanarOffset& offset, const s
   return {offset.dx_mm * fx + offset.dy_mm * fy, -offset.dx_mm * fy + offset.dy_mm * fx};
 }
 
-std::optional<cv::Point2d> anchor_shift_px(const std::map<int, cv::Point2d>& anchors, const MarkerDetections& found) {
-  std::vector<double> xs;
-  std::vector<double> ys;
+std::vector<cv::Point2d> anchor_shifts(const std::map<int, cv::Point2d>& anchors, const MarkerDetections& found) {
+  std::vector<cv::Point2d> shifts;
   for (const auto& [marker_id, center] : anchors) {
     const auto markers = found.find(marker_id);
-    if (markers == found.end() || markers->second.size() != 1) continue;
-    const cv::Point2d shift = center_of(markers->second.front()) - center;
-    xs.push_back(shift.x);
-    ys.push_back(shift.y);
+    if (markers != found.end() && markers->second.size() == 1) shifts.push_back(center_of(markers->second.front()) - center);
   }
-  if (xs.empty()) return std::nullopt;
-  return cv::Point2d(median(xs), median(ys));
+  return shifts;
+}
+
+namespace {
+
+cv::Point2d median_point(const std::vector<cv::Point2d>& points) {
+  std::vector<double> xs;
+  std::vector<double> ys;
+  for (const auto& point : points) {
+    xs.push_back(point.x);
+    ys.push_back(point.y);
+  }
+  return {median(xs), median(ys)};
+}
+
+}  // namespace
+
+std::optional<cv::Point2d> anchor_shift_px(const std::map<int, cv::Point2d>& anchors, const MarkerDetections& found) {
+  const std::vector<cv::Point2d> shifts = anchor_shifts(anchors, found);
+  if (shifts.empty()) return std::nullopt;
+  return median_point(shifts);
 }
 
 FrameObservation observe_frame(const cv::Mat& image, const ParkingSpot& spot) {
@@ -411,23 +431,34 @@ FrameObservation observe_frame(const cv::Mat& image, const ParkingSpot& spot) {
   if (spot.anchors.empty()) {  // view check off: a wrapped or moved view goes unnoticed and shows up as an offset
     return observe_marker(found, spot, cv::Point2d(0.0, 0.0), std::nullopt);
   }
-  const std::optional<cv::Point2d> view_shift = anchor_shift_px(spot.anchors, found);
-  if (!view_shift) {  // a small fixed marker drops out for single frames; skip it like a missed Pinky marker
+  const std::vector<cv::Point2d> shifts = anchor_shifts(spot.anchors, found);
+  if (shifts.empty()) {  // a small fixed marker drops out for single frames; skip it like a missed Pinky marker
     FrameObservation observation;
     observation.reason = "no fixed marker visible to verify the camera view";
     observation.skipped_status = ParkingStatus::ViewUnverified;
     return observation;
   }
-  const double shift = cv::norm(*view_shift);
-  if (shift > spot.max_view_shift_px) {
+  const cv::Point2d view_shift = median_point(shifts);
+  const double shift = cv::norm(view_shift);
+  const auto unverified = [&](std::string reason) {
     FrameObservation observation;
-    observation.reason = format("fixed markers moved %.1f px from registration", shift);
+    observation.reason = std::move(reason);
     observation.blocking_status = ParkingStatus::ViewUnverified;
     observation.view_shift_px = shift;
     observation.view_shift_xy_px = view_shift;
     return observation;
+  };
+  if (shift > spot.max_view_shift_px) return unverified(format("fixed markers moved %.1f px from registration", shift));
+  double disagreement = 0.0;
+  for (const auto& s : shifts) disagreement = std::max(disagreement, cv::norm(s - view_shift));
+  if (disagreement > kAnchorAgreePx) {
+    return unverified(format("fixed markers moved differently (%.1f px apart); one may have been moved", disagreement));
   }
-  FrameObservation observation = observe_marker(found, spot, *view_shift, shift);
+  if (shifts.size() == 1 && !spot.single_anchor_trusted && shift > kSingleAnchorMaxShiftPx) {
+    return unverified(format(
+        "only one fixed marker visible and it moved %.1f px; cannot tell camera drift from a moved marker", shift));
+  }
+  FrameObservation observation = observe_marker(found, spot, view_shift, shift);
   observation.view_shift_xy_px = view_shift;
   return observation;
 }

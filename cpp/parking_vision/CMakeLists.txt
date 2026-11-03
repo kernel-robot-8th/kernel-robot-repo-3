@@ -20,15 +20,15 @@ else()
   set(PARKING_VISION_ARUCO_LIB opencv_objdetect)
 endif()
 
-add_library(parking_vision src/parking_check.cpp src/parking_observation.cpp src/parking_tracker.cpp)
+add_library(parking_vision src/parking_check.cpp src/parking_observation.cpp src/parking_tracker.cpp src/registration.cpp)
 add_library(parking_vision::parking_vision ALIAS parking_vision)
 set_target_properties(parking_vision PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(parking_vision PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(parking_vision
-  PUBLIC opencv_core
-  PRIVATE opencv_imgproc opencv_calib3d ${PARKING_VISION_ARUCO_LIB} nlohmann_json::nlohmann_json OpenSSL::Crypto)
+  PUBLIC opencv_core nlohmann_json::nlohmann_json
+  PRIVATE opencv_imgproc opencv_calib3d ${PARKING_VISION_ARUCO_LIB} OpenSSL::Crypto)
 target_compile_options(parking_vision PRIVATE -Wall -Wextra -Wpedantic)
 
 # Exported as parking_vision::parking_vision; the fixtures are shared with parking_vision_ros tests through
@@ -40,6 +40,12 @@ ament_export_targets(export_parking_vision HAS_LIBRARY_TARGET)
 # The library is static, so its private dependencies are linked by the consumer.
 ament_export_dependencies(OpenCV nlohmann_json OpenSSL)
 
+# Spot registration and checking CLI (replaces scripts/pinky_parking.py): ros2 run parking_vision pinky_parking
+add_executable(pinky_parking tools/pinky_parking.cpp)
+target_link_libraries(pinky_parking PRIVATE parking_vision opencv_imgproc opencv_videoio opencv_highgui)
+target_compile_options(pinky_parking PRIVATE -Wall -Wextra -Wpedantic)
+install(TARGETS pinky_parking RUNTIME DESTINATION lib/${PROJECT_NAME})
+
 add_executable(parking_vision_benchmark tools/benchmark_observe_frame.cpp)
 target_link_libraries(parking_vision_benchmark PRIVATE parking_vision opencv_imgproc opencv_imgcodecs)
 
@@ -47,12 +53,15 @@ include(CTest)
 if(BUILD_TESTING)
   find_package(GTest REQUIRED)
   include(GoogleTest)
-  add_executable(parking_vision_tests test/test_parking_check.cpp test/test_parking_tracker.cpp test/test_python_parity.cpp)
+  add_executable(parking_vision_tests test/test_parking_check.cpp test/test_parking_tracker.cpp test/test_python_parity.cpp
+    test/test_pinky_parking_cli.cpp)
   target_link_libraries(parking_vision_tests PRIVATE
-    parking_vision opencv_imgproc opencv_imgcodecs opencv_calib3d ${PARKING_VISION_ARUCO_LIB}
+    parking_vision opencv_imgproc opencv_imgcodecs opencv_calib3d opencv_videoio ${PARKING_VISION_ARUCO_LIB}
     nlohmann_json::nlohmann_json GTest::gtest_main)
   target_compile_definitions(parking_vision_tests PRIVATE
-    PARKING_VISION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures")
+    PARKING_VISION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
+    PINKY_PARKING_CLI="$<TARGET_FILE:pinky_parking>")
+  add_dependencies(parking_vision_tests pinky_parking)
   gtest_discover_tests(parking_vision_tests)
 endif()
 

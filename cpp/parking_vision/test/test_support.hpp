@@ -1,4 +1,4 @@
-// Scene helpers shared by the C++ tests; mirror the helpers in tests/test_parking_check.py.
+// Scene helpers shared by the C++ tests; mirror the helpers of the former tests/test_parking_check.py.
 #pragma once
 
 #include <cmath>

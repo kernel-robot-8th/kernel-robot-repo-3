@@ -1,7 +1,7 @@
 // Ceiling-camera ArUco check of whether Pinky stopped on its registered parking spot.
 //
-// C++ port of src/control_station/parking_check.py. Same algorithm, thresholds and reasons; parity with the
-// Python module is checked by test/test_python_parity.cpp against fixtures generated from it.
+// C++ port of the former src/control_station/parking_check.py (removed 2026-11-03; last in commit 8ea4c84). Same
+// algorithm, thresholds and reasons; test/test_python_parity.cpp checks it against fixtures generated from it.
 #pragma once
 
 #include <array>
@@ -25,6 +25,13 @@ inline constexpr double kMaxReprojectionErrorPx = 3.0;
 // is not the registered view (the ceiling camera sometimes opens wrapped sideways by ~96 px); smaller shifts
 // are the camera mount drifting and are subtracted.
 inline constexpr double kMaxViewShiftPx = 15.0;
+// The drift is subtracted only when the fixed markers agree on it. Visible markers whose shifts differ from
+// their median by more than this mean one of them was moved, not the camera (a tilted camera spread ~1.5 px).
+inline constexpr double kAnchorAgreePx = 3.0;
+// With a single visible fixed marker a moved marker and a drifted camera look the same, so only a shift up to
+// this much is subtracted; beyond it the view is unverified. A spot whose operator confirmed the marker is
+// fastened down (view_check.single_anchor_trusted) uses the full max_view_shift_px instead.
+inline constexpr double kSingleAnchorMaxShiftPx = 3.0;
 // The marker side measured on the registered plane must stay this close to the printed side;
 // otherwise the marker is not on that plane (lifted, tilted or a different print).
 inline constexpr double kMaxSideErrorRatio = 0.1;
@@ -111,6 +118,7 @@ struct ParkingSpot {
   Intrinsics intrinsics;
   std::optional<std::string> marker_forward_axis;  // "+x", "-x", "+y", "-y" or not recorded
   double max_view_shift_px = kMaxViewShiftPx;
+  bool single_anchor_trusted = false;
   std::optional<std::string> registration_opencv_version;
 };
 
@@ -141,6 +149,8 @@ PlaneMarker project_to_plane(const Corners& corners_px, const MarkerPose& plane,
 PlanarOffset plane_offset(const PlaneMarker& reference, const PlaneMarker& current);
 // (forward, left) in mm from Pinky's own view; dyaw already reads as a left turn when positive.
 std::pair<double, double> pinky_frame_offset(const PlanarOffset& offset, const std::string& forward_axis);
+// (x, y) pixel shift of each registered fixed marker that is visible exactly once.
+std::vector<cv::Point2d> anchor_shifts(const std::map<int, cv::Point2d>& anchors, const MarkerDetections& found);
 // Median (x, y) pixel shift of the registered fixed markers visible exactly once, or nullopt if none are.
 std::optional<cv::Point2d> anchor_shift_px(const std::map<int, cv::Point2d>& anchors, const MarkerDetections& found);
 FrameObservation observe_frame(const cv::Mat& image, const ParkingSpot& spot);

@@ -1,4 +1,4 @@
-// Port of tests/test_parking_check.py: the same behaviour checked on the C++ implementation.
+// Port of the former tests/test_parking_check.py: the same behaviour checked on the C++ implementation.
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -443,6 +443,15 @@ TEST_F(LoadSpot, UnsupportedDictionaryIsRejected) {
     const fs::path path = write_spot(json::array(), {{"mode", "OFF"}}, {{"aruco_dictionary", dictionary}});
     EXPECT_NE(error_of(path, directory).find("지원하지 않는 ArUco 사전입니다"), std::string::npos) << dictionary;
   }
+}
+
+TEST_F(LoadSpot, SingleAnchorTrusted) {
+  const json anchors = {{{"marker_id", 3}, {"center_px", {500.0, 250.0}}}};
+  EXPECT_FALSE(load_spot(write_spot(anchors, {{"mode", "FIXED_MARKERS"}}), directory).single_anchor_trusted);
+  EXPECT_TRUE(load_spot(write_spot(anchors, {{"mode", "FIXED_MARKERS"}, {"single_anchor_trusted", true}}), directory)
+                  .single_anchor_trusted);
+  const fs::path bad = write_spot(anchors, {{"mode", "FIXED_MARKERS"}, {"single_anchor_trusted", "yes"}});
+  EXPECT_NE(error_of(bad, directory).find("single_anchor_trusted"), std::string::npos);
 }
 
 TEST_F(LoadSpot, ChangedCalibrationIsRejected) {

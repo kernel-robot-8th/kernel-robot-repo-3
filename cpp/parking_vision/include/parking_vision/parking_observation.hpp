@@ -1,6 +1,6 @@
 // One-shot parking observation over frames captured after a request.
 //
-// C++ port of the judging part of src/control_station/parking_observation.py: only frames captured after the
+// C++ port of the judging part of the former src/control_station/parking_observation.py: only frames captured after the
 // request are judged, at most kObservationMaxFrames usable ones within the collection window, and fewer than
 // kObservationMinFrames usable frames are not judged. The result is an observation, never a robot command.
 // Spot lookup, the feed itself and the JSON contract stay with the caller; time is passed in by the caller.

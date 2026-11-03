@@ -1,4 +1,4 @@
-// Port of tests/test_parking_tracker.py and the judging cases of tests/test_parking_observation.py.
+// Port of the former tests/test_parking_tracker.py and the judging cases of tests/test_parking_observation.py.
 #include <filesystem>
 #include <fstream>
 
@@ -15,11 +15,15 @@ namespace {
 
 const std::pair<int, int> kPinkyAt = {420, 140};
 const std::pair<int, int> kAnchorAt = {80, 60};
+const std::pair<int, int> kSecondAnchorAt = {100, 380};  // two fixed markers, so drift is told from a moved marker
 
 cv::Mat render(std::optional<std::pair<int, int>> pinky, bool anchor = true) {
   std::map<int, std::pair<int, int>> markers;
   if (pinky) markers[21] = *pinky;
-  if (anchor) markers[1] = kAnchorAt;
+  if (anchor) {
+    markers[1] = kAnchorAt;
+    markers[2] = kSecondAnchorAt;
+  }
   cv::Mat color;
   cv::cvtColor(render_scene(markers), color, cv::COLOR_GRAY2BGR);
   return color;
