@@ -142,6 +142,7 @@ class _CameraFeed:
     error_message: str | None = None
     sequence: int = 0
     detector: "_YoloDetector | None" = None
+    robot_id: str | None = "arm-01"
     detections: list[dict[str, object]] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
     thread: threading.Thread | None = None
@@ -509,6 +510,7 @@ class OpenCVArmCameraStreamManager:
                     if shelf_weights or shelf_prompts
                     else None
                 ),
+                robot_id=None,  # a fixed view of the shelf, not a camera on the arm
             )
             self._feeds["shelf_camera"] = shelf_feed
             for other in (head_feed, joint_feed):
@@ -783,7 +785,7 @@ class OpenCVArmCameraStreamManager:
                 result.append(
                     CameraSnapshot(
                         id=feed.camera_id,
-                        robot_id="arm-01",
+                        robot_id=feed.robot_id,
                         position=feed.position,
                         connection_state=(
                             feed.connection_state if configured else CameraConnectionState.UNKNOWN

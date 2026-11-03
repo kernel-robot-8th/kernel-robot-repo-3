@@ -311,6 +311,7 @@ curl -s http://127.0.0.1:8000/api/parking-spots/pinky_dock_1/check
 - 응답은 `{"observation": {...}}`이며, 필드는 [주차 정렬 관측 계약 초안](../spec/interface-contracts.md#pinky-주차-정렬-관측-초안)을 따릅니다. 오류는 `error_code`/`message`/`error`로 반환합니다.
 - 이 API 호출은 판정 결과를 작업 이력에 남기지 않고, 로봇 명령도 만들지 않습니다.
 - 관제가 카메라를 열고 있는 동안에는 CLI로 같은 카메라를 열 수 없습니다.
+- 코드의 기본 카메라 경로(by-id)는 바꾸지 않았습니다. 실습 PC의 포트 설정(포트 4 천장, 포트 10 선반)과 YOLO 모델 경로는 PC마다 다르므로 Git에서 제외되는 `.control-station/control-station.env`에 두고 `set -a; source .control-station/control-station.env; set +a; ./run-control-station.sh`로 실행합니다. 이 설정으로 띄운 화면은 [관제 화면 캡처](../images/control-station-overview-2026-11-02.png)에 있습니다.
 - 관제 가상환경의 `opencv-python-headless`와 CLI로 등록할 때 쓴 GUI OpenCV의 버전이 다르면 모서리 검출이 조금 달라집니다. 2026-11-02 같은 화면에서 OpenCV 4.6(등록)과 4.14(판정) 사이에 약 1 mm·0.2°·고정 마커 0.8 px 차이가 났습니다. 응답의 `opencv_version`과 `registration_opencv_version`으로 확인합니다.
 
 2026-11-02에 mock 모드, 임시 DB, 포트 8765로 관제를 띄워 실제 천장 카메라로 확인했습니다. `/api/cameras`의 `head_camera`는 640×480, 29.7 fps였습니다. 판정 API를 5회 호출했고 모두 약 0.5초 걸렸습니다. 결과는 모두 `ARRIVED`/`WITHIN`(앞 0.4 mm·왼쪽 1.5 mm·yaw 0.23° 이내)이었고, 15프레임 모두 요청 시각 이후 프레임이었으며, 호출 간 프레임 sequence는 겹치지 않았습니다. 없는 등록 ID는 404, 형식이 틀린 ID는 400으로 응답했습니다. 이때 밀림은 일어나지 않았습니다.

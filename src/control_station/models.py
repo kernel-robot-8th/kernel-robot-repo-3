@@ -56,7 +56,7 @@ class FrameFreshness(StringEnum):
 @dataclass(frozen=True)
 class CameraSnapshot:
     id: str
-    robot_id: str
+    robot_id: str | None  # None for a fixed environment camera that belongs to no robot
     position: str
     connection_state: CameraConnectionState
     stream_state: CameraStreamState
