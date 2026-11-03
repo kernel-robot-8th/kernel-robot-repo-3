@@ -8,7 +8,13 @@ The capture is parking_vision_ros::CeilingCameraNode rather than usb_cam: on 202
 this container on a corrupt MJPEG frame and could not follow the camera when it re-enumerated, which also took
 the parking node down. CeilingCameraNode reopens the by-path device every 2 s after a failure, so the parking
 node stays up and reports CAMERA_UNAVAILABLE while the camera is gone.
+
+The camera device is video_device:=..., else CONTROL_STATION_CEILING_CAMERA (the same variable the pinky_parking CLI
+reads, kept per PC in the git-ignored .control-station/control-station.env), else the shared default below. Two HCAM0
+cameras share one by-id and serial, so only the by-path port tells them apart.
 """
+
+import os
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -27,8 +33,9 @@ def generate_launch_description() -> LaunchDescription:
         return ParameterValue(LaunchConfiguration(name), value_type=str)
 
     return LaunchDescription([
-        DeclareLaunchArgument("video_device", default_value=DEFAULT_DEVICE,
-                              description="Ceiling camera by-path device (two HCAM0 share one by-id)"),
+        DeclareLaunchArgument("video_device",
+                              default_value=os.environ.get("CONTROL_STATION_CEILING_CAMERA", "").strip() or DEFAULT_DEVICE,
+                              description="Ceiling camera by-path device (default: CONTROL_STATION_CEILING_CAMERA)"),
         DeclareLaunchArgument("repository_root", default_value="."),
         DeclareLaunchArgument("spot_id", default_value="pinky_dock_1"),
         ComposableNodeContainer(

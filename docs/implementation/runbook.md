@@ -203,6 +203,7 @@ CONTROL_STATION_HEAD_CAMERA=ros:/ceiling_camera/image_raw/compressed \
 CONTROL_STATION_SHELF_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:10:1.0-video-index0 ./run-control-station.sh
 ```
 
+- 천장 카메라 경로는 `video_device:=...`, 없으면 환경 변수 `CONTROL_STATION_CEILING_CAMERA`, 없으면 기본값(포트 4)을 씁니다. HCAM0 두 대는 by-id와 일련번호가 같아 USB 포트(by-path)로만 구분되므로, 포트 구성이 다른 PC는 Git에서 제외되는 `.control-station/control-station.env`에 `CONTROL_STATION_CEILING_CAMERA`를 두고 두 터미널에서 `set -a; source .control-station/control-station.env; set +a`를 먼저 실행합니다. 등록 CLI `pinky_parking`도 같은 변수를 씁니다.
 - `run-control-station.sh`는 위 설정이 있으면 ROS와 `cpp/install/setup.bash`를 source합니다. `/api/health`의 `parking.source`가 `ros`이면 판정 노드에 연결된 구성입니다.
 - Head Camera는 `/compressed` 토픽으로 받습니다. 같은 PC라도 raw 640×480 영상을 프로세스 사이로 보내면 대부분 전달되지 않았습니다(2026-11-02).
 - 판정 노드가 꺼지면 웹 주차 패널은 `NODE_UNAVAILABLE`, 확정 판정과 `VERIFY_ARRIVAL`은 `PARKING_NODE_UNAVAILABLE`로 팔 단계를 시작하지 않습니다.
