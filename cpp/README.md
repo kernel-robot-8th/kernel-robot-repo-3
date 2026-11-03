@@ -98,6 +98,7 @@ ros2 launch parking_vision_ros ceiling_parking.launch.py repository_root:=. spot
 - 읽기가 실패하면 장치를 닫고, 2초마다 by-path를 다시 풀어서 다시 엽니다. 캡처 스레드에서 예외가 밖으로 나가지 않습니다.
 - 카메라 설정값은 바꾸지 않습니다.
 - 카메라가 빠진 동안에도 판정 노드는 살아 있고, `/pinky_parking/state`는 `CAMERA_UNAVAILABLE`("새 프레임이 들어오지 않습니다")을 냅니다.
+- 관제용 JPEG는 카메라가 보낸 MJPEG 프레임을 그대로 보냅니다(`CAP_PROP_CONVERT_RGB=0`). 판정용 영상을 만들 때 한 번만 풀고, 프레임마다 다시 압축하지 않습니다. 풀 수 없는 프레임은 두 토픽 모두에 보내지 않습니다. 카메라가 MJPG를 받아들이지 않거나 영상 파일을 읽을 때는 예전처럼 다시 압축합니다(`jpeg_quality`). 2026-11-03에 HCAM0(포트 4.4)에서 OpenCV 4.6과 4.14 모두 카메라 JPEG(Huffman 테이블 포함 baseline)를 그대로 내줬고, 운영 컨테이너의 `/ceiling_camera/image_raw/compressed`는 29.7 Hz, 프레임당 약 54 KB였습니다. 바꾸기 전과 CPU 사용량은 비교하지 못했습니다.
 
 비디오 파일로 카메라를 대신하는 테스트(`test_ceiling_camera_node.cpp`)에서 다음을 확인합니다. 영상이 사라졌다가 돌아오는 경우와, 시작할 때 장치가 없는 경우입니다. 실물에서도 확인했습니다. 확정 판정은 `MISALIGNED` 15프레임이었고, 웹 영상은 초당 약 29장이었으며, 카메라 설정은 바뀌지 않았습니다.
 

@@ -27,7 +27,7 @@ CeilingCameraNode::CeilingCameraNode(const rclcpp::NodeOptions& options) : rclcp
   width_ = declare_parameter<int>("width", 640);
   height_ = declare_parameter<int>("height", 480);
   fps_ = declare_parameter<double>("fps", 30.0);
-  jpeg_quality_ = declare_parameter<int>("jpeg_quality", 80);
+  jpeg_quality_ = declare_parameter<int>("jpeg_quality", 80);  // only when re-encoding (not the camera's own JPEG)
   reopen_interval_s_ = declare_parameter<double>("reopen_interval_s", 2.0);
   max_failed_reads_ = declare_parameter<int>("max_failed_reads", 10);
 
@@ -94,23 +94,37 @@ void CeilingCameraNode::stream_once(const std::string& source, bool v4l2, int in
     set_status("카메라를 열 수 없습니다: " + source + " (다른 프로그램 점유 여부 확인)", true);
     return;
   }
+  const int mjpeg = cv::VideoWriter::fourcc('M', 'J', 'P', 'G');
+  bool passthrough = false;
   if (v4l2) {
     // Both HCAM0 cameras share a USB 2.0 hub; MJPEG keeps two streams within its bandwidth.
-    capture.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
+    capture.set(cv::CAP_PROP_FOURCC, mjpeg);
     capture.set(cv::CAP_PROP_FRAME_WIDTH, width_);
     capture.set(cv::CAP_PROP_FRAME_HEIGHT, height_);
     capture.set(cv::CAP_PROP_FPS, fps_);
+    // Take the camera's own JPEG: it goes out on image_raw/compressed as is and is decoded once for image_raw,
+    // instead of OpenCV decoding it and this loop encoding it again on every frame. On 2026-11-03 both OpenCV 4.6
+    // and 4.14 handed HCAM0's JPEG (baseline with Huffman tables) over unchanged at 29.7 fps.
+    passthrough = static_cast<int>(capture.get(cv::CAP_PROP_FOURCC)) == mjpeg &&
+                  capture.set(cv::CAP_PROP_CONVERT_RGB, 0) && capture.get(cv::CAP_PROP_CONVERT_RGB) == 0;
   }
   const std::vector<int> jpeg_params = {cv::IMWRITE_JPEG_QUALITY, jpeg_quality_};
   const auto frame_period = std::chrono::duration<double>(1.0 / fps_);
   auto next_frame = std::chrono::steady_clock::now();
   int failed_reads = 0;
   bool streaming = false;
+  cv::Mat grabbed;  // the camera's JPEG bytes when passing through, else the decoded frame
   cv::Mat frame;
   while (running_) {
-    if (!capture.read(frame) || frame.empty()) {
+    if (!capture.read(grabbed) || grabbed.empty()) {
       if (++failed_reads >= max_failed_reads_) break;
       wait(kReadRetryS);
+      continue;
+    }
+    // OpenCV decodes the camera's MJPEG with the same imdecode, so a corrupt frame fails here as it did there.
+    frame = passthrough ? cv::imdecode(grabbed, cv::IMREAD_COLOR) : grabbed;
+    if (frame.empty()) {
+      if (++failed_reads >= max_failed_reads_) break;
       continue;
     }
     if (frame.type() != CV_8UC3) {
@@ -121,7 +135,7 @@ void CeilingCameraNode::stream_once(const std::string& source, bool v4l2, int in
     if (!streaming) {
       streaming = true;
       set_status("카메라 프레임 수신 중: " + source + " " + std::to_string(frame.cols) + "x" +
-                     std::to_string(frame.rows),
+                     std::to_string(frame.rows) + (passthrough ? " (카메라 JPEG 그대로 전달)" : " (JPEG 다시 압축)"),
                  false);
     }
     std_msgs::msg::Header header;
@@ -135,7 +149,11 @@ void CeilingCameraNode::stream_once(const std::string& source, bool v4l2, int in
       auto compressed = std::make_unique<sensor_msgs::msg::CompressedImage>();
       compressed->header = header;
       compressed->format = "jpeg";
-      cv::imencode(".jpg", frame, compressed->data, jpeg_params);
+      if (passthrough) {
+        compressed->data.assign(grabbed.datastart, grabbed.dataend);
+      } else {
+        cv::imencode(".jpg", frame, compressed->data, jpeg_params);
+      }
       compressed_publisher_->publish(std::move(compressed));
     }
     if (!v4l2) {  // a file reads as fast as it can; a camera paces itself
