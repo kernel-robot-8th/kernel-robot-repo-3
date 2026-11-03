@@ -113,6 +113,28 @@
       <pre id="coordinateTargetResult" class="coordinate-result" hidden></pre>
     </section>
 
+    <section aria-labelledby="arm-command-title">
+      <div class="section-heading"><h2 id="arm-command-title">OMX 명령 (HTTP 워커)</h2><span id="armWorkerState" class="updated">워커 상태 확인 중</span></div>
+      <form id="armCommandForm" class="coordinate-form arm-command-form">
+        <label>대상 종류<input name="object_class" maxlength="80" required placeholder="예: strawberry"></label>
+        <label>좌표계<input name="frame_id" maxlength="80" required value="omx_link0"></label>
+        <label>X (m)<input name="x" type="number" step="any" min="-1" max="1" required></label>
+        <label>Y (m)<input name="y" type="number" step="any" min="-1" max="1" required></label>
+        <label>Z (m)<input name="z" type="number" step="any" min="-1" max="1" required></label>
+        <label>놓을 칸<input name="slot_id" maxlength="40" required value="CART_1"></label>
+        <label>유효 시간(초)<input name="valid_for_s" type="number" min="5" max="600" step="1" required value="60"></label>
+        <button type="submit">명령 보내기</button>
+      </form>
+      <p class="note">워커가 가져가서 ACCEPTED를 보내야 실행됩니다. 연결된 워커가 실물 OMX면 팔이 움직이고, 모의 워커는 움직이지 않습니다. 좌표 확인은 워커가 하며, 관제는 단위 실수(±1 m 초과)만 막습니다.</p>
+      <p id="armCommandMessage" class="note" role="status"></p>
+      <div class="table-wrap">
+        <table class="arm-command-table">
+          <thead><tr><th>명령</th><th>상태</th><th>대상·좌표</th><th>워커·마지막 이벤트</th><th></th></tr></thead>
+          <tbody id="armCommandRows"><tr><td colspan="5" class="loading">명령을 불러오는 중…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
       </div>
 
       <div class="view" id="view-tasks" hidden>
@@ -159,6 +181,11 @@
         <div><dt>POST</dt><dd><code>/api/arm/start</code> 텔레오퍼레이션 시작</dd></div>
         <div><dt>POST</dt><dd><code>/api/arm/stop</code> 종료 요청</dd></div>
         <div><dt>POST</dt><dd><code>/api/arm/coordinate-target-drafts</code> 미실행 좌표 초안 파일 저장</dd></div>
+        <div><dt>POST</dt><dd><code>/api/arm/commands</code> OMX 명령 1건을 큐에 등록 (팔당 미완료 명령 1건)</dd></div>
+        <div><dt>GET</dt><dd><code>/api/arm/commands</code>, <code>/api/arm/commands/{command_id}</code> 명령 목록·워커 접속 상태 / 명령 상세·이벤트</dd></div>
+        <div><dt>GET</dt><dd><code>/api/arm/{robot_id}/commands/next?worker_id=...&amp;wait_s=20</code> 워커 long-poll (200 명령 / 204 없음)</dd></div>
+        <div><dt>POST</dt><dd><code>/api/arm/commands/{command_id}/events</code> 워커 이벤트 보고 (ACCEPTED에 200을 받아야 실행)</dd></div>
+        <div><dt>POST</dt><dd><code>/api/arm/commands/{command_id}/cancel</code>, <code>.../clear-unknown</code> 취소 요청 / UNKNOWN 현장 확인 기록</dd></div>
         <div><dt>GET</dt><dd><code>/api/tasks</code> 작업 목록</dd></div>
         <div><dt>GET</dt><dd><code>/api/tasks/{task_id}</code> 작업 상세·단계·이벤트</dd></div>
         <div><dt>POST</dt><dd><code>/api/tasks</code> 작업 등록 및 선택적 `pick_request` 조건 저장</dd></div>

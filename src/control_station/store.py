@@ -153,6 +153,11 @@ class TaskStore:
         self._claim_lock = Lock()
         self._migrate()
 
+    @property
+    def session_factory(self) -> sessionmaker:
+        """Sessions on the migrated task database, shared with the arm command queue."""
+        return self._sessions
+
     def claim_task(self, task_id: str) -> tuple[dict[str, Any], bool]:
         """Atomically reserve one pending task for this server process.
 

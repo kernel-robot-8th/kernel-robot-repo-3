@@ -119,7 +119,7 @@ HTTP 서버 생존, 카메라 프레임 수신, Nav2 action server 발견, LeRob
 | 데이터 | 좌표계·단위 | 결정 상태 |
 |---|---|---|
 | 카메라 검출 위치 | 이미지 `(u, v)` / `pixel`, 카메라 ID와 프레임 시각 동반 | 픽셀 표현은 개념상 정함; 해상도·원점·crop/resize 보정은 카메라별 확인 필요 |
-| OMX 집기 목표 | OMX가 명령에서 요구하는 기준 frame과 길이 단위 | **미확정**: frame 이름, 축 방향, 원점, 허용 작업 범위를 문서/장치로 확인해야 함 |
+| OMX 집기 목표 | OMX 베이스 frame 기준 XYZ, 단위 m ([OMX 명령 HTTP 인터페이스](../implementation/arm-command-api.md)의 `target`) | 전달 형식은 정함. frame 이름(모의 워커 기본 `omx_link0`), 축 방향, 원점, 허용 작업 범위는 OMX 장치로 확인해야 함 |
 | Pinky 목적지 | Nav2가 요구하는 map frame과 pose 단위 | **미확정**: map/frame, yaw 표현, waypoint/action schema 조사 필요 |
 | 카메라→OMX 변환 | 카메라 calibration과 OMX 기준 frame 사이 변환 | 현재 MVP 범위 밖; 변환 오차·허용값은 실험 후 합의 필요 |
 
@@ -252,7 +252,7 @@ Pinky가 멈춘 뒤 천장 카메라로 "등록된 주차 위치와 얼마나 �
 | UI ↔ 관제 | localhost HTTP API | 원격 배포 인증·TLS·접근 제어 |
 | 관제 ↔ 저장소 | SQLite, SQLAlchemy ORM, Alembic | 원격/다중 사용자 배포 DB |
 | 관제 ↔ Pinky | ROS 2/Nav2 action client를 기본 방향으로 검토 | 배포판, domain, action 이름·타입, namespace, frame, lifecycle 진단; 현재는 action server discovery만 구현 |
-| 관제 ↔ OMX | 공통 명령·결과 모델을 어댑터에서 사용; 현장 read-only register probe 확인 | 실제 관제 어댑터, READY/정지 신호, 안전 작업 영역, 최종 파지 결과/오류 경로; LeRobot `send_action()`은 관절 목표 쓰기 함수이며 이 계약을 대신하지 않음 |
+| 관제 ↔ OMX | HTTP 명령 큐: 워커가 long-poll로 명령을 가져가고 이벤트를 보고하며, `ACCEPTED`에 200을 받아야 실행 ([OMX 명령 HTTP 인터페이스](../implementation/arm-command-api.md)); 현장 read-only register probe 확인 | 실물 LeRobot 워커, 카메라 좌표로 명령 생성, 작업 단계 연결, 실행 중 결과 제한 시간, 안전 작업 영역, 원격 배포 인증; LeRobot `send_action()`은 관절 목표 쓰기 함수이므로 XYZ→관절 IK는 워커 쪽에 필요 |
 | 카메라 ↔ 관제 | 현재 OpenCV 캡처와 브라우저용 MJPEG | 배포 장치 ID, 동시 스트림 성능, 장착 위치 최종 확인 |
 | 주문 서비스 ↔ 관제 | 주문 ID·물품·수량·픽업 위치가 필요 | endpoint, HTTP/event 방식, 인증, payload, 재시도와 저장 책임자 |
 | 로봇 결과 이벤트 | 관제 내부 식별자와 이벤트 의미 | 실제 topic/action result 형식, event ID·sequence·시각, 순서·재전송 보장 |
@@ -262,7 +262,7 @@ Pinky가 멈춘 뒤 천장 카메라로 "등록된 주차 위치와 얼마나 �
 - [ ] 주문 API schema, 인증·전송 방식, 주문/운송 상태 소유자
 - [ ] 한 주문을 여러 운송 작업으로 나누는 조건과 `order_id`-`task_id` 관계
 - [ ] Pinky Nav2 action 계약과 map frame
-- [ ] OMX 작업 명령, READY, 파지·적재 완료와 오류 신호
+- [ ] OMX 작업 명령, READY, 파지·적재 완료와 오류 신호 (전달 방식과 이벤트는 [HTTP 인터페이스](../implementation/arm-command-api.md)로 초안 구현; `reason_code` 목록·READY 신호·실물 워커는 미정)
 - [ ] 카메라→OMX 좌표 frame·단위·축·calibration 및 검증 허용 오차
 - [ ] 장치 이벤트 ID·sequence·시각 제공 여부와 heartbeat 주기
 - [ ] timeout/stale 기준과 운영자의 보류·재개 절차

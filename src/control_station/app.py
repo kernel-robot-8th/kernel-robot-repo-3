@@ -14,6 +14,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+from control_station.arm_commands import (
+    ArmCommandConflict,
+    ArmCommandError,
+    ArmCommandNotFound,
+    ArmCommandStore,
+)
 from control_station.arm_supervisor import ArmTeleopSupervisor
 from control_station.camera_adapters import (
     MAX_OBSERVATION_IMAGE_BYTES,
@@ -404,6 +410,16 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
             self._json(200, {"artifact": artifact, "review_event_id": parts[4]})
         elif route == "/api/arm/status":
             self._json(200, {"arm": self.app.arm_supervisor.snapshot()})
+        elif route == "/api/arm/commands":
+            self._json(200, self.app.arm_commands.list_recent())
+        elif route.startswith("/api/arm/commands/"):
+            command_id = route.removeprefix("/api/arm/commands/")
+            try:
+                self._json(200, {"command": self.app.arm_commands.get(command_id)})
+            except ArmCommandNotFound:
+                self._json_error(404, "ARM_COMMAND_NOT_FOUND", "Arm command not found")
+        elif re.fullmatch(r"/api/arm/[^/]+/commands/next", route):
+            self._claim_arm_command(route.split("/")[3])
         elif route.startswith("/api/parking-spots/") and route.endswith("/live"):
             spot_id = route.removeprefix("/api/parking-spots/").removesuffix("/live")
             tracker = self.app.parking_tracker
@@ -443,6 +459,50 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
                 self._json(404, {"error": "API route not found"})
                 return
             super().do_GET()
+
+    def _handle_arm_command_post(self, parts: list[str], body: dict[str, Any]) -> None:
+        store = self.app.arm_commands
+        try:
+            if len(parts) == 3:
+                self._json(201, {"command": store.create(body)})
+            elif parts[4] == "events":
+                command, applied = store.apply_worker_event(parts[3], body)
+                self._json(200, {"command": command, "applied": applied})
+            elif parts[4] == "cancel":
+                if body:
+                    raise ArmCommandError("cancel takes an empty JSON object")
+                self._json(200, {"command": store.cancel(parts[3])})
+            else:
+                if set(body) != {"note"}:
+                    raise ArmCommandError("clear-unknown takes exactly note")
+                self._json(200, {"command": store.clear_unknown(parts[3], body["note"])})
+        except ArmCommandNotFound:
+            self._json_error(404, "ARM_COMMAND_NOT_FOUND", "Arm command not found")
+        except ArmCommandError as exc:
+            self._json_error(400, "ARM_COMMAND_INVALID", str(exc))
+        except ArmCommandConflict as exc:
+            self._json_error(409, exc.error_code, str(exc), command=exc.command)
+
+    def _claim_arm_command(self, robot_id: str) -> None:
+        """Worker long-poll: 200 with one frozen command, or 204 when none arrived in time."""
+        query = parse_qs(urlsplit(self.path).query)
+        try:
+            wait_s = float(query.get("wait_s", ["20"])[0])
+            command = self.app.arm_commands.claim_next(
+                robot_id, query.get("worker_id", [None])[0], wait_s
+            )
+        except ArmCommandNotFound:
+            self._json_error(404, "ARM_NOT_FOUND", "Unknown arm robot_id")
+            return
+        except (ArmCommandError, ValueError) as exc:
+            self._json_error(400, "ARM_COMMAND_INVALID", str(exc))
+            return
+        if command is None:
+            self.send_response(204)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
+        self._json(200, {"command": command})
 
     def _serve_observation_image(self, task_id: str, event_id: str) -> None:
         if not re.fullmatch(r"TASK-[A-F0-9]{8}", task_id) or not re.fullmatch(
@@ -847,6 +907,21 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
             and parts[3] == "projection-draft"
         )
         parse_command_route = route == "/api/tasks/parse-command"
+        arm_command_route = route == "/api/arm/commands" or (
+            len(parts) == 5
+            and parts[:3] == ["api", "arm", "commands"]
+            and parts[4] in {"events", "cancel", "clear-unknown"}
+        )
+        if arm_command_route:
+            # Browsers send Origin; the arm worker is a plain HTTP client and sends none.
+            origin = self.headers.get("Origin")
+            if origin and urlsplit(origin).netloc != self.headers.get("Host"):
+                self._json_error(
+                    403,
+                    "CROSS_ORIGIN_REQUEST_REJECTED",
+                    "Cross-origin arm-command request rejected",
+                )
+                return
         if parse_command_route:
             origin = self.headers.get("Origin")
             if origin and urlsplit(origin).netloc != self.headers.get("Host"):
@@ -890,6 +965,7 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
             and not target_selection_route
             and not projection_draft_route
             and not parse_command_route
+            and not arm_command_route
         ):
             self._json(404, {"error": "API route not found"})
             return
@@ -916,6 +992,9 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
             return
         if not isinstance(body, dict):
             self._json(400, {"error": "Request body must be a JSON object"})
+            return
+        if arm_command_route:
+            self._handle_arm_command_post(parts, body)
             return
         if parse_command_route:
             text = body.get("text")
@@ -1623,7 +1702,9 @@ def main() -> None:
     mode = os.environ.get("CONTROL_STATION_MODE", "mock").strip().lower()
     provider = make_status_provider(mode)
     task_store = TaskStore()
-    host = "127.0.0.1"
+    # Default stays local. Set e.g. 0.0.0.0 only on a trusted LAN so an arm worker on another
+    # machine can reach the API; there is no authentication.
+    host = os.environ.get("CONTROL_STATION_HOST", "127.0.0.1").strip() or "127.0.0.1"
     port = int(os.environ.get("CONTROL_STATION_PORT", "8000"))
     handler = partial(ControlStationHandler, directory=str(WEB_DIR))
     server = ControlStationServer((host, port), handler)
@@ -1677,6 +1758,7 @@ def main() -> None:
             joint_enabled=server.arm_supervisor.enabled
         )
     server.task_store = task_store
+    server.arm_commands = ArmCommandStore(task_store.session_factory)
     frames_after = getattr(server.camera_manager, "raw_frames_after", None)
     if server.parking_source == "ros":
         raw_domain = os.environ.get("CONTROL_STATION_MOBILE_DOMAIN", os.environ.get("ROS_DOMAIN_ID"))

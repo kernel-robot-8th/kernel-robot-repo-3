@@ -84,6 +84,59 @@ class TaskEventRecord(Base):
     task: Mapped[TaskRecord] = relationship(back_populates="events")
 
 
+class ArmCommandRecord(Base):
+    """One arm command handed to an external worker (e.g. the LeRobot OMX laptop) over HTTP."""
+
+    __tablename__ = "arm_commands"
+    __table_args__ = (Index("idx_arm_commands_robot_created", "robot_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    robot_id: Mapped[str] = mapped_column(String, nullable=False)
+    operation: Mapped[str] = mapped_column(String, nullable=False)
+    state: Mapped[str] = mapped_column(String, nullable=False)
+    request: Mapped[dict[str, object]] = mapped_column("request_json", JSON, nullable=False)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    valid_until: Mapped[str] = mapped_column(String, nullable=False)
+    dispatched_at: Mapped[str | None] = mapped_column(String)
+    worker_id: Mapped[str | None] = mapped_column(String)
+    accepted_at: Mapped[str | None] = mapped_column(String)
+    cancel_requested_at: Mapped[str | None] = mapped_column(String)
+    finished_at: Mapped[str | None] = mapped_column(String)
+    last_event_at: Mapped[str | None] = mapped_column(String)
+    operator_cleared_at: Mapped[str | None] = mapped_column(String)
+    reason_code: Mapped[str | None] = mapped_column(String)
+    result: Mapped[dict[str, object] | None] = mapped_column("result_json", JSON)
+
+    events: Mapped[list[ArmCommandEventRecord]] = relationship(
+        back_populates="command",
+        cascade="all, delete-orphan",
+        order_by="(ArmCommandEventRecord.received_at, ArmCommandEventRecord.id)",
+    )
+
+
+class ArmCommandEventRecord(Base):
+    __tablename__ = "arm_command_events"
+    __table_args__ = (
+        # Worker event IDs make retried POSTs idempotent; server events leave it NULL.
+        UniqueConstraint("command_id", "worker_event_id", name="uq_arm_command_events_worker_event"),
+        Index("idx_arm_command_events_command_received", "command_id", "received_at", "id"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    command_id: Mapped[str] = mapped_column(
+        ForeignKey("arm_commands.id", ondelete="CASCADE"), nullable=False
+    )
+    worker_event_id: Mapped[str | None] = mapped_column(String)
+    event_type: Mapped[str] = mapped_column(String, nullable=False)
+    previous_state: Mapped[str | None] = mapped_column(String)
+    new_state: Mapped[str | None] = mapped_column(String)
+    occurred_at: Mapped[str | None] = mapped_column(String)
+    received_at: Mapped[str] = mapped_column(String, nullable=False)
+    payload: Mapped[dict[str, object]] = mapped_column("payload_json", JSON, nullable=False)
+
+    command: Mapped[ArmCommandRecord] = relationship(back_populates="events")
+
+
 def database_path() -> Path:
     default_path = Path(__file__).resolve().parents[2] / "data" / "tasks.sqlite3"
     return Path(os.environ.get("CONTROL_STATION_DB", default_path))

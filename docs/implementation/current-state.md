@@ -80,6 +80,7 @@
 | POST | `/api/arm/start` | 고정 프로필 프로세스 시작 요청 |
 | POST | `/api/arm/stop` | 프로세스 그룹에 `SIGINT` 종료 요청 |
 | POST | `/api/arm/coordinate-target-drafts` | 좌표 입력을 미실행 초안 파일로 저장 |
+| POST/GET | `/api/arm/commands`, `/api/arm/commands/{id}`, `/api/arm/commands/{id}/events`·`cancel`·`clear-unknown`, `/api/arm/{robot_id}/commands/next` | OMX 명령 큐([HTTP 인터페이스](arm-command-api.md)): 운영자 입력 좌표 1건을 `arm_commands` 테이블에 고정해 두고 외부 워커가 long-poll로 가져가 이벤트를 보고. 팔당 미완료 1건, ACK 제한 시간 뒤 `UNKNOWN`, 자동 재전송 없음. 작업 단계와 미연결이며 확인한 워커는 팔을 움직이지 않는 `scripts/mock_omx_worker.py`뿐 |
 | GET | `/api/tasks` | SQLite 작업 요약 목록 반환 |
 | GET | `/api/tasks/{task_id}` | 작업 요약, 단계 및 이벤트 이력과 비저장 `local_execution_owner` 관측 반환; 없으면 `404` |
 | POST | `/api/tasks` | `destination`, `arm_job`, 선택적 `pick_request` 외의 필드는 거부; `PENDING` 작업, 표준 단계 및 `TASK_CREATED` 이벤트 저장 |

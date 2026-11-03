@@ -433,6 +433,123 @@ coordinateTargetForm.addEventListener('submit', async (event) => {
   }
 });
 
+const armCommandForm = document.querySelector('#armCommandForm');
+const armCommandMessage = document.querySelector('#armCommandMessage');
+const armCommandRows = document.querySelector('#armCommandRows');
+const armWorkerState = document.querySelector('#armWorkerState');
+const armCommandStateLabels = {
+  QUEUED: '대기 (워커 미수신)', DISPATCHED: '워커 수신 · 수락 대기', ACCEPTED: '수락',
+  RUNNING: '실행 중', SUCCEEDED: '성공', FAILED: '실패', REJECTED: '워커 거부',
+  CANCELED: '취소됨', EXPIRED: '만료', UNKNOWN: '결과 불명 · 현장 확인 필요',
+};
+
+function formatClock(iso) {
+  return iso ? new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(iso)) : '-';
+}
+
+function renderArmWorkers(workers) {
+  const worker = workers.find((item) => item.robot_id === 'arm-01');
+  if (!worker) {
+    armWorkerState.textContent = '워커 접속 기록 없음';
+  } else if (worker.waiting_polls > 0) {
+    armWorkerState.textContent = `워커 대기 중 · ${worker.worker_id}`;
+  } else {
+    const seconds = Math.round((Date.now() - new Date(worker.last_poll_at).getTime()) / 1000);
+    armWorkerState.textContent = `워커 마지막 접속 ${seconds}초 전 · ${worker.worker_id}`;
+  }
+}
+
+function renderArmCommands(commands) {
+  if (!commands.length) {
+    armCommandRows.innerHTML = '<tr><td colspan="5" class="loading">보낸 명령이 없습니다.</td></tr>';
+    return;
+  }
+  armCommandRows.innerHTML = commands.map((command) => {
+    const position = command.target.position;
+    const simulated = command.result && command.result.simulated ? '<span class="simulated">모의</span>' : '';
+    const reason = command.reason_code ? `<small>${escapeHtml(command.reason_code)}</small>` : '';
+    const cleared = command.operator_cleared_at ? `<small>현장 확인 ${escapeHtml(formatClock(command.operator_cleared_at))}</small>` : '';
+    const inFlight = ['DISPATCHED', 'ACCEPTED', 'RUNNING'].includes(command.state);
+    let action = '';
+    if (command.state === 'QUEUED' || (inFlight && !command.cancel_requested)) {
+      action = `<button type="button" class="secondary" data-arm-cancel="${escapeHtml(command.command_id)}">취소</button>`;
+    } else if (inFlight) {
+      action = '<small>취소 요청됨</small>';
+    } else if (command.state === 'UNKNOWN' && !command.operator_cleared_at) {
+      action = `<button type="button" class="secondary" data-arm-clear="${escapeHtml(command.command_id)}">현장 확인 완료</button>`;
+    }
+    return `<tr>
+      <td>${escapeHtml(command.command_id)}<small>${escapeHtml(formatClock(command.created_at))}</small></td>
+      <td>${escapeHtml(armCommandStateLabels[command.state] || command.state)}${simulated}${reason}${cleared}</td>
+      <td>${escapeHtml(command.target.object_class)} → ${escapeHtml(command.place.slot_id)}<small>${escapeHtml(command.target.frame_id)} (${[position.x, position.y, position.z].map((value) => value.toFixed(3)).join(', ')}) m</small></td>
+      <td>${escapeHtml(command.worker_id || '-')}<small>${escapeHtml(formatClock(command.last_event_at || command.dispatched_at))}</small></td>
+      <td>${action}</td>
+    </tr>`;
+  }).join('');
+  armCommandRows.querySelectorAll('[data-arm-cancel]').forEach((button) => {
+    button.addEventListener('click', () => postArmCommand(`/api/arm/commands/${button.dataset.armCancel}/cancel`, {}));
+  });
+  armCommandRows.querySelectorAll('[data-arm-clear]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const note = window.prompt('팔·물체 상태를 현장에서 확인한 내용을 적어 주세요. 결과는 UNKNOWN으로 남고, 새 명령만 다시 보낼 수 있게 됩니다.');
+      if (note && note.trim()) postArmCommand(`/api/arm/commands/${button.dataset.armClear}/clear-unknown`, { note: note.trim() });
+    });
+  });
+}
+
+async function refreshArmCommands() {
+  try {
+    const response = await fetch('/api/arm/commands', { cache: 'no-store' });
+    if (!response.ok) throw new Error();
+    const data = await response.json();
+    renderArmWorkers(data.workers);
+    renderArmCommands(data.commands);
+  } catch {
+    armWorkerState.textContent = '명령 목록을 불러오지 못했습니다';
+  }
+}
+
+async function postArmCommand(url, body) {
+  armCommandMessage.textContent = '';
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(apiErrorMessage(result, '요청에 실패했습니다.'));
+    return result.command;
+  } catch (error) {
+    armCommandMessage.textContent = error.message;
+    return null;
+  } finally {
+    await refreshArmCommands();
+  }
+}
+
+armCommandForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = armCommandForm.querySelector('button');
+  const formData = new FormData(armCommandForm);
+  button.disabled = true;
+  const command = await postArmCommand('/api/arm/commands', {
+    robot_id: 'arm-01',
+    operation: 'PICK_AND_PLACE',
+    valid_for_s: Number(formData.get('valid_for_s')),
+    target: {
+      object_class: formData.get('object_class'),
+      frame_id: formData.get('frame_id'),
+      unit: 'm',
+      position: { x: Number(formData.get('x')), y: Number(formData.get('y')), z: Number(formData.get('z')) },
+    },
+    place: { slot_id: formData.get('slot_id') },
+    source: { kind: 'OPERATOR_INPUT' },
+  });
+  if (command) armCommandMessage.textContent = `${command.command_id} 등록 · 워커가 가져갈 때까지 대기`;
+  button.disabled = false;
+});
+
 const taskStatusLabels = {
   PENDING: '대기', VALIDATING: '검증 중', RUNNING: '실행 중',
   SUCCEEDED: '성공', FAILED: '실패', CANCELING: '취소 중',
@@ -1190,6 +1307,8 @@ async function refresh() {
 
 refresh();
 refreshTasks();
+refreshArmCommands();
 window.setInterval(refresh, 3000);
 window.setInterval(refreshTasks, 1000);
+window.setInterval(refreshArmCommands, 1000);
 window.setInterval(pollParkingLive, 500);

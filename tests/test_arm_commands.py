@@ -1,0 +1,245 @@
+from __future__ import annotations
+
+import json
+import tempfile
+import threading
+import time
+import unittest
+from functools import partial
+from pathlib import Path
+from unittest import mock
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
+
+from control_station import arm_commands
+from control_station.app import ControlStationHandler, ControlStationServer, WEB_DIR
+from control_station.arm_commands import ArmCommandConflict, ArmCommandError, ArmCommandStore
+from control_station.store import TaskStore
+
+
+def command_request(**overrides: object) -> dict[str, object]:
+    request: dict[str, object] = {
+        "robot_id": "arm-01",
+        "operation": "PICK_AND_PLACE",
+        "valid_for_s": 60,
+        "target": {
+            "object_class": "strawberry",
+            "frame_id": "omx_link0",
+            "unit": "m",
+            "position": {"x": 0.21, "y": -0.05, "z": 0.12},
+            "uncertainty_m": {"x": 0.01, "y": 0.03, "z": 0.01},
+        },
+        "place": {"slot_id": "CART_1"},
+        "source": {"kind": "OPERATOR_INPUT"},
+    }
+    request.update(overrides)
+    return request
+
+
+class ArmCommandStoreTests(unittest.TestCase):
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.task_store = TaskStore(str(Path(directory.name) / "tasks.sqlite3"))
+        self.addCleanup(self.task_store.close)
+        self.store = ArmCommandStore(self.task_store.session_factory, ack_timeout_s=10)
+
+    def event(self, command: dict, event: str, event_id: str | None = None, **fields: object):
+        body = {
+            "event_id": event_id or f"{event}-1",
+            "robot_id": "arm-01",
+            "worker_id": "w1",
+            "event": event,
+            "simulated": True,
+            **fields,
+        }
+        return self.store.apply_worker_event(command["command_id"], body)
+
+    def claimed(self) -> dict:
+        self.store.create(command_request())
+        command = self.store.claim_next("arm-01", "w1", 0)
+        self.assertIsNotNone(command)
+        return command
+
+    def test_full_success_path_records_each_state(self) -> None:
+        command = self.claimed()
+        self.assertEqual(command["state"], "DISPATCHED")
+        self.assertEqual(command["target"]["frame_id"], "omx_link0")
+        self.assertEqual(self.event(command, "ACCEPTED")[0]["state"], "ACCEPTED")
+        self.assertEqual(self.event(command, "PROGRESS", phase="GRASP_TARGET")[0]["state"], "RUNNING")
+        final, applied = self.event(command, "SUCCEEDED", grasp_confirmed=True, place_confirmed=True)
+        self.assertTrue(applied)
+        self.assertEqual(final["state"], "SUCCEEDED")
+        self.assertTrue(final["result"]["simulated"])
+        events = [item["event_type"] for item in self.store.get(command["command_id"])["events"]]
+        self.assertEqual(events, ["CREATED", "DISPATCHED", "ACCEPTED", "PROGRESS", "SUCCEEDED"])
+
+    def test_success_requires_grasp_and_place_confirmation(self) -> None:
+        command = self.claimed()
+        self.event(command, "ACCEPTED")
+        with self.assertRaises(ArmCommandError):
+            self.event(command, "SUCCEEDED", grasp_confirmed=True)
+        unknown, _ = self.event(command, "RESULT_UNKNOWN", reason_code="NO_GRASP_SENSOR")
+        self.assertEqual(unknown["state"], "UNKNOWN")
+        self.assertTrue(unknown["blocks_new_commands"])
+
+    def test_only_one_unfinished_command_per_arm(self) -> None:
+        self.store.create(command_request())
+        with self.assertRaises(ArmCommandConflict) as raised:
+            self.store.create(command_request())
+        self.assertEqual(raised.exception.error_code, "ARM_COMMAND_ACTIVE")
+
+    def test_invalid_requests_are_rejected(self) -> None:
+        for request in (
+            command_request(robot_id="arm-02"),
+            command_request(valid_for_s=1),
+            command_request(target={**command_request()["target"], "unit": "mm"}),
+            command_request(
+                target={**command_request()["target"], "position": {"x": 210, "y": 0, "z": 0}}
+            ),
+            command_request(source={"kind": "CAMERA"}),
+            {**command_request(), "extra": 1},
+        ):
+            with self.subTest(request=request), self.assertRaises(ArmCommandError):
+                self.store.create(request)
+
+    def test_repeated_event_id_is_idempotent(self) -> None:
+        command = self.claimed()
+        _, applied = self.event(command, "ACCEPTED", event_id="e1")
+        again, applied_again = self.event(command, "ACCEPTED", event_id="e1")
+        self.assertTrue(applied)
+        self.assertFalse(applied_again)
+        self.assertEqual(again["state"], "ACCEPTED")
+        with self.assertRaises(ArmCommandConflict) as raised:
+            self.event(command, "FAILED", event_id="e1", reason_code="X")
+        self.assertEqual(raised.exception.error_code, "EVENT_ID_REUSED")
+
+    def test_reject_needs_reason_and_other_worker_is_refused(self) -> None:
+        command = self.claimed()
+        with self.assertRaises(ArmCommandError):
+            self.event(command, "REJECTED")
+        with self.assertRaises(ArmCommandConflict) as raised:
+            self.store.apply_worker_event(
+                command["command_id"],
+                {"event_id": "x", "robot_id": "arm-01", "worker_id": "w2", "event": "ACCEPTED", "simulated": False},
+            )
+        self.assertEqual(raised.exception.error_code, "WORKER_MISMATCH")
+        rejected, _ = self.event(command, "REJECTED", reason_code="FRAME_UNSUPPORTED")
+        self.assertEqual(rejected["state"], "REJECTED")
+        self.assertFalse(rejected["blocks_new_commands"])
+
+    def test_missing_ack_becomes_unknown_and_late_accept_is_refused(self) -> None:
+        store = ArmCommandStore(self.task_store.session_factory, ack_timeout_s=0.05)
+        store.create(command_request())
+        command = store.claim_next("arm-01", "w1", 0)
+        time.sleep(0.1)
+        current = store.get(command["command_id"])
+        self.assertEqual((current["state"], current["reason_code"]), ("UNKNOWN", "ACK_TIMEOUT"))
+        with self.assertRaises(ArmCommandConflict) as raised:
+            store.apply_worker_event(
+                command["command_id"],
+                {"event_id": "late", "robot_id": "arm-01", "worker_id": "w1", "event": "ACCEPTED", "simulated": True},
+            )
+        self.assertEqual(raised.exception.error_code, "INVALID_TRANSITION")
+        with self.assertRaises(ArmCommandConflict):
+            store.create(command_request())
+        cleared = store.clear_unknown(command["command_id"], "팔이 움직이지 않은 것을 현장에서 확인")
+        self.assertEqual(cleared["state"], "UNKNOWN")
+        self.assertFalse(cleared["blocks_new_commands"])
+        store.create(command_request())
+
+    def test_expired_queue_entry_is_never_dispatched(self) -> None:
+        command = self.store.create(command_request(valid_for_s=5))
+        later = arm_commands._now() + arm_commands.timedelta(seconds=6)
+        with mock.patch.object(arm_commands, "_now", return_value=later):
+            self.assertIsNone(self.store.claim_next("arm-01", "w1", 0))
+            self.assertEqual(self.store.get(command["command_id"])["state"], "EXPIRED")
+
+    def test_cancel_before_and_after_accept(self) -> None:
+        queued = self.store.create(command_request())
+        self.assertEqual(self.store.cancel(queued["command_id"])["state"], "CANCELED")
+
+        command = self.claimed()
+        self.store.cancel(command["command_id"])
+        with self.assertRaises(ArmCommandConflict) as raised:
+            self.event(command, "ACCEPTED")
+        self.assertEqual(raised.exception.error_code, "CANCELED_BEFORE_ACCEPT")
+        self.assertEqual(self.store.get(command["command_id"])["state"], "CANCELED")
+
+        command = self.claimed()
+        self.event(command, "ACCEPTED")
+        with self.assertRaises(ArmCommandConflict):
+            self.event(command, "CANCELED", phase="GRASP_TARGET")
+        requested = self.store.cancel(command["command_id"])
+        self.assertTrue(requested["cancel_requested"])
+        self.assertEqual(self.event(command, "CANCELED")[0]["state"], "CANCELED")
+
+    def test_long_poll_wakes_when_a_command_is_created(self) -> None:
+        results: list[dict | None] = []
+        poller = threading.Thread(target=lambda: results.append(self.store.claim_next("arm-01", "w1", 5)))
+        poller.start()
+        time.sleep(0.2)
+        self.assertEqual(self.store.workers()[0]["waiting_polls"], 1)
+        started = time.monotonic()
+        self.store.create(command_request())
+        poller.join(5)
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual(results[0]["state"], "DISPATCHED")
+
+
+class ArmCommandHttpTests(unittest.TestCase):
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        task_store = TaskStore(str(Path(directory.name) / "tasks.sqlite3"))
+        self.addCleanup(task_store.close)
+        server = ControlStationServer(
+            ("127.0.0.1", 0), partial(ControlStationHandler, directory=str(WEB_DIR))
+        )
+        server.arm_commands = ArmCommandStore(task_store.session_factory)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.base = f"http://127.0.0.1:{server.server_address[1]}"
+
+    def call(self, method: str, path: str, body: object = None, headers: dict | None = None) -> tuple[int, dict]:
+        data = json.dumps(body).encode() if body is not None else None
+        request = Request(
+            self.base + path,
+            data=data,
+            method=method,
+            headers={**({"Content-Type": "application/json"} if data else {}), **(headers or {})},
+        )
+        try:
+            with urlopen(request, timeout=10) as response:
+                raw = response.read()
+                return response.status, json.loads(raw) if raw else {}
+        except HTTPError as error:
+            return error.code, json.loads(error.read() or b"{}")
+
+    def test_worker_round_trip_over_http(self) -> None:
+        self.assertEqual(self.call("GET", "/api/arm/arm-01/commands/next?worker_id=w1&wait_s=0")[0], 204)
+        status, created = self.call("POST", "/api/arm/commands", command_request())
+        self.assertEqual(status, 201)
+        command_id = created["command"]["command_id"]
+        status, claimed = self.call("GET", "/api/arm/arm-01/commands/next?worker_id=w1&wait_s=0")
+        self.assertEqual((status, claimed["command"]["command_id"]), (200, command_id))
+        event = {"event_id": "a1", "robot_id": "arm-01", "worker_id": "w1", "event": "ACCEPTED", "simulated": True}
+        status, accepted = self.call("POST", f"/api/arm/commands/{command_id}/events", event)
+        self.assertEqual((status, accepted["applied"]), (200, True))
+        status, conflict = self.call("POST", "/api/arm/commands", command_request())
+        self.assertEqual((status, conflict["error_code"]), (409, "ARM_COMMAND_ACTIVE"))
+        status, listing = self.call("GET", "/api/arm/commands")
+        self.assertEqual(listing["commands"][0]["state"], "ACCEPTED")
+        self.assertEqual(listing["workers"][0]["worker_id"], "w1")
+
+    def test_cross_origin_browser_request_is_rejected(self) -> None:
+        status, body = self.call(
+            "POST", "/api/arm/commands", command_request(), headers={"Origin": "http://evil.example"}
+        )
+        self.assertEqual((status, body["error_code"]), (403, "CROSS_ORIGIN_REQUEST_REJECTED"))
+
+
+if __name__ == "__main__":
+    unittest.main()
