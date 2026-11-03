@@ -72,7 +72,10 @@
 3. `VERIFY_ARRIVAL`
 4. `EXECUTE_ARM_TASK`
 5. `VERIFY_ARM_RESULT`
-6. `FINALIZE_TASK`
+6. `VERIFY_LOAD`
+7. `FINALIZE_TASK`
+
+`VERIFY_ARM_RESULT`는 팔이 보고한 결과, `VERIFY_LOAD`는 관제가 수레 위 물품 개수를 관측해 목표 수량과 비교한 결과입니다. 팔의 적재 성공 보고만으로 적재 완료로 보지 않고, `VERIFY_LOAD`가 성공해야 Pinky 출발 단계로 넘어갑니다([데이터 흐름](data-flow.md)의 "목표 수량 적재 성공 확인").
 
 작업이 이동만 요구하는 경우 등 선택 단계의 존재 여부는 작업 유형에 따라 정합니다. MVP에서 기본 시나리오는 위 순서를 따릅니다.
 

@@ -7,6 +7,7 @@ import threading
 import uuid
 from typing import Any, Callable
 
+from control_station.load_check import EXPECTED_LOAD_COUNT, LOAD_ERROR_CODES, LoadObserver, judge_load
 from control_station.models import StepStatus, TaskStatus
 from control_station.store import (
     DEFAULT_TASK_STEPS,
@@ -36,6 +37,15 @@ class ArrivalNotConfirmed(RuntimeError):
         self.error_code = error_code
 
 
+class LoadNotConfirmed(RuntimeError):
+    """The load observation after the arm step did not show the expected items on the cart."""
+
+    def __init__(self, error_code: str, message: str, source: str) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.source = source
+
+
 class TaskExecutionConflict(RuntimeError):
     def __init__(
         self,
@@ -57,11 +67,14 @@ class MockTaskOrchestrator:
         task_store: TaskStore,
         mode: str = "mock",
         arrival_check: ArrivalCheck | None = None,
+        load_check: LoadObserver | None = None,
     ) -> None:
         self.task_store = task_store
         self.mode = mode
         # When set, VERIFY_ARRIVAL succeeds only on an ARRIVED parking observation.
         self.arrival_check = arrival_check
+        # When set, VERIFY_LOAD succeeds only when the observed count on the cart equals the expected count.
+        self.load_check = load_check
         self.step_delay = self._read_step_delay()
         self.fail_step = self._read_failure_step() if mode == "mock" else None
         self._lock = threading.RLock()
@@ -401,6 +414,8 @@ class MockTaskOrchestrator:
         result_payload: dict[str, Any] = {"source": "mock", "outcome": "SIMULATED_SUCCESS"}
         if step.get("step_type") == "VERIFY_ARRIVAL" and self.arrival_check is not None:
             result_payload = self._verify_arrival(task_id, step_id, command_id, base)
+        if step.get("step_type") == "VERIFY_LOAD" and self.load_check is not None:
+            result_payload = self._verify_load(task_id, step_id, command_id, base)
         self.task_store.transition_step(
             task_id,
             step_id,
@@ -453,6 +468,55 @@ class MockTaskOrchestrator:
             "source": "parking_check",
             "outcome": "PARKING_ARRIVED",
             "spot_id": observation.get("spot_id"),
+        }
+
+    def _verify_load(
+        self,
+        task_id: str,
+        step_id: str,
+        command_id: str,
+        base: dict[str, Any],
+    ) -> dict[str, Any]:
+        assert self.load_check is not None
+        try:
+            observation = self.load_check()
+        except Exception as exc:
+            raise LoadNotConfirmed(
+                getattr(exc, "error_code", "LOAD_CHECK_ERROR"),
+                f"적재 확인을 시작하지 못했습니다: {exc}",
+                "load_check",
+            ) from exc
+        source = str(observation.get("source") or "load_check")
+        status = judge_load(observation, EXPECTED_LOAD_COUNT)
+        self.task_store.record_step_event(
+            task_id,
+            step_id,
+            command_id,
+            "LOAD_OBSERVED",
+            {
+                **base,
+                "source": source,
+                "event": "LOAD_OBSERVED",
+                "observation": observation,
+                "expected_count": EXPECTED_LOAD_COUNT,
+                "status": status,
+                "task_state_changed": False,
+            },
+            expected_task_status=TaskStatus.RUNNING,
+        )
+        if status != "LOADED":
+            # Pinky does not leave with a load that was not confirmed; the operator decides what happens next.
+            raise LoadNotConfirmed(
+                LOAD_ERROR_CODES[status],
+                f"적재 확인 {status}: 기대 {EXPECTED_LOAD_COUNT}개, 관측 {observation.get('observed_count')}개"
+                f" ({observation.get('reason')})",
+                source,
+            )
+        return {
+            "source": source,
+            "outcome": "LOAD_CONFIRMED",
+            "expected_count": EXPECTED_LOAD_COUNT,
+            "observed_count": observation.get("observed_count"),
         }
 
     def _finish_cancel(self, task_id: str, active_step_id: str | None) -> None:
@@ -540,6 +604,8 @@ class MockTaskOrchestrator:
         source = "mock"
         if isinstance(error, ArrivalNotConfirmed):
             source, error_code, event_name = "parking_check", error.error_code, "ARRIVAL_NOT_CONFIRMED"
+        elif isinstance(error, LoadNotConfirmed):
+            source, error_code, event_name = error.source, error.error_code, "LOAD_NOT_CONFIRMED"
         elif isinstance(error, MockScenarioFailure):
             error_code = event_name = "MOCK_SCENARIO_FAILURE"
         else:

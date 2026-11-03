@@ -21,6 +21,7 @@ from control_station.camera_adapters import (
     UnconfiguredArmCameraStreamManager,
 )
 from control_station.coordinate_target_drafts import CoordinateTargetDraftStore
+from control_station.load_check import mock_load_observer_from_env
 from control_station.parking_ros import RosParkingSource
 from control_station.robot_adapters import make_status_provider
 from control_station.shelf_slot_map import ShelfSlotMapError, load_shelf_slot_map
@@ -206,8 +207,10 @@ def main() -> None:
         # Display-only live state of the same spot; VERIFY_ARRIVAL still decides only from a fresh check.
         server.parking_tracker = parking_node
     arrival_check = partial(server.parking_check, parking_spot_id) if parking_spot_id else None
+    # Mock mode only: VERIFY_LOAD then records a simulated count instead of a plain mock success.
+    load_check = mock_load_observer_from_env() if mode == "mock" else None
     server.task_orchestrator = MockTaskOrchestrator(
-        task_store, mode=mode, arrival_check=arrival_check
+        task_store, mode=mode, arrival_check=arrival_check, load_check=load_check
     )
     draft_dir = os.environ.get(
         "CONTROL_STATION_COORDINATE_DRAFT_DIR", ".control-station/coordinate-target-drafts"

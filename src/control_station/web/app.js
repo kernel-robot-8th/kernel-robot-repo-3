@@ -659,7 +659,7 @@ const taskStatusLabels = {
 const stepLabels = {
   VALIDATE_ROBOTS: '로봇 상태 확인', NAVIGATE_TO_DESTINATION: '목적지로 이동',
   VERIFY_ARRIVAL: '도착 확인', EXECUTE_ARM_TASK: '팔 작업',
-  VERIFY_ARM_RESULT: '팔 작업 결과 확인', FINALIZE_TASK: '작업 마무리',
+  VERIFY_ARM_RESULT: '팔 작업 결과 확인', VERIFY_LOAD: '적재 확인', FINALIZE_TASK: '작업 마무리',
   VALIDATE_REQUEST: '요청 조건 확인', DETECT_TARGETS: '대상 후보 관측',
   SELECT_TARGET: '대상 선택', ESTIMATE_TARGET_POSE: '대상 위치 추정',
   VALIDATE_GRASP: '파지 가능성 확인', APPROACH_TARGET: '대상 접근',
@@ -689,6 +689,7 @@ const taskEventLabels = {
 };
 const parkingStatusLabels = {
   ARRIVED: '도착',
+  LOAD_CONFIRMED: '적재 수량 확인',
   MISALIGNED: '어긋남',
   NOT_FOUND: '확인 불가(마커 안 보임)',
   AMBIGUOUS: '확인 불가(같은 마커 여러 개)',
@@ -696,7 +697,20 @@ const parkingStatusLabels = {
 };
 const parkingDeviationLabels = { WITHIN: '범위 안', NEAR: '조금 벗어남', FAR: '많이 벗어남' };
 
+  LOAD_NOT_CONFIRMED: '적재 미확인 · 출발하지 않음',
+};
+const loadStatusLabels = {
+  LOADED: '다 실림',
+  INCOMPLETE: '덜 실림',
+  EXCESS: '더 실림',
+  NOT_VERIFIED: '확인 불가',
 function formatParkingObservation(observation) {
+
+function formatLoadObservation(payload) {
+  const observation = payload.observation || {};
+  const observed = observation.observed_count == null ? '개수 없음' : `${observation.observed_count}개`;
+  return `적재 확인 · ${loadStatusLabels[payload.status] || payload.status} · 기대 ${payload.expected_count}개 · 관측 ${observed}${observation.simulated ? ' · 모의 관측(카메라 미사용)' : ''}`;
+}
   const parts = [`주차 판정 · ${observation.spot_id} · ${parkingStatusLabels[observation.status] || observation.status}`];
   const offset = observation.offset;
   if (offset) {
@@ -1159,6 +1173,8 @@ function renderTaskDetail(task) {
             ? `${event.payload?.source === 'mock' ? '모의 ' : ''}진행률 ${Number(event.payload?.progress) || 0}% · ${event.payload?.message || '진행 이벤트'}`
             : (taskEventLabels[eventName] || eventName);
       const source = event.payload?.source;
+        : event.event_type === 'LOAD_OBSERVED'
+        ? formatLoadObservation(event.payload || {})
       const robotId = event.payload?.robot_id;
       const imageLink = event.event_type === 'TARGET_OBSERVED' && event.payload?.frame_artifact?.path
         ? `<a href="/api/tasks/${encodeURIComponent(task.id)}/observations/${encodeURIComponent(event.id)}/image" target="_blank" rel="noopener">프레임 보기</a>`
