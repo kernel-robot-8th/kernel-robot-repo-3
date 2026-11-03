@@ -139,6 +139,7 @@ function renderCameras(cameras) {
           <div class="camera-detail" data-field="point-cloud-info-row" hidden><span>XYZ PointCloud2 · 관측 전용</span><strong data-field="point-cloud-info"></strong></div>
           <div class="camera-detail"><span>프레임률</span><strong data-field="frame-rate"></strong></div>
           <div class="camera-detail" data-field="detections-row" hidden><span>YOLO 검출</span><strong data-field="detections"></strong></div>
+          <div class="camera-detail" data-field="slot-zones-row" hidden><span>선반 칸 · 표시 전용</span><strong data-field="slot-zones"></strong></div>
           <div class="camera-detail" data-field="detector-provenance-row" hidden><span>YOLO 설정 / 모델</span><strong data-field="detector-provenance"></strong></div>
           <div class="camera-detail" data-field="target-observation" hidden><span>대상 판정 · 관측 전용</span><strong data-field="target-status"></strong></div>
         </div>
@@ -233,6 +234,7 @@ function renderCameras(cameras) {
     } else if (!camera.stream_url && !preview.querySelector('img')) {
       preview.replaceChildren(document.createTextNode(camera.error_message || '영상 스트림 미연결'));
     }
+    renderSlotZones(card, preview, camera);
   });
   if (targetObservationClass) {
     const requestId = ++targetObservationRequest;
@@ -240,6 +242,71 @@ function renderCameras(cameras) {
       .filter((camera) => camera.position === 'HEAD' || camera.position === 'JOINT')
       .forEach((camera) => refreshTargetObservation(camera, requestId));
   }
+}
+
+const slotZoneStatusLabels = {
+  READY: '보정 적용', INVALID: '보정 파일 오류', SLOT_MAP_MISMATCH: '칸 정의 버전 다름',
+  SLOT_MAP_UNAVAILABLE: '칸 정의 없음', IMAGE_MISMATCH: '카메라 설정 다름',
+};
+const slotAssignmentLabels = { OUTSIDE: '칸 밖', AMBIGUOUS: '칸 경계·애매', NO_BBOX: 'bbox 없음' };
+const svgNamespace = 'http://www.w3.org/2000/svg';
+
+function renderSlotZones(card, preview, camera) {
+  // Display only: zone outlines on the stream and the slot each detection's bottom-center falls in.
+  const zones = camera.slot_zones;
+  const row = card.querySelector('[data-field="slot-zones-row"]');
+  row.hidden = !zones;
+  let overlay = preview.querySelector('svg.slot-overlay');
+  if (!zones || zones.status !== 'READY' || !preview.querySelector('img')) {
+    overlay?.remove();
+    if (zones) {
+      card.querySelector('[data-field="slot-zones"]').textContent = `${slotZoneStatusLabels[zones.status] || zones.status}${zones.detail ? ` · ${zones.detail}` : ''}`;
+    }
+    return;
+  }
+  if (!overlay) {
+    overlay = document.createElementNS(svgNamespace, 'svg');
+    overlay.classList.add('slot-overlay');
+    overlay.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    overlay.setAttribute('aria-hidden', 'true');
+    preview.append(overlay);
+  }
+  overlay.setAttribute('viewBox', `0 0 ${camera.frame_width} ${camera.frame_height}`);
+  const occupied = new Set();
+  const detections = camera.detections || [];
+  detections.forEach((item) => { if (item.slot_assignment?.status === 'IN_SLOT') occupied.add(item.slot_assignment.slot_id); });
+  const shapes = zones.slots.map((slot) => {
+    // The filled shape is the anchor zone that decides the slot; the dashed outline is the whole slot space.
+    const volume = document.createElementNS(svgNamespace, 'polygon');
+    volume.setAttribute('points', (slot.volume_polygon_px || []).map(([x, y]) => `${x},${y}`).join(' '));
+    volume.setAttribute('class', 'slot-volume');
+    const polygon = document.createElementNS(svgNamespace, 'polygon');
+    polygon.setAttribute('points', slot.polygon_px.map(([x, y]) => `${x},${y}`).join(' '));
+    polygon.setAttribute('class', occupied.has(slot.slot_id) ? 'slot-zone occupied' : 'slot-zone');
+    const label = document.createElementNS(svgNamespace, 'text');
+    const xs = slot.polygon_px.map(([x]) => x);
+    const ys = slot.polygon_px.map(([, y]) => y);
+    label.setAttribute('x', String((Math.min(...xs) + Math.max(...xs)) / 2));
+    label.setAttribute('y', String(Math.min(...ys) - 6));
+    label.setAttribute('class', 'slot-label');
+    label.textContent = slot.label.replace(' 선반 ', ' ');
+    return [volume, polygon, label];
+  }).flat();
+  const anchors = detections.filter((item) => item.slot_assignment?.anchor_px).map((item) => {
+    const dot = document.createElementNS(svgNamespace, 'circle');
+    dot.setAttribute('cx', String(item.slot_assignment.anchor_px[0]));
+    dot.setAttribute('cy', String(item.slot_assignment.anchor_px[1]));
+    dot.setAttribute('r', '4');
+    dot.setAttribute('class', item.slot_assignment.status === 'IN_SLOT' ? 'slot-anchor' : 'slot-anchor unsure');
+    return dot;
+  });
+  overlay.replaceChildren(...shapes, ...anchors);
+  const summary = detections.map((item) => {
+    const assignment = item.slot_assignment;
+    const where = assignment?.status === 'IN_SLOT' ? assignment.label : (slotAssignmentLabels[assignment?.status] || '—');
+    return `${item.class_name} → ${where}`;
+  });
+  card.querySelector('[data-field="slot-zones"]').textContent = `보정 적용 · 재투영 ${zones.reprojection_rms_px} px${summary.length ? ` · ${summary.join(', ')}` : ' · 검출 없음'}`;
 }
 
 async function refreshTargetObservation(camera, requestId) {
@@ -465,7 +532,10 @@ function renderArmCommands(commands) {
     return;
   }
   armCommandRows.innerHTML = commands.map((command) => {
-    const position = command.target.position;
+    const target = command.target;
+    const where = target.pick_slot_id
+      ? `칸 ${escapeHtml(target.slot_label || target.pick_slot_id)} (${escapeHtml(target.pick_slot_id)})`
+      : `${escapeHtml(target.frame_id)} (${[target.position.x, target.position.y, target.position.z].map((value) => value.toFixed(3)).join(', ')}) m`;
     const simulated = command.result && command.result.simulated ? '<span class="simulated">모의</span>' : '';
     const reason = command.reason_code ? `<small>${escapeHtml(command.reason_code)}</small>` : '';
     const cleared = command.operator_cleared_at ? `<small>현장 확인 ${escapeHtml(formatClock(command.operator_cleared_at))}</small>` : '';
@@ -481,7 +551,7 @@ function renderArmCommands(commands) {
     return `<tr>
       <td>${escapeHtml(command.command_id)}<small>${escapeHtml(formatClock(command.created_at))}</small></td>
       <td>${escapeHtml(armCommandStateLabels[command.state] || command.state)}${simulated}${reason}${cleared}</td>
-      <td>${escapeHtml(command.target.object_class)} → ${escapeHtml(command.place.slot_id)}<small>${escapeHtml(command.target.frame_id)} (${[position.x, position.y, position.z].map((value) => value.toFixed(3)).join(', ')}) m</small></td>
+      <td>${escapeHtml(target.object_class)} → ${escapeHtml(command.place.slot_id)}<small>${where}</small></td>
       <td>${escapeHtml(command.worker_id || '-')}<small>${escapeHtml(formatClock(command.last_event_at || command.dispatched_at))}</small></td>
       <td>${action}</td>
     </tr>`;
@@ -528,21 +598,52 @@ async function postArmCommand(url, body) {
   }
 }
 
+const armCommandSlot = document.querySelector('#armCommandSlot');
+const armCommandPositionInputs = ['frame_id', 'x', 'y', 'z'].map((name) => armCommandForm.elements[name]);
+
+function updateArmCommandMode() {
+  // A slot command carries no coordinates; the worker replays the pose it taught for that slot.
+  const slotMode = Boolean(armCommandSlot.value);
+  armCommandPositionInputs.forEach((input) => { input.disabled = slotMode; });
+}
+
+async function loadShelfSlots() {
+  try {
+    const response = await fetch('/api/arm/shelf-slots', { cache: 'no-store' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(apiErrorMessage(data, '칸 정의를 불러오지 못했습니다.'));
+    data.slot_map.slots.filter((slot) => slot.active).forEach((slot) => {
+      const option = document.createElement('option');
+      option.value = slot.slot_id;
+      option.textContent = slot.label;
+      armCommandSlot.append(option);
+    });
+  } catch (error) {
+    armCommandSlot.disabled = true;
+    armCommandSlot.title = error.message;
+  }
+}
+
+armCommandSlot.addEventListener('change', updateArmCommandMode);
+
 armCommandForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const button = armCommandForm.querySelector('button');
   const formData = new FormData(armCommandForm);
   button.disabled = true;
+  const slotId = armCommandSlot.value;
   const command = await postArmCommand('/api/arm/commands', {
     robot_id: 'arm-01',
     operation: 'PICK_AND_PLACE',
     valid_for_s: Number(formData.get('valid_for_s')),
-    target: {
-      object_class: formData.get('object_class'),
-      frame_id: formData.get('frame_id'),
-      unit: 'm',
-      position: { x: Number(formData.get('x')), y: Number(formData.get('y')), z: Number(formData.get('z')) },
-    },
+    target: slotId
+      ? { object_class: formData.get('object_class'), pick_slot_id: slotId }
+      : {
+        object_class: formData.get('object_class'),
+        frame_id: formData.get('frame_id'),
+        unit: 'm',
+        position: { x: Number(formData.get('x')), y: Number(formData.get('y')), z: Number(formData.get('z')) },
+      },
     place: { slot_id: formData.get('slot_id') },
     source: { kind: 'OPERATOR_INPUT' },
   });
@@ -1320,6 +1421,7 @@ async function refresh() {
 refresh();
 refreshTasks();
 refreshArmCommands();
+loadShelfSlots();
 window.setInterval(refresh, 3000);
 window.setInterval(refreshTasks, 1000);
 window.setInterval(refreshArmCommands, 1000);

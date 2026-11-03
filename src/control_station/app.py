@@ -21,6 +21,8 @@ from control_station.arm_commands import (
     ArmCommandStore,
 )
 from control_station.arm_supervisor import ArmTeleopSupervisor
+from control_station.shelf_slot_map import ShelfSlotMapError, load_shelf_slot_map
+from control_station.shelf_slot_zones import ShelfSlotZones
 from control_station.camera_adapters import (
     MAX_OBSERVATION_IMAGE_BYTES,
     OpenCVArmCameraStreamManager,
@@ -283,9 +285,15 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
         elif route == "/api/robots":
             self._json(200, {"robots": self.app.robot_provider.snapshots()})
         elif route == "/api/cameras":
+            zones = self.app.shelf_slot_zones
             self._json(
                 200,
-                {"cameras": [camera.to_dict() for camera in self.app.camera_manager.snapshots()]},
+                {
+                    "cameras": [
+                        zones.annotate(camera.to_dict())
+                        for camera in self.app.camera_manager.snapshots()
+                    ]
+                },
             )
         elif route.startswith("/api/cameras/") and route.endswith("/target-observation"):
             camera_id = route.removeprefix("/api/cameras/").removesuffix("/target-observation")
@@ -410,6 +418,16 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
             self._json(200, {"arm": self.app.arm_supervisor.snapshot()})
         elif route == "/api/arm/commands":
             self._json(200, self.app.arm_commands.list_recent())
+        elif route == "/api/arm/shelf-slots":
+            slot_map = self.app.arm_commands.slot_map
+            if slot_map is None:
+                self._json_error(
+                    404,
+                    "SHELF_SLOTS_NOT_CONFIGURED",
+                    self.app.arm_commands.slot_map_error or "칸 정의 파일이 없습니다",
+                )
+            else:
+                self._json(200, {"slot_map_version": slot_map.version, "slot_map": slot_map.document})
         elif route.startswith("/api/arm/commands/"):
             command_id = route.removeprefix("/api/arm/commands/")
             try:
@@ -1758,7 +1776,16 @@ def main() -> None:
             joint_enabled=server.arm_supervisor.enabled
         )
     server.task_store = task_store
-    server.arm_commands = ArmCommandStore(task_store.session_factory)
+    try:
+        slot_map, slot_map_error = load_shelf_slot_map(), None
+    except ShelfSlotMapError as exc:
+        # Position commands still work; only pick_slot_id commands are refused.
+        slot_map, slot_map_error = None, str(exc)
+        print(f"칸 정의를 불러오지 못했습니다: {exc}", flush=True)
+    server.arm_commands = ArmCommandStore(
+        task_store.session_factory, slot_map=slot_map, slot_map_error=slot_map_error
+    )
+    server.shelf_slot_zones = ShelfSlotZones(slot_map)
     server.parking_check = None
     server.parking_tracker = None
     if parking_spot_id:

@@ -16,6 +16,7 @@
 - [ROS 2·관제 인터페이스 조사](implementation/ros2-inventory.md): 현재 workspace와 관제 경계, 정적 토픽/action 목록 및 확인되지 않은 runtime 정보
 - [시뮬레이션 설정](implementation/simulation-setup.md): MuJoCo ROS 2 선행조건, 분리 domain 실행과 관제 read-only 상태 확인
 - [좌표 목표 초안](implementation/coordinate-target-draft.md): 관제 입력을 미실행 JSON 초안으로 저장하는 임시 기능
+- [정면 카메라 선반 위치 보정](implementation/shelf-pose-calibration.md): 선반 모서리를 찍어 solvePnP로 정면 카메라 위치를 구하고 6칸 영역을 화면에 투영하는 도구
 - [OMX 명령 HTTP 인터페이스](implementation/arm-command-api.md): 관제가 OMX 목표 좌표를 명령으로 넘기고 OMX 워커가 long-poll로 받아 결과를 보고하는 계약, 모의 워커 실행 방법
 - [카메라 좌표 초안](implementation/camera-intrinsic-calibration.md): 체커보드/선반 평면 보정 및 fresh task 관측 후보를 2D 평면 draft로 투영하는 오프라인 도구와 제한
 - [캘리브레이션 파일 지도](implementation/calibration-files.md): 카메라별 보정 스크립트, 결과 파일 위치와 현황, 팀 체커보드 인쇄 파일

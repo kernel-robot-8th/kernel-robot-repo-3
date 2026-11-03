@@ -65,7 +65,7 @@
 | GET | `/api/health` | 서버 모드와 주차 판정 설정(`parking.source`(`ros` 또는 `null`), `parking.camera_id`(패널이 보여 줄 feed), `parking.spot_id`, `parking.live_tracking`) 반환 |
 | GET | `/api/parking-spots/{spot_id}/live` | `CONTROL_STATION_PARKING_SPOT`으로 지정한 위치의 화면 표시용 실시간 상태(`NOT_IN_VIEW`/`MOVING`/`IN_POSITION`/`OFF_POSITION`/판정 불가) 반환; 추적하지 않는 위치면 `PARKING_TRACKING_NOT_CONFIGURED`(404); 팔 단계 진행에 쓰지 않음 |
 | GET | `/api/robots` | mock 상태 또는 ROS 2 Nav2 discovery, 선택 설정의 OMX `/joint_states` 관측, 선택 설정의 arm trajectory action-server discovery 반환; action discovery는 goal 전송/준비·안전 판정이 아님 |
-| GET | `/api/cameras` | Head·Joint 카메라와 선택 설정한 선반 카메라(`shelf_camera`, `CONTROL_STATION_SHELF_CAMERA`) 상태, 설정된 스트림 주소, 각 feed에 설정된 YOLO/선택 YOLO-World 검출 결과(`detector_state`, `detections`) 및 model type·prompt·가중치·추론 provenance 반환; MuJoCo mode는 fixed camera detector 상태/provenance와 depth/CameraInfo 및 선택형 PointCloud2 metadata도 노출 |
+| GET | `/api/cameras` | Head·Joint 카메라와 선택 설정한 선반 카메라(`shelf_camera`, `CONTROL_STATION_SHELF_CAMERA`) 상태, 설정된 스트림 주소, 각 feed에 설정된 YOLO/선택 YOLO-World 검출 결과(`detector_state`, `detections`) 및 model type·prompt·가중치·추론 provenance 반환; 활성화한 선반 위치 보정이 있는 카메라는 `slot_zones`(6칸 영상 영역)와 검출별 `slot_assignment`(bbox 아래 가운데 점이 든 칸, 표시 전용 — [선반 위치 보정](shelf-pose-calibration.md#관제-화면에-연결)) 포함; MuJoCo mode는 fixed camera detector 상태/provenance와 depth/CameraInfo 및 선택형 PointCloud2 metadata도 노출 |
 | GET | `/api/cameras/{camera_id}/target-observation?class_name=...` | 대상 클래스의 최신 카메라 관측을 미설정/준비/오류, fixed frame 미추론, stale/프레임 없음, 후보 없음/단일/복수로 분류; 선택적 `color` 힌트와 `shelf_level` 영상 영역 비교를 검토용으로 표시; 후보 필터·선택 및 명령 없음 |
 | GET | `/api/tasks/{task_id}/observations/{event_id}/image` | 저장된 `TARGET_OBSERVED` 이벤트에 연결된 PNG만 task/event 경로 및 SHA-256 확인 후 제공 |
 | GET | `/api/tasks/{task_id}/projection-drafts/{event_id}/artifact` | projection review event의 경로/hash와 draft/task ID를 확인한 뒤 저장된 `DRAFT_ONLY` JSON을 제공; 파일 변경/누락 시 거부 |
@@ -77,7 +77,7 @@
 | POST | `/api/arm/start` | 고정 프로필 프로세스 시작 요청 |
 | POST | `/api/arm/stop` | 프로세스 그룹에 `SIGINT` 종료 요청 |
 | POST | `/api/arm/coordinate-target-drafts` | 좌표 입력을 미실행 초안 파일로 저장 |
-| POST/GET | `/api/arm/commands`, `/api/arm/commands/{id}`, `/api/arm/commands/{id}/events`·`cancel`·`clear-unknown`, `/api/arm/{robot_id}/commands/next` | OMX 명령 큐([HTTP 인터페이스](arm-command-api.md)): 운영자 입력 좌표 1건을 `arm_commands` 테이블에 고정해 두고 외부 워커가 long-poll로 가져가 이벤트를 보고. 팔당 미완료 1건, ACK 제한 시간 뒤 `UNKNOWN`, 자동 재전송 없음. 작업 단계와 미연결이며 확인한 워커는 팔을 움직이지 않는 `scripts/mock_omx_worker.py`뿐 |
+| POST/GET | `/api/arm/commands`, `/api/arm/commands/{id}`, `/api/arm/commands/{id}/events`·`cancel`·`clear-unknown`, `/api/arm/{robot_id}/commands/next` | OMX 명령 큐([HTTP 인터페이스](arm-command-api.md)): 운영자가 고른 선반 칸(`pick_slot_id`, `config/shelf-slots.json`의 사용 칸 6개) 또는 좌표 1건을 `arm_commands` 테이블에 고정해 두고 외부 워커가 long-poll로 가져가 이벤트를 보고. 팔당 미완료 1건, ACK 제한 시간 뒤 `UNKNOWN`, 자동 재전송 없음. 작업 단계와 미연결이며 확인한 워커는 팔을 움직이지 않는 `scripts/mock_omx_worker.py`뿐 |
 | GET | `/api/tasks` | SQLite 작업 요약 목록 반환 |
 | GET | `/api/tasks/{task_id}` | 작업 요약, 단계 및 이벤트 이력과 비저장 `local_execution_owner` 관측 반환; 없으면 `404` |
 | POST | `/api/tasks` | `destination`, `arm_job`, 선택적 `pick_request` 외의 필드는 거부; `PENDING` 작업, 표준 단계 및 `TASK_CREATED` 이벤트 저장 |

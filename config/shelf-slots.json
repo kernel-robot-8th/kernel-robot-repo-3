@@ -1,0 +1,392 @@
+{
+  "schema_version": 1,
+  "status": "MODEL_DERIVED_WITH_MEASURED_ADJUSTMENTS",
+  "note": "팀 3D 모델에서 계산한 값에 measured_adjustments의 실측 보정을 반영했습니다.",
+  "measured_adjustments": [
+    {
+      "level": "LOWER",
+      "shift_m": -0.035,
+      "note": "2026-11-03 자 실측: 선반 밑면부터 아래 단 앞 턱 위 약 10 cm(모델 13.5 cm), 위 단 턱 위 27 cm·폭 41 cm는 모델과 같음"
+    }
+  ],
+  "frame": {
+    "frame_id": "shelf_front",
+    "unit": "m",
+    "origin": "두 선반이 맞닿는 선의 밑면, 선반 정면 평면 위",
+    "x": "선반 안쪽 (정면 카메라에서 멀어지는 방향)",
+    "y": "정면에서 볼 때 왼쪽",
+    "z": "위 (선반 밑면 기준, 바닥·책상 높이 미포함)"
+  },
+  "source_models": [
+    {
+      "file": "shelf_a (1).glb",
+      "sha256": "de622e46978f36f0657b23b7eda976d90d344f3df07569b7924769b355e3c7df",
+      "generator": "Khronos glTF Blender I/O v5.0.21",
+      "shelf_id": "shelf_a"
+    },
+    {
+      "file": "shelf_b (1).glb",
+      "sha256": "e4a8d9a95bfbbbcc89509c99caf26659fa606fbfacccbcd9153655493be64923",
+      "generator": "Khronos glTF Blender I/O v5.0.21",
+      "shelf_id": "shelf_b"
+    }
+  ],
+  "shelves": [
+    {
+      "shelf_id": "shelf_a",
+      "side": "LEFT",
+      "width_m": 0.41,
+      "height_m": 0.2694,
+      "depth_m": 0.1202
+    },
+    {
+      "shelf_id": "shelf_b",
+      "side": "RIGHT",
+      "width_m": 0.41,
+      "height_m": 0.2694,
+      "depth_m": 0.1202
+    }
+  ],
+  "slots": [
+    {
+      "slot_id": "slot_a_1_1",
+      "shelf_id": "shelf_a",
+      "level": "UPPER",
+      "side": "LEFT",
+      "label": "왼쪽 선반 위 단 좌",
+      "active": true,
+      "marker_m": {
+        "x": 0.0701,
+        "y": 0.305,
+        "z": 0.251
+      },
+      "footprint_m": {
+        "x_min": 0.0318,
+        "x_max": 0.1085,
+        "y_min": 0.205,
+        "y_max": 0.4033
+      },
+      "deck_height_m": 0.251,
+      "lip_top_height_m": 0.269,
+      "clear_height_m": null
+    },
+    {
+      "slot_id": "slot_a_1_2",
+      "shelf_id": "shelf_a",
+      "level": "UPPER",
+      "side": "RIGHT",
+      "label": "왼쪽 선반 위 단 우",
+      "active": true,
+      "marker_m": {
+        "x": 0.0701,
+        "y": 0.105,
+        "z": 0.251
+      },
+      "footprint_m": {
+        "x_min": 0.0318,
+        "x_max": 0.1085,
+        "y_min": 0.0068,
+        "y_max": 0.205
+      },
+      "deck_height_m": 0.251,
+      "lip_top_height_m": 0.269,
+      "clear_height_m": null
+    },
+    {
+      "slot_id": "slot_a_2_1",
+      "shelf_id": "shelf_a",
+      "level": "LOWER",
+      "side": "LEFT",
+      "label": "왼쪽 선반 아래 단 좌",
+      "active": true,
+      "marker_m": {
+        "x": 0.0445,
+        "y": 0.305,
+        "z": 0.0828
+      },
+      "footprint_m": {
+        "x_min": 0.0017,
+        "x_max": 0.1085,
+        "y_min": 0.205,
+        "y_max": 0.4029
+      },
+      "deck_height_m": 0.0828,
+      "lip_top_height_m": 0.1,
+      "clear_height_m": 0.1662
+    },
+    {
+      "slot_id": "slot_a_2_2",
+      "shelf_id": "shelf_a",
+      "level": "LOWER",
+      "side": "RIGHT",
+      "label": "왼쪽 선반 아래 단 우",
+      "active": true,
+      "marker_m": {
+        "x": 0.0445,
+        "y": 0.105,
+        "z": 0.0828
+      },
+      "footprint_m": {
+        "x_min": 0.0017,
+        "x_max": 0.1085,
+        "y_min": 0.0072,
+        "y_max": 0.205
+      },
+      "deck_height_m": 0.0828,
+      "lip_top_height_m": 0.1,
+      "clear_height_m": 0.1662
+    },
+    {
+      "slot_id": "slot_b_1_1",
+      "shelf_id": "shelf_b",
+      "level": "UPPER",
+      "side": "LEFT",
+      "label": "오른쪽 선반 위 단 좌",
+      "active": false,
+      "marker_m": {
+        "x": 0.0701,
+        "y": -0.105,
+        "z": 0.251
+      },
+      "footprint_m": {
+        "x_min": 0.0318,
+        "x_max": 0.1085,
+        "y_min": -0.205,
+        "y_max": -0.0068
+      },
+      "deck_height_m": 0.251,
+      "lip_top_height_m": 0.269,
+      "clear_height_m": null
+    },
+    {
+      "slot_id": "slot_b_1_2",
+      "shelf_id": "shelf_b",
+      "level": "UPPER",
+      "side": "RIGHT",
+      "label": "오른쪽 선반 위 단 우",
+      "active": false,
+      "marker_m": {
+        "x": 0.0701,
+        "y": -0.305,
+        "z": 0.251
+      },
+      "footprint_m": {
+        "x_min": 0.0318,
+        "x_max": 0.1085,
+        "y_min": -0.4033,
+        "y_max": -0.205
+      },
+      "deck_height_m": 0.251,
+      "lip_top_height_m": 0.269,
+      "clear_height_m": null
+    },
+    {
+      "slot_id": "slot_b_2_1",
+      "shelf_id": "shelf_b",
+      "level": "LOWER",
+      "side": "LEFT",
+      "label": "오른쪽 선반 아래 단 좌",
+      "active": true,
+      "marker_m": {
+        "x": 0.0445,
+        "y": -0.105,
+        "z": 0.0828
+      },
+      "footprint_m": {
+        "x_min": 0.0017,
+        "x_max": 0.1085,
+        "y_min": -0.205,
+        "y_max": -0.0072
+      },
+      "deck_height_m": 0.0828,
+      "lip_top_height_m": 0.1,
+      "clear_height_m": 0.1662
+    },
+    {
+      "slot_id": "slot_b_2_2",
+      "shelf_id": "shelf_b",
+      "level": "LOWER",
+      "side": "RIGHT",
+      "label": "오른쪽 선반 아래 단 우",
+      "active": true,
+      "marker_m": {
+        "x": 0.0445,
+        "y": -0.305,
+        "z": 0.0828
+      },
+      "footprint_m": {
+        "x_min": 0.0017,
+        "x_max": 0.1085,
+        "y_min": -0.4029,
+        "y_max": -0.205
+      },
+      "deck_height_m": 0.0828,
+      "lip_top_height_m": 0.1,
+      "clear_height_m": 0.1662
+    }
+  ],
+  "keypoints": [
+    {
+      "keypoint_id": "left_end_bottom_front",
+      "label": "왼쪽 끝 옆판 아래 앞 모서리",
+      "point_m": {
+        "x": 0.0,
+        "y": 0.41,
+        "z": 0.0
+      }
+    },
+    {
+      "keypoint_id": "left_end_top_front",
+      "label": "왼쪽 끝 옆판 위 앞 모서리",
+      "point_m": {
+        "x": 0.0551,
+        "y": 0.41,
+        "z": 0.2693
+      }
+    },
+    {
+      "keypoint_id": "seam_bottom_front",
+      "label": "가운데 이음새 아래 앞 모서리",
+      "point_m": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0
+      }
+    },
+    {
+      "keypoint_id": "seam_top_front",
+      "label": "가운데 이음새 위 앞 모서리",
+      "point_m": {
+        "x": 0.0551,
+        "y": 0.0,
+        "z": 0.2693
+      }
+    },
+    {
+      "keypoint_id": "right_end_bottom_front",
+      "label": "오른쪽 끝 옆판 아래 앞 모서리",
+      "point_m": {
+        "x": 0.0,
+        "y": -0.41,
+        "z": 0.0
+      }
+    },
+    {
+      "keypoint_id": "right_end_top_front",
+      "label": "오른쪽 끝 옆판 위 앞 모서리",
+      "point_m": {
+        "x": 0.0551,
+        "y": -0.41,
+        "z": 0.2693
+      }
+    },
+    {
+      "keypoint_id": "shelf_a_upper_lip_top_left",
+      "label": "왼쪽 선반 위 단 앞 턱 위 왼쪽 모서리",
+      "point_m": {
+        "x": 0.0301,
+        "y": 0.4033,
+        "z": 0.269
+      }
+    },
+    {
+      "keypoint_id": "shelf_a_upper_lip_top_right",
+      "label": "왼쪽 선반 위 단 앞 턱 위 오른쪽 모서리",
+      "point_m": {
+        "x": 0.0301,
+        "y": 0.0068,
+        "z": 0.269
+      }
+    },
+    {
+      "keypoint_id": "shelf_a_upper_lip_bottom_left",
+      "label": "왼쪽 선반 위 단 앞 턱 아래 왼쪽 모서리",
+      "point_m": {
+        "x": 0.0301,
+        "y": 0.4033,
+        "z": 0.249
+      }
+    },
+    {
+      "keypoint_id": "shelf_a_upper_lip_bottom_right",
+      "label": "왼쪽 선반 위 단 앞 턱 아래 오른쪽 모서리",
+      "point_m": {
+        "x": 0.0301,
+        "y": 0.0068,
+        "z": 0.249
+      }
+    },
+    {
+      "keypoint_id": "shelf_a_lower_lip_top_left",
+      "label": "왼쪽 선반 아래 단 앞 턱 위 왼쪽 모서리",
+      "point_m": {
+        "x": 0.0,
+        "y": 0.4029,
+        "z": 0.1
+      }
+    },
+    {
+      "keypoint_id": "shelf_a_lower_lip_top_right",
+      "label": "왼쪽 선반 아래 단 앞 턱 위 오른쪽 모서리",
+      "point_m": {
+        "x": 0.0,
+        "y": 0.0072,
+        "z": 0.1
+      }
+    },
+    {
+      "keypoint_id": "shelf_a_lower_lip_bottom_left",
+      "label": "왼쪽 선반 아래 단 앞 턱 아래 왼쪽 모서리",
+      "point_m": {
+        "x": 0.0,
+        "y": 0.4029,
+        "z": 0.081
+      }
+    },
+    {
+      "keypoint_id": "shelf_a_lower_lip_bottom_right",
+      "label": "왼쪽 선반 아래 단 앞 턱 아래 오른쪽 모서리",
+      "point_m": {
+        "x": 0.0,
+        "y": 0.0072,
+        "z": 0.081
+      }
+    },
+    {
+      "keypoint_id": "shelf_b_lower_lip_top_left",
+      "label": "오른쪽 선반 아래 단 앞 턱 위 왼쪽 모서리",
+      "point_m": {
+        "x": 0.0,
+        "y": -0.0072,
+        "z": 0.1
+      }
+    },
+    {
+      "keypoint_id": "shelf_b_lower_lip_top_right",
+      "label": "오른쪽 선반 아래 단 앞 턱 위 오른쪽 모서리",
+      "point_m": {
+        "x": 0.0,
+        "y": -0.4029,
+        "z": 0.1
+      }
+    },
+    {
+      "keypoint_id": "shelf_b_lower_lip_bottom_left",
+      "label": "오른쪽 선반 아래 단 앞 턱 아래 왼쪽 모서리",
+      "point_m": {
+        "x": 0.0,
+        "y": -0.0072,
+        "z": 0.081
+      }
+    },
+    {
+      "keypoint_id": "shelf_b_lower_lip_bottom_right",
+      "label": "오른쪽 선반 아래 단 앞 턱 아래 오른쪽 모서리",
+      "point_m": {
+        "x": 0.0,
+        "y": -0.4029,
+        "z": 0.081
+      }
+    }
+  ]
+}

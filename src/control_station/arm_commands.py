@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from control_station.database import ArmCommandEventRecord, ArmCommandRecord
 from control_station.models import StringEnum
+from control_station.shelf_slot_map import ShelfSlotMap
 
 
 ARM_ROBOT_IDS = frozenset({"arm-01"})
@@ -175,8 +176,53 @@ def _xyz(value: object, field: str, *, minimum: float, maximum: float) -> dict[s
     return result
 
 
-def validate_command_request(payload: Mapping[str, object]) -> tuple[str, str, int, dict[str, Any]]:
-    """Return (robot_id, operation, valid_for_s, frozen request) or raise ArmCommandError."""
+def _slot_target(target: Mapping[str, object], slot_map: ShelfSlotMap | None) -> dict[str, Any]:
+    """A slot target names a shelf slot; the worker replays its own pose for it, so no XYZ is sent."""
+    if slot_map is None:
+        raise ArmCommandError("칸 정의 파일(config/shelf-slots.json)이 없어 pick_slot_id를 쓸 수 없습니다")
+    if any(target.get(field) is not None for field in ("frame_id", "unit", "position", "uncertainty_m")):
+        raise ArmCommandError("pick_slot_id와 좌표(frame_id, unit, position, uncertainty_m)는 함께 보낼 수 없습니다")
+    slot = slot_map.active_slots.get(target.get("pick_slot_id"))  # type: ignore[arg-type]
+    if slot is None:
+        raise ArmCommandError("pick_slot_id must be one of: " + ", ".join(sorted(slot_map.active_slots)))
+    return {
+        "pick_slot_id": slot["slot_id"],
+        "slot_label": slot["label"],
+        "slot_map_version": slot_map.version,
+        "frame_id": None,
+        "unit": None,
+        "position": None,
+        "uncertainty_m": None,
+    }
+
+
+def _position_target(target: Mapping[str, object]) -> dict[str, Any]:
+    if target.get("unit") != "m":
+        raise ArmCommandError("target.unit must be 'm'")
+    return {
+        "pick_slot_id": None,
+        "slot_label": None,
+        "slot_map_version": None,
+        "frame_id": _matching(target.get("frame_id"), "target.frame_id", _FRAME_ID),
+        "unit": "m",
+        "position": _xyz(
+            target.get("position"), "target.position", minimum=-MAX_ABS_POSITION_M, maximum=MAX_ABS_POSITION_M
+        ),
+        "uncertainty_m": (
+            _xyz(target["uncertainty_m"], "target.uncertainty_m", minimum=0.0, maximum=MAX_ABS_POSITION_M)
+            if target.get("uncertainty_m") is not None
+            else None
+        ),
+    }
+
+
+def validate_command_request(
+    payload: Mapping[str, object], slot_map: ShelfSlotMap | None = None
+) -> tuple[str, str, int, dict[str, Any]]:
+    """Return (robot_id, operation, valid_for_s, frozen request) or raise ArmCommandError.
+
+    The target is either one shelf slot (`pick_slot_id`) or one XYZ position with its frame and unit.
+    """
     allowed = {"robot_id", "operation", "valid_for_s", "target", "place", "source"}
     if set(payload) - allowed:
         raise ArmCommandError("Unsupported fields: " + ", ".join(sorted(set(payload) - allowed)))
@@ -191,22 +237,15 @@ def validate_command_request(payload: Mapping[str, object]) -> tuple[str, str, i
         raise ArmCommandError("valid_for_s must be an integer from 5 to 600")
 
     target = payload.get("target")
-    target_fields = {"object_class", "frame_id", "unit", "position", "uncertainty_m", "approach"}
+    target_fields = {"object_class", "pick_slot_id", "frame_id", "unit", "position", "uncertainty_m", "approach"}
     if not isinstance(target, Mapping) or set(target) - target_fields:
         raise ArmCommandError("target must be an object with " + ", ".join(sorted(target_fields)))
-    if target.get("unit") != "m":
-        raise ArmCommandError("target.unit must be 'm'")
     frozen_target: dict[str, Any] = {
         "object_class": _text(target.get("object_class"), "target.object_class", 80),
-        "frame_id": _matching(target.get("frame_id"), "target.frame_id", _FRAME_ID),
-        "unit": "m",
-        "position": _xyz(
-            target.get("position"), "target.position", minimum=-MAX_ABS_POSITION_M, maximum=MAX_ABS_POSITION_M
-        ),
-        "uncertainty_m": (
-            _xyz(target["uncertainty_m"], "target.uncertainty_m", minimum=0.0, maximum=MAX_ABS_POSITION_M)
-            if target.get("uncertainty_m") is not None
-            else None
+        **(
+            _slot_target(target, slot_map)
+            if target.get("pick_slot_id") is not None
+            else _position_target(target)
         ),
         "approach": target.get("approach", "FRONT_HORIZONTAL"),
     }
@@ -235,8 +274,17 @@ def validate_command_request(payload: Mapping[str, object]) -> tuple[str, str, i
 class ArmCommandStore:
     """Persist arm commands and serialize their state changes inside this server process."""
 
-    def __init__(self, sessions: sessionmaker, *, ack_timeout_s: float | None = None) -> None:
+    def __init__(
+        self,
+        sessions: sessionmaker,
+        *,
+        ack_timeout_s: float | None = None,
+        slot_map: ShelfSlotMap | None = None,
+        slot_map_error: str | None = None,
+    ) -> None:
         self._sessions = sessions
+        self.slot_map = slot_map
+        self.slot_map_error = slot_map_error
         self.ack_timeout_s = (
             ack_timeout_s
             if ack_timeout_s is not None
@@ -386,7 +434,7 @@ class ArmCommandStore:
     # ---- operator side ----
 
     def create(self, payload: Mapping[str, object]) -> dict[str, Any]:
-        robot_id, operation, valid_for_s, request = validate_command_request(payload)
+        robot_id, operation, valid_for_s, request = validate_command_request(payload, self.slot_map)
         now = _now()
         with self._lock:
             with self._sessions.begin() as session:

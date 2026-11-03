@@ -117,6 +117,7 @@
       <div class="section-heading"><h2 id="arm-command-title">OMX 명령 (HTTP 워커)</h2><span id="armWorkerState" class="updated">워커 상태 확인 중</span></div>
       <form id="armCommandForm" class="coordinate-form arm-command-form">
         <label>대상 종류<input name="object_class" maxlength="80" required placeholder="예: strawberry"></label>
+        <label>집을 칸<select id="armCommandSlot" name="pick_slot_id"><option value="">좌표로 입력</option></select></label>
         <label>좌표계<input name="frame_id" maxlength="80" required value="omx_link0"></label>
         <label>X (m)<input name="x" type="number" step="any" min="-1" max="1" required></label>
         <label>Y (m)<input name="y" type="number" step="any" min="-1" max="1" required></label>

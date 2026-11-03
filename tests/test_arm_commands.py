@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 from control_station import arm_commands
 from control_station.app import ControlStationHandler, ControlStationServer, WEB_DIR
 from control_station.arm_commands import ArmCommandConflict, ArmCommandError, ArmCommandStore
+from control_station.shelf_slot_map import ShelfSlotMapError, load_shelf_slot_map
 from control_station.store import TaskStore
 
 
@@ -187,6 +188,62 @@ class ArmCommandStoreTests(unittest.TestCase):
         self.assertEqual(results[0]["state"], "DISPATCHED")
 
 
+def slot_request(**target: object) -> dict[str, object]:
+    return command_request(target={"object_class": "strawberry", **target})
+
+
+class ShelfSlotCommandTests(unittest.TestCase):
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.directory = Path(directory.name)
+        self.task_store = TaskStore(str(self.directory / "tasks.sqlite3"))
+        self.addCleanup(self.task_store.close)
+        self.slot_map = load_shelf_slot_map()  # the committed config/shelf-slots.json
+        self.store = ArmCommandStore(self.task_store.session_factory, slot_map=self.slot_map)
+
+    def test_committed_map_has_the_six_agreed_slots(self) -> None:
+        self.assertEqual(
+            sorted(self.slot_map.active_slots),
+            ["slot_a_1_1", "slot_a_1_2", "slot_a_2_1", "slot_a_2_2", "slot_b_2_1", "slot_b_2_2"],
+        )
+        self.assertEqual(self.slot_map.active_slots["slot_a_2_1"]["label"], "왼쪽 선반 아래 단 좌")
+
+    def test_slot_command_freezes_slot_and_map_version_without_coordinates(self) -> None:
+        command = self.store.create(slot_request(pick_slot_id="slot_b_2_2"))
+        target = command["target"]
+        self.assertEqual(target["pick_slot_id"], "slot_b_2_2")
+        self.assertEqual(target["slot_label"], "오른쪽 선반 아래 단 우")
+        self.assertEqual(target["slot_map_version"], self.slot_map.version)
+        self.assertIsNone(target["position"])
+        self.assertIsNone(target["frame_id"])
+
+    def test_unknown_inactive_or_mixed_slot_targets_are_rejected(self) -> None:
+        for target in (
+            {"pick_slot_id": "slot_z_9_9"},
+            {"pick_slot_id": "slot_b_1_1"},  # right shelf upper tier exists in the model but is not used
+            {"pick_slot_id": "slot_a_2_1", "frame_id": "omx_link0", "unit": "m", "position": {"x": 0, "y": 0, "z": 0}},
+        ):
+            with self.subTest(target=target), self.assertRaises(ArmCommandError):
+                self.store.create(slot_request(**target))
+
+    def test_slot_commands_need_a_slot_map(self) -> None:
+        store = ArmCommandStore(self.task_store.session_factory)
+        with self.assertRaisesRegex(ArmCommandError, "칸 정의"):
+            store.create(slot_request(pick_slot_id="slot_a_2_1"))
+        self.assertEqual(store.create(command_request())["target"]["pick_slot_id"], None)
+
+    def test_slot_map_loader_rejects_duplicate_or_inactive_only_maps(self) -> None:
+        document = json.loads(self.slot_map.path.read_text(encoding="utf-8"))
+        duplicate = {**document, "slots": [document["slots"][0], document["slots"][0]]}
+        inactive = {**document, "slots": [{**slot, "active": False} for slot in document["slots"]]}
+        for name, broken in (("duplicate", duplicate), ("inactive", inactive)):
+            path = self.directory / f"{name}.json"
+            path.write_text(json.dumps(broken), encoding="utf-8")
+            with self.subTest(name=name), self.assertRaises(ShelfSlotMapError):
+                load_shelf_slot_map(path)
+
+
 class ArmCommandHttpTests(unittest.TestCase):
     def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory()
@@ -196,7 +253,7 @@ class ArmCommandHttpTests(unittest.TestCase):
         server = ControlStationServer(
             ("127.0.0.1", 0), partial(ControlStationHandler, directory=str(WEB_DIR))
         )
-        server.arm_commands = ArmCommandStore(task_store.session_factory)
+        server.arm_commands = ArmCommandStore(task_store.session_factory, slot_map=load_shelf_slot_map())
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(server.server_close)
@@ -233,6 +290,14 @@ class ArmCommandHttpTests(unittest.TestCase):
         status, listing = self.call("GET", "/api/arm/commands")
         self.assertEqual(listing["commands"][0]["state"], "ACCEPTED")
         self.assertEqual(listing["workers"][0]["worker_id"], "w1")
+
+    def test_shelf_slots_are_served_and_usable_over_http(self) -> None:
+        status, body = self.call("GET", "/api/arm/shelf-slots")
+        self.assertEqual(status, 200)
+        active = [slot["slot_id"] for slot in body["slot_map"]["slots"] if slot["active"]]
+        self.assertEqual(len(active), 6)
+        status, created = self.call("POST", "/api/arm/commands", slot_request(pick_slot_id="slot_a_1_1"))
+        self.assertEqual((status, created["command"]["target"]["slot_map_version"]), (201, body["slot_map_version"]))
 
     def test_cross_origin_browser_request_is_rejected(self) -> None:
         status, body = self.call(

@@ -17,11 +17,13 @@ were actually confirmed (otherwise RESULT_UNKNOWN or FAILED).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -49,6 +51,9 @@ class Worker:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
         self.base = args.server.rstrip("/")
+        raw = args.slots.read_bytes()
+        self.slot_map_version = hashlib.sha256(raw).hexdigest()
+        self.known_slots = {slot["slot_id"] for slot in json.loads(raw)["slots"] if slot["active"]}
 
     def send(self, command: dict, event: str, **fields: object) -> dict:
         body = {
@@ -69,7 +74,13 @@ class Worker:
     def check(self, command: dict) -> str | None:
         """Worker-side checks before accepting. Return a reason code to reject, or None."""
         target = command["target"]
-        if target["frame_id"] != self.args.frame_id:
+        if target.get("pick_slot_id") is not None:
+            # A real worker looks up the joint pose it taught for this slot under this slot map version.
+            if target["slot_map_version"] != self.slot_map_version:
+                return "SLOT_MAP_MISMATCH"
+            if target["pick_slot_id"] not in self.known_slots:
+                return "SLOT_UNKNOWN"
+        elif target["frame_id"] != self.args.frame_id:
             return "FRAME_UNSUPPORTED"
         if datetime.fromisoformat(command["valid_until"]) <= datetime.now(timezone.utc):
             return "EXPIRED"
@@ -82,9 +93,13 @@ class Worker:
 
     def handle(self, command: dict) -> None:
         target = command["target"]
+        where = (
+            f"칸 {target['pick_slot_id']} ({target['slot_label']})"
+            if target.get("pick_slot_id") is not None
+            else f"{target['frame_id']} {target['position']} m"
+        )
         print(
-            f"[{command['command_id']}] {target['object_class']} @ {target['frame_id']} "
-            f"{target['position']} m -> slot {command['place']['slot_id']}",
+            f"[{command['command_id']}] {target['object_class']} @ {where} -> {command['place']['slot_id']}",
             flush=True,
         )
         if self.args.result == "silent":
@@ -139,6 +154,12 @@ def main() -> int:
     parser.add_argument("--robot-id", default="arm-01")
     parser.add_argument("--worker-id", default="mock-omx-worker")
     parser.add_argument("--frame-id", default="omx_link0", help="the only target frame this worker accepts")
+    parser.add_argument(
+        "--slots",
+        type=Path,
+        default=Path(__file__).resolve().parents[1] / "config" / "shelf-slots.json",
+        help="slot map whose slots this worker can pick (its SHA-256 must match the command)",
+    )
     parser.add_argument(
         "--result",
         choices=("succeeded", "failed", "unknown", "reject", "silent"),

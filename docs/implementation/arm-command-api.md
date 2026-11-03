@@ -2,7 +2,7 @@
 
 관제가 OMX 목표 좌표를 넘기고, OMX 쪽 워커가 그것을 가져가 실행한 뒤 결과를 알려 주는 HTTP 계약입니다. 관제와 OMX가 한 노트북에 있든 서버와 노트북으로 나뉘든 같은 API를 씁니다. 관제는 팔을 직접 움직이지 않습니다. 팔을 움직이는 것은 OMX 쪽 워커(LeRobot)입니다.
 
-현재 구현 범위: 명령 큐·상태 기록 API, 관제 화면의 **OMX 명령** 섹션(수동 조작 탭), 팔을 움직이지 않는 [모의 워커](../../scripts/mock_omx_worker.py). 작업 흐름(작업 이력의 단계)과는 아직 연결하지 않았고, 좌표는 운영자가 직접 입력합니다(`source.kind: OPERATOR_INPUT`). 카메라에서 계산한 좌표를 넣는 경로와 실물 OMX 워커는 아직 없습니다.
+현재 구현 범위: 명령 큐·상태 기록 API, 관제 화면의 **OMX 명령** 섹션(수동 조작 탭), 팔을 움직이지 않는 [모의 워커](../../scripts/mock_omx_worker.py). 작업 흐름(작업 이력의 단계)과는 아직 연결하지 않았고, 목표는 운영자가 직접 고릅니다(`source.kind: OPERATOR_INPUT`). 목표는 **선반 칸 하나**(`pick_slot_id`) 또는 **XYZ 좌표 하나** 중 하나입니다. 카메라 관측으로 칸·좌표를 정하는 경로와 실물 OMX 워커는 아직 없습니다.
 
 ## 왜 HTTP인가
 
@@ -67,7 +67,9 @@ sequenceDiagram
 
 | 필드 | 의미 | 워커가 할 일 |
 |---|---|---|
-| `target.frame_id` | 좌표 기준 프레임 이름. 관제는 이름만 전달하고 실제 프레임인지 확인하지 않습니다 | 자기 베이스 프레임(모의 워커 기본값 `omx_link0`)과 다르면 `REJECTED` / `FRAME_UNSUPPORTED` |
+| `target.pick_slot_id` | 집을 선반 칸([칸 정의](#선반-칸-정의)의 사용 칸 6개 중 하나). 칸 명령이면 `frame_id`·`unit`·`position`·`uncertainty_m`은 `null`입니다 | 그 칸에 기록해 둔 관절 자세를 재생. 모르는 칸이면 `REJECTED` / `SLOT_UNKNOWN` |
+| `target.slot_label`, `slot_map_version` | 칸 이름(예: "왼쪽 선반 아래 단 좌")과 명령을 만들 때 쓴 칸 정의 파일의 SHA-256 | 자기 칸 정의와 버전이 다르면 `REJECTED` / `SLOT_MAP_MISMATCH` |
+| `target.frame_id` | 좌표 명령의 기준 프레임 이름. 관제는 이름만 전달하고 실제 프레임인지 확인하지 않습니다 | 자기 베이스 프레임(모의 워커 기본값 `omx_link0`)과 다르면 `REJECTED` / `FRAME_UNSUPPORTED` |
 | `target.unit` / `position` | 항상 m. 관제는 ±1 m를 넘는 값만 막습니다(mm를 m로 잘못 쓴 경우 방지). 작업 범위 검사가 아닙니다 | 작업 범위·IK 실패면 `REJECTED` (`OUT_OF_WORKSPACE`, `IK_FAILED` 등) |
 | `target.uncertainty_m` | 축별 신뢰 범위(선택). 정면 카메라는 깊이 축 오차가 큽니다 | 큰 축은 손목 카메라 재확인(`REFINE_TARGET`)으로 보정 |
 | `target.approach` | 접근 방향. 현재 `FRONT_HORIZONTAL`만 정의 | OMX 팀이 다른 방식이 필요하면 값을 추가합니다 |
@@ -133,6 +135,7 @@ sequenceDiagram
 |---|---|---|---|
 | POST | `/api/arm/commands` | 관제 화면 | 명령 등록. body: `robot_id`, `operation`, `valid_for_s`(5–600), `target`, `place`, `source` |
 | GET | `/api/arm/commands` | 관제 화면 | 최근 20건, 워커 접속 상태, ACK 제한 시간 |
+| GET | `/api/arm/shelf-slots` | 둘 다 | 관제가 불러온 칸 정의 파일 내용과 버전(SHA-256). 파일이 없으면 404 `SHELF_SLOTS_NOT_CONFIGURED` |
 | GET | `/api/arm/commands/{command_id}` | 둘 다 | 명령과 전체 이벤트 이력 |
 | POST | `/api/arm/commands/{command_id}/cancel` | 관제 화면 | body `{}`. `QUEUED`면 바로 취소, 실행 중이면 취소 요청 표시 |
 | POST | `/api/arm/commands/{command_id}/clear-unknown` | 관제 화면 | body `{"note": "..."}`. `UNKNOWN` 현장 확인 기록 |
@@ -140,6 +143,35 @@ sequenceDiagram
 | POST | `/api/arm/commands/{command_id}/events` | 워커 | 이벤트 보고 |
 
 오류 응답은 `error_code`, `message`를 담습니다. 400은 형식 오류, 404는 없는 명령·팔, 409는 현재 상태에서 허용되지 않는 요청이며 409에는 현재 `command`가 함께 옵니다. 브라우저의 다른 출처(Origin) 요청은 403으로 막습니다.
+
+## 선반 칸 정의
+
+[config/shelf-slots.json](../../config/shelf-slots.json)은 팀 3D 모델(`shelf_a.glb`, `shelf_b.glb`)에서 [derive_shelf_slots.py](../../scripts/derive_shelf_slots.py)로 만든 칸 목록입니다. 모델에 들어 있는 칸 표시(`slot_<선반>_<단>_<번호>`, 각 단 바닥판 윗면의 칸 중앙)와 메시의 바닥판 면을 읽어, 두 선반을 하나의 선반 기준 좌표(`shelf_front`)로 표현합니다.
+
+- 원점은 두 선반이 맞닿는 선의 밑면, 선반 정면 평면 위입니다. x는 선반 안쪽, y는 정면에서 볼 때 왼쪽, z는 위입니다. 높이는 선반 밑면 기준이며 책상 높이는 들어 있지 않습니다.
+- 칸마다 칸 표시 위치(`marker_m`), 바닥판 영역(`footprint_m`), 바닥판 높이, 위 단까지 높이(`clear_height_m`, 위가 열려 있으면 `null`)를 담습니다.
+- 사용하는 칸(`active: true`)은 6개로 정했습니다(2026-11-03): 왼쪽 선반 위 단 좌·우, 아래 단 좌·우, 오른쪽 선반 아래 단 좌·우. 오른쪽 선반 위 단(`slot_b_1_*`)은 모델에는 있지만 쓰지 않습니다.
+
+| 칸 | `slot_id` | x | y | z (바닥판) | 물건 최대 높이 |
+|---|---|---|---|---|---|
+| 왼쪽 위 단 좌 | `slot_a_1_1` | 7.0 | 30.5 | 25.1 | 열림 |
+| 왼쪽 위 단 우 | `slot_a_1_2` | 7.0 | 10.5 | 25.1 | 열림 |
+| 왼쪽 아래 단 좌 | `slot_a_2_1` | 4.5 | 30.5 | 8.3 | 16.6 |
+| 왼쪽 아래 단 우 | `slot_a_2_2` | 4.5 | 10.5 | 8.3 | 16.6 |
+| 오른쪽 아래 단 좌 | `slot_b_2_1` | 4.5 | −10.5 | 8.3 | 16.6 |
+| 오른쪽 아래 단 우 | `slot_b_2_2` | 4.5 | −30.5 | 8.3 | 16.6 |
+
+단위는 cm이며 파일에는 m로 저장됩니다. 2026-11-03 자로 잰 실물은 폭 41 cm, 위 단 턱 위 27 cm로 모델과 같았지만, 아래 단은 모델보다 3.5 cm 낮았습니다(선반 밑면부터 아래 단 턱 위 약 10 cm, 모델 13.5 cm). 그래서 아래 단과 그 앞 턱에만 −3.5 cm 보정을 넣었고, 파일 `status`는 `MODEL_DERIVED_WITH_MEASURED_ADJUSTMENTS`, 보정 내역은 `measured_adjustments`에 남깁니다. 아래 단 바닥판은 8.3 cm, 아래 칸 높이는 16.6 cm가 됩니다. 정면 카메라 위치 보정에서 이 값으로 재투영 오차 1.3 px를 얻었고, 정면 카메라에서 `shelf_a`가 왼쪽인 것도 확인했습니다([선반 위치 보정](shelf-pose-calibration.md)). 깊이와 칸 좌우 위치는 실측하지 않은 모델 값입니다.
+
+모델을 다시 받으면 이렇게 새로 만듭니다. 출력 파일이 있으면 `--force` 없이는 덮어쓰지 않습니다.
+
+```bash
+.venv/bin/python scripts/derive_shelf_slots.py shelf_a.glb shelf_b.glb \
+  --inactive slot_b_1_1,slot_b_1_2 --force \
+  --lower-deck-shift -0.035 --adjustment-note "2026-11-03 자 실측: …"
+```
+
+파일 내용이 바뀌면 버전(SHA-256)도 바뀝니다. 관제는 시작할 때 한 번 읽으므로(`CONTROL_STATION_SHELF_SLOTS`로 경로 변경 가능) 다시 시작해야 하고, OMX 워커의 칸별 자세도 새 버전 기준으로 다시 확인해야 합니다. 그 전까지 워커는 버전이 다른 명령을 `SLOT_MAP_MISMATCH`로 거부합니다. 파일을 읽지 못하면 관제는 좌표 명령만 받습니다.
 
 ## 실행해 보기
 
@@ -168,7 +200,8 @@ sequenceDiagram
 
 ## 남은 일
 
-- 정면 카메라 관측 → OMX 좌표 변환 결과로 명령 만들기 (`source.kind: CAMERA`, 카메라 ID·프레임 hash·보정 버전 포함)
+- 정면 카메라 관측으로 칸을 판정해 명령 만들기 (`source.kind: CAMERA`, 카메라 ID·프레임 hash·칸 영역 버전 포함)
+- 실물 선반 치수·배치 확인, OMX 베이스의 선반 기준 위치 측정(칸 좌표 → OMX 좌표)
 - 작업 흐름 연결: 도착 확인(`VERIFY_ARRIVAL`) 통과 뒤 명령 생성, `PROGRESS`를 단계 상태로 반영
 - 실행 중 결과 제한 시간과 그때의 처리
 - `reason_code` 목록과 `approach` 값을 OMX 팀과 확정
