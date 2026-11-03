@@ -415,8 +415,7 @@ class _RosImageSource:
         if image is None:
             return
         stamp = message.header.stamp.sec + message.header.stamp.nanosec / 1e9
-        # A frame counts as captured at its stamp but never later than it arrived, like the C++ parking node,
-        # so a request-time filter never takes a frame captured before the request.
+        # A frame counts as captured at its stamp but never later than it arrived, like the C++ parking node.
         age = max(0.0, received_wall - stamp) if stamp > 0 else 0.0
         captured_wall = received_wall - age
         captured_at = datetime.fromtimestamp(captured_wall, tz=timezone.utc).isoformat(timespec="milliseconds")
@@ -845,24 +844,6 @@ class OpenCVArmCameraStreamManager:
             return None
         with feed.lock:
             return feed.frame
-
-    def raw_frames_after(
-        self, camera_id: str, after_sequence: int
-    ) -> list[tuple[int, str, bytes, int, int, str, float]] | None:
-        """Retained raw BGR frames newer than after_sequence, oldest first.
-
-        Each item is (sequence, sha256, pixels, width, height, captured_at, captured_monotonic).
-        None means the feed does not exist or has no device configured.
-        """
-        feed = self._feeds.get(camera_id)
-        if feed is None or not feed.device:
-            return None
-        with feed.lock:
-            return [
-                (sequence, *feed.raw_frames[sequence])
-                for sequence in sorted(feed.raw_frames)
-                if sequence > after_sequence
-            ]
 
     def detect_for_prompt(self, camera: CameraSnapshot, prompt: str) -> CameraSnapshot:
         camera_id = camera.id

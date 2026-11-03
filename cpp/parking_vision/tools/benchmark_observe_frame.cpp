@@ -1,5 +1,5 @@
-// Per-frame latency of observe_frame on the parity fixtures; tools/benchmark_observe_frame.py measures the
-// Python module on the same frames and spot.
+// Per-frame latency of observe_frame on the parity fixtures (the Python counterpart was removed with the
+// Python judgment on 2026-11-03; cpp/README.md keeps its last numbers).
 //
 //   parking_vision_benchmark <fixture dir> [iterations] [opencv threads]
 #include <algorithm>

@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from control_station.parking_observation import ParkingObservationError
+from control_station.parking_ros import ParkingObservationError
 from control_station.store import TaskStore
 from control_station.task_orchestrator import MockTaskOrchestrator
 

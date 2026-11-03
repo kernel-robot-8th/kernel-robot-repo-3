@@ -118,7 +118,7 @@ section "Pinky 주차 판정"
 if [[ -f "${REPO_DIR}/.control-station/camera-calibrations/ceiling_camera.json" ]]; then ok "천장 카메라 내부 보정 파일"
 else warn "천장 카메라 내부 보정 파일 없음" "docs/implementation/camera-intrinsic-calibration.md"; fi
 spots="$(ls "${REPO_DIR}"/.control-station/parking-spots/*.json 2>/dev/null | xargs -r -n1 basename | tr '\n' ' ')"
-if [[ -n "$spots" ]]; then ok "등록된 주차 위치: ${spots}"; else warn "등록된 주차 위치 없음" "scripts/pinky_parking.py register (런북 참고)"; fi
+if [[ -n "$spots" ]]; then ok "등록된 주차 위치: ${spots}"; else warn "등록된 주차 위치 없음" "ros2 run parking_vision pinky_parking register (런북 참고)"; fi
 if /usr/bin/python3 -c 'import cv2, sys; sys.exit("GTK" not in cv2.getBuildInformation() and "QT" not in cv2.getBuildInformation())' 2>/dev/null; then
   ok "창을 띄우는 OpenCV (시스템 python3, 주차 위치 등록 창)"
 else

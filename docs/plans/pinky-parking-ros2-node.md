@@ -4,7 +4,7 @@
 
 ## 현재 상태 (2026-11-03)
 
-- 순서 1~5를 구현했습니다. `CONTROL_STATION_PARKING_SOURCE=ros`로 띄운 관제는 `/live`, `/check`, `VERIFY_ARRIVAL`을 C++ 노드(`/pinky_parking/state`, `/pinky_parking/check`)로 답하고, `CONTROL_STATION_HEAD_CAMERA=ros:/ceiling_camera/image_raw/compressed`로 Head Camera 영상과 YOLO 표시를 드라이버 토픽에서 받습니다. 설정하지 않으면 예전처럼 관제 안의 Python 판정(`parking_observation.py`, `parking_tracker.py`)이 Head Camera를 직접 엽니다.
+- 순서 1~5를 구현했습니다. `CONTROL_STATION_PARKING_SPOT`을 준 관제는 `/live`, `/check`, `VERIFY_ARRIVAL`을 C++ 노드(`/pinky_parking/state`, `/pinky_parking/check`)로 답하고, `CONTROL_STATION_HEAD_CAMERA=ros:/ceiling_camera/image_raw/compressed`로 Head Camera 영상과 YOLO 표시를 캡처 노드 토픽에서 받습니다. 2026-11-03에 관제 안의 Python 판정(`parking_check.py`, `parking_observation.py`, `parking_tracker.py`)과 Python 등록 CLI를 지우고, 등록·판정 CLI도 C++(`pinky_parking`)로 옮겼습니다. 관제는 주차 판정을 직접 하지 않습니다.
 - 2026-11-03 19:5x부터 현장 관제가 이 구성으로 돌고 있습니다(드라이버 컨테이너 `ceiling_parking.launch.py`, ROS는 localhost·domain 87). 선반 카메라는 여전히 관제가 OpenCV로 엽니다.
 - 검증 1·3을 했습니다. 3은 같은 영상을 Python 판정과 C++ 판정에 동시에 넣어 30초간 0.5초마다 비교했고, 60회 모두 같은 상태(`OFF_POSITION`)였으며 차이는 dx 중앙값 1.0 mm(최대 1.4), dy 1.3 mm(최대 1.7), yaw 0.15°(최대 0.3)로 OpenCV 4.14와 4.6의 차이 수준이었습니다. 합성 영상으로 `VERIFY_ARRIVAL`이 `ARRIVED`일 때만 팔 단계로 넘어가고, `MISALIGNED`와 노드 정지(`PARKING_NODE_UNAVAILABLE`)일 때 팔 단계가 취소되는 것도 확인했습니다. 검증 2(rosbag)와 4(실물 위치 시험), 순서 6(YOLO 노드 분리)은 아직입니다. 자세한 내용은 [cpp/README.md](../../cpp/README.md)에 있습니다.
 
@@ -77,7 +77,7 @@ Head Camera를 관제에서 계속 보면서 YOLO 박스도 보이게 합니다.
 
 ## 관제 변경
 
-- `CONTROL_STATION_PARKING_SOURCE=ros`이면 `/live`는 `/pinky_parking/state` 구독 값으로, `/check`와 `VERIFY_ARRIVAL`은 `/pinky_parking/check` 서비스 호출로 답합니다. 응답 JSON 형식은 지금과 같습니다. 설정하지 않으면 지금처럼 프로세스 안에서 판정합니다.
+- `CONTROL_STATION_PARKING_SPOT`이 있으면 `/live`는 `/pinky_parking/state` 구독 값으로, `/check`와 `VERIFY_ARRIVAL`은 `/pinky_parking/check` 서비스 호출로 답합니다. 응답 JSON 형식은 지금과 같습니다. (2026-11-03부터 관제 안의 Python 판정은 없습니다.)
 - 서비스가 응답하지 않거나 timeout이면 판정 불가로 처리하고 팔 단계를 시작하지 않습니다. 자동 재시도는 하지 않습니다. 구현에서는 연결 실패를 `PARKING_NODE_UNAVAILABLE`(503), 6초 timeout을 `PARKING_NODE_TIMEOUT`(503)으로 돌려주고, `/live`는 노드 상태가 없거나 2초 넘게 갱신되지 않으면 마지막 상태 대신 `NODE_UNAVAILABLE`을 보여 줍니다. ROS 판정 결과에는 `judgment_source`(`ros:/pinky_parking/state` 또는 `ros:/pinky_parking/check`)가 붙습니다.
 - mock 모드에서도 이 설정이면 rclpy를 초기화합니다. ROS domain은 `CONTROL_STATION_MOBILE_DOMAIN` 규칙을 따릅니다.
 
@@ -94,7 +94,7 @@ Head Camera를 관제에서 계속 보면서 YOLO 박스도 보이게 합니다.
 2. `parking_vision`을 ament_cmake 패키지로 맞춤
 3. 카메라 드라이버 확인(표준 드라이버 또는 자체 캡처 컴포넌트)
 4. `parking_vision_ros` 컴포넌트(상태 발행, 확정 판정 서비스)와 rosbag 검증
-5. 관제의 ROS 카메라 매니저와 `CONTROL_STATION_PARKING_SOURCE=ros`
+5. 관제의 ROS 카메라 매니저와 노드 판정 연결 (완료, Python 판정 제거)
 6. YOLO 노드 분리(2단계)
 
 ## 남은 확인 사항

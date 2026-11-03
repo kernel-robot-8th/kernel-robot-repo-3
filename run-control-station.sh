@@ -26,7 +26,7 @@ if [[ "${CONTROL_STATION_MODE:-mock}" == "mujoco" && ${ARM_MODE} -eq 1 ]]; then
 fi
 
 # The C++ parking node and ros:<topic> cameras need ROS 2 and the cpp/ workspace interfaces.
-if [[ "${CONTROL_STATION_PARKING_SOURCE:-local}" == "ros" || "${CONTROL_STATION_HEAD_CAMERA:-}" == ros:* \
+if [[ -n "${CONTROL_STATION_PARKING_SPOT:-}" || "${CONTROL_STATION_HEAD_CAMERA:-}" == ros:* \
       || "${CONTROL_STATION_SHELF_CAMERA:-}" == ros:* ]]; then
   set +u  # ROS setup scripts read unset variables
   if [[ -z "${ROS_DISTRO:-}" && -f /opt/ros/jazzy/setup.bash ]]; then

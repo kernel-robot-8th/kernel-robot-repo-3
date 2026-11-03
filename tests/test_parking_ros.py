@@ -4,16 +4,16 @@ import threading
 import unittest
 from types import SimpleNamespace
 
-from control_station.parking_observation import ParkingObservationError
 from control_station.parking_ros import (
     NODE_UNAVAILABLE,
+    ParkingObservationError,
     STALE_STATE_S,
     RosParkingSource,
     live_payload,
     observation_payload,
 )
 
-# Keys of ParkingTracker._state() for a state with a spot, and of observe_parking().
+# Keys of the /live payload for a state with a spot and of the /check observation (interface-contracts.md).
 LIVE_KEYS = {
     "state", "reason", "spot_id", "feed_camera_id", "frame_sequence", "captured_at", "updated_at", "display_only",
     "usable_for_robot_control", "offset", "tolerance", "position_ratio", "yaw_ratio", "deviation_level",

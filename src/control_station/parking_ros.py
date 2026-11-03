@@ -1,10 +1,10 @@
 """Pinky parking judgment from the C++ ROS 2 node (docs/plans/pinky-parking-ros2-node.md).
 
-Used when CONTROL_STATION_PARKING_SOURCE=ros. The node (cpp/parking_vision_ros) owns the judgment; this module
-subscribes to /pinky_parking/state, calls /pinky_parking/check and turns both into the same JSON as the in-process
-judgment (parking_observation.observe_parking, parking_tracker.ParkingTracker.snapshot), so the API, the web panel
-and VERIFY_ARRIVAL stay as they are. A check that times out or cannot reach the node is not judged and is not
-retried. Nothing here sends a robot command.
+The node (cpp/parking_vision_ros) owns the judgment; the control station has no parking judgment of its own. This
+module subscribes to /pinky_parking/state, calls /pinky_parking/check and turns both into the JSON of the parking
+contract (interface-contracts.md: GET /api/parking-spots/{spot_id}/live and /check), which the web panel and
+VERIFY_ARRIVAL use. A check that times out or cannot reach the node is not judged and is not retried. Nothing here
+sends a robot command.
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from control_station.parking_observation import OBSERVATION_SCHEMA_VERSION, ParkingObservationError
 
+OBSERVATION_SCHEMA_VERSION = 1
 STATE_TOPIC = "/pinky_parking/state"
 CHECK_SERVICE = "/pinky_parking/check"
 # The node publishes at 10 Hz; a state older than this means the node or its timer stopped.
@@ -33,6 +33,16 @@ HTTP_STATUS = {
 }
 
 
+class ParkingObservationError(Exception):
+    """A check that could not be judged, with the API's HTTP status and error_code."""
+
+    def __init__(self, http_status: int, error_code: str, message: str) -> None:
+        super().__init__(message)
+        self.http_status = http_status
+        self.error_code = error_code
+        self.message = message
+
+
 def iso_time(stamp: Any) -> str | None:  # builtin_interfaces/Time
     nanoseconds = int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
     if nanoseconds == 0:
@@ -47,7 +57,7 @@ def _points(values: Any) -> list[list[float]]:
 
 
 def judgment_fields(message: Any) -> dict[str, object]:
-    """parking_observation.judgment_fields() from ParkingState or a CheckParking response."""
+    """Offset, tolerance and deviation fields shared by /live and /check, from ParkingState or CheckParking."""
     offset: dict[str, object] | None = None
     axis = message.marker_forward_axis or None
     if message.has_offset:
@@ -73,7 +83,7 @@ def judgment_fields(message: Any) -> dict[str, object]:
 
 
 def image_overlay(message: Any) -> dict[str, object]:
-    """parking_observation.image_overlay() from ParkingState or a CheckParking response."""
+    """Raw feed pixels for drawing over the stream (display only), from ParkingState or CheckParking."""
     return {
         "marker_forward_axis": message.marker_forward_axis or None,
         "view_shift_xy_px": (
@@ -87,7 +97,7 @@ def image_overlay(message: Any) -> dict[str, object]:
 
 
 def live_payload(message: Any, feed_camera_id: str | None) -> dict[str, object]:
-    """ParkingTracker.snapshot() from a ParkingState message.
+    """The /live payload from a ParkingState message.
 
     feed_camera_id is the control station feed that shows the same camera (the web panel streams it); the node's
     own image topic is kept as node_image_topic.
@@ -113,7 +123,7 @@ def live_payload(message: Any, feed_camera_id: str | None) -> dict[str, object]:
 
 
 def observation_payload(response: Any, feed_camera_id: str | None) -> dict[str, object]:
-    """observe_parking() from a successful CheckParking response; feed_camera_id as in live_payload()."""
+    """The /check observation from a successful CheckParking response; feed_camera_id as in live_payload()."""
     return {
         "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
         "spot_id": response.spot_id,
@@ -141,7 +151,7 @@ def observation_payload(response: Any, feed_camera_id: str | None) -> dict[str, 
 
 
 class RosParkingSource:
-    """Live state and confirmed checks of one spot from the parking node, in the in-process JSON shapes."""
+    """Live state and confirmed checks of one spot from the parking node, in the contract's JSON shapes."""
 
     def __init__(
         self,

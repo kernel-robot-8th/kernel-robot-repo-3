@@ -198,41 +198,41 @@ export ROS_DOMAIN_ID=87 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST   # 로봇들의
 source cpp/install/setup.bash
 ros2 launch parking_vision_ros ceiling_parking.launch.py repository_root:=$PWD spot_id:=pinky_dock_1
 # 2) 다른 터미널에서 관제 (같은 ROS_DOMAIN_ID, ROS_AUTOMATIC_DISCOVERY_RANGE)
-CONTROL_STATION_PARKING_SOURCE=ros CONTROL_STATION_PARKING_SPOT=pinky_dock_1 \
+CONTROL_STATION_PARKING_SPOT=pinky_dock_1 \
 CONTROL_STATION_HEAD_CAMERA=ros:/ceiling_camera/image_raw/compressed \
 CONTROL_STATION_SHELF_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:10:1.0-video-index0 ./run-control-station.sh
 ```
 
-- `run-control-station.sh`는 위 설정이 있으면 ROS와 `cpp/install/setup.bash`를 source합니다. `/api/health`의 `parking.source`가 `ros`이면 이 구성입니다.
+- `run-control-station.sh`는 위 설정이 있으면 ROS와 `cpp/install/setup.bash`를 source합니다. `/api/health`의 `parking.source`가 `ros`이면 판정 노드에 연결된 구성입니다.
 - Head Camera는 `/compressed` 토픽으로 받습니다. 같은 PC라도 raw 640×480 영상을 프로세스 사이로 보내면 대부분 전달되지 않았습니다(2026-11-02).
 - 판정 노드가 꺼지면 웹 주차 패널은 `NODE_UNAVAILABLE`, 확정 판정과 `VERIFY_ARRIVAL`은 `PARKING_NODE_UNAVAILABLE`로 팔 단계를 시작하지 않습니다.
-- `CONTROL_STATION_PARKING_SOURCE`를 지정하지 않으면 예전처럼 관제가 Head Camera를 직접 열고 Python으로 판정합니다.
+- 관제에는 주차 판정이 없습니다. `CONTROL_STATION_PARKING_SPOT`을 주지 않으면 주차 판정 없이 뜨고 `VERIFY_ARRIVAL`은 모의 성공입니다.
 - 2026-11-03 같은 영상에 두 판정을 동시에 30초 돌린 비교, `usb_cam` 대신 자체 캡처 노드를 쓰는 이유는 [cpp/README.md](../../cpp/README.md)에 있습니다.
 
 ## 천장 카메라 Pinky 주차 판정
 
-천장 카메라로 Pinky 윗면의 ArUco 마커를 찾고, 미리 등록한 정답 위치와 비교해 주차 상태를 판정합니다. 관제 서버와 연결되지 않은 별도 CLI입니다. Pinky나 로봇팔에 명령을 보내지 않으며, 결과는 `DRAFT_ONLY` 관측 초안입니다.
+천장 카메라로 Pinky 윗면의 ArUco 마커를 찾고, 미리 등록한 정답 위치와 비교해 주차 상태를 판정합니다. 관제 서버와 연결되지 않은 C++ CLI `pinky_parking`(`cpp/parking_vision`)입니다. 2026-11-03에 Python `scripts/pinky_parking.py`를 같은 인자·파일 형식·종료 코드로 옮기고 Python은 지웠습니다. Pinky나 로봇팔에 명령을 보내지 않으며, 결과는 `DRAFT_ONLY` 관측 초안입니다.
 
 준비할 것:
 
 - 천장 카메라 내부 보정 파일 `.control-station/camera-calibrations/ceiling_camera.json`. `camera_id`가 `ceiling_camera`이고 `pixel_transform_id`가 `opencv-v4l2-capture-no-app-geometry-v1`이어야 합니다. 만드는 방법은 [카메라 내부 보정](camera-intrinsic-calibration.md)을 따릅니다. 캡처 해상도가 보정 해상도(현재 640×480)와 다르면 판정하지 않고 종료합니다.
 - Pinky 윗면의 ArUco 마커. 기본 사전은 `DICT_4X4_50`입니다. 마커 한 변 길이는 인쇄물의 검은 테두리 기준으로 mm 단위로 잽니다.
 - (선택) 화면에 함께 보이는 바닥 고정 ArUco 마커. 이 마커로 카메라 시야가 등록할 때와 같은지 확인합니다. 쓰려면 바닥에 테이프로 고정하고, Pinky가 지나가거나 서는 자리와 사람이 가리는 자리에서 떨어뜨려 둡니다. 놓아만 둔 카드나 Pinky 바퀴 옆 마커는 밀려서 판정이 멈춥니다. 쓰지 않으면 `--no-anchors`로 등록합니다.
-- `cv2.aruco`를 지원하는 OpenCV. `--once` 판정은 창을 띄우지 않으므로 `opencv-python-headless`로도 됩니다. `register`와 실시간 `check`는 창을 띄우므로 GUI를 지원하는 OpenCV가 필요합니다.
+- `cpp/`를 빌드하고 `source cpp/install/setup.bash`한 셸. `check --once`와 `register --headless`는 창을 띄우지 않고, 창이 있는 `register`와 실시간 `check`는 시스템 OpenCV(highgui) 창을 씁니다.
 - 카메라 경로. `--camera` 또는 환경 변수 `CONTROL_STATION_CEILING_CAMERA`로 지정합니다. 천장 카메라는 관제의 Head Camera와 같은 실물 카메라(HCAM0)입니다. 2026-11-02 현장에서는 USB 포트 4에 연결됐고, 이름은 Head Camera 기본 by-id(`usb-Jieli_Technology_USB_Composite_Device-video-index0`)로 잡혔습니다. 같은 모델이 여러 대 꽂혀 있으면 by-id로는 구분되지 않으므로 포트 기준 `/dev/v4l/by-path/...` 경로를 씁니다. 실제로 19:36에 다른 HCAM0이 USB 포트 10에 연결되자 by-id 링크가 그 카메라(선반을 옆에서 보는 시점)로 바뀌었습니다. by-path는 꽂은 USB 포트가 바뀌면 달라집니다.
 - 카메라는 한 프로그램만 열 수 있습니다. 관제 서버가 Head Camera로 이 카메라를 열고 있으면 서버를 먼저 종료합니다. 점유 여부는 `fuser -v /dev/videoN`으로 확인합니다.
 
 ### 정답 위치 등록
 
 ```bash
-python3 scripts/pinky_parking.py register --spot-id pinky_dock_1 \
+ros2 run parking_vision pinky_parking register --spot-id pinky_dock_1 \
   --camera /dev/v4l/by-path/pci-0000:80:14.0-usb-0:4:1.0-video-index0 \
   --marker-id 21 --marker-side-mm 70 --marker-forward-axis -x
 ```
 
 `--marker-forward-axis`는 Pinky 앞쪽을 향하는 마커 축입니다. `+x`는 마커 오른쪽 변, `+y`는 윗변이 앞쪽이라는 뜻이고, 마커 면이 위를 향한다고 가정합니다. 주면 판정 결과에 Pinky 기준 앞·왼쪽 차이가 함께 나옵니다. 생략할 수 있습니다.
 
-Pinky를 정답 위치에 세운 뒤 창에서 Space를 누르면 다음 순서로 등록합니다.
+Pinky를 정답 위치에 세운 뒤 창에서 Space를 누르면 다음 순서로 등록합니다. `--headless`를 주면 창 없이 바로 모읍니다.
 
 1. 15프레임(`--frames`)을 모읍니다. 모서리 좌표는 프레임별 중앙값을 씁니다.
 2. 이 모서리로 마커 평면을 정합니다(OpenCV IPPE).
@@ -256,11 +256,11 @@ schema v1 파일(2026-10-31 이전 등록)은 고정 마커 정보가 없어 판
 
 ```bash
 # 실시간 창. 흰 외곽선은 등록 위치, 흰 원은 고정 마커의 등록 위치입니다. q로 종료합니다.
-python3 scripts/pinky_parking.py check --spot-id pinky_dock_1 \
+ros2 run parking_vision pinky_parking check --spot-id pinky_dock_1 \
   --camera /dev/v4l/by-path/pci-0000:80:14.0-usb-0:4:1.0-video-index0
 
 # 창 없이 한 번 판정하고 JSON 한 줄을 출력합니다.
-python3 scripts/pinky_parking.py check --spot-id pinky_dock_1 \
+ros2 run parking_vision pinky_parking check --spot-id pinky_dock_1 \
   --camera /dev/v4l/by-path/pci-0000:80:14.0-usb-0:4:1.0-video-index0 --once
 ```
 
