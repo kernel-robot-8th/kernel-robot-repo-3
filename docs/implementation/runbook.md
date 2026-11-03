@@ -2,7 +2,7 @@
 
 ## 대시보드와 API만 실행
 
-Python 3.10 이상 환경에서 저장소 의존성을 설치한 뒤 실행합니다. 기본 모드에는 별도 LeRobot 폴더가 필요하지 않습니다.
+처음이라면 `scripts/check_setup.sh`로 필요한 것이 준비됐는지 먼저 확인합니다(사용법은 [README](../../README.md#시작-전-환경-확인)). Python 3.10 이상 환경에서 저장소 의존성을 설치한 뒤 실행합니다. 기본 모드에는 별도 LeRobot 폴더가 필요하지 않습니다.
 
 ```bash
 python3 -m venv .venv
