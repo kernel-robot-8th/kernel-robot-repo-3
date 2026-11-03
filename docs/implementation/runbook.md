@@ -187,6 +187,28 @@ Ultralytics는 YOLO-World prompt class를 `set_classes()`로 지정하는 API를
 
 검출 결과는 표시 전용입니다. 로봇 명령이나 작업 상태 판단에 쓰지 않습니다. 카메라는 한 프로그램만 열 수 있으므로 다른 카메라 프로그램을 먼저 종료합니다.
 
+## C++ 주차 판정 노드로 관제 실행
+
+관제의 주차 판정과 Head Camera 영상을 C++ ROS 2 노드 쪽으로 옮겨 실행하는 방법입니다([전환 계획](../plans/pinky-parking-ros2-node.md)). 천장 카메라는 드라이버 컨테이너가 열고, 관제는 영상과 판정을 ROS로 받습니다. 판정 규칙과 API 응답 형식은 아래 Python 판정과 같습니다.
+
+```bash
+cd cpp && source /opt/ros/jazzy/setup.bash && colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release && cd ..
+export ROS_DOMAIN_ID=87 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST   # 로봇들의 ROS graph와 분리
+# 1) 카메라 드라이버 + C++ 판정 노드 (관제가 Head Camera를 열고 있으면 먼저 끕니다)
+source cpp/install/setup.bash
+ros2 launch parking_vision_ros ceiling_parking.launch.py repository_root:=$PWD spot_id:=pinky_dock_1
+# 2) 다른 터미널에서 관제 (같은 ROS_DOMAIN_ID, ROS_AUTOMATIC_DISCOVERY_RANGE)
+CONTROL_STATION_PARKING_SOURCE=ros CONTROL_STATION_PARKING_SPOT=pinky_dock_1 \
+CONTROL_STATION_HEAD_CAMERA=ros:/ceiling_camera/image_raw/compressed \
+CONTROL_STATION_SHELF_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:10:1.0-video-index0 ./run-control-station.sh
+```
+
+- `run-control-station.sh`는 위 설정이 있으면 ROS와 `cpp/install/setup.bash`를 source합니다. `/api/health`의 `parking.source`가 `ros`이면 이 구성입니다.
+- Head Camera는 `/compressed` 토픽으로 받습니다. 같은 PC라도 raw 640×480 영상을 프로세스 사이로 보내면 대부분 전달되지 않았습니다(2026-11-02).
+- 판정 노드가 꺼지면 웹 주차 패널은 `NODE_UNAVAILABLE`, 확정 판정과 `VERIFY_ARRIVAL`은 `PARKING_NODE_UNAVAILABLE`로 팔 단계를 시작하지 않습니다.
+- `CONTROL_STATION_PARKING_SOURCE`를 지정하지 않으면 예전처럼 관제가 Head Camera를 직접 열고 Python으로 판정합니다.
+- 2026-11-03 같은 영상에 두 판정을 동시에 30초 돌린 비교, `usb_cam` 대신 자체 캡처 노드를 쓰는 이유는 [cpp/README.md](../../cpp/README.md)에 있습니다.
+
 ## 천장 카메라 Pinky 주차 판정
 
 천장 카메라로 Pinky 윗면의 ArUco 마커를 찾고, 미리 등록한 정답 위치와 비교해 주차 상태를 판정합니다. 관제 서버와 연결되지 않은 별도 CLI입니다. Pinky나 로봇팔에 명령을 보내지 않으며, 결과는 `DRAFT_ONLY` 관측 초안입니다.
@@ -345,6 +367,7 @@ Pinky를 움직이지 않은 상태에서 확인했습니다.
 - 다시 등록한 뒤 카메라를 매번 새로 열어 `--once`를 10회 실행했습니다. 9회는 `ARRIVED`/`WITHIN`(앞·왼쪽 0.1 mm, yaw 0.06° 이내, 고정 마커 이동 0.1 px 이하)였습니다. 1회는 카메라가 밀린 상태로 열렸고, 1번 마커가 96.0 px 이동으로 측정되어 `VIEW_UNVERIFIED`로 판정을 거부했습니다. 기존 19:36 등록은 `rejected/pinky_dock_1-20261102T1936-loose-anchors.json`으로 옮겼습니다. 등록 흔들림은 0.28 mm / 0.32°였고, 평면 위 마커 한 변은 70.0 mm였습니다.
 - 이어서 카메라를 매번 새로 열어 `--once`를 11회 실행했습니다. 10회는 `ARRIVED`(최대 2.5 mm, 0.68°)였습니다. 1회는 사람이 Pinky 옆에서 작업하며 마커를 가린 순간이라 `NOT_FOUND`였습니다. 사람이 옆에 있는 동안 측정된 1.3–2.5 mm 변화는 Pinky를 건드린 것인지 측정 오차인지 구분하지 않았습니다.
 - 이 결과는 정지 상태의 측정 반복성입니다. Pinky를 다시 세웠을 때의 주차 반복성이나 팔 작업에 필요한 허용 오차는 측정하지 않았습니다.
+- 2026-11-03 19:20쯤 Pinky가 정답 위치에서 뒤로 44 mm 밀린 상태가 허용 오차 50 mm / 10° 안이라 `IN_POSITION`으로 표시됐습니다. 화면에 등록 위치와 현재 마커를 겹쳐 그려 약 26 px(마커 한 변의 약 60 %) 어긋난 것을 확인한 뒤, 허용 오차를 25 mm / 5°로 좁혔습니다(등록 파일의 `tolerance`만 수정, 등록 기준은 그대로). 같은 상태가 `OFF_POSITION`, 확정 판정 `MISALIGNED`/`NEAR`(position 44 mm > 25 mm, 비율 1.78)로 바뀌었습니다. 여전히 측정 근거가 없는 임시 값입니다.
 
 ### 해석할 때 주의할 점
 

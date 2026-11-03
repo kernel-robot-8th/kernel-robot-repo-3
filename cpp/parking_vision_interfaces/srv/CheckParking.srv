@@ -1,0 +1,64 @@
+# Confirmed parking judgment, the ROS form of GET /api/parking-spots/{spot_id}/check.
+# Judges only frames captured after the request: up to 3 s and 15 usable frames; fewer than 5 is NOT_FOUND.
+# The result is an observation, never a robot command. ARRIVED means the marker is within tolerance of the
+# registered spot; it does not replace the navigation result.
+
+string spot_id
+---
+bool ok                             # false: nothing was judged; error_code and message say why
+string error_code                   # PARKING_SPOT_ID_INVALID, PARKING_SPOT_NOT_FOUND, PARKING_SPOT_INVALID,
+                                    # PARKING_CAMERA_UNAVAILABLE, PARKING_OBSERVATION_ERROR
+string message
+
+int32 observation_schema_version
+string spot_id
+int32 marker_id
+string status                       # ARRIVED, MISALIGNED, NOT_FOUND, AMBIGUOUS, VIEW_UNVERIFIED
+string reason
+
+bool has_offset
+float64 dx_mm
+float64 dy_mm
+float64 distance_mm
+float64 dyaw_deg
+string marker_forward_axis
+bool has_pinky_frame
+float64 forward_mm
+float64 left_mm
+
+bool has_ratios
+float64 position_ratio
+float64 yaw_ratio
+string deviation_level
+
+float64 tolerance_position_mm
+float64 tolerance_yaw_deg
+bool view_check
+bool has_view_shift
+float64 view_shift_px
+
+int32 frames_used                   # usable frames behind the median
+int32 frames_examined               # frames captured after the request that were judged
+string feed_camera_id
+string calibration_camera_id
+uint64 first_frame_sequence
+uint64 last_frame_sequence
+builtin_interfaces/Time requested_at
+builtin_interfaces/Time captured_from
+builtin_interfaces/Time captured_until
+string spot_registration_sha256
+string intrinsic_calibration_sha256
+string opencv_version
+string registration_opencv_version  # empty when the spot file does not record it
+
+bool has_view_shift_xy
+float64 view_shift_x_px
+float64 view_shift_y_px
+uint32 image_width
+uint32 image_height
+float64[8] registered_corners_px
+bool has_marker_corners
+float64[8] marker_corners_px
+float64[] anchor_centers_px
+
+bool usable_for_robot_control       # always false

@@ -355,6 +355,90 @@ class UnconfiguredArmCameraStreamManager:
         return
 
 
+# CONTROL_STATION_*_CAMERA=ros:<image topic> reads that camera from a ROS camera driver node instead of V4L2.
+ROS_SOURCE_PREFIX = "ros:"
+
+
+class _RosImageSource:
+    """Latest frame of one sensor_msgs Image or CompressedImage topic, as BGR with its capture time."""
+
+    def __init__(self, topic: str) -> None:
+        import numpy as np
+        from rclpy.context import Context
+        from rclpy.executors import SingleThreadedExecutor
+        from rclpy.node import Node
+        from rclpy.qos import qos_profile_sensor_data
+        from sensor_msgs.msg import CompressedImage, Image
+
+        raw_domain = os.environ.get("CONTROL_STATION_MOBILE_DOMAIN", os.environ.get("ROS_DOMAIN_ID"))
+        if raw_domain is None:
+            raise RuntimeError("ROS domain ID(CONTROL_STATION_MOBILE_DOMAIN 또는 ROS_DOMAIN_ID)가 필요합니다")
+        self._np = np
+        self._compressed = topic.endswith("/compressed")
+        self._latest: tuple[object, str, float] | None = None
+        self._ready = threading.Condition()
+        self._context = Context()
+        self._context.init(domain_id=int(raw_domain))
+        name = "control_station_camera_" + re.sub(r"[^A-Za-z0-9_]", "_", topic.strip("/"))
+        self._node = Node(name[:200], context=self._context)
+        # Best effort subscribes to both reliable and best-effort drivers and never queues stale frames.
+        self._node.create_subscription(
+            CompressedImage if self._compressed else Image, topic, self._on_image, qos_profile_sensor_data
+        )
+        self._executor = SingleThreadedExecutor(context=self._context)
+        self._executor.add_node(self._node)
+        self._thread = threading.Thread(target=self._executor.spin, name=f"ros-camera-{topic}", daemon=True)
+        self._thread.start()
+
+    def _to_bgr(self, message):  # type: ignore[no-untyped-def]
+        import cv2
+
+        np = self._np
+        if self._compressed:
+            return cv2.imdecode(np.frombuffer(message.data, dtype=np.uint8), cv2.IMREAD_COLOR)
+        pixels = np.frombuffer(message.data, dtype=np.uint8)
+        if message.encoding in ("bgr8", "rgb8"):
+            image = pixels.reshape(message.height, message.step)[:, : message.width * 3].reshape(
+                message.height, message.width, 3
+            )
+            return image[:, :, ::-1].copy() if message.encoding == "rgb8" else image.copy()
+        if message.encoding == "mono8":
+            gray = pixels.reshape(message.height, message.step)[:, : message.width]
+            return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        raise ValueError(f"지원하지 않는 영상 encoding: {message.encoding}")
+
+    def _on_image(self, message) -> None:  # type: ignore[no-untyped-def]
+        received_monotonic = time.monotonic()
+        received_wall = time.time()
+        image = self._to_bgr(message)
+        if image is None:
+            return
+        stamp = message.header.stamp.sec + message.header.stamp.nanosec / 1e9
+        # A frame counts as captured at its stamp but never later than it arrived, like the C++ parking node,
+        # so a request-time filter never takes a frame captured before the request.
+        age = max(0.0, received_wall - stamp) if stamp > 0 else 0.0
+        captured_wall = received_wall - age
+        captured_at = datetime.fromtimestamp(captured_wall, tz=timezone.utc).isoformat(timespec="milliseconds")
+        with self._ready:
+            self._latest = (image, captured_at, received_monotonic - age)
+            self._ready.notify_all()
+
+    def next_frame(self, timeout_s: float) -> tuple[object, str, float] | None:
+        with self._ready:
+            if self._latest is None:
+                self._ready.wait(timeout_s)
+            frame, self._latest = self._latest, None
+        return frame
+
+    def close(self) -> None:
+        with self._ready:
+            self._ready.notify_all()
+        self._executor.shutdown()
+        self._node.destroy_node()
+        self._context.try_shutdown()
+        self._thread.join(timeout=2)
+
+
 class OpenCVArmCameraStreamManager:
     """Own configured V4L2 devices once and expose their latest JPEG frames."""
 
@@ -437,6 +521,14 @@ class OpenCVArmCameraStreamManager:
                         "CONTROL_STATION_SHELF_CAMERA를 다른 장치로 설정하세요."
                     )
         self._closed = threading.Event()
+        self._ros_sources: list[_RosImageSource] = []
+        if any(feed.device and feed.device.startswith(ROS_SOURCE_PREFIX) for feed in self._feeds.values()):
+            try:
+                # Import here, before the capture threads: rclpy's first import is not safe from two threads
+                # (another thread may be importing it for the parking node at the same time).
+                import rclpy.node  # noqa: F401
+            except ImportError:
+                pass  # each ros: feed reports the missing ROS environment itself
         for feed in self._feeds.values():
             if feed.device:
                 feed.thread = threading.Thread(
@@ -474,6 +566,10 @@ class OpenCVArmCameraStreamManager:
 
         if feed.detector is not None:
             feed.detector.load()
+
+        if feed.device and feed.device.startswith(ROS_SOURCE_PREFIX):
+            self._ros_capture_loop(feed, feed.device.removeprefix(ROS_SOURCE_PREFIX), cv2)
+            return
 
         while not self._closed.is_set():
             device = feed.device
@@ -556,59 +652,13 @@ class OpenCVArmCameraStreamManager:
                         self._closed.wait(0.05)
                         continue
                     failed_reads = 0
-                    captured_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
-                    captured_monotonic = time.monotonic()
-                    raw_height, raw_width = image.shape[:2]
-                    raw_pixels = image.tobytes(order="C")
-                    frame_sha256 = hashlib.sha256(raw_pixels).hexdigest()
-                    detections: list[dict[str, object]] = []
-                    detector = feed.detector
-                    if detector is not None and detector.state == "ready":
-                        try:
-                            image, detections = detector.annotate(image)
-                        except Exception as exc:  # keep streaming raw frames if inference fails
-                            detector.state, detector.error_message = "error", f"YOLO 추론 실패: {exc}"
-                    encoded, jpeg = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                    if not encoded:
-                        continue
-                    frame_height, frame_width = image.shape[:2]
-                    with feed.lock:
-                        feed.sequence += 1
-                        frame_sequence = feed.sequence
-                        feed.frame_width = int(frame_width)
-                        feed.frame_height = int(frame_height)
-                        feed.frame_sha256 = frame_sha256
-                        feed.raw_frames[frame_sequence] = (
-                            frame_sha256,
-                            raw_pixels,
-                            int(raw_width),
-                            int(raw_height),
-                            captured_at,
-                            captured_monotonic,
-                        )
-                        while len(feed.raw_frames) > 5:
-                            del feed.raw_frames[min(feed.raw_frames)]
-                        for detection in detections:
-                            detection.update(
-                                {
-                                    "camera_id": feed.camera_id,
-                                    "captured_at": captured_at,
-                                    "frame_sequence": frame_sequence,
-                                    "frame_sha256": frame_sha256,
-                                    "pixel_transform_id": PIXEL_TRANSFORM_ID,
-                                }
-                            )
-                        feed.frame = jpeg.tobytes()
-                        feed.detections = detections
-                        feed.last_frame_at = captured_at
-                        feed.last_frame_monotonic = captured_monotonic
-                        feed.frame_times.append(captured_monotonic)
-                        feed.frame_times = [
-                            stamp for stamp in feed.frame_times if captured_monotonic - stamp <= 2
-                        ]
-                        feed.connection_state = CameraConnectionState.CONNECTED
-                        feed.stream_state = CameraStreamState.STREAMING
-                        feed.error_message = None
+                    self._publish_frame(
+                        feed,
+                        image,
+                        datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+                        time.monotonic(),
+                        cv2,
+                    )
             except Exception as exc:
                 capture_failure = f"카메라 프레임 처리 실패: {exc}"
             finally:
@@ -622,6 +672,96 @@ class OpenCVArmCameraStreamManager:
                         capture_failure or f"카메라 프레임 수신 중단: {feed.device}"
                     )
                 self._closed.wait(2)
+
+    def _publish_frame(self, feed: _CameraFeed, image, captured_at: str, captured_monotonic: float, cv2) -> None:  # type: ignore[no-untyped-def]
+        """Run YOLO on one BGR frame and make it the feed's latest JPEG and raw frame."""
+        raw_height, raw_width = image.shape[:2]
+        raw_pixels = image.tobytes(order="C")
+        frame_sha256 = hashlib.sha256(raw_pixels).hexdigest()
+        detections: list[dict[str, object]] = []
+        detector = feed.detector
+        if detector is not None and detector.state == "ready":
+            try:
+                image, detections = detector.annotate(image)
+            except Exception as exc:  # keep streaming raw frames if inference fails
+                detector.state, detector.error_message = "error", f"YOLO 추론 실패: {exc}"
+        encoded, jpeg = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        if not encoded:
+            return
+        frame_height, frame_width = image.shape[:2]
+        with feed.lock:
+            feed.sequence += 1
+            frame_sequence = feed.sequence
+            feed.frame_width = int(frame_width)
+            feed.frame_height = int(frame_height)
+            feed.frame_sha256 = frame_sha256
+            feed.raw_frames[frame_sequence] = (
+                frame_sha256,
+                raw_pixels,
+                int(raw_width),
+                int(raw_height),
+                captured_at,
+                captured_monotonic,
+            )
+            while len(feed.raw_frames) > 5:
+                del feed.raw_frames[min(feed.raw_frames)]
+            for detection in detections:
+                detection.update(
+                    {
+                        "camera_id": feed.camera_id,
+                        "captured_at": captured_at,
+                        "frame_sequence": frame_sequence,
+                        "frame_sha256": frame_sha256,
+                        "pixel_transform_id": PIXEL_TRANSFORM_ID,
+                    }
+                )
+            feed.frame = jpeg.tobytes()
+            feed.detections = detections
+            feed.last_frame_at = captured_at
+            feed.last_frame_monotonic = captured_monotonic
+            feed.frame_times.append(captured_monotonic)
+            feed.frame_times = [
+                stamp for stamp in feed.frame_times if captured_monotonic - stamp <= 2
+            ]
+            feed.connection_state = CameraConnectionState.CONNECTED
+            feed.stream_state = CameraStreamState.STREAMING
+            feed.error_message = None
+
+    def _ros_capture_loop(self, feed: _CameraFeed, topic: str, cv2) -> None:  # type: ignore[no-untyped-def]
+        """Take the feed's frames from a ROS image topic that a camera driver node publishes.
+
+        The driver owns the device, so the control station and the C++ parking node can share one camera
+        (docs/plans/pinky-parking-ros2-node.md). The geometry is the same 640x480 MJPEG capture with no crop or
+        flip, so detections keep PIXEL_TRANSFORM_ID. A topic ending in /compressed is decoded here; it is the one
+        to use across processes, since raw 640x480 images were mostly dropped between processes on 2026-11-02.
+        """
+        try:
+            source = _RosImageSource(topic)
+        except Exception as exc:
+            with feed.lock:
+                feed.connection_state = CameraConnectionState.DISCONNECTED
+                feed.stream_state = CameraStreamState.ERROR
+                feed.error_message = f"ROS 영상 구독 실패 ({topic}): {exc}"
+            return
+        self._ros_sources.append(source)
+        with feed.lock:
+            feed.connection_state = CameraConnectionState.CONNECTED
+            feed.stream_state = CameraStreamState.NO_FRAMES
+            feed.error_message = None
+        while not self._closed.is_set():
+            frame = source.next_frame(timeout_s=2.0)
+            if frame is None:
+                if not self._closed.is_set():
+                    with feed.lock:
+                        feed.stream_state = CameraStreamState.NO_FRAMES
+                        feed.error_message = f"ROS 영상 토픽에서 2초 동안 프레임이 없습니다: {topic}"
+                continue
+            image, captured_at, captured_monotonic = frame
+            try:
+                self._publish_frame(feed, image, captured_at, captured_monotonic, cv2)
+            except Exception as exc:
+                with feed.lock:
+                    feed.error_message = f"카메라 프레임 처리 실패: {exc}"
 
     def snapshots(self) -> list[CameraSnapshot]:
         result = []
@@ -908,6 +1048,8 @@ class OpenCVArmCameraStreamManager:
 
     def close(self) -> None:
         self._closed.set()
+        for source in self._ros_sources:
+            source.close()
         for feed in self._feeds.values():
             worker = feed.thread
             if worker is None:

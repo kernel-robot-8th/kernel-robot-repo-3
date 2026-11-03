@@ -520,6 +520,7 @@ const parkingLiveTitles = {
   VIEW_UNVERIFIED: '확인 불가 · 카메라 시야가 등록 때와 다름',
   CAMERA_UNAVAILABLE: '확인 불가 · 카메라 영상 없음',
   SPOT_INVALID: '확인 불가 · 주차 위치 파일 오류',
+  NODE_UNAVAILABLE: '확인 불가 · 주차 판정 노드 연결 안 됨',
 };
 const parkingHelp = {
   NOT_IN_VIEW: 'Pinky가 주차 구역 밖에 있거나 윗면 마커가 사람·물건에 가려졌습니다.',
@@ -528,6 +529,7 @@ const parkingHelp = {
   VIEW_UNVERIFIED: '영상이 밀린 채 열렸으면 관제 서버를 다시 시작해 카메라를 다시 엽니다. 카메라를 건드렸으면 주차 위치를 다시 등록하세요.',
   CAMERA_UNAVAILABLE: '관제 서버의 Head Camera 연결을 확인하세요.',
   SPOT_INVALID: '주차 위치를 다시 등록하거나 등록 파일을 확인하세요.',
+  NODE_UNAVAILABLE: 'C++ 주차 판정 노드(/pinky_parking)가 꺼졌거나 다른 ROS domain에 있습니다. ceiling_parking.launch.py 실행 여부를 확인하세요.',
 };
 
 function signedNumber(value, digits = 1) {

@@ -30,6 +30,7 @@ from control_station.command_parser import (
 from control_station.coordinate_target_drafts import CoordinateDraftError, CoordinateTargetDraftStore
 from control_station.models import CameraSnapshot, TaskStatus
 from control_station.parking_observation import ParkingObservationError, observe_parking
+from control_station.parking_ros import RosParkingSource
 from control_station.parking_tracker import ParkingTracker
 from control_station.projection_drafts import (
     ProjectionDraftError,
@@ -268,6 +269,7 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
                     "status": "ok",
                     "mode": self.app.mode,
                     "parking": {
+                        "source": self.app.parking_source,
                         "camera_id": self.app.parking_camera_id,
                         "spot_id": self.app.parking_spot_id,
                         "live_tracking": self.app.parking_tracker is not None,
@@ -416,12 +418,7 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
         elif route.startswith("/api/parking-spots/") and route.endswith("/check"):
             spot_id = route.removeprefix("/api/parking-spots/").removesuffix("/check")
             try:
-                observation = observe_parking(
-                    spot_id,
-                    self.app.parking_camera_id,
-                    getattr(self.app.camera_manager, "raw_frames_after", None),
-                    Path(__file__).resolve().parents[2],
-                )
+                observation = self.app.parking_check(spot_id)
             except ParkingObservationError as exc:
                 self._json_error(exc.http_status, exc.error_code, exc.message)
                 return
@@ -1651,7 +1648,14 @@ def main() -> None:
     # Gate VERIFY_ARRIVAL on this registered spot; never let a missing camera silently skip the gate.
     parking_spot_id = os.environ.get("CONTROL_STATION_PARKING_SPOT", "").strip() or None
     server.parking_spot_id = parking_spot_id
-    if parking_spot_id and not server.parking_camera_id:
+    # local: judge in this process from the feed above. ros: ask the C++ parking node (cpp/parking_vision_ros),
+    # which reads the camera itself; the JSON returned by /live, /check and VERIFY_ARRIVAL is the same.
+    server.parking_source = os.environ.get("CONTROL_STATION_PARKING_SOURCE", "local").strip().lower() or "local"
+    if server.parking_source not in {"local", "ros"}:
+        raise RuntimeError("CONTROL_STATION_PARKING_SOURCE는 local 또는 ros여야 합니다.")
+    if server.parking_source == "ros" and not parking_spot_id:
+        raise RuntimeError("CONTROL_STATION_PARKING_SOURCE=ros에는 CONTROL_STATION_PARKING_SPOT도 지정해야 합니다.")
+    if server.parking_source == "local" and parking_spot_id and not server.parking_camera_id:
         raise RuntimeError(
             "CONTROL_STATION_PARKING_SPOT을 쓰려면 CONTROL_STATION_PARKING_CAMERA도 지정해야 합니다."
         )
@@ -1665,6 +1669,7 @@ def main() -> None:
         or head_detector_configured
         or server.parking_camera_id
         or os.environ.get("CONTROL_STATION_SHELF_CAMERA", "").strip()
+        or os.environ.get("CONTROL_STATION_HEAD_CAMERA", "").strip().startswith("ros:")
     ):
         server.camera_manager = UnconfiguredArmCameraStreamManager()
     else:
@@ -1672,28 +1677,38 @@ def main() -> None:
             joint_enabled=server.arm_supervisor.enabled
         )
     server.task_store = task_store
-    arrival_check = (
-        partial(
-            observe_parking,
-            parking_spot_id,
-            server.parking_camera_id,
-            getattr(server.camera_manager, "raw_frames_after", None),
-            Path(__file__).resolve().parents[2],
+    frames_after = getattr(server.camera_manager, "raw_frames_after", None)
+    if server.parking_source == "ros":
+        raw_domain = os.environ.get("CONTROL_STATION_MOBILE_DOMAIN", os.environ.get("ROS_DOMAIN_ID"))
+        if raw_domain is None:
+            raise RuntimeError(
+                "CONTROL_STATION_PARKING_SOURCE=ros에는 ROS domain ID"
+                "(CONTROL_STATION_MOBILE_DOMAIN 또는 ROS_DOMAIN_ID)를 지정해야 합니다."
+            )
+        # The panel streams this control station feed; with the node it is the Head Camera fed from the driver topic.
+        server.parking_camera_id = server.parking_camera_id or "head_camera"
+        parking_node = RosParkingSource(int(raw_domain), parking_spot_id, server.parking_camera_id)
+        server.parking_check = parking_node.check
+        # Display-only live state of the same spot; VERIFY_ARRIVAL still decides only from a fresh check.
+        server.parking_tracker = parking_node
+    else:
+        repository_root = Path(__file__).resolve().parents[2]
+
+        def local_check(spot_id: str) -> dict[str, object]:
+            return observe_parking(spot_id, server.parking_camera_id, frames_after, repository_root)
+
+        server.parking_check = local_check
+        # Display-only live state of the same spot; the arrival gate below stays the only decision path.
+        server.parking_tracker = (
+            ParkingTracker(
+                parking_spot_id, server.parking_camera_id, frames_after, Path(__file__).resolve().parents[2]
+            ).start()
+            if parking_spot_id and server.parking_camera_id and frames_after
+            else None
         )
-        if parking_spot_id
-        else None
-    )
+    arrival_check = partial(server.parking_check, parking_spot_id) if parking_spot_id else None
     server.task_orchestrator = MockTaskOrchestrator(
         task_store, mode=mode, arrival_check=arrival_check
-    )
-    # Display-only live state of the same spot; the arrival gate above stays the only decision path.
-    frames_after = getattr(server.camera_manager, "raw_frames_after", None)
-    server.parking_tracker = (
-        ParkingTracker(
-            parking_spot_id, server.parking_camera_id, frames_after, Path(__file__).resolve().parents[2]
-        ).start()
-        if parking_spot_id and server.parking_camera_id and frames_after
-        else None
     )
     draft_dir = os.environ.get(
         "CONTROL_STATION_COORDINATE_DRAFT_DIR", ".control-station/coordinate-target-drafts"
