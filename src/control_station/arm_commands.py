@@ -32,7 +32,14 @@ from control_station.shelf_slot_map import ShelfSlotMap
 
 
 ARM_ROBOT_IDS = frozenset({"arm-01"})
-OPERATIONS = frozenset({"PICK_AND_PLACE"})
+# MOVE_TO_SLOT moves the arm to the pose taught for a slot without grasping; used to check motion first.
+# RETURN_HOME moves it back to the worker's recorded "home" pose; it names no object, slot, position or place.
+# MOVE_TO_POSITION brings the arm's tool point to one XYZ position (the worker solves the joints); no grasping.
+OPERATIONS = frozenset({"PICK_AND_PLACE", "MOVE_TO_SLOT", "RETURN_HOME", "MOVE_TO_POSITION"})
+# Operations whose SUCCEEDED means "measured joints reached the planned pose" rather than grasp and place.
+POSE_OPERATIONS = frozenset({"MOVE_TO_SLOT", "RETURN_HOME", "MOVE_TO_POSITION"})
+# Operations that only move the arm and so name no place to put an object.
+MOVE_ONLY_WITHOUT_PLACE = frozenset({"RETURN_HOME", "MOVE_TO_POSITION"})
 APPROACHES = frozenset({"FRONT_HORIZONTAL"})
 SOURCE_KINDS = frozenset({"OPERATOR_INPUT"})
 # Phase names follow the control station's pick-and-place step types so progress can map onto steps.
@@ -111,6 +118,7 @@ WORKER_EVENT_FIELDS = frozenset(
         "reason_code",
         "message",
         "grasp_confirmed",
+        "pose_reached",
         "place_confirmed",
         "details",
     }
@@ -221,7 +229,8 @@ def validate_command_request(
 ) -> tuple[str, str, int, dict[str, Any]]:
     """Return (robot_id, operation, valid_for_s, frozen request) or raise ArmCommandError.
 
-    The target is either one shelf slot (`pick_slot_id`) or one XYZ position with its frame and unit.
+    The target is either one shelf slot (`pick_slot_id`) or one XYZ position with its frame and unit;
+    RETURN_HOME has neither.
     """
     allowed = {"robot_id", "operation", "valid_for_s", "target", "place", "source"}
     if set(payload) - allowed:
@@ -235,13 +244,28 @@ def validate_command_request(
     valid_for_s = payload.get("valid_for_s")
     if isinstance(valid_for_s, bool) or not isinstance(valid_for_s, int) or not 5 <= valid_for_s <= 600:
         raise ArmCommandError("valid_for_s must be an integer from 5 to 600")
+    source = _operator_source(payload.get("source"))
+    if operation == "RETURN_HOME":
+        if payload.get("target") not in (None, {}) or payload.get("place") is not None:
+            raise ArmCommandError("RETURN_HOME takes no target or place; the worker uses its recorded home pose")
+        home_target = dict.fromkeys(
+            ("object_class", "pick_slot_id", "slot_label", "slot_map_version", "frame_id", "unit", "position",
+             "uncertainty_m", "approach")
+        )
+        return str(robot_id), str(operation), valid_for_s, {"target": home_target, "place": None, "source": source}
 
     target = payload.get("target")
     target_fields = {"object_class", "pick_slot_id", "frame_id", "unit", "position", "uncertainty_m", "approach"}
     if not isinstance(target, Mapping) or set(target) - target_fields:
         raise ArmCommandError("target must be an object with " + ", ".join(sorted(target_fields)))
+    if operation == "MOVE_TO_SLOT" and target.get("pick_slot_id") is None:
+        raise ArmCommandError("MOVE_TO_SLOT needs target.pick_slot_id")
+    if operation == "MOVE_TO_POSITION" and target.get("pick_slot_id") is not None:
+        raise ArmCommandError("MOVE_TO_POSITION needs target.position, not a slot")
     frozen_target: dict[str, Any] = {
-        "object_class": _text(target.get("object_class"), "target.object_class", 80),
+        "object_class": _text(
+            target.get("object_class"), "target.object_class", 80, required=operation == "PICK_AND_PLACE"
+        ),
         **(
             _slot_target(target, slot_map)
             if target.get("pick_slot_id") is not None
@@ -253,22 +277,35 @@ def validate_command_request(
         raise ArmCommandError("target.approach must be one of: " + ", ".join(sorted(APPROACHES)))
 
     place = payload.get("place")
-    if not isinstance(place, Mapping) or set(place) != {"slot_id"}:
+    if operation in MOVE_ONLY_WITHOUT_PLACE:
+        if place is not None:
+            raise ArmCommandError(f"{operation} takes no place")
+        frozen_place = None
+    elif not isinstance(place, Mapping) or set(place) != {"slot_id"}:
         raise ArmCommandError("place must be an object with exactly slot_id")
-    source = payload.get("source")
+    else:
+        frozen_place = {"slot_id": _matching(place.get("slot_id"), "place.slot_id", _SLOT_ID)}
+    request = {"target": frozen_target, "place": frozen_place, "source": source}
+    return str(robot_id), str(operation), valid_for_s, request
+
+
+def _operator_source(source: object) -> dict[str, Any]:
     if not isinstance(source, Mapping) or set(source) - {"kind", "note"}:
         raise ArmCommandError("source must be an object with kind and optional note")
     if source.get("kind") not in SOURCE_KINDS:
         raise ArmCommandError("source.kind must be one of: " + ", ".join(sorted(SOURCE_KINDS)))
-    request = {
-        "target": frozen_target,
-        "place": {"slot_id": _matching(place.get("slot_id"), "place.slot_id", _SLOT_ID)},
-        "source": {
-            "kind": source["kind"],
-            "note": _text(source.get("note"), "source.note", 200, required=False),
-        },
-    }
-    return str(robot_id), str(operation), valid_for_s, request
+    return {"kind": source["kind"], "note": _text(source.get("note"), "source.note", 200, required=False)}
+
+
+def _require_success_evidence(operation: str, body: Mapping[str, object]) -> None:
+    """SUCCEEDED must carry the evidence its operation needs; otherwise the worker reports RESULT_UNKNOWN."""
+    if operation in POSE_OPERATIONS:
+        if body.get("pose_reached") is not True:
+            raise ArmCommandError(f"{operation} SUCCEEDED needs pose_reached true (measured joint positions at the goal)")
+    elif not (body.get("grasp_confirmed") is True and body.get("place_confirmed") is True):
+        raise ArmCommandError(
+            "SUCCEEDED needs grasp_confirmed and place_confirmed true; use RESULT_UNKNOWN when they cannot be confirmed"
+        )
 
 
 class ArmCommandStore:
@@ -433,8 +470,19 @@ class ArmCommandStore:
 
     # ---- operator side ----
 
-    def create(self, payload: Mapping[str, object]) -> dict[str, Any]:
+    def create(
+        self, payload: Mapping[str, object], camera_source: Mapping[str, object] | None = None
+    ) -> dict[str, Any]:
+        """Queue a command. `camera_source` is evidence the server itself took from a camera snapshot;
+        clients can only send `source.kind: OPERATOR_INPUT`, so camera provenance cannot be posted directly."""
         robot_id, operation, valid_for_s, request = validate_command_request(payload, self.slot_map)
+        if camera_source is not None:
+            if camera_source.get("slot_id") != request["target"]["pick_slot_id"]:
+                raise ArmCommandError("camera evidence is for a different slot than the command target")
+            request["source"] = {"kind": "CAMERA", **camera_source}
+            # Where in the slot the camera saw the object; the arm side decides whether to correct for it.
+            request["target"]["lateral_offset_m"] = camera_source.get("lateral_offset_m")
+            request["target"]["object_position_shelf_m"] = camera_source.get("position_shelf_m")
         now = _now()
         with self._lock:
             with self._sessions.begin() as session:
@@ -456,7 +504,12 @@ class ArmCommandStore:
                 )
                 session.add(command)
                 self._record(
-                    session, command, "CREATED", None, {"source": "operator", "valid_for_s": valid_for_s}, now
+                    session,
+                    command,
+                    "CREATED",
+                    None,
+                    {"source": "camera" if camera_source is not None else "operator", "valid_for_s": valid_for_s},
+                    now,
                 )
                 presented = self._present(command)
             self._new_command.notify_all()
@@ -593,13 +646,9 @@ class ArmCommandStore:
         if event in REASON_REQUIRED or reason_code is not None:
             reason_code = _matching(reason_code, "reason_code", _REASON_CODE)
         _text(body.get("message"), "message", 300, required=False)
-        for field in ("grasp_confirmed", "place_confirmed"):
+        for field in ("grasp_confirmed", "place_confirmed", "pose_reached"):
             if body.get(field) is not None and not isinstance(body.get(field), bool):
                 raise ArmCommandError(f"{field} must be true or false")
-        if event == "SUCCEEDED" and not (body.get("grasp_confirmed") is True and body.get("place_confirmed") is True):
-            raise ArmCommandError(
-                "SUCCEEDED needs grasp_confirmed and place_confirmed true; use RESULT_UNKNOWN when they cannot be confirmed"
-            )
         if body.get("details") is not None and not isinstance(body.get("details"), Mapping):
             raise ArmCommandError("details must be an object")
 
@@ -627,6 +676,8 @@ class ArmCommandStore:
                         raise ArmCommandConflict(
                             "WORKER_MISMATCH", "이 명령을 가져간 워커가 아닙니다.", self._present(command)
                         )
+                    if event == "SUCCEEDED":
+                        _require_success_evidence(command.operation, body)
                     current = ArmCommandState(command.state)
                     next_state = WORKER_TRANSITIONS[event].get(current)
                     if next_state is None:

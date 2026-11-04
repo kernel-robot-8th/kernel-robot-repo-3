@@ -48,6 +48,8 @@ def request_json(method: str, url: str, body: dict | None = None, timeout: float
 
 
 class Worker:
+    banner = "모의 OMX 워커 {worker_id}: {url} 대기 (팔을 움직이지 않음)"
+
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
         self.base = args.server.rstrip("/")
@@ -74,7 +76,9 @@ class Worker:
     def check(self, command: dict) -> str | None:
         """Worker-side checks before accepting. Return a reason code to reject, or None."""
         target = command["target"]
-        if target.get("pick_slot_id") is not None:
+        if command["operation"] == "RETURN_HOME":
+            pass  # a real worker replays its recorded "home" pose; there is no target to check
+        elif target.get("pick_slot_id") is not None:
             # A real worker looks up the joint pose it taught for this slot under this slot map version.
             if target["slot_map_version"] != self.slot_map_version:
                 return "SLOT_MAP_MISMATCH"
@@ -93,15 +97,14 @@ class Worker:
 
     def handle(self, command: dict) -> None:
         target = command["target"]
-        where = (
-            f"칸 {target['pick_slot_id']} ({target['slot_label']})"
-            if target.get("pick_slot_id") is not None
-            else f"{target['frame_id']} {target['position']} m"
-        )
-        print(
-            f"[{command['command_id']}] {target['object_class']} @ {where} -> {command['place']['slot_id']}",
-            flush=True,
-        )
+        if command["operation"] == "RETURN_HOME":
+            where = "home"
+        elif target.get("pick_slot_id") is not None:
+            where = f"칸 {target['pick_slot_id']} ({target['slot_label']})"
+        else:
+            where = f"{target['frame_id']} {target['position']} m"
+        place = f" -> {command['place']['slot_id']}" if command.get("place") else ""
+        print(f"[{command['command_id']}] {command['operation']} {target['object_class'] or ''} @ {where}{place}", flush=True)
         if self.args.result == "silent":
             print("  (silent: ACCEPTED를 보내지 않음 -> 관제가 ACK_TIMEOUT 후 UNKNOWN 처리)", flush=True)
             return
@@ -118,7 +121,10 @@ class Worker:
                 self.execute_phase(command, phase)
                 command = self.send(command, "PROGRESS", phase=phase)
             if self.args.result == "succeeded":
-                self.send(command, "SUCCEEDED", grasp_confirmed=True, place_confirmed=True)
+                if command["operation"] in ("MOVE_TO_SLOT", "RETURN_HOME", "MOVE_TO_POSITION"):
+                    self.send(command, "SUCCEEDED", pose_reached=True)
+                else:
+                    self.send(command, "SUCCEEDED", grasp_confirmed=True, place_confirmed=True)
             elif self.args.result == "failed":
                 self.send(command, "FAILED", reason_code="MOCK_GRASP_FAILED")
             else:
@@ -131,7 +137,7 @@ class Worker:
             f"{self.base}/api/arm/{self.args.robot_id}/commands/next"
             f"?worker_id={self.args.worker_id}&wait_s={self.args.wait_s:g}"
         )
-        print(f"모의 OMX 워커 {self.args.worker_id}: {url} 대기 (팔을 움직이지 않음)", flush=True)
+        print(self.banner.format(worker_id=self.args.worker_id, url=url), flush=True)
         while True:
             try:
                 status, body = request_json("GET", url, timeout=self.args.wait_s + 10)

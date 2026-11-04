@@ -533,9 +533,17 @@ function renderArmCommands(commands) {
   }
   armCommandRows.innerHTML = commands.map((command) => {
     const target = command.target;
-    const where = target.pick_slot_id
-      ? `칸 ${escapeHtml(target.slot_label || target.pick_slot_id)} (${escapeHtml(target.pick_slot_id)})`
-      : `${escapeHtml(target.frame_id)} (${[target.position.x, target.position.y, target.position.z].map((value) => value.toFixed(3)).join(', ')}) m`;
+    const camera = command.source?.kind === 'CAMERA'
+      ? ` · 정면 캠 ${escapeHtml(command.source.class_name)} ${Math.round(command.source.confidence * 100)}%`
+      : '';
+    let where = 'home 자세';
+    if (target.pick_slot_id) {
+      where = `칸 ${escapeHtml(target.slot_label || target.pick_slot_id)} (${escapeHtml(target.pick_slot_id)})${camera}`;
+    } else if (target.position) {
+      where = `${escapeHtml(target.frame_id)} (${[target.position.x, target.position.y, target.position.z].map((value) => value.toFixed(3)).join(', ')}) m`;
+    }
+    const what = { MOVE_TO_SLOT: '칸 앞으로 이동', RETURN_HOME: '원상복귀', MOVE_TO_POSITION: '좌표로 이동' }[command.operation]
+      || `${escapeHtml(target.object_class)} → ${escapeHtml(command.place.slot_id)}`;
     const simulated = command.result && command.result.simulated ? '<span class="simulated">모의</span>' : '';
     const reason = command.reason_code ? `<small>${escapeHtml(command.reason_code)}</small>` : '';
     const cleared = command.operator_cleared_at ? `<small>현장 확인 ${escapeHtml(formatClock(command.operator_cleared_at))}</small>` : '';
@@ -551,7 +559,7 @@ function renderArmCommands(commands) {
     return `<tr>
       <td>${escapeHtml(command.command_id)}<small>${escapeHtml(formatClock(command.created_at))}</small></td>
       <td>${escapeHtml(armCommandStateLabels[command.state] || command.state)}${simulated}${reason}${cleared}</td>
-      <td>${escapeHtml(target.object_class)} → ${escapeHtml(command.place.slot_id)}<small>${where}</small></td>
+      <td>${what}<small>${where}</small></td>
       <td>${escapeHtml(command.worker_id || '-')}<small>${escapeHtml(formatClock(command.last_event_at || command.dispatched_at))}</small></td>
       <td>${action}</td>
     </tr>`;
@@ -598,14 +606,58 @@ async function postArmCommand(url, body) {
   }
 }
 
+const cameraCommandForm = document.querySelector('#cameraCommandForm');
+
+cameraCommandForm.addEventListener('submit', async (event) => {
+  // The server picks the slot from the front camera; it refuses unless the object is in exactly one slot.
+  event.preventDefault();
+  const button = cameraCommandForm.querySelector('button');
+  const objectClass = cameraCommandForm.elements.object_class.value.trim();
+  button.disabled = true;
+  armCommandMessage.textContent = '';
+  try {
+    const response = await fetch('/api/arm/commands/from-camera', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ object_class: objectClass }),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      const detail = result.details ? ` (${JSON.stringify(result.details)})` : '';
+      throw new Error(`${apiErrorMessage(result, '칸을 정하지 못했습니다.')}${detail}`);
+    }
+    const found = result.selection;
+    armCommandMessage.textContent = `${found.class_name} ${Math.round(found.confidence * 100)}% → ${found.slot_label} · ${result.command.command_id} 등록, 워커가 가져갈 때까지 대기`;
+  } catch (error) {
+    armCommandMessage.textContent = error.message;
+  } finally {
+    button.disabled = false;
+    await refreshArmCommands();
+  }
+});
+
 const armCommandSlot = document.querySelector('#armCommandSlot');
 const armCommandPositionInputs = ['frame_id', 'x', 'y', 'z'].map((name) => armCommandForm.elements[name]);
 
+const armCommandOperation = document.querySelector('#armCommandOperation');
+
 function updateArmCommandMode() {
   // A slot command carries no coordinates; the worker replays the pose it taught for that slot.
+  // Moving to a slot needs a slot; picking also needs to say what object it is.
+  // Moving to a position takes coordinates only and no place to put an object.
+  const moveOnly = armCommandOperation.value === 'MOVE_TO_SLOT';
+  const toPosition = armCommandOperation.value === 'MOVE_TO_POSITION';
+  armCommandSlot.querySelector('option[value=""]').disabled = moveOnly;
+  if (moveOnly && !armCommandSlot.value && armCommandSlot.options.length > 1) armCommandSlot.selectedIndex = 1;
+  if (toPosition) armCommandSlot.value = '';
+  armCommandSlot.disabled = toPosition;
+  armCommandForm.elements.slot_id.disabled = toPosition;
+  armCommandForm.elements.object_class.required = armCommandOperation.value === 'PICK_AND_PLACE';
   const slotMode = Boolean(armCommandSlot.value);
   armCommandPositionInputs.forEach((input) => { input.disabled = slotMode; });
 }
+
+armCommandOperation.addEventListener('change', updateArmCommandMode);
 
 async function loadShelfSlots() {
   try {
@@ -618,6 +670,7 @@ async function loadShelfSlots() {
       option.textContent = slot.label;
       armCommandSlot.append(option);
     });
+    updateArmCommandMode();
   } catch (error) {
     armCommandSlot.disabled = true;
     armCommandSlot.title = error.message;
@@ -634,20 +687,34 @@ armCommandForm.addEventListener('submit', async (event) => {
   const slotId = armCommandSlot.value;
   const command = await postArmCommand('/api/arm/commands', {
     robot_id: 'arm-01',
-    operation: 'PICK_AND_PLACE',
+    operation: armCommandOperation.value,
     valid_for_s: Number(formData.get('valid_for_s')),
     target: slotId
-      ? { object_class: formData.get('object_class'), pick_slot_id: slotId }
+      ? { object_class: String(formData.get('object_class') || '').trim() || null, pick_slot_id: slotId }
       : {
-        object_class: formData.get('object_class'),
+        object_class: String(formData.get('object_class') || '').trim() || null,
         frame_id: formData.get('frame_id'),
         unit: 'm',
         position: { x: Number(formData.get('x')), y: Number(formData.get('y')), z: Number(formData.get('z')) },
       },
-    place: { slot_id: formData.get('slot_id') },
+    ...(armCommandOperation.value === 'MOVE_TO_POSITION' ? {} : { place: { slot_id: formData.get('slot_id') } }),
     source: { kind: 'OPERATOR_INPUT' },
   });
   if (command) armCommandMessage.textContent = `${command.command_id} 등록 · 워커가 가져갈 때까지 대기`;
+  button.disabled = false;
+});
+
+document.querySelector('#armReturnHome').addEventListener('click', async (event) => {
+  // No slot, coordinate or place: the worker moves the arm back to the home pose it recorded.
+  const button = event.currentTarget;
+  button.disabled = true;
+  const command = await postArmCommand('/api/arm/commands', {
+    robot_id: 'arm-01',
+    operation: 'RETURN_HOME',
+    valid_for_s: Number(armCommandForm.elements.valid_for_s.value),
+    source: { kind: 'OPERATOR_INPUT' },
+  });
+  if (command) armCommandMessage.textContent = `${command.command_id} 원상복귀 등록 · 워커가 가져갈 때까지 대기`;
   button.disabled = false;
 });
 
@@ -679,6 +746,7 @@ const stepOutcomeLabels = {
   NOT_EXECUTED_AFTER_CANCEL: '취소 뒤 미실행',
   NOT_EXECUTED_AFTER_FAILURE: '실패 뒤 미실행',
   PARKING_ARRIVED: '주차 판정 도착',
+  LOAD_CONFIRMED: '적재 수량 확인',
 };
 const taskEventLabels = {
   MOCK_SCENARIO_FAILURE: '모의 실패 시나리오 발생',
@@ -686,17 +754,6 @@ const taskEventLabels = {
   MOCK_TASK_COMPLETED: '모의 작업 완료',
   TARGET_PLANE_PROJECTION_RECORDED: '선반 평면 좌표 초안 기록',
   ARRIVAL_NOT_CONFIRMED: '도착 미확인 · 팔 단계 시작 안 함',
-};
-const parkingStatusLabels = {
-  ARRIVED: '도착',
-  LOAD_CONFIRMED: '적재 수량 확인',
-  MISALIGNED: '어긋남',
-  NOT_FOUND: '확인 불가(마커 안 보임)',
-  AMBIGUOUS: '확인 불가(같은 마커 여러 개)',
-  VIEW_UNVERIFIED: '확인 불가(카메라 시야 미확인)',
-};
-const parkingDeviationLabels = { WITHIN: '범위 안', NEAR: '조금 벗어남', FAR: '많이 벗어남' };
-
   LOAD_NOT_CONFIRMED: '적재 미확인 · 출발하지 않음',
 };
 const loadStatusLabels = {
@@ -704,13 +761,23 @@ const loadStatusLabels = {
   INCOMPLETE: '덜 실림',
   EXCESS: '더 실림',
   NOT_VERIFIED: '확인 불가',
-function formatParkingObservation(observation) {
+};
 
 function formatLoadObservation(payload) {
   const observation = payload.observation || {};
   const observed = observation.observed_count == null ? '개수 없음' : `${observation.observed_count}개`;
   return `적재 확인 · ${loadStatusLabels[payload.status] || payload.status} · 기대 ${payload.expected_count}개 · 관측 ${observed}${observation.simulated ? ' · 모의 관측(카메라 미사용)' : ''}`;
 }
+const parkingStatusLabels = {
+  ARRIVED: '도착',
+  MISALIGNED: '어긋남',
+  NOT_FOUND: '확인 불가(마커 안 보임)',
+  AMBIGUOUS: '확인 불가(같은 마커 여러 개)',
+  VIEW_UNVERIFIED: '확인 불가(카메라 시야 미확인)',
+};
+const parkingDeviationLabels = { WITHIN: '범위 안', NEAR: '조금 벗어남', FAR: '많이 벗어남' };
+
+function formatParkingObservation(observation) {
   const parts = [`주차 판정 · ${observation.spot_id} · ${parkingStatusLabels[observation.status] || observation.status}`];
   const offset = observation.offset;
   if (offset) {
@@ -1163,6 +1230,8 @@ function renderTaskDetail(task) {
         : '';
       const detail = parking
         ? formatParkingObservation(parking)
+        : event.event_type === 'LOAD_OBSERVED'
+        ? formatLoadObservation(event.payload || {})
         : projection
         ? `2D 선반 평면 좌표 초안 · ${projection.plane_frame?.frame_id || 'frame 미지정'} · x=${Number(projection.plane_xy?.x).toFixed(3)}, y=${Number(projection.plane_xy?.y).toFixed(3)} ${projection.plane_frame?.unit || ''} · bbox 하단 중앙 proxy · 후보 #${Number(projection.candidate_index) + 1} · 로봇 목표로 사용 불가`
         : observation
@@ -1173,8 +1242,6 @@ function renderTaskDetail(task) {
             ? `${event.payload?.source === 'mock' ? '모의 ' : ''}진행률 ${Number(event.payload?.progress) || 0}% · ${event.payload?.message || '진행 이벤트'}`
             : (taskEventLabels[eventName] || eventName);
       const source = event.payload?.source;
-        : event.event_type === 'LOAD_OBSERVED'
-        ? formatLoadObservation(event.payload || {})
       const robotId = event.payload?.robot_id;
       const imageLink = event.event_type === 'TARGET_OBSERVED' && event.payload?.frame_artifact?.path
         ? `<a href="/api/tasks/${encodeURIComponent(task.id)}/observations/${encodeURIComponent(event.id)}/image" target="_blank" rel="noopener">프레임 보기</a>`

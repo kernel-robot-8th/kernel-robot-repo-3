@@ -115,9 +115,15 @@
 
     <section aria-labelledby="arm-command-title">
       <div class="section-heading"><h2 id="arm-command-title">OMX 명령 (HTTP 워커)</h2><span id="armWorkerState" class="updated">워커 상태 확인 중</span></div>
+      <form id="cameraCommandForm" class="camera-command-form">
+        <label>정면 캠에서 찾을 물건<input id="cameraCommandClass" name="object_class" list="detectorClassOptions" maxlength="80" required placeholder="예: ball"></label>
+        <button type="submit">정면 캠으로 칸 찾아 이동</button>
+      </form>
+      <p class="note">정면 캠 검출에서 이 물건이 정확히 한 칸 안에만 보일 때 그 칸으로 이동 명령을 만듭니다. 영상이 오래됐거나, 여러 칸에 있거나, 칸 경계에 걸리면 명령을 만들지 않고 이유를 보여 줍니다. 아래는 칸을 직접 고르는 수동 명령입니다.</p>
       <form id="armCommandForm" class="coordinate-form arm-command-form">
-        <label>대상 종류<input name="object_class" maxlength="80" required placeholder="예: strawberry"></label>
-        <label>집을 칸<select id="armCommandSlot" name="pick_slot_id"><option value="">좌표로 입력</option></select></label>
+        <label>명령 종류<select id="armCommandOperation" name="operation"><option value="MOVE_TO_SLOT">칸 앞으로 이동</option><option value="MOVE_TO_POSITION">좌표로 이동</option><option value="PICK_AND_PLACE">집어서 옮기기</option></select></label>
+        <label>대상 종류<input name="object_class" maxlength="80" placeholder="예: strawberry"></label>
+        <label>칸<select id="armCommandSlot" name="pick_slot_id"><option value="">좌표로 입력</option></select></label>
         <label>좌표계<input name="frame_id" maxlength="80" required value="omx_link0"></label>
         <label>X (m)<input name="x" type="number" step="any" min="-1" max="1" required></label>
         <label>Y (m)<input name="y" type="number" step="any" min="-1" max="1" required></label>
@@ -125,8 +131,9 @@
         <label>놓을 칸<input name="slot_id" maxlength="40" required value="CART_1"></label>
         <label>유효 시간(초)<input name="valid_for_s" type="number" min="5" max="600" step="1" required value="60"></label>
         <button type="submit">명령 보내기</button>
+        <button type="button" id="armReturnHome" class="secondary">원상복귀</button>
       </form>
-      <p class="note">워커가 가져가서 ACCEPTED를 보내야 실행됩니다. 연결된 워커가 실물 OMX면 팔이 움직이고, 모의 워커는 움직이지 않습니다. 좌표 확인은 워커가 하며, 관제는 단위 실수(±1 m 초과)만 막습니다.</p>
+      <p class="note">원상복귀는 워커가 기록해 둔 home 자세로 팔을 돌려보냅니다. 좌표로 이동은 omx_link0(팔 받침 바닥, 어깨 회전축 1.1 cm 뒤 원점, 앞 +X, 팔 기준 왼쪽 +Y, 위 +Z) 기준 그리퍼 턱 부착점 위치이며 손목은 수평입니다. 워커가 가져가서 ACCEPTED를 보내야 실행됩니다. 연결된 워커가 실물 OMX면 팔이 움직이고, 모의 워커는 움직이지 않습니다. 좌표 확인은 워커가 하며, 관제는 단위 실수(±1 m 초과)만 막습니다.</p>
       <p id="armCommandMessage" class="note" role="status"></p>
       <div class="table-wrap">
         <table class="arm-command-table">

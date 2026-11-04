@@ -227,6 +227,76 @@ class ShelfSlotCommandTests(unittest.TestCase):
             with self.subTest(target=target), self.assertRaises(ArmCommandError):
                 self.store.create(slot_request(**target))
 
+    def test_move_to_slot_needs_a_slot_and_succeeds_only_on_a_reached_pose(self) -> None:
+        with self.assertRaisesRegex(ArmCommandError, "pick_slot_id"):
+            self.store.create(command_request(operation="MOVE_TO_SLOT"))
+        command = self.store.create(
+            command_request(operation="MOVE_TO_SLOT", target={"pick_slot_id": "slot_a_2_1"})
+        )
+        self.assertIsNone(command["target"]["object_class"])
+        claimed = self.store.claim_next("arm-01", "w1", 0)
+        base = {"robot_id": "arm-01", "worker_id": "w1", "simulated": False}
+        self.store.apply_worker_event(claimed["command_id"], {**base, "event_id": "a", "event": "ACCEPTED"})
+        with self.assertRaisesRegex(ArmCommandError, "pose_reached"):
+            self.store.apply_worker_event(
+                claimed["command_id"],
+                {**base, "event_id": "s", "event": "SUCCEEDED", "grasp_confirmed": True, "place_confirmed": True},
+            )
+        done, _ = self.store.apply_worker_event(
+            claimed["command_id"], {**base, "event_id": "s2", "event": "SUCCEEDED", "pose_reached": True}
+        )
+        self.assertEqual(done["state"], "SUCCEEDED")
+
+    def test_return_home_names_no_target_and_succeeds_only_on_a_reached_pose(self) -> None:
+        home = {"robot_id": "arm-01", "operation": "RETURN_HOME", "valid_for_s": 60, "source": {"kind": "OPERATOR_INPUT"}}
+        for extra in ({"target": {"pick_slot_id": "slot_a_2_1"}}, {"place": {"slot_id": "CART_1"}}):
+            with self.subTest(extra=extra), self.assertRaisesRegex(ArmCommandError, "RETURN_HOME"):
+                self.store.create({**home, **extra})
+        command = self.store.create(home)
+        self.assertIsNone(command["place"])
+        self.assertTrue(all(value is None for value in command["target"].values()))
+        claimed = self.store.claim_next("arm-01", "w1", 0)
+        base = {"robot_id": "arm-01", "worker_id": "w1", "simulated": False}
+        self.store.apply_worker_event(claimed["command_id"], {**base, "event_id": "a", "event": "ACCEPTED"})
+        with self.assertRaisesRegex(ArmCommandError, "pose_reached"):
+            self.store.apply_worker_event(claimed["command_id"], {**base, "event_id": "s", "event": "SUCCEEDED"})
+        done, _ = self.store.apply_worker_event(
+            claimed["command_id"], {**base, "event_id": "s2", "event": "SUCCEEDED", "pose_reached": True}
+        )
+        self.assertEqual(done["state"], "SUCCEEDED")
+
+    def test_move_to_position_carries_only_a_position_and_succeeds_on_a_reached_pose(self) -> None:
+        position = {"frame_id": "omx_link0", "unit": "m", "position": {"x": 0.2, "y": 0.0, "z": 0.15}}
+        move = {"robot_id": "arm-01", "operation": "MOVE_TO_POSITION", "valid_for_s": 60, "source": {"kind": "OPERATOR_INPUT"}}
+        for bad in (
+            {"target": {"pick_slot_id": "slot_a_2_1"}},
+            {"target": position, "place": {"slot_id": "CART_1"}},
+            {"target": {**position, "unit": "mm"}},
+        ):
+            with self.subTest(bad=bad), self.assertRaises(ArmCommandError):
+                self.store.create({**move, **bad})
+        command = self.store.create({**move, "target": position})
+        self.assertIsNone(command["place"])
+        self.assertIsNone(command["target"]["pick_slot_id"])
+        self.assertEqual(command["target"]["position"], {"x": 0.2, "y": 0.0, "z": 0.15})
+        claimed = self.store.claim_next("arm-01", "w1", 0)
+        base = {"robot_id": "arm-01", "worker_id": "w1", "simulated": False}
+        self.store.apply_worker_event(claimed["command_id"], {**base, "event_id": "a", "event": "ACCEPTED"})
+        with self.assertRaisesRegex(ArmCommandError, "pose_reached"):
+            self.store.apply_worker_event(claimed["command_id"], {**base, "event_id": "s", "event": "SUCCEEDED"})
+
+    def test_camera_evidence_is_stored_only_when_it_matches_the_target_slot(self) -> None:
+        evidence = {"camera_id": "shelf_camera", "slot_id": "slot_b_2_1", "class_name": "ball", "confidence": 0.62}
+        request = command_request(operation="MOVE_TO_SLOT", target={"object_class": "ball", "pick_slot_id": "slot_a_2_1"})
+        with self.assertRaisesRegex(ArmCommandError, "different slot"):
+            self.store.create(request, camera_source=evidence)
+        request["target"]["pick_slot_id"] = "slot_b_2_1"
+        command = self.store.create(request, camera_source=evidence)
+        self.assertEqual(command["source"]["kind"], "CAMERA")
+        self.assertEqual(command["source"]["confidence"], 0.62)
+        with self.assertRaises(ArmCommandError):  # clients cannot post camera provenance themselves
+            self.store.create(command_request(source={"kind": "CAMERA"}))
+
     def test_slot_commands_need_a_slot_map(self) -> None:
         store = ArmCommandStore(self.task_store.session_factory)
         with self.assertRaisesRegex(ArmCommandError, "칸 정의"):

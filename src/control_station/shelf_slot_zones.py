@@ -19,6 +19,9 @@ import threading
 from pathlib import Path
 from typing import Any
 
+import cv2
+import numpy as np
+
 from control_station.shelf_regions import _point_in_polygon
 from control_station.shelf_slot_map import ShelfSlotMap
 
@@ -37,6 +40,43 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return value
 
 
+def _projection(artifact: dict[str, Any]) -> dict[str, np.ndarray] | None:
+    """Camera model and pose stored in the artifact, or None for artifacts made before they were kept."""
+    try:
+        intrinsics = artifact["intrinsics"]
+        camera_matrix = np.array(intrinsics["camera_matrix"], dtype=np.float64).reshape(3, 3)
+        distortion = np.array(intrinsics["distortion_coefficients"], dtype=np.float64).reshape(-1)
+        rvec = np.array(artifact["pose"]["rvec"], dtype=np.float64).reshape(3, 1)
+        tvec = np.array(artifact["pose"]["tvec_m"], dtype=np.float64).reshape(3, 1)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (np.isfinite(camera_matrix).all() and np.isfinite(distortion).all() and np.isfinite(rvec).all() and np.isfinite(tvec).all()):
+        return None
+    rotation, _ = cv2.Rodrigues(rvec)
+    return {"camera_matrix": camera_matrix, "distortion": distortion, "rotation": rotation, "tvec": tvec}
+
+
+def pixel_to_shelf_plane(pixel: tuple[float, float], projection: dict[str, np.ndarray], plane_z: float) -> dict[str, float] | None:
+    """Intersect the camera ray through `pixel` with the horizontal shelf plane z = plane_z (shelf_front frame).
+
+    Left-right (y) is well determined from the front camera. Depth (x) is not: an object behind the front lip
+    shows its bbox bottom on the lip line, so x comes out nearer than the object really is.
+    """
+    normalized = cv2.undistortPoints(
+        np.array([[pixel]], dtype=np.float64), projection["camera_matrix"], projection["distortion"]
+    ).reshape(2)
+    rotation, tvec = projection["rotation"], projection["tvec"]
+    center = (-rotation.T @ tvec).reshape(3)
+    direction = (rotation.T @ np.array([normalized[0], normalized[1], 1.0])).reshape(3)
+    if abs(direction[2]) < 1e-9:
+        return None
+    scale = (plane_z - center[2]) / direction[2]
+    if scale <= 0:
+        return None
+    point = center + scale * direction
+    return {"x": round(float(point[0]), 4), "y": round(float(point[1]), 4), "z": round(float(plane_z), 4)}
+
+
 def _polygon(value: object) -> list[tuple[float, float]] | None:
     if not isinstance(value, list) or len(value) < 3:
         return None
@@ -50,6 +90,70 @@ def _polygon(value: object) -> list[tuple[float, float]] | None:
             return None
         points.append((float(point[0]), float(point[1])))
     return points
+
+
+class SlotSelectionError(ValueError):
+    """The camera view does not single out one slot for the requested object; no command is made."""
+
+    def __init__(self, error_code: str, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.details = details or {}
+
+
+def select_slot_for_class(camera: dict[str, Any], object_class: str) -> dict[str, Any]:
+    """Pick the one slot holding `object_class` in an annotated camera snapshot, or refuse.
+
+    Refuses when the frame is not fresh, the detector or slot zones are not ready, the object is not
+    seen in any slot, it sits on a slot boundary, or it is seen in more than one slot. The returned
+    record is the camera evidence stored with the command.
+    """
+    if camera.get("stream_state") != "STREAMING" or camera.get("frame_freshness") != "FRESH":
+        raise SlotSelectionError("CAMERA_NOT_FRESH", "정면 카메라 영상이 최신이 아닙니다",
+                                 {"stream_state": camera.get("stream_state"), "frame_freshness": camera.get("frame_freshness")})
+    if camera.get("detector_state") != "ready":
+        raise SlotSelectionError("DETECTOR_NOT_READY", "정면 카메라 물체 검출기가 준비되지 않았습니다",
+                                 {"detector_state": camera.get("detector_state")})
+    zones = camera.get("slot_zones") or {"status": "NOT_CONFIGURED"}
+    if zones.get("status") != "READY":
+        raise SlotSelectionError("SLOT_ZONES_NOT_READY", f"칸 영역을 쓸 수 없습니다 ({zones.get('status')})",
+                                 {"slot_zones_status": zones.get("status"), "detail": zones.get("detail")})
+    wanted = object_class.strip().casefold()
+    matches = [item for item in camera.get("detections") or [] if str(item.get("class_name", "")).casefold() == wanted]
+    in_slot = [item for item in matches if (item.get("slot_assignment") or {}).get("status") == "IN_SLOT"]
+    unsure = [item for item in matches if (item.get("slot_assignment") or {}).get("status") == "AMBIGUOUS"]
+    seen = sorted({str(item.get("class_name")) for item in camera.get("detections") or []})
+    if unsure:
+        raise SlotSelectionError("TARGET_AMBIGUOUS", f"{object_class}이(가) 칸 경계에 걸려 칸을 정할 수 없습니다",
+                                 {"candidates": [item["slot_assignment"]["candidates"] for item in unsure]})
+    if not in_slot:
+        raise SlotSelectionError("TARGET_NOT_FOUND", f"정면 카메라에서 칸 안의 {object_class}을(를) 찾지 못했습니다",
+                                 {"detected_classes": seen, "outside_slots": len(matches)})
+    if len(in_slot) > 1:
+        raise SlotSelectionError("TARGET_MULTIPLE", f"{object_class}이(가) 여러 칸에 있어 하나를 고를 수 없습니다",
+                                 {"slots": [item["slot_assignment"]["slot_id"] for item in in_slot]})
+    detection = in_slot[0]
+    assignment = detection["slot_assignment"]
+    return {
+        "camera_id": camera.get("id"),
+        "captured_at": detection.get("captured_at") or camera.get("last_frame_at"),
+        "frame_sequence": detection.get("frame_sequence") or camera.get("frame_sequence"),
+        "frame_sha256": detection.get("frame_sha256") or camera.get("frame_sha256"),
+        "pixel_transform_id": camera.get("pixel_transform_id"),
+        "class_name": detection.get("class_name"),
+        "confidence": detection.get("confidence"),
+        "bbox_xyxy_px": detection.get("bbox_xyxy_px"),
+        "anchor_px": assignment["anchor_px"],
+        # Shelf-frame point of the bottom-center and its left(+)/right(-) offset from the slot centre line;
+        # None when the activated pose has no camera model. Only y is reliable from the front camera.
+        "position_shelf_m": assignment.get("position_shelf_m"),
+        "lateral_offset_m": assignment.get("lateral_offset_m"),
+        "slot_id": assignment["slot_id"],
+        "slot_label": assignment["label"],
+        "shelf_pose_id": zones.get("pose_id"),
+        "shelf_pose_sha256": zones.get("artifact_sha256"),
+        "detector_weights_sha256": camera.get("detector_weights_sha256"),
+    }
 
 
 class ShelfSlotZones:
@@ -114,12 +218,15 @@ class ShelfSlotZones:
                     raise ValueError(
                         f"invalid slot zone {slot.get('slot_id')!r}; re-run calibrate_shelf_pose.py for anchor zones"
                     )
+                definition = self.slot_map.active_slots[slot["slot_id"]]
                 slots.append(
                     {
                         "slot_id": slot["slot_id"],
-                        "label": self.slot_map.active_slots[slot["slot_id"]]["label"],
+                        "label": definition["label"],
                         "polygon_px": [list(point) for point in anchor],
                         "volume_polygon_px": [list(point) for point in volume],
+                        "deck_height_m": definition["deck_height_m"],
+                        "marker_m": definition["marker_m"],
                     }
                 )
             if not slots:
@@ -135,6 +242,8 @@ class ShelfSlotZones:
             "reprojection_rms_px": artifact.get("reprojection_rms_px"),
             "camera_position_in_shelf_frame_m": artifact.get("pose", {}).get("camera_position_in_shelf_frame_m"),
             "slots": slots,
+            "coordinates": "LATERAL_RELIABLE" if _projection(artifact) is not None else "UNAVAILABLE",
+            "_projection": _projection(artifact),  # internal; stripped before the zones leave the server
         }
 
     def annotate(self, camera: dict[str, Any]) -> dict[str, Any]:
@@ -142,7 +251,9 @@ class ShelfSlotZones:
         zones = self._load(str(camera.get("id")))
         if zones["status"] == "NOT_CONFIGURED":
             return camera
-        zones = {**zones, "used_for_selection": False}
+        projection = zones.get("_projection")
+        zones = {key: value for key, value in zones.items() if not key.startswith("_")}
+        zones["used_for_selection"] = False
         if zones["status"] == "READY":
             size = zones["image_size_px"] or {}
             if (size.get("width"), size.get("height")) != (camera.get("frame_width"), camera.get("frame_height")):
@@ -152,13 +263,15 @@ class ShelfSlotZones:
         camera = {**camera, "slot_zones": zones}
         if zones["status"] == "READY" and camera.get("detections"):
             camera["detections"] = [
-                {**detection, "slot_assignment": self.assign(detection, zones["slots"])}
+                {**detection, "slot_assignment": self.assign(detection, zones["slots"], projection)}
                 for detection in camera["detections"]
             ]
         return camera
 
     @staticmethod
-    def assign(detection: dict[str, Any], slots: list[dict[str, Any]]) -> dict[str, Any]:
+    def assign(
+        detection: dict[str, Any], slots: list[dict[str, Any]], projection: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         box = detection.get("bbox_xyxy_px")
         if not isinstance(box, list) or len(box) != 4:
             return {"status": "NO_BBOX", "used_for_selection": False}
@@ -173,7 +286,14 @@ class ShelfSlotZones:
             "used_for_selection": False,
         }
         if len(inside) == 1 and not edge:
-            result.update(status="IN_SLOT", slot_id=inside[0]["slot_id"], label=inside[0]["label"])
+            slot = inside[0]
+            result.update(status="IN_SLOT", slot_id=slot["slot_id"], label=slot["label"])
+            if projection is not None and "deck_height_m" in slot:
+                # The bottom-center lies on (or just in front of) this slot's deck, so use that plane.
+                position = pixel_to_shelf_plane(anchor, projection, slot["deck_height_m"])
+                if position is not None:
+                    result["position_shelf_m"] = position
+                    result["lateral_offset_m"] = round(position["y"] - slot["marker_m"]["y"], 4)
         elif inside or edge:
             result["status"] = "AMBIGUOUS"
         else:

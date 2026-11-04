@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from control_station.arm_commands import ArmCommandConflict, ArmCommandError, ArmCommandNotFound
 from control_station.coordinate_target_drafts import CoordinateDraftError
+from control_station.shelf_slot_zones import SlotSelectionError, select_slot_for_class
 
 if TYPE_CHECKING:
     from control_station.app import ControlStationHandler
@@ -98,6 +99,43 @@ def post_command(h: ControlStationHandler, route: str, parts: list[str], body: d
         h._json_error(400, "ARM_COMMAND_INVALID", str(exc))
     except ArmCommandConflict as exc:
         h._json_error(409, exc.error_code, str(exc), command=exc.command)
+
+
+def post_command_from_camera(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:
+    """정면 카메라가 물건을 찾은 칸으로 OMX 이동 명령 등록 (한 칸에만 보일 때만)"""
+    allowed = {"object_class", "camera_id", "valid_for_s"}
+    object_class = body.get("object_class")
+    if set(body) - allowed or not isinstance(object_class, str) or not object_class.strip():
+        h._json_error(400, "ARM_COMMAND_INVALID", "body needs object_class and may have camera_id, valid_for_s")
+        return
+    camera_id = body.get("camera_id", "shelf_camera")
+    snapshot = next((camera for camera in h.app.camera_manager.snapshots() if camera.id == camera_id), None)
+    if snapshot is None:
+        h._json_error(404, "CAMERA_NOT_FOUND", f"camera {camera_id!r} is not configured")
+        return
+    try:
+        selection = select_slot_for_class(h.app.shelf_slot_zones.annotate(snapshot.to_dict()), object_class)
+        command = h.app.arm_commands.create(
+            {
+                "robot_id": "arm-01",
+                "operation": "MOVE_TO_SLOT",
+                "valid_for_s": body.get("valid_for_s", 60),
+                "target": {"object_class": object_class.strip(), "pick_slot_id": selection["slot_id"]},
+                "place": {"slot_id": "CART_1"},
+                "source": {"kind": "OPERATOR_INPUT"},  # replaced by the camera evidence below
+            },
+            camera_source=selection,
+        )
+    except SlotSelectionError as exc:
+        h._json_error(409, exc.error_code, str(exc), details=exc.details)
+        return
+    except ArmCommandError as exc:
+        h._json_error(400, "ARM_COMMAND_INVALID", str(exc))
+        return
+    except ArmCommandConflict as exc:
+        h._json_error(409, exc.error_code, str(exc), command=exc.command)
+        return
+    h._json(201, {"command": command, "selection": selection})
 
 
 def post_coordinate_draft(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:

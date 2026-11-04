@@ -57,7 +57,10 @@ button:disabled { border-color: #d9dde2; background: #edf0f3; color: #8a929b; cu
 .task-form label, .coordinate-form label { display: grid; gap: 4px; color: #58616b; font-size: 11px; }
 .task-form input, .task-form select, .coordinate-form input, .coordinate-form select { width: 100%; min-width: 0; padding: 8px; border: 1px solid #cbd1d8; border-radius: 4px; color: #20252b; font: inherit; font-size: 12px; }
 .coordinate-form { display: grid; grid-template-columns: 1.3fr .6fr repeat(3, .7fr) auto; align-items: end; gap: 8px; padding: 12px; border: 1px solid #d9dde2; border-radius: 4px; background: #fff; }
-.arm-command-form { grid-template-columns: 1fr 1.2fr 1fr repeat(3, .6fr) .8fr .7fr auto; margin-bottom: 8px; }
+.arm-command-form { grid-template-columns: 1.1fr 1fr 1.2fr 1fr repeat(3, .6fr) .8fr .7fr auto; margin-bottom: 8px; }
+.camera-command-form { display: grid; grid-template-columns: minmax(0, 18rem) auto; align-items: end; gap: 8px; margin-bottom: 4px; }
+.camera-command-form label { display: grid; gap: 4px; color: #58616b; font-size: 11px; }
+.camera-command-form input { width: 100%; min-width: 0; padding: 8px; border: 1px solid #cbd1d8; border-radius: 4px; color: #20252b; font: inherit; font-size: 12px; }
 .arm-command-table td { width: auto; white-space: normal; vertical-align: top; }
 .arm-command-table small { display: block; color: #7a838d; font-size: 11px; }
 .arm-command-table .simulated { margin-left: 6px; padding: 1px 5px; border-radius: 3px; background: #eef1f4; color: #58616b; font-size: 10px; }

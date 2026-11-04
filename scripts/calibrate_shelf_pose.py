@@ -224,6 +224,11 @@ def build_artifact(
             "slot_map_sha256": slot_map_sha,
         },
         "solver": {"method": "SOLVEPNP_SQPNP + solvePnPRefineLM", "opencv_version": cv2.__version__},
+        # Kept with the pose so a pixel can be turned back into a shelf-frame point from this file alone.
+        "intrinsics": {
+            "camera_matrix": camera_matrix.tolist(),
+            "distortion_coefficients": distortion.tolist(),
+        },
         "pose": {
             "rvec": [round(float(v), 6) for v in rvec.reshape(3)],
             "tvec_m": [round(float(v), 5) for v in tvec.reshape(3)],

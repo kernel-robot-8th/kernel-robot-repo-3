@@ -76,6 +76,8 @@ POST_ROUTES: tuple[Route, ...] = (
           "Cross-origin projection-draft request rejected"),
     Route(_path("/api/tasks/parse-command"), tasks.post_parse_command,
           "Cross-origin command-preview request rejected", cross_origin_error_code=False),
+    Route(_path("/api/arm/commands/from-camera"), arm.post_command_from_camera,
+          "Cross-origin arm-command request rejected"),
     # The arm worker is a plain HTTP client without Origin, so only browser requests can be cross-origin.
     Route(
         lambda route, parts: route == "/api/arm/commands"
