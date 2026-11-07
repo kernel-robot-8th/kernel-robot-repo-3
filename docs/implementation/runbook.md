@@ -127,6 +127,29 @@ LeRobot이 설치된 Python 환경에서 follower의 현재 관절 raw 값, torq
 
 출력은 한 시점의 관측값입니다. `readiness_state`는 항상 `UNKNOWN`으로 남으며, torque 비활성화·hardware error 0·USB 응답은 비상정지, 작업공간 clear, 동작 가능 상태 또는 집기 성공을 증명하지 않습니다. register `Min_Position_Limit`/`Max_Position_Limit`은 OMX-F의 확장 위치 모드에서 안전한 선반 작업 한계로 간주하지 않습니다. 읽기 전용 probe를 실물 준비 상태 API 대신 사용하지 않습니다.
 
+## ACT 집기 정책 실물 시험
+
+팀이 LeRobot으로 학습한 ACT 정책(카메라 영상과 관절 값을 보고 관절 목표를 내는 모방학습 모델, YOLO 아님)을 LeRobot 비동기 추론으로 실물 OMX에서 돌리고, 끝난 뒤 OMX 워커로 원상복귀하는 시험 절차입니다. 관제 작업 흐름과는 아직 연결하지 않았습니다. 도우미는 [omx_act_policy_test.sh](../../scripts/omx_act_policy_test.sh)입니다.
+
+```bash
+set -a; source .control-station/control-station.env; set +a   # 두 터미널 모두
+scripts/omx_act_policy_test.sh server            # 터미널 1: 정책 서버 (GPU, 모터 연결 없음)
+scripts/omx_act_policy_test.sh client [모델]     # 터미널 2: 팔이 움직임. 놓기가 끝나면 Ctrl+C
+scripts/omx_act_policy_test.sh worker            # 터미널 2: OMX 워커 → 관제 화면 원상복귀
+```
+
+- 준비: LeRobot 가상환경에 `grpcio==1.73.1`, `matplotlib`이 필요합니다(2026-11-07 이 PC에 설치, 기존 패키지 변경 없음). 계정 `dialout` 권한이 없으면 도우미가 `sg dialout`으로 실행합니다.
+- 장치는 환경 변수로 지정합니다: `CONTROL_STATION_ACT_FRONT_CAMERA`(필수, 학습 때의 front 카메라), `CONTROL_STATION_JOINT_CAMERA`(wrist), `CONTROL_STATION_FOLLOWER_PORT`, `CONTROL_STATION_OMX_POSES`(워커 자세 파일). 카메라 번호(`/dev/videoN`)는 꽂을 때마다 바뀌므로 by-id/by-path를 씁니다. 같은 모델의 카메라라도 **학습 때와 같은 위치·시점**의 카메라를 front로 줘야 합니다. 다른 PC의 명령에 있는 장치 번호를 그대로 쓰지 않습니다.
+- 정책에는 완료 신호가 없습니다. robot_client는 Ctrl+C를 누를 때까지 계속 동작하므로, 사람이 놓기가 끝난 것을 보고 멈춥니다.
+- LeRobot 기본값은 종료할 때 토크를 끄는 것(`disable_torque_on_disconnect=True`)이라 팔이 떨어집니다. 도우미는 `false`를 줘서 마지막 자세를 유지합니다. 연결할 때는 LeRobot이 모터 설정을 쓰느라 토크가 잠깐 꺼지므로 쉬는 자세에서 시작합니다. 시작 전에 `Goal_Position`이 현재 위치와 같은지 읽어 두면 토크가 켜질 때 팔이 튀지 않는지 알 수 있습니다.
+- 팔 포트는 배타적으로 열리지 않습니다(Dynamixel SDK가 pyserial exclusive를 쓰지 않음). 정책과 워커가 동시에 떠 있으면 둘 다 모터에 쓸 수 있으므로, 도우미는 다른 팔 프로세스가 있으면 시작하지 않습니다. 워커는 정책을 끈 뒤에 켭니다.
+- LeRobot이 연결 시 쓰는 보정값(Homing_Offset 0, Drive_Mode 0)은 워커가 기대하는 공장 기본값과 같아서, 정책을 돌린 뒤에도 기록한 자세를 그대로 씁니다. 워커는 그리퍼를 움직이지 않으므로, 물체를 놓기 전에 멈추면 든 채로 돌아옵니다.
+
+2026-11-07 이 PC 확인:
+- 모델은 이 PC에 로그인된 Hugging Face 계정의 `JJinJJin2/omx_act_policy_v2`입니다(데이터셋 `JJinJJin2/pick_and_place_v2`, 20 에피소드 × 약 20초, task "Pick up Doll"). 학습 때 front는 선반만 위에서 본 HCAM0, wrist는 Innomaker였고, 그날 포트 4의 허브에 연결된 4.4(HCAM0)와 4.3(Innomaker)이 같은 시점이었습니다. v1 `JJinJJin2/omx_act_policy`는 front 영상이 그리퍼 근접 화면이라 카메라가 뒤바뀐 것으로 의심되어 쓰지 않았습니다. 팀원 모델 `neverlish/omx_act_record-test-20261104-1`은 front가 팔·Pinky까지 보이는 천장 시점이고, 에피소드 끝 자세가 매번 다릅니다(home 대비 최대 2,077틱).
+- 연결한 팔은 follower 보드 `A9F93543…`로, [자세 파일](../../config/omx-slot-poses.json)을 기록한 `F58AE686…`과 다른 팔입니다. 시작 전 쉬는 자세(토크 꺼짐)를 [record_omx_pose.py](../../scripts/record_omx_pose.py)로 읽어 이 팔의 `home`으로 `.control-station/omx-poses-A9F93543.json`(Git 제외)에 기록했고, 워커의 home 계획이 dry-run으로 통과했습니다.
+- 정책을 실행해 팔이 집기 동작 뒤 쉬는 자세 근처로 돌아왔습니다(운영자 관찰). 종료 뒤 팔은 토크를 유지했고 home 대비 최대 74틱이었습니다. 이 복귀는 학습 데이터의 에피소드가 쉬는 자세에서 끝나도록 녹화돼 정책이 그대로 따라 한 것으로 보입니다. 관제에 원상복귀 명령 기록이 없으므로, **정책 종료 뒤 워커의 `RETURN_HOME`은 이 팔에서 아직 실행하지 않았습니다.** 물체를 Pinky 위에 실제로 놓았는지와 적재 성공 여부는 기록하지 않았습니다.
+
 ## 선반 카메라 표시
 
 선반과 팔을 앞에서 보는 선반 카메라(정면 카메라)를 관제 화면에 함께 띄우려면 `CONTROL_STATION_SHELF_CAMERA`에 장치 경로를 지정합니다. feed ID는 내부 보정 파일 `shelf_camera.json`과 같은 `shelf_camera`입니다. 2026-11-02 기준 이 카메라는 USB 포트 10의 HCAM0입니다. 천장 카메라와 모델이 같아 by-id로는 구분되지 않으므로 by-path를 씁니다.
