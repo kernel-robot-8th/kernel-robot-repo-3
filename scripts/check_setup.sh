@@ -5,9 +5,9 @@ set -u
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_PY="${REPO_DIR}/.venv/bin/python"
 ROS_SETUP="/opt/ros/jazzy/setup.bash"
-TEAM_MODEL_COMMIT="e252f4e"
-TEAM_MODEL_PATH="yolo/runs/strawberry_car_ball/weights/best.pt"
-TEAM_MODEL_LOCAL="${REPO_DIR}/.control-station/models/strawberry_car_ball_r2_${TEAM_MODEL_COMMIT}.pt"
+TEAM_MODEL_COMMIT="2413f4c"
+TEAM_MODEL_PATH="yolo/models/best11.pt"
+TEAM_MODEL_LOCAL="${REPO_DIR}/.control-station/models/best11_${TEAM_MODEL_COMMIT}.pt"
 
 INSTALL=0
 VISION=0
