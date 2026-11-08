@@ -113,6 +113,30 @@ CONTROL_STATION_ARM_PROGRAM=/경로/lerobot-teleoperate ./run-control-station.sh
 
 실제 팔 제어는 운영체제의 장치 권한, LeRobot 의존성 및 사용자별 OMX 지원 코드가 있어야 합니다. 이 구성은 현재 관제 저장소에 포함되지 않습니다. 저장소만 복제한 환경에서는 첫 번째 절차로 대시보드와 API를 실행할 수 있습니다.
 
+## 학습 정책 한 번 실행
+
+LeRobot async inference 정책 서버를 별도 터미널에서 먼저 실행합니다. 제어 서버의 정책 실행 버튼은 async client만 시작하며 정책 서버를 자동으로 띄우지 않습니다.
+
+```bash
+cd ~/Desktop/lerobot
+source venv/bin/activate
+python -m lerobot.async_inference.policy_server --host=127.0.0.1 --port=8080 \
+  --fps=30 --inference_latency=0.033 --obs_queue_timeout=1
+```
+
+LeRobot client에 `--max_action_steps` 옵션이 포함되도록 `~/Desktop/lerobot/src/lerobot` checkout을 사용합니다. 관제 서버는 `opencv`와 `omx_follower` config를 client보다 먼저 import합니다. 관제의 정책 목록에서 **사과 집기**를 선택하면 현재 모델 `neverlish/omx_act_record-test-20261104-1`과 학습 당시 task 문자열 `Pick up Doll`이 함께 사용됩니다. 표시 이름과 학습 조건 문자열은 서로 다른 용도입니다. 관제 서버를 시작할 때 정책 실행을 활성화하고, 한 번의 시연에 맞는 총 액션 상한을 지정합니다.
+
+```bash
+cd /경로/kernel-robot-repo-3
+CONTROL_STATION_POLICY_ENABLED=1 \
+CONTROL_STATION_POLICY_MAX_ACTION_STEPS=300 \
+./run-control-station.sh
+```
+
+`300`은 설정 예시입니다. 실제 실행 전에 시연 한 회의 길이에 맞게 양의 정수로 바꾸세요. 이는 LeRobot이 로봇에 보낸 총 action 수이며 `actions_per_chunk=100`과는 별개입니다. 기본 프로필은 `neverlish/omx_act_record-test-20261104-1`, task `Pick up Doll`, follower `/dev/omx_follower`, 카메라 `/dev/video7` 및 `/dev/video9`, ACT/CUDA, 30 FPS, chunk 100, threshold 0.7입니다. 설정은 `CONTROL_STATION_POLICY_*` 환경변수로 바꿀 수 있습니다. Python은 기본 `~/Desktop/lerobot/venv/bin/python`을 사용하며 `CONTROL_STATION_LEROBOT_DIR`와 `CONTROL_STATION_LEROBOT_PYTHON`으로 checkout/환경 경로를 지정할 수 있습니다.
+
+관제의 **학습 정책 한 번 실행** 버튼 또는 `POST /api/arm/policy/start?profile_id=apple_pick`가 클라이언트를 시작합니다. 응답과 상태 조회의 `run_id`로 실행을 식별할 수 있습니다. client는 설정된 총 액션 수를 보내면 종료하고 관제 상태를 `LIMIT_REACHED`로 표시합니다. 이는 제한에 도달했다는 뜻이며 물체를 잡거나 놓았다는 결과가 아닙니다. **중단 요청** 또는 `POST /api/arm/policy/stop`은 실행을 멈추도록 요청하고 결과를 `INTERRUPTED`/미확정으로 표시합니다. 텔레오퍼레이션과 정책 client는 동시에 시작할 수 없습니다. 실행 로그는 `.control-station/logs/policy-run-<run_id>.log`에 남으므로 해당 로그와 카메라/실물 상태를 확인하세요. 관제 UI의 프로세스 상태만으로 팔 준비나 Pick & Place 성공을 판단하지 않습니다.
+
 ## OMX 읽기 전용 상태 조회
 
 LeRobot이 설치된 Python 환경에서 follower의 현재 관절 raw 값, torque enable, hardware error, operating mode, 설정된 register 범위와 전압 raw 값을 읽을 수 있습니다.
