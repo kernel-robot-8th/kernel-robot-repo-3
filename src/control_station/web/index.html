@@ -59,6 +59,11 @@
         <div><p id="armDetail" class="arm-detail">프로세스 상태를 불러오는 중…</p><p class="note">프로세스 실행 중 표시는 로봇 준비 완료나 작업 완료를 보장하지 않습니다.</p></div>
         <div class="arm-actions"><button id="armStart" type="button">텔레오퍼레이션 시작</button><button id="armStop" type="button" class="secondary" disabled>종료 요청</button></div>
       </div>
+      <div class="section-heading"><h3>학습 정책 1회 실행</h3><span id="policyRunState" class="updated">상태 확인 중</span></div>
+      <div class="arm-control">
+        <div><label for="policyProfile">실행할 정책</label><select id="policyProfile" disabled><option>불러오는 중…</option></select><p id="policyRunDetail" class="arm-detail">정책 실행 상태를 불러오는 중…</p><p class="note">한 번 실행은 설정된 총 액션 수에서 멈춥니다. 액션 상한 도달은 사과 집기·배치 성공을 뜻하지 않으므로 영상과 실제 로봇 상태를 확인하세요.</p></div>
+        <div class="arm-actions"><button id="policyRunStart" type="button">학습 정책 한 번 실행</button><button id="policyRunStop" type="button" class="secondary" disabled>중단 요청</button></div>
+      </div>
     </section>
 
     <section aria-labelledby="coordinate-target-title">
@@ -120,6 +125,8 @@
         <div><dt>GET</dt><dd><code>/api/arm/status</code> 팔 프로세스 상태</dd></div>
         <div><dt>POST</dt><dd><code>/api/arm/start</code> 텔레오퍼레이션 시작</dd></div>
         <div><dt>POST</dt><dd><code>/api/arm/stop</code> 종료 요청</dd></div>
+        <div><dt>POST</dt><dd><code>/api/arm/policy/start?profile_id=apple_pick</code> 선택한 학습 정책 1회 실행</dd></div>
+        <div><dt>POST</dt><dd><code>/api/arm/policy/stop</code> 학습 정책 중단 요청</dd></div>
         <div><dt>POST</dt><dd><code>/api/arm/coordinate-target-drafts</code> 미실행 좌표 초안 파일 저장</dd></div>
         <div><dt>GET</dt><dd><code>/api/tasks</code> 작업 목록</dd></div>
         <div><dt>GET</dt><dd><code>/api/tasks/{task_id}</code> 작업 상세·단계·이벤트</dd></div>
@@ -132,7 +139,7 @@
         <div><dt>POST</dt><dd><code>/api/tasks/{task_id}/start</code> 모의 작업 시작 (mock 모드만)</dd></div>
         <div><dt>POST</dt><dd><code>/api/tasks/{task_id}/cancel</code> 모의 작업 취소 (mock 모드만)</dd></div>
       </dl>
-      <p class="note">자연어 해석은 제한된 규칙 기반 초안이며 모호하거나 검출 클래스와 맞지 않는 대상은 자동 선택하지 않습니다. 작업 등록은 저장만 하고 관측 기록은 task 이벤트를 추가할 뿐 상태를 전이하지 않습니다. 시작/취소는 mock 모드에서만 동작하며 실제 로봇 명령을 보내지 않습니다.</p>
+      <p class="note">자연어 해석은 제한된 규칙 기반 초안이며 모호하거나 검출 클래스와 맞지 않는 대상은 자동 선택하지 않습니다. 작업 등록은 저장만 하고 관측 기록은 task 이벤트를 추가할 뿐 상태를 전이하지 않습니다. task 시작/취소는 mock 모드에서만 동작합니다. 학습 정책 API는 명시적으로 활성화한 경우 실제 LeRobot 로봇 클라이언트를 실행합니다.</p>
     </section>
 
       </div>

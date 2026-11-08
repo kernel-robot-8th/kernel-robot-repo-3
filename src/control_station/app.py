@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 import time
 from dataclasses import replace
 from functools import partial
@@ -15,6 +16,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from control_station.arm_supervisor import ArmTeleopSupervisor
+from control_station.policy_run_supervisor import PolicyRunSupervisor
 from control_station.camera_adapters import (
     MAX_OBSERVATION_IMAGE_BYTES,
     OpenCVArmCameraStreamManager,
@@ -388,7 +390,13 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
                 return
             self._json(200, {"artifact": artifact, "review_event_id": parts[4]})
         elif route == "/api/arm/status":
-            self._json(200, {"arm": self.app.arm_supervisor.snapshot()})
+            self._json(
+                200,
+                {
+                    "arm": self.app.arm_supervisor.snapshot(),
+                    "policy_run": self.app.policy_run_supervisor.snapshot(),
+                },
+            )
         elif route == "/api/tasks":
             self._json(200, {"tasks": self.app.task_store.list_tasks()})
         elif route.startswith("/api/tasks/"):
@@ -781,21 +789,52 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
             }
             self._json(202 if accepted else 200, {"task": task, "execution_mode": "mock"})
             return
-        if route in {"/api/arm/start", "/api/arm/stop"}:
+        if route in {
+            "/api/arm/start",
+            "/api/arm/stop",
+            "/api/arm/policy/start",
+            "/api/arm/policy/stop",
+        }:
             origin = self.headers.get("Origin")
             if origin and urlsplit(origin).netloc != self.headers.get("Host"):
                 self._json(403, {"error": "Cross-origin arm-control request rejected"})
                 return
+            policy_route = route.startswith("/api/arm/policy/")
+            response_key = "policy_run" if policy_route else "arm"
             try:
-                state = (
-                    self.app.arm_supervisor.start()
-                    if route == "/api/arm/start"
-                    else self.app.arm_supervisor.stop()
-                )
+                with self.app.arm_control_lock:
+                    if route == "/api/arm/start":
+                        if self.app.policy_run_supervisor.snapshot()["process_alive"]:
+                            raise RuntimeError("학습 정책 실행이 끝날 때까지 텔레오퍼레이션을 시작할 수 없습니다.")
+                        state = self.app.arm_supervisor.start()
+                    elif route == "/api/arm/stop":
+                        state = self.app.arm_supervisor.stop()
+                    elif route == "/api/arm/policy/start":
+                        if self.app.arm_supervisor.snapshot()["process_alive"]:
+                            raise RuntimeError("텔레오퍼레이션을 종료한 뒤 학습 정책을 실행하세요.")
+                        query = parse_qs(urlsplit(self.path).query)
+                        profile_ids = query.get("profile_id", [])
+                        if len(profile_ids) > 1:
+                            raise RuntimeError("profile_id는 하나만 지정할 수 있습니다.")
+                        state = self.app.policy_run_supervisor.start(
+                            profile_ids[0] if profile_ids else None
+                        )
+                    else:
+                        state = self.app.policy_run_supervisor.stop()
             except RuntimeError as exc:
-                self._json(409, {"error": str(exc), "arm": self.app.arm_supervisor.snapshot()})
+                self._json(
+                    409,
+                    {
+                        "error": str(exc),
+                        response_key: (
+                            self.app.policy_run_supervisor.snapshot()
+                            if policy_route
+                            else self.app.arm_supervisor.snapshot()
+                        ),
+                    },
+                )
                 return
-            self._json(202, {"arm": state})
+            self._json(202, {response_key: state})
             return
         target_observation_route = (
             len(parts) == 4
@@ -1602,6 +1641,14 @@ def main() -> None:
             else None
         )
     )
+    server.policy_run_supervisor = PolicyRunSupervisor(
+        disabled_reason=(
+            "MuJoCo 관측 모드에서는 실물 LeRobot 정책 실행을 사용할 수 없습니다."
+            if mode == "mujoco"
+            else None
+        )
+    )
+    server.arm_control_lock = threading.RLock()
     head_detector_configured = any(
         os.environ.get(name, "").strip()
         for name in (
@@ -1640,6 +1687,7 @@ def main() -> None:
         server.server_close()
         server.camera_manager.close()
         server.arm_supervisor.close()
+        server.policy_run_supervisor.close()
         server.task_orchestrator.close()
         task_store.close()
         provider.close()

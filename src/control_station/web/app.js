@@ -6,6 +6,11 @@ const armState = document.querySelector('#armState');
 const armDetail = document.querySelector('#armDetail');
 const armStart = document.querySelector('#armStart');
 const armStop = document.querySelector('#armStop');
+const policyRunState = document.querySelector('#policyRunState');
+const policyRunDetail = document.querySelector('#policyRunDetail');
+const policyRunStart = document.querySelector('#policyRunStart');
+const policyRunStop = document.querySelector('#policyRunStop');
+const policyProfile = document.querySelector('#policyProfile');
 const coordinateTargetForm = document.querySelector('#coordinateTargetForm');
 const coordinateTargetMessage = document.querySelector('#coordinateTargetMessage');
 const coordinateTargetResult = document.querySelector('#coordinateTargetResult');
@@ -362,6 +367,35 @@ function renderArm(arm) {
   armStop.disabled = !arm.process_alive;
 }
 
+function renderPolicyRun(policyRun) {
+  const labels = {
+    DISABLED: '비활성화', STOPPED: '중지', STARTING: '시작 중',
+    RUNNING: '정책 실행 중', STOPPING: '중단 중', LIMIT_REACHED: '액션 상한 도달',
+    INTERRUPTED: '중단 · 결과 미확정', ERROR: '오류',
+  };
+  const profiles = policyRun.policy_profiles || [];
+  const expectedOptions = profiles.map((profile) => profile.id).join('|');
+  const currentOptions = [...policyProfile.options].map((option) => option.value).join('|');
+  if (expectedOptions !== currentOptions) {
+    policyProfile.replaceChildren(...profiles.map((profile) => {
+      const option = document.createElement('option');
+      option.value = profile.id;
+      option.textContent = profile.name;
+      return option;
+    }));
+    if (profiles.some((profile) => profile.id === policyRun.current_profile_id)) {
+      policyProfile.value = policyRun.current_profile_id;
+    }
+  }
+  policyProfile.disabled = !policyRun.enabled || profiles.length < 2 || policyRun.process_alive;
+  policyRunState.textContent = labels[policyRun.state] || policyRun.state;
+  policyRunDetail.textContent = policyRun.max_action_steps
+    ? `${policyRun.detail} · 총 액션 상한 ${policyRun.max_action_steps}`
+    : `${policyRun.detail} · CONTROL_STATION_POLICY_MAX_ACTION_STEPS 설정 필요`;
+  policyRunStart.disabled = !policyRun.enabled || !policyRun.max_action_steps || policyRun.process_alive;
+  policyRunStop.disabled = !policyRun.process_alive;
+}
+
 async function sendArmAction(action) {
   armStart.disabled = true;
   armStop.disabled = true;
@@ -379,6 +413,27 @@ async function sendArmAction(action) {
 
 armStart.addEventListener('click', () => sendArmAction('start'));
 armStop.addEventListener('click', () => sendArmAction('stop'));
+
+async function sendPolicyRunAction(action) {
+  policyRunStart.disabled = true;
+  policyRunStop.disabled = true;
+  try {
+    const profileQuery = action === 'start'
+      ? `?profile_id=${encodeURIComponent(policyProfile.value)}`
+      : '';
+    const response = await fetch(`/api/arm/policy/${action}${profileQuery}`, { method: 'POST' });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || '정책 실행 요청에 실패했습니다.');
+    renderPolicyRun(result.policy_run);
+  } catch (error) {
+    policyRunDetail.textContent = error.message;
+  } finally {
+    await refresh();
+  }
+}
+
+policyRunStart.addEventListener('click', () => sendPolicyRunAction('start'));
+policyRunStop.addEventListener('click', () => sendPolicyRunAction('stop'));
 
 coordinateTargetForm.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -804,6 +859,7 @@ async function refresh() {
     renderRobots(robotData.robots);
     renderCameras(cameraData.cameras);
     renderArm(armData.arm);
+    renderPolicyRun(armData.policy_run);
     updatedAt.textContent = `갱신 ${new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date())}`;
   } catch {
     serverStatus.className = 'server-status error';
