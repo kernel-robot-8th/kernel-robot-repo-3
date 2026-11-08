@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import math
+import json
 import os
+import re
 import signal
+import stat
 import subprocess
 import threading
 import uuid
@@ -14,6 +17,7 @@ from typing import Any
 
 
 ACTION_LIMIT_EXIT_CODE = 75
+MAX_POLICY_PROFILE_CONFIG_BYTES = 256 * 1024
 
 
 def _now() -> str:
@@ -28,6 +32,53 @@ def _env_int(name: str, default: int | None = None) -> int | None:
         return int(raw)
     except ValueError as exc:
         raise ValueError(f"{name} must be an integer") from exc
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def _load_policy_profiles(path: Path) -> dict[str, dict[str, str]]:
+    try:
+        file_stat = path.lstat()
+    except OSError as exc:
+        raise ValueError(f"policy profile file is unavailable: {path}") from exc
+    if stat.S_ISLNK(file_stat.st_mode) or not stat.S_ISREG(file_stat.st_mode):
+        raise ValueError("policy profile path must be a regular non-symlink file")
+    if file_stat.st_size > MAX_POLICY_PROFILE_CONFIG_BYTES:
+        raise ValueError("policy profile file exceeds 256 KiB")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_json_object)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"policy profile JSON is invalid: {exc}") from exc
+    if not isinstance(payload, dict) or set(payload) != {"schema_version", "profiles"}:
+        raise ValueError("policy profile JSON must contain schema_version and profiles only")
+    if payload["schema_version"] != 1 or isinstance(payload["schema_version"], bool):
+        raise ValueError("policy profile schema_version must be 1")
+    entries = payload["profiles"]
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("policy profiles must be a non-empty array")
+    profiles: dict[str, dict[str, str]] = {}
+    required_fields = {"id", "name", "policy_type", "model", "task"}
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != required_fields:
+            raise ValueError("each policy profile must contain id, name, policy_type, model, and task only")
+        profile_id = entry["id"]
+        if not isinstance(profile_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", profile_id):
+            raise ValueError("policy profile id must use lowercase letters, digits, '_' or '-' (max 64 chars)")
+        if profile_id in profiles:
+            raise ValueError(f"duplicate policy profile id: {profile_id}")
+        for field in ("name", "policy_type", "model", "task"):
+            value = entry[field]
+            if not isinstance(value, str) or not value.strip() or len(value) > 512:
+                raise ValueError(f"policy profile {field} must be a non-empty string up to 512 characters")
+        profiles[profile_id] = {key: str(value).strip() for key, value in entry.items()}
+    return profiles
 
 
 class PolicyRunSupervisor:
@@ -56,20 +107,14 @@ class PolicyRunSupervisor:
         ).expanduser()
         self.max_action_steps = _env_int("CONTROL_STATION_POLICY_MAX_ACTION_STEPS")
         self.server_address = os.environ.get("CONTROL_STATION_POLICY_SERVER_ADDRESS", "127.0.0.1:8080")
-        self.model = os.environ.get(
-            "CONTROL_STATION_POLICY_MODEL", "neverlish/omx_act_record-test-20261104-1"
-        )
-        self.task = os.environ.get("CONTROL_STATION_POLICY_TASK", "Pick up Doll")
-        self.policy_profiles: dict[str, dict[str, str]] = {
-            "apple_pick": {
-                "id": "apple_pick",
-                "name": "사과 집기",
-                "model": os.environ.get("CONTROL_STATION_POLICY_APPLE_PICK_MODEL", self.model),
-                # Preserve the task label used to condition this trained policy.
-                "task": os.environ.get("CONTROL_STATION_POLICY_APPLE_PICK_TASK", self.task),
-            }
-        }
-        self.current_profile_id = "apple_pick"
+        profile_path = Path(
+            os.environ.get(
+                "CONTROL_STATION_POLICY_PROFILES",
+                str(Path(__file__).resolve().parents[2] / "config" / "policy_profiles.json"),
+            )
+        ).expanduser()
+        self.policy_profiles = _load_policy_profiles(profile_path)
+        self.current_profile_id = next(iter(self.policy_profiles))
         self.robot_port = os.environ.get("CONTROL_STATION_POLICY_ROBOT_PORT", "/dev/omx_follower")
         self.robot_id = os.environ.get("CONTROL_STATION_POLICY_ROBOT_ID", "omx_follower_arm")
         self.front_camera = os.environ.get("CONTROL_STATION_POLICY_FRONT_CAMERA", "/dev/video7")
@@ -137,7 +182,7 @@ class PolicyRunSupervisor:
             f"--robot.cameras={cameras}",
             f"--task={profile['task']}",
             f"--server_address={self.server_address}",
-            "--policy_type=act",
+            f"--policy_type={profile['policy_type']}",
             f"--pretrained_name_or_path={profile['model']}",
             f"--policy_device={self.policy_device}",
             f"--fps={self.fps}",
