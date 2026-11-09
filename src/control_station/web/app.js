@@ -39,7 +39,6 @@ const viewNames = { overview: '현황', manual: '수동 조작', tasks: '작업 
 const controlModeLabels = {
   mock: '모의',
   ros2: 'ROS 2 상태 관측',
-  mujoco: 'MuJoCo 시뮬레이션 관측',
 };
 
 navItems.forEach((item) => {
@@ -80,7 +79,7 @@ function renderRobots(robots) {
 }
 
 function renderCameras(cameras) {
-  const names = { HEAD: 'Head Camera', JOINT: 'Joint Camera', FIXED: 'MuJoCo Fixed Camera' };
+  const names = { HEAD: 'Head Camera', JOINT: 'Joint Camera' };
   const connectionLabel = {
     CONNECTED: '연결됨', DISCONNECTED: '연결 끊김', UNKNOWN: '확인 필요',
   };
@@ -117,11 +116,6 @@ function renderCameras(cameras) {
           <div class="camera-detail"><span>프레임 상태</span><strong data-field="freshness"></strong></div>
           <div class="camera-detail"><span>마지막 프레임</span><strong data-field="last-frame"></strong></div>
           <div class="camera-detail"><span>프레임 ID / 해상도</span><strong data-field="frame-info"></strong></div>
-          <div class="camera-detail" data-field="source-info-row" hidden><span>ROS source frame / stamp</span><strong data-field="source-info"></strong></div>
-          <div class="camera-detail" data-field="depth-info-row" hidden><span>Depth · 관측 전용</span><strong data-field="depth-info"></strong></div>
-          <div class="camera-detail" data-field="camera-info-row" hidden><span>CameraInfo · 보정 검토 필요</span><strong data-field="camera-info"></strong></div>
-          <div class="camera-detail" data-field="tf-info-row" hidden><span>카메라 → base TF · 시뮬레이션</span><strong data-field="tf-info"></strong></div>
-          <div class="camera-detail" data-field="point-cloud-info-row" hidden><span>XYZ PointCloud2 · 관측 전용</span><strong data-field="point-cloud-info"></strong></div>
           <div class="camera-detail"><span>프레임률</span><strong data-field="frame-rate"></strong></div>
           <div class="camera-detail" data-field="detections-row" hidden><span>YOLO 검출</span><strong data-field="detections"></strong></div>
           <div class="camera-detail" data-field="detector-provenance-row" hidden><span>YOLO 설정 / 모델</span><strong data-field="detector-provenance"></strong></div>
@@ -141,35 +135,6 @@ function renderCameras(cameras) {
       ? `${camera.frame_width}×${camera.frame_height}`
       : '—';
     card.querySelector('[data-field="frame-info"]').textContent = `${camera.frame_sequence || 0} / ${resolution}`;
-    const sourceInfo = camera.source_frame_id || camera.source_stamp
-      ? `${camera.source_frame_id || 'frame ID 없음'}${camera.source_stamp ? ` · ROS ${camera.source_stamp.sec}.${String(camera.source_stamp.nanosec).padStart(9, '0')}` : ''}`
-      : '—';
-    card.querySelector('[data-field="source-info-row"]').hidden = sourceInfo === '—';
-    card.querySelector('[data-field="source-info"]').textContent = sourceInfo;
-    const depth = camera.depth_observation;
-    const depthSummary = depth?.state === 'OBSERVED'
-      ? `${depth.state} · ${depth.encoding} · ${depth.width}×${depth.height} · RGB ${depth.rgb_header_dimension_match || '미비교'} · ${depth.freshness || '신선도 미확인'}`
-      : (depth?.state || '미제공');
-    card.querySelector('[data-field="depth-info-row"]').hidden = !depth;
-    card.querySelector('[data-field="depth-info"]').textContent = depthSummary;
-    const cameraInfo = camera.camera_info_observation;
-    const cameraInfoSummary = cameraInfo?.state === 'OBSERVED'
-      ? `${cameraInfo.state} · ${cameraInfo.width}×${cameraInfo.height} · ${cameraInfo.distortion_model || '모델 미지정'} · RGB ${cameraInfo.rgb_header_dimension_match || '미비교'} · ${cameraInfo.freshness || '신선도 미확인'} · 검증 전`
-      : (cameraInfo?.state || '미제공');
-    card.querySelector('[data-field="camera-info-row"]').hidden = !cameraInfo;
-    card.querySelector('[data-field="camera-info"]').textContent = cameraInfoSummary;
-    const tf = camera.tf_observation;
-    const tfSummary = tf?.state === 'AVAILABLE'
-      ? `${tf.state} · (${tf.translation_xyz_m.map((value) => Number(value).toFixed(3)).join(', ')}) m · placeholder`
-      : (tf?.state || '미제공');
-    card.querySelector('[data-field="tf-info-row"]').hidden = !tf;
-    card.querySelector('[data-field="tf-info"]').textContent = tfSummary;
-    const pointCloud = camera.point_cloud_observation;
-    const pointCloudSummary = pointCloud?.state === 'OBSERVED'
-      ? `${pointCloud.state} · ${pointCloud.width}×${pointCloud.height} · ${pointCloud.source_frame_id} · 좌표 미해석 · RGB ${pointCloud.rgb_header_dimension_match || '미비교'} · ${pointCloud.freshness || '신선도 미확인'}`
-      : (pointCloud?.state || '미제공');
-    card.querySelector('[data-field="point-cloud-info-row"]').hidden = !pointCloud;
-    card.querySelector('[data-field="point-cloud-info"]').textContent = pointCloudSummary;
     card.querySelector('[data-field="frame-rate"]').textContent = camera.frame_rate == null ? '—' : `${camera.frame_rate} fps`;
     card.querySelector('[data-field="error"]').textContent = camera.error_message || '';
     const detectorLabel = { loading: '모델 불러오는 중', error: '모델 오류' };
@@ -544,9 +509,7 @@ function renderTaskDetail(task) {
   const modeLabel = controlModeLabels[controlMode] || controlMode;
   const modeNote = controlMode === 'mock'
     ? '모의 모드 · 단계 성공은 진행 시뮬레이션이며 실제 인식/로봇 명령을 의미하지 않습니다.'
-    : controlMode === 'mujoco'
-      ? 'MuJoCo 시뮬레이션 관측 모드 · 작업 start/cancel과 실물 팔 제어는 비활성화되어 있습니다.'
-      : `현재 ${escapeHtml(modeLabel)} 모드 · 작업 실행은 모의 모드에서만 제공됩니다.`;
+    : `현재 ${escapeHtml(modeLabel)} 모드 · 작업 실행은 모의 모드에서만 제공됩니다.`;
   const ownershipNote = task.local_execution_owner === 'NO_LOCAL_WORKER'
     ? '<p class="task-error">저장된 작업은 활성 상태지만 이 서버 프로세스에 실행 worker가 없습니다. 자동 재개나 명령 재전송은 하지 않습니다. 작업 상태를 운영자가 확인해야 합니다.</p>'
     : task.local_execution_owner === 'MODE_NOT_MANAGED'
@@ -581,18 +544,6 @@ function renderTaskDetail(task) {
       const candidateHints = observation?.candidates?.map(formatDetectionCandidate).join('; ');
       const colorEvaluation = formatColorEvaluation(observation?.color_evaluation);
       const shelfEvaluation = formatShelfLevelEvaluation(observation?.shelf_level_evaluation);
-      const depthRegion = observation?.depth_region_observation;
-      const depthRegionText = depthRegion
-        ? ` · bbox raw-depth ${depthRegion.state === 'SUMMARIZED' ? (depthRegion.candidates || []).map((sample) => {
-            const median = Number(sample.raw_value_median);
-            return sample.state === 'POSITIVE_FINITE_SAMPLES' && Number.isFinite(median)
-              ? `후보 #${Number(sample.candidate_index) + 1} ${depthRegion.depth_encoding} 원시 중앙값 ${median.toFixed(3)} (단위 미해석)`
-              : `후보 #${Number(sample.candidate_index) + 1} ${sample.state || '표본 없음'}`;
-          }).join(', ') : depthRegion.state} · 위치/선택에 미사용`
-        : '';
-      const sourceStamp = observation?.source_stamp
-        ? ` · ROS source ${observation.source_frame_id || 'frame ID 없음'} ${observation.source_stamp.sec}.${String(observation.source_stamp.nanosec).padStart(9, '0')}`
-        : '';
       const requestPrompt = observation?.detector_provenance?.prompt_scope === 'REQUEST_CLASS_ONE_SHOT'
         ? ` · 요청 prompt ${observation.detector_provenance.requested_prompt || observation.target_class}`
         : '';
@@ -605,7 +556,7 @@ function renderTaskDetail(task) {
       const detail = projection
         ? `2D 선반 평면 좌표 초안 · ${projection.plane_frame?.frame_id || 'frame 미지정'} · x=${Number(projection.plane_xy?.x).toFixed(3)}, y=${Number(projection.plane_xy?.y).toFixed(3)} ${projection.plane_frame?.unit || ''} · bbox 하단 중앙 proxy · 후보 #${Number(projection.candidate_index) + 1} · 로봇 목표로 사용 불가`
         : observation
-        ? `대상 관측 · ${event.payload?.pick_request?.category || observation.target_class} · ${observation.camera_id} · ${observation.status}${requestPrompt} · ${candidateCount}${colorEvaluation ? ` · ${colorEvaluation}` : ''}${shelfEvaluation ? ` · ${shelfEvaluation}` : ''}${depthRegionText} · frame ${observation.frame_sequence}${sourceStamp}${candidateHints ? ` · ${candidateHints}` : ''}`
+        ? `대상 관측 · ${event.payload?.pick_request?.category || observation.target_class} · ${observation.camera_id} · ${observation.status}${requestPrompt} · ${candidateCount}${colorEvaluation ? ` · ${colorEvaluation}` : ''}${shelfEvaluation ? ` · ${shelfEvaluation}` : ''} · frame ${observation.frame_sequence}${candidateHints ? ` · ${candidateHints}` : ''}`
         : selection
           ? `운영자 후보 선택 기록 · ${selectionCandidate?.class_name || '대상'} #${Number(selection.candidate_index) + 1} · 관측 ${selection.observation_event_id} · frame ${selection.frame_sequence}`
           : eventName === 'PROGRESS'

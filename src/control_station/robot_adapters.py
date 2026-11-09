@@ -71,15 +71,12 @@ class Ros2RobotStatusProvider:
             raise RuntimeError(
                 "ROS 2 Jazzy 환경을 source한 뒤 다시 실행하세요."
             ) from exc
-        if mobile_discovery_enabled:
-            try:
-                from nav2_msgs.action import NavigateToPose
-            except ImportError as exc:
-                raise RuntimeError(
-                    "Nav2 상태 관측을 사용하려면 nav2_msgs 환경을 source하세요."
-                ) from exc
-        else:
-            NavigateToPose = None
+        try:
+            from nav2_msgs.action import NavigateToPose
+        except ImportError as exc:
+            raise RuntimeError(
+                "Nav2 상태 관측을 사용하려면 nav2_msgs 환경을 source하세요."
+            ) from exc
         if arm_joint_states_topic is not None:
             try:
                 from sensor_msgs.msg import JointState
@@ -119,8 +116,6 @@ class Ros2RobotStatusProvider:
         self._node = Node("control_station_status", context=self._context)
         self._client = (
             ActionClient(self._node, NavigateToPose, "navigate_to_pose")
-            if mobile_discovery_enabled
-            else None
         )
         self._arm_trajectory_client = (
             ActionClient(
@@ -187,12 +182,8 @@ class Ros2RobotStatusProvider:
             )
 
     def snapshots(self) -> list[dict[str, object]]:
-        available = self._client.server_is_ready() if self._client is not None else False
-        arm_name = (
-            "MuJoCo OMX 시뮬레이션"
-            if self._client is None
-            else "팔관절로봇"
-        )
+        available = self._client.server_is_ready()
+        arm_name = "팔관절로봇"
         with self._arm_joint_state_lock:
             arm_sample = self._arm_joint_state
         if self._arm_joint_states_topic is None:
@@ -294,28 +285,18 @@ class Ros2RobotStatusProvider:
                 f"{'발견' if trajectory_action_discovered else '미발견'} "
                 "(goal 미전송; 준비/안전 상태를 증명하지 않음)"
             )
-        if self._client is None:
-            mobile_snapshot = {
-                "id": "mobile-01",
-                "name": "주행로봇",
-                "kind": "MOBILE",
-                "communication": "시뮬레이션 모드 · 미사용",
-                "state": "unconfigured",
-                "detail": "MuJoCo OMX 관측 모드 · Pinky/Nav2 action을 조회하지 않음",
-            }
-        else:
-            mobile_snapshot = {
-                "id": "mobile-01",
-                "name": "주행로봇",
-                "kind": "MOBILE",
-                "communication": "액션 서버 발견" if available else "발견 대기",
-                "state": "available" if available else "waiting",
-                "detail": (
-                    f"ROS 2 domain {self._domain_id} · Nav2 NavigateToPose"
-                    if available
-                    else f"ROS 2 domain {self._domain_id} · Nav2 액션 서버를 기다리는 중"
-                ),
-            }
+        mobile_snapshot = {
+            "id": "mobile-01",
+            "name": "주행로봇",
+            "kind": "MOBILE",
+            "communication": "액션 서버 발견" if available else "발견 대기",
+            "state": "available" if available else "waiting",
+            "detail": (
+                f"ROS 2 domain {self._domain_id} · Nav2 NavigateToPose"
+                if available
+                else f"ROS 2 domain {self._domain_id} · Nav2 액션 서버를 기다리는 중"
+            ),
+        }
         return [mobile_snapshot, arm_snapshot]
 
     def close(self) -> None:
@@ -328,40 +309,25 @@ class Ros2RobotStatusProvider:
 def make_status_provider(mode: str) -> RobotStatusProvider:
     if mode == "mock":
         return MockRobotStatusProvider()
-    if mode in {"ros2", "mujoco"}:
+    if mode == "ros2":
         raw_domain = os.environ.get("CONTROL_STATION_MOBILE_DOMAIN")
         if raw_domain is None:
             raw_domain = os.environ.get("ROS_DOMAIN_ID")
-        if mode == "mujoco" and raw_domain is None:
-            raise RuntimeError(
-                "MuJoCo 관측 모드에는 실물 장치와 분리된 ROS domain을 명시해야 합니다."
-            )
         if raw_domain is None:
             raw_domain = "0"
         try:
             domain_id = int(raw_domain)
         except ValueError as exc:
             raise RuntimeError("ROS domain ID 설정은 정수여야 합니다.") from exc
-        minimum_domain_id = 1 if mode == "mujoco" else 0
-        if not minimum_domain_id <= domain_id <= 232:
-            if mode == "mujoco":
-                raise RuntimeError("MuJoCo 관측 모드의 ROS domain ID는 1부터 232 사이여야 합니다.")
+        if not 0 <= domain_id <= 232:
             raise RuntimeError("ROS 2 domain ID는 0부터 232 사이여야 합니다.")
-        raw_topic = (
-            "/mujoco_omx/joint_state_broadcaster/joint_states"
-            if mode == "mujoco"
-            else os.environ.get("CONTROL_STATION_ARM_JOINT_STATES_TOPIC")
-        )
+        raw_topic = os.environ.get("CONTROL_STATION_ARM_JOINT_STATES_TOPIC")
         topic = raw_topic.strip() if raw_topic is not None else None
         if topic == "":
             topic = None
         if topic is not None and (not topic.startswith("/") or topic.startswith("~")):
             raise RuntimeError("CONTROL_STATION_ARM_JOINT_STATES_TOPIC은 절대 토픽 이름이어야 합니다.")
-        raw_action_name = (
-            "/mujoco_omx/joint_trajectory_controller/follow_joint_trajectory"
-            if mode == "mujoco"
-            else os.environ.get("CONTROL_STATION_ARM_TRAJECTORY_ACTION_NAME")
-        )
+        raw_action_name = os.environ.get("CONTROL_STATION_ARM_TRAJECTORY_ACTION_NAME")
         action_name = raw_action_name.strip() if raw_action_name is not None else None
         if action_name == "":
             action_name = None
@@ -383,6 +349,5 @@ def make_status_provider(mode: str) -> RobotStatusProvider:
             topic,
             max_age,
             action_name,
-            mobile_discovery_enabled=mode != "mujoco",
         )
-    raise RuntimeError("CONTROL_STATION_MODE는 mock, ros2 또는 mujoco여야 합니다.")
+    raise RuntimeError("CONTROL_STATION_MODE는 mock 또는 ros2여야 합니다.")

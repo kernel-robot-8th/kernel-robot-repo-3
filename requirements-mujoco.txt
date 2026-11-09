@@ -1,3 +1,0 @@
-# Optional isolated simulator for the OMX arm; it is not needed by the control-station server.
-mujoco>=3.3,<4
-numpy>=1.23,<3
