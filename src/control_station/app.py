@@ -20,7 +20,6 @@ from control_station.policy_run_supervisor import PolicyRunSupervisor
 from control_station.camera_adapters import (
     MAX_OBSERVATION_IMAGE_BYTES,
     OpenCVArmCameraStreamManager,
-    Ros2SimulationCameraStreamManager,
     UnconfiguredArmCameraStreamManager,
     YOLO_WORLD_REQUEST_PROMPT_POLICY_VERSION,
 )
@@ -581,11 +580,6 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
             r"[0-9a-f]{64}", camera.frame_sha256
         ):
             status = "FRAME_PROVENANCE_UNKNOWN"
-        elif (
-            camera.position == "FIXED"
-            and camera.detector_inference_frame_sequence != camera.frame_sequence
-        ):
-            status = "DETECTOR_NOT_RUN"
         elif camera.detector_classes is not None and not any(
             name.casefold() == target_class.casefold() for name in camera.detector_classes
         ):
@@ -630,25 +624,12 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
             "frame_freshness": camera.frame_freshness.value,
             "frame_sequence": camera.frame_sequence,
             "captured_at": camera.last_frame_at,
-            "source_stamp": camera.source_stamp,
-            "source_frame_id": camera.source_frame_id,
-            "source_stamp_clock_status": (
-                "ROS_SOURCE_HEADER_NOT_ALIGNED_WITH_HOST_CLOCK"
-                if camera.source_stamp is not None
-                else "NOT_PROVIDED"
-            ),
             "frame_width": camera.frame_width,
             "frame_height": camera.frame_height,
             "frame_sha256": camera.frame_sha256,
             "pixel_transform_id": camera.pixel_transform_id,
             "candidate_count": candidate_count,
             "candidates": candidates,
-            "depth_region_observation": {
-                "state": "NOT_REQUESTED",
-                "review_required": True,
-                "used_for_selection": False,
-                "target_pose_use": False,
-            },
             "decision_scope": "OBSERVATION_ONLY",
             "arm_command_sent": False,
         }
@@ -931,7 +912,7 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
                 (
                     camera
                     for camera in self.app.camera_manager.snapshots()
-                    if camera.position in {"HEAD", "FIXED"}
+                    if camera.position == "HEAD"
                 ),
                 None,
             )
@@ -1353,7 +1334,6 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
                 return
             observation_step_type = {
                 "HEAD": "DETECT_TARGETS",
-                "FIXED": "DETECT_TARGETS",
                 "JOINT": "REFINE_TARGET",
             }.get(camera.position)
             if observation_step_type is None:
@@ -1404,28 +1384,6 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
             target_class = str(pick_request["category"])
             request_prompt_attempted = False
             request_prompt_error: str | None = None
-            fixed_detector_attempted = False
-            fixed_detector_error: str | None = None
-            if (
-                camera.position == "FIXED"
-                and camera.detector_state == "ready"
-                and camera.connection_state.value == "CONNECTED"
-                and camera.stream_state.value == "STREAMING"
-                and camera.frame_freshness.value == "FRESH"
-                and isinstance(camera.frame_sequence, int)
-                and not isinstance(camera.frame_sequence, bool)
-                and camera.frame_sequence > 0
-                and isinstance(camera.frame_sha256, str)
-            ):
-                detect_observation = getattr(
-                    self.app.camera_manager, "detect_for_observation", None
-                )
-                if callable(detect_observation):
-                    fixed_detector_attempted = True
-                    try:
-                        camera = detect_observation(camera)
-                    except Exception as exc:
-                        fixed_detector_error = f"{type(exc).__name__}: {exc}"[:512]
             if (
                 camera.detector_state == "ready"
                 and camera.detector_model_type == "YOLO_WORLD_OPEN_VOCAB"
@@ -1491,38 +1449,6 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
                         detector_provenance["prompt_inference_error"] = request_prompt_error
                 if request_prompt_error is not None:
                     observation["status"] = "REQUEST_PROMPT_INFERENCE_ERROR"
-            if fixed_detector_attempted:
-                detector_provenance = observation.get("detector_provenance")
-                if isinstance(detector_provenance, dict):
-                    detector_provenance["inference_scope"] = "FIXED_CAMERA_TASK_OBSERVATION"
-                    if fixed_detector_error is not None:
-                        detector_provenance["inference_error"] = fixed_detector_error
-                if fixed_detector_error is not None:
-                    observation["status"] = "DETECTOR_INFERENCE_ERROR"
-            if camera.position == "FIXED":
-                summarize_depth = getattr(
-                    self.app.camera_manager, "summarize_detection_depth", None
-                )
-                if callable(summarize_depth):
-                    try:
-                        observation["depth_region_observation"] = summarize_depth(
-                            camera, observation["candidates"]
-                        )
-                    except Exception as exc:
-                        observation["depth_region_observation"] = {
-                            "state": "SUMMARY_ERROR",
-                            "error": f"{type(exc).__name__}: {exc}"[:256],
-                            "review_required": True,
-                            "used_for_selection": False,
-                            "target_pose_use": False,
-                        }
-                else:
-                    observation["depth_region_observation"] = {
-                        "state": "UNAVAILABLE",
-                        "review_required": True,
-                        "used_for_selection": False,
-                        "target_pose_use": False,
-                    }
             event_payload: dict[str, object] = {
                 "event": "TARGET_OBSERVED",
                 "pick_request": pick_request,
@@ -1635,19 +1561,9 @@ def main() -> None:
     server.mode = mode
     server.robot_provider = provider
     server.arm_supervisor = ArmTeleopSupervisor(
-        disabled_reason=(
-            "MuJoCo 관측 모드에서는 실물 LeRobot 텔레오퍼레이션을 사용할 수 없습니다."
-            if mode == "mujoco"
-            else None
-        )
+        disabled_reason=None
     )
-    server.policy_run_supervisor = PolicyRunSupervisor(
-        disabled_reason=(
-            "MuJoCo 관측 모드에서는 실물 LeRobot 정책 실행을 사용할 수 없습니다."
-            if mode == "mujoco"
-            else None
-        )
-    )
+    server.policy_run_supervisor = PolicyRunSupervisor()
     server.arm_control_lock = threading.RLock()
     head_detector_configured = any(
         os.environ.get(name, "").strip()
@@ -1656,12 +1572,7 @@ def main() -> None:
             "CONTROL_STATION_HEAD_YOLO_WORLD_PROMPTS",
         )
     )
-    if mode == "mujoco":
-        raw_domain = os.environ.get("CONTROL_STATION_MOBILE_DOMAIN", os.environ.get("ROS_DOMAIN_ID"))
-        if raw_domain is None:
-            raise RuntimeError("MuJoCo 카메라 구독에 ROS domain ID를 지정해야 합니다.")
-        server.camera_manager = Ros2SimulationCameraStreamManager(int(raw_domain))
-    elif not (server.arm_supervisor.enabled or head_detector_configured):
+    if not (server.arm_supervisor.enabled or head_detector_configured):
         server.camera_manager = UnconfiguredArmCameraStreamManager()
     else:
         server.camera_manager = OpenCVArmCameraStreamManager(
@@ -1673,11 +1584,7 @@ def main() -> None:
         "CONTROL_STATION_COORDINATE_DRAFT_DIR", ".control-station/coordinate-target-drafts"
     )
     server.coordinate_target_drafts = CoordinateTargetDraftStore(draft_dir)
-    mode_label = {
-        "mock": "모의",
-        "ros2": "ROS 2",
-        "mujoco": "MuJoCo 시뮬레이션 관측",
-    }[mode]
+    mode_label = {"mock": "모의", "ros2": "ROS 2"}[mode]
     print(f"관제 서버 ({mode_label} 모드): http://{host}:{port}", flush=True)
     try:
         server.serve_forever()

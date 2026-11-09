@@ -47,7 +47,7 @@
       <datalist id="detectorClassOptions"></datalist>
       <p class="note">색상은 미보정 HSV 픽셀 힌트와, 선반 층은 명시적으로 설정한 영상 영역 초안과 비교해 검토 상태만 표시합니다. 결과는 후보를 필터링하거나 자동 선택하지 않으며, 관측 결과는 팔 명령을 보내지 않습니다.</p>
       <div id="cameraGrid" class="camera-grid"><p class="loading">상태를 불러오는 중…</p></div>
-      <p class="note">실행 모드에 따라 지정된 카메라 입력을 관측합니다. MuJoCo mode는 `/mujoco_omx/fixed_camera/color/image_raw`의 ROS RGB frame만 읽고, ROS source frame ID·stamp를 보존합니다. Depth·CameraInfo·TF는 현재 관제 UI에서 소비하지 않으며 이 프리뷰를 로봇 제어에 사용하지 않습니다.</p>
+      <p class="note">설정된 Head Camera와 Joint Camera 입력을 관측합니다. 프리뷰와 검출 후보는 검토용이며 로봇 제어에 연결되지 않습니다.</p>
     </section>
 
       </div>

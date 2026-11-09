@@ -10,7 +10,7 @@ SESSION_LOG="${LOG_DIR}/session-${SESSION_ID}.log"
 usage() {
   printf '사용법: %s [--arm]\n' "$0"
   printf '  인수 없음  팔 제어를 끈 관제 대시보드 시작\n'
-  printf '  --arm      설정된 LeRobot 프로세스 제어 활성화 (MuJoCo 관측 모드에서는 사용할 수 없음)\n'
+  printf '  --arm      설정된 LeRobot 프로세스 제어 활성화\n'
 }
 
 case "${1:-}" in
@@ -19,11 +19,6 @@ case "${1:-}" in
   -h|--help) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
 esac
-
-if [[ "${CONTROL_STATION_MODE:-mock}" == "mujoco" && ${ARM_MODE} -eq 1 ]]; then
-  printf 'MuJoCo 관측 모드에서는 --arm을 사용할 수 없습니다.\n' >&2
-  exit 2
-fi
 
 mkdir -p "${LOG_DIR}"
 export CONTROL_STATION_ARM_LOG="${CONTROL_STATION_ARM_LOG:-${LOG_DIR}/arm-${SESSION_ID}.log}"
