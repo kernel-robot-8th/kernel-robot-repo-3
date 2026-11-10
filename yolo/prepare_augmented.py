@@ -1,6 +1,8 @@
+import argparse  # 생성할 사진 수를 지정한다.
 import itertools  # 밝기·크기·회전의 모든 조합을 만든다.
 import json  # 각 사진의 원본과 변형 조건을 기록한다.
 from pathlib import Path  # 데이터 경로를 다룬다.
+import random  # 전체 조합 중 일부만 고른다.
 
 import cv2  # 밝기와 기하 변형을 적용한다.
 import numpy as np  # 변환 행렬과 좌표를 계산한다.
@@ -26,66 +28,72 @@ def floor_background(image, label_path, scale):  # 물체가 없는 바닥 부�
     return np.ascontiguousarray(np.tile(block, repeat)[:640, :640])  # 바닥 무늬를 이어 붙인다.
 
 
-def generate(source, output, split):  # 한 분할(train 또는 val)의 변형 파일을 생성한다.
+def generate(source, output, split, count=None):  # 한 분할(train 또는 val)의 변형 파일을 생성한다.
     image_folder = output / 'images' / split  # 변형 사진을 저장할 경로다.
     label_folder = output / 'labels' / split  # 변형 정답을 저장할 경로다.
     for directory in (image_folder, label_folder):  # 사진과 정답 폴더를 준비한다.
         directory.mkdir(parents=True, exist_ok=True)
     manifest = []  # 생성한 모든 사진의 출처를 기록한다.
     levels = itertools.product([0.4, 0.7, 1.0, 1.3, 1.6],  # 픽셀 밝기 배율이다.
-                               [0.05, 0.1, 0.2, 0.3,  # 아주 먼 거리에서 작게 보이는 크기다.
+                               [0.2, 0.3,  # 먼 거리 크기다. 점처럼 작은 0.05·0.1은 오검출을 늘려 뺐다.
                                 0.5, 0.75, 1.0, 1.25, 1.5], [-20, 0, 20])  # 크기와 회전이다.
-    for brightness, scale, angle in levels:  # 135가지 조건을 반복한다.
+    paths = sorted((source / 'images' / split).glob('*.jpg'))  # 해당 분할 원본만 읽는다.
+    # 카메라 사진은 배경이 바닥이 아니라 로봇·선반이라, 축소 후 빈 곳을 바깥 무늬로 채우면
+    # 로봇 부품이 반복되는 비현실적인 사진이 된다. 바닥 영상 사진만 변형한다.
+    paths = [path for path in paths if not path.name.startswith('camera_frames_')]
+    jobs = list(itertools.product(levels, paths))  # 105가지 조건 × 원본 사진 전체 조합이다.
+    if count is not None:  # 개수를 정하면 조합 중 무작위로 일부만 만든다. 조건 종류는 그대로 섞인다.
+        jobs = random.Random(0).sample(jobs, min(count, len(jobs)))  # 다시 실행해도 같은 조합이 나온다.
+    for (brightness, scale, angle), path in jobs:  # 고른 조건과 원본을 하나씩 처리한다.
         condition = f'b{brightness}_s{scale}_r{angle}'  # 조건 식별자를 만든다.
-        for path in sorted((source / 'images' / split).glob('*.jpg')):  # 해당 분할 원본만 읽는다.
-            image = cv2.imread(str(path))  # 원본 사진을 읽는다.
-            if image is None:  # 손상 사진을 확인한다.
-                raise SystemExit(f'읽기 실패: {path}')  # 오류를 안내한다.
-            height, width = image.shape[:2]  # 원본 크기를 확인한다.
-            ratio = min(640 / width, 640 / height)  # 긴 변을 640으로 줄인다.
-            w, h = round(width * ratio), round(height * ratio)  # 축소 크기를 계산한다.
-            image = cv2.resize(image, (w, h), interpolation=cv2.INTER_AREA)  # 크기를 통일한다.
-            left, top = (640 - w) // 2, (640 - h) // 2  # 640 화면 중앙 배치 위치를 구한다.
-            label_path = source / 'labels' / split / f'{path.stem}.txt'  # 원본 정답이다.
-            background = floor_background(image, label_path, scale)  # 바닥으로 채운 배경이다.
-            shift = np.array([[1, 0, left], [0, 1, top], [0, 0, 1]])  # 사진을 중앙으로 옮긴다.
-            matrix = cv2.getRotationMatrix2D((320, 320), angle, scale)  # 기하 변환이다.
-            transformed = cv2.warpAffine(image, matrix @ shift, (640, 640), dst=background,
-                                         borderMode=cv2.BORDER_TRANSPARENT)  # 배경 위에 사진을 얹는다.
-            transformed = np.clip(transformed.astype(np.float32) * brightness, 0, 255)
-            labels, dropped = [], 0  # 변환한 박스와 잘린 박스 개수를 기록한다.
-            for row in label_path.read_text().splitlines():  # 정답 박스를 처리한다.
-                cls, x, y, bw, bh = map(float, row.split())  # 정규화 좌표를 읽는다.
-                x1, x2 = (x - bw / 2) * w + left, (x + bw / 2) * w + left
-                y1, y2 = (y - bh / 2) * h + top, (y + bh / 2) * h + top
-                corners = np.array([[x1, y1, 1], [x2, y1, 1],  # 네 모서리를 만든다.
-                                    [x2, y2, 1], [x1, y2, 1]])
-                warped = corners @ matrix.T  # 사진과 같은 변환을 박스에도 적용한다.
-                low, high = warped.min(axis=0), warped.max(axis=0)  # 외접 박스를 계산한다.
-                clipped_low, clipped_high = np.clip(low, 0, 640), np.clip(high, 0, 640)
-                size = np.maximum(0, clipped_high - clipped_low)  # 화면에 남은 박스다.
-                visibility = np.prod(size) / max(np.prod(high - low), 1e-9)
-                if visibility < 0.5 or min(size) < 2:  # 절반 이상 잘린 물체는 제외한다.
-                    dropped += 1  # 잘린 박스를 센다.
-                    continue  # 남은 박스만 정답으로 저장한다.
-                center = (clipped_low + clipped_high) / 2 / 640  # 정규화 중심이다.
-                bw, bh = size / 640  # 정규화 크기다.
-                labels.append(f'{int(cls)} {center[0]:.6f} {center[1]:.6f} {bw:.6f} {bh:.6f}')
-            if dropped:  # 물체가 잘린 사진은 저장하지 않는다.
-                continue  # 다음 원본으로 넘어간다.
-            name = f'{condition}_{path.stem}'  # 원본까지 식별할 이름을 만든다.
-            destination = image_folder / f'{name}.jpg'  # 결과 사진 경로다.
-            if not cv2.imwrite(str(destination), transformed.astype(np.uint8)):
-                raise SystemExit(f'저장 실패: {destination}')  # 저장 오류를 안내한다.
-            (label_folder / f'{name}.txt').write_text('\n'.join(labels) + '\n')
-            manifest.append({'image': destination.name, 'source': path.name,  # 출처를 기록한다.
-                             'condition': condition, 'brightness': brightness,
-                             'scale': scale, 'angle': angle})  # 변형 조건을 기록한다.
+        image = cv2.imread(str(path))  # 원본 사진을 읽는다.
+        if image is None:  # 손상 사진을 확인한다.
+            raise SystemExit(f'읽기 실패: {path}')  # 오류를 안내한다.
+        height, width = image.shape[:2]  # 원본 크기를 확인한다.
+        ratio = min(640 / width, 640 / height)  # 긴 변을 640으로 줄인다.
+        w, h = round(width * ratio), round(height * ratio)  # 축소 크기를 계산한다.
+        image = cv2.resize(image, (w, h), interpolation=cv2.INTER_AREA)  # 크기를 통일한다.
+        left, top = (640 - w) // 2, (640 - h) // 2  # 640 화면 중앙 배치 위치를 구한다.
+        label_path = source / 'labels' / split / f'{path.stem}.txt'  # 원본 정답이다.
+        background = floor_background(image, label_path, scale)  # 바닥으로 채운 배경이다.
+        shift = np.array([[1, 0, left], [0, 1, top], [0, 0, 1]])  # 사진을 중앙으로 옮긴다.
+        matrix = cv2.getRotationMatrix2D((320, 320), angle, scale)  # 기하 변환이다.
+        transformed = cv2.warpAffine(image, matrix @ shift, (640, 640), dst=background,
+                                     borderMode=cv2.BORDER_TRANSPARENT)  # 배경 위에 사진을 얹는다.
+        transformed = np.clip(transformed.astype(np.float32) * brightness, 0, 255)
+        labels, dropped = [], 0  # 변환한 박스와 잘린 박스 개수를 기록한다.
+        for row in label_path.read_text().splitlines():  # 정답 박스를 처리한다.
+            cls, x, y, bw, bh = map(float, row.split())  # 정규화 좌표를 읽는다.
+            x1, x2 = (x - bw / 2) * w + left, (x + bw / 2) * w + left
+            y1, y2 = (y - bh / 2) * h + top, (y + bh / 2) * h + top
+            corners = np.array([[x1, y1, 1], [x2, y1, 1],  # 네 모서리를 만든다.
+                                [x2, y2, 1], [x1, y2, 1]])
+            warped = corners @ matrix.T  # 사진과 같은 변환을 박스에도 적용한다.
+            low, high = warped.min(axis=0), warped.max(axis=0)  # 외접 박스를 계산한다.
+            clipped_low, clipped_high = np.clip(low, 0, 640), np.clip(high, 0, 640)
+            size = np.maximum(0, clipped_high - clipped_low)  # 화면에 남은 박스다.
+            visibility = np.prod(size) / max(np.prod(high - low), 1e-9)
+            if visibility < 0.5 or min(size) < 2:  # 절반 이상 잘린 물체는 제외한다.
+                dropped += 1  # 잘린 박스를 센다.
+                continue  # 남은 박스만 정답으로 저장한다.
+            center = (clipped_low + clipped_high) / 2 / 640  # 정규화 중심이다.
+            bw, bh = size / 640  # 정규화 크기다.
+            labels.append(f'{int(cls)} {center[0]:.6f} {center[1]:.6f} {bw:.6f} {bh:.6f}')
+        if dropped:  # 물체가 잘린 사진은 저장하지 않는다.
+            continue  # 다음 원본으로 넘어간다.
+        name = f'{condition}_{path.stem}'  # 원본까지 식별할 이름을 만든다.
+        destination = image_folder / f'{name}.jpg'  # 결과 사진 경로다.
+        if not cv2.imwrite(str(destination), transformed.astype(np.uint8)):
+            raise SystemExit(f'저장 실패: {destination}')  # 저장 오류를 안내한다.
+        (label_folder / f'{name}.txt').write_text('\n'.join(labels) + '\n')
+        manifest.append({'image': destination.name, 'source': path.name,  # 출처를 기록한다.
+                         'condition': condition, 'brightness': brightness,
+                         'scale': scale, 'angle': angle})  # 변형 조건을 기록한다.
     print(f'{split}: 이미지·라벨 {len(manifest)}쌍 생성 완료', flush=True)
     return manifest  # 생성한 파일 목록을 반환한다.
 
 
-def generate_crops(source, output, split):  # 물체 일부가 화면 가장자리에서 잘린 사진을 생성한다.
+def generate_crops(source, output, split, count=None):  # 물체 일부가 화면 가장자리에서 잘린 사진을 생성한다.
     image_folder = output / 'images' / split  # 크롭 사진을 저장할 경로다.
     label_folder = output / 'labels' / split  # 크롭 정답을 저장할 경로다.
     for directory in (image_folder, label_folder):  # 사진과 정답 폴더를 준비한다.
@@ -93,7 +101,10 @@ def generate_crops(source, output, split):  # 물체 일부가 화면 가장자�
         for old in directory.glob('crop_*'):  # 이전 방식으로 만든 크롭 파일을 지운다.
             old.unlink()
     manifest = []  # 생성한 크롭 사진의 출처를 기록한다.
-    for path in sorted((source / 'images' / split).glob('*.jpg')):  # 해당 분할 원본만 읽는다.
+    paths = sorted((source / 'images' / split).glob('*.jpg'))  # 해당 분할 원본만 읽는다.
+    if count is not None:  # 개수를 정하면 원본 사진 일부에서만 크롭을 만든다.
+        paths = random.Random(0).sample(paths, min(count, len(paths)))  # 다시 실행해도 같은 사진이 나온다.
+    for path in paths:  # 고른 원본을 하나씩 처리한다.
         image = cv2.imread(str(path))  # 원본 사진을 읽는다.
         if image is None:  # 손상 사진을 확인한다.
             raise SystemExit(f'읽기 실패: {path}')  # 오류를 안내한다.
@@ -141,12 +152,19 @@ def generate_crops(source, output, split):  # 물체 일부가 화면 가장자�
 
 
 if __name__ == '__main__':  # 직접 실행할 때만 실제 이미지와 라벨 파일을 생성한다.
+    parser = argparse.ArgumentParser()  # 실행 옵션을 준비한다.
+    parser.add_argument('--count', type=int, default=100)  # 분할마다 만들 밝기·크기·회전 변형 사진 수다.
+    parser.add_argument('--all', action='store_true')  # 105가지 조건 × 전체 원본을 모두 만든다 (수천 장).
+    args = parser.parse_args()  # 옵션을 읽는다.
+    transform_count = None if args.all else args.count  # 변형 사진 수다.
+    crop_sources = None if args.all else max(1, args.count // 40)  # 원본 1장당 크롭이 약 8장 나온다.
     root = Path(__file__).resolve().parent  # yolo 폴더를 찾는다.
     source = root / 'dataset_strawberry_car_ball'  # prepare_data.py가 분리한 원본 데이터다.
     output = root / 'dataset_strawberry_car_ball_expanded'  # 원본을 보존할 별도 데이터 폴더다.
     records = {}  # 각 분할의 원본 출처를 기록한다.
     for split in ('train', 'val'):  # 원본 분할을 유지하며 각각 변형한다.
-        records[split] = generate(source, output, split) + generate_crops(source, output, split)
+        records[split] = (generate(source, output, split, transform_count)
+                          + generate_crops(source, output, split, crop_sources))
         (output / f'manifest_{split}.json').write_text(json.dumps(records[split], indent=2))
     train_sources = {row['source'] for row in records['train']}  # 학습 원본 목록이다.
     val_sources = {row['source'] for row in records['val']}  # 검증 원본 목록이다.

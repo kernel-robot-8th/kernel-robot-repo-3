@@ -3,14 +3,13 @@ from pathlib import Path  # 이미지 경로를 찾고 라벨 파일을 저장�
 import cv2  # 사진을 읽고 마우스로 박스를 선택하는 OpenCV를 가져온다.
 
 
-class_id = 2  # 클래스 번호를 정한다. 딸기는 0, 자동차는 1, 공은 2이다.
-class_name = 'ball'  # 이번에 라벨링할 클래스 이름을 정한다.
+class_id = 1  # 클래스 번호를 정한다. 딸기 0, 자동차 1, 공 2, 호박 3, 사과 4, 당근 5, 열매 송이 6, 감자 7, 수박 8, 물티슈 9이다.
+class_name = 'car'  # 이번에 라벨링할 클래스 이름을 정한다.
 image_dir = (  # 실행 위치와 관계없이 원본 사진 폴더를 찾는다.
-    Path(__file__).resolve().parents[1]  # 이 파일을 기준으로 프로젝트 폴더를 찾는다.
-    / 'video'  # 원본 영상과 사진이 있는 폴더를 지정한다.
-    / 'ball_frames'  # 공 사진이 있는 폴더를 지정한다.
+    Path(__file__).resolve().parent  # 이 파일이 있는 yolo 폴더를 기준으로 한다.
+    / 'car3_frames'  # 뒤집힌 자동차 바닥면 사진이 있는 폴더를 지정한다.
 )
-images = sorted(image_dir.glob('*.jpg'))  # 현재 폴더에 있는 공 사진 전체를 이름순으로 가져온다.
+images = sorted(image_dir.glob('*.jpg'))  # 현재 폴더에 있는 사진 전체를 이름순으로 가져온다.
 if not images:  # 경로가 잘못되었거나 사진이 없는지 확인한다.
     raise SystemExit('이미지 폴더를 확인하세요.')  # 사진이 없으면 이유를 알리고 종료한다.
 
@@ -32,7 +31,7 @@ for index, image_path in enumerate(images, start=1):  # 사진을 첫 장부터 
     preview = cv2.resize(image, (round(image_w * scale), round(image_h * scale)))  # 표시용으로 축소한다.
     preview_h, preview_w = preview.shape[:2]  # 실제 표시용 사진의 높이와 너비를 구한다.
     title = f'{class_name} {index}/{len(images)} - {image_path.name}'  # 클래스와 진행 상황을 표시한다.
-    print(f'[{index}/{len(images)}] 공 전체를 선택하세요: {image_path.name}')  # 현재 작업을 안내한다.
+    print(f'[{index}/{len(images)}] {class_name} 전체를 선택하세요: {image_path.name}')  # 현재 작업을 안내한다.
     x, y, w, h = cv2.selectROI(title, preview, showCrosshair=True)  # 드래그한 박스 좌표를 받는다.
     cv2.destroyAllWindows()  # 현재 사진 창을 닫는다.
 
