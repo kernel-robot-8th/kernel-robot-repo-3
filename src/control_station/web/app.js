@@ -79,7 +79,7 @@ function renderRobots(robots) {
 }
 
 function renderCameras(cameras) {
-  const names = { HEAD: 'Head Camera', JOINT: 'Joint Camera' };
+  const names = { HEAD: 'Head Camera', JOINT: 'Joint Camera', FRONT: 'Front Camera' };
   const connectionLabel = {
     CONNECTED: '연결됨', DISCONNECTED: '연결 끊김', UNKNOWN: '확인 필요',
   };
@@ -187,7 +187,7 @@ function renderCameras(cameras) {
   if (targetObservationClass) {
     const requestId = ++targetObservationRequest;
     cameras
-      .filter((camera) => camera.position === 'HEAD' || camera.position === 'JOINT')
+      .filter((camera) => ['HEAD', 'JOINT', 'FRONT'].includes(camera.position))
       .forEach((camera) => refreshTargetObservation(camera, requestId));
   }
 }

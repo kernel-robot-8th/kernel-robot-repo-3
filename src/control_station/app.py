@@ -797,9 +797,21 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
                         profile_ids = query.get("profile_id", [])
                         if len(profile_ids) > 1:
                             raise RuntimeError("profile_id는 하나만 지정할 수 있습니다.")
-                        state = self.app.policy_run_supervisor.start(
-                            profile_ids[0] if profile_ids else None
-                        )
+                        hold_front = getattr(self.app.camera_manager, "hold_front_for_policy", None)
+                        if hold_front is not None and not hold_front(True):
+                            hold_front(False)
+                            raise RuntimeError(
+                                "관제 화면이 Front Camera를 놓았는지 확인하지 못해 정책을 시작하지 않았습니다. "
+                                "잠시 뒤 다시 시도하세요."
+                            )
+                        try:
+                            state = self.app.policy_run_supervisor.start(
+                                profile_ids[0] if profile_ids else None
+                            )
+                        finally:
+                            # A live policy process keeps the camera released through policy_active.
+                            if hold_front is not None:
+                                hold_front(False)
                     else:
                         state = self.app.policy_run_supervisor.stop()
             except RuntimeError as exc:
@@ -1572,11 +1584,21 @@ def main() -> None:
             "CONTROL_STATION_HEAD_YOLO_WORLD_PROMPTS",
         )
     )
-    if not (server.arm_supervisor.enabled or head_detector_configured):
+    front_camera_configured = any(
+        os.environ.get(name, "").strip()
+        for name in (
+            "CONTROL_STATION_FRONT_CAMERA",
+            "CONTROL_STATION_POLICY_FRONT_CAMERA",
+            "CONTROL_STATION_FRONT_YOLO_WEIGHTS",
+            "CONTROL_STATION_FRONT_YOLO_WORLD_PROMPTS",
+        )
+    )
+    if not (server.arm_supervisor.enabled or head_detector_configured or front_camera_configured):
         server.camera_manager = UnconfiguredArmCameraStreamManager()
     else:
         server.camera_manager = OpenCVArmCameraStreamManager(
-            joint_enabled=server.arm_supervisor.enabled
+            joint_enabled=server.arm_supervisor.enabled,
+            policy_active=lambda: bool(server.policy_run_supervisor.snapshot()["process_alive"]),
         )
     server.task_store = task_store
     server.task_orchestrator = MockTaskOrchestrator(task_store, mode=mode)

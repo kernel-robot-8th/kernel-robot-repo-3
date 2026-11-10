@@ -110,6 +110,22 @@ CONTROL_STATION_ARM_PROGRAM=/경로/lerobot-teleoperate ./run-control-station.sh
 
 장치 번호는 연결 순서에 따라 바뀔 수 있습니다. 2026-10-31 read-only 열거에서는 HCAM0가 `/dev/video4`, Innomaker U20CAM-720P가 `/dev/video6`이었습니다. 기존 구성에서 `/dev/video4`를 Joint Camera로 선택했던 기록에 따라 이제 그 슬롯의 기본 경로를 Innomaker by-id로 고정했고 Head Camera는 HCAM0 by-id를 사용합니다. 단일 frame만으로 물리 장착 위치를 검증한 것은 아니므로 `--arm`을 실행하기 전에 `v4l2-ctl --list-devices`, `/dev/v4l/by-id`, 관제 화면을 통해 사람이 역할을 확인하세요. 환경 변수로 같은 실물 capture node를 두 슬롯에 지정하면 관제는 양쪽 stream을 열지 않고 충돌 오류를 표시합니다.
 
+### Front Camera 화면
+
+Front Camera는 학습 정책 client의 `front` 입력과 같은 카메라입니다. `CONTROL_STATION_FRONT_CAMERA`를 지정하면 관제 화면에 Front Camera 카드가 추가되고, 지정하지 않으면 `CONTROL_STATION_POLICY_FRONT_CAMERA`를 같은 장치로 사용합니다. 둘 다 없으면 카드에 경로 미설정을 표시하고 장치를 열지 않습니다. `CONTROL_STATION_FRONT_YOLO_WEIGHTS`를 지정하면 Head Camera와 같은 방식으로 YOLO 검출을 표시하고, 지정하지 않으면 영상만 표시합니다(아래 "카메라별 YOLO 검출 표시" 참고).
+
+Head Camera와 Front Camera가 같은 기종(HCAM0)이면 `/dev/v4l/by-id` 경로가 둘 중 하나만 가리키고, 다시 꽂을 때마다 가리키는 장치가 바뀔 수 있습니다. 2026-11-10 이 노트북에서는 USB 포트 1이 Head, 포트 2가 Front였으므로 포트 기준 경로로 지정합니다. 포트를 바꿔 꽂으면 경로도 바뀌므로 화면으로 역할을 다시 확인하세요.
+
+```bash
+CONTROL_STATION_HEAD_CAMERA=/dev/v4l/by-path/pci-0000:00:14.0-usb-0:1:1.0-video-index0 \
+CONTROL_STATION_FRONT_CAMERA=/dev/v4l/by-path/pci-0000:00:14.0-usb-0:2:1.0-video-index0 \
+./run-control-station.sh
+```
+
+카메라는 기본으로 640×480 MJPEG를 요청합니다. 센서가 4:3 모드에서 시야를 잘라내는 경우 `CONTROL_STATION_HEAD_CAMERA_RESOLUTION=1280x720`처럼 카메라별(`HEAD`, `JOINT`, `FRONT`)로 다른 모드를 요청할 수 있습니다. 해상도를 바꾸면 검출의 픽셀 좌표 기준도 그 해상도로 바뀌고, 처리량이 늘어 프레임률이 낮아질 수 있습니다. 실제 시야가 넓어지는지는 카메라마다 화면으로 확인해야 합니다.
+
+V4L2 장치는 한 프로세스만 영상을 받을 수 있어, 관제가 Front Camera를 열고 있으면 정책 client가 같은 장치를 열지 못합니다. 그래서 정책 시작 요청을 받으면 관제가 Front Camera capture를 먼저 닫고, 닫힌 것을 확인한 뒤 정책 client를 시작합니다. 정책 프로세스가 살아 있는 동안 카드는 `연결 끊김`/`중지`와 사용 중 안내를 표시하고, 프로세스가 끝나면 자동으로 다시 엽니다. 5초 안에 닫힘을 확인하지 못하면 정책을 시작하지 않고 409 오류를 반환합니다. 이 해제는 Front Camera만 대상으로 하며, 정책의 `wrist` 입력과 Joint Camera가 같은 장치인 경우는 처리하지 않습니다.
+
 실제 팔 제어는 운영체제의 장치 권한, LeRobot 의존성 및 사용자별 OMX 지원 코드가 있어야 합니다. 이 구성은 현재 관제 저장소에 포함되지 않습니다. 저장소만 복제한 환경에서는 첫 번째 절차로 대시보드와 API를 실행할 수 있습니다.
 
 ## 학습 정책 한 번 실행
@@ -175,6 +191,10 @@ CONTROL_STATION_JOINT_YOLO_WEIGHTS=/경로/wrist-refine.pt \
 | `CONTROL_STATION_JOINT_YOLO_WORLD_PROMPTS` | 없음 | Joint Camera YOLO-World의 고정 prompt 목록; weights도 명시해야 모델이 로드됩니다 |
 | `CONTROL_STATION_JOINT_YOLO_CONF` | `0.25` | Joint Camera detector confidence threshold |
 | `CONTROL_STATION_JOINT_YOLO_DEVICE` | 자동 | Joint Camera detector device (`0` 또는 `cpu`) |
+| `CONTROL_STATION_FRONT_YOLO_WEIGHTS` | 없음 (꺼짐) | Front Camera 전용 YOLO 가중치 `.pt` 경로. 학습 정책 실행 중에는 카메라와 함께 검출도 멈춥니다. |
+| `CONTROL_STATION_FRONT_YOLO_WORLD_PROMPTS` | 없음 | Front Camera YOLO-World의 고정 prompt 목록; weights도 명시해야 모델이 로드됩니다 |
+| `CONTROL_STATION_FRONT_YOLO_CONF` | `0.25` | Front Camera detector confidence threshold |
+| `CONTROL_STATION_FRONT_YOLO_DEVICE` | 자동 | Front Camera detector device (`0` 또는 `cpu`) |
 
 
 YOLO-World는 별도 데이터셋 episode 수집이나 fine-tuning 없이 지정한 text vocabulary에 대한 open-vocabulary 후보를 생성합니다. `requirements-vision.txt`의 Ultralytics 의존성을 재사용합니다. 가중치 파일은 이 저장소에 포함되지 않으며 존재하는 파일 경로를 명시해야 합니다. 상시 카메라 검출의 prompt list는 관제 프로세스 시작 시 고정됩니다. 대기 task에서 **카메라에서 대상 관측**을 명시적으로 요청하면, YOLO-World에서만 설정 vocabulary에 없는 task category를 일회성 prompt로 적용해 정확히 캡처한 raw frame을 추론하고 기존 vocabulary를 복원합니다. 일반 `GET` 관측은 모델 prompt를 변경하지 않으며, closed-set YOLO에는 요청별 prompt 기능이 없습니다. 프롬프트 class 후보는 관측/대상 명령 초안에 제공되지만 정확도 보정, 자동 후보 선택 또는 로봇 제어에 쓰이지 않습니다. 검증된 저장 가중치가 준비되면 다음처럼 opt-in으로 켤 수 있습니다.
