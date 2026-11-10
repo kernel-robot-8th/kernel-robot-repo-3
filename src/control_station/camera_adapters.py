@@ -14,7 +14,7 @@ import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 from control_station.models import (
     CameraConnectionState,
@@ -139,6 +139,10 @@ class _CameraFeed:
     detections: list[dict[str, object]] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
     thread: threading.Thread | None = None
+    # Set while this process holds no open capture, so another process may open the device.
+    released: threading.Event = field(default_factory=threading.Event)
+    # Requested capture size. Some sensors crop the field of view at 4:3, so a wider mode may show more.
+    capture_size: tuple[int, int] = (640, 480)
 
 
 class _YoloDetector:
@@ -329,6 +333,14 @@ class UnconfiguredArmCameraStreamManager:
                 stream_state=CameraStreamState.UNKNOWN,
                 error_message="팔 카메라 스트림을 사용하려면 --arm 모드로 실행하세요",
             ),
+            CameraSnapshot(
+                id="front_camera",
+                robot_id="arm-01",
+                position="FRONT",
+                connection_state=CameraConnectionState.UNKNOWN,
+                stream_state=CameraStreamState.UNKNOWN,
+                error_message="Front Camera 장치 경로 미설정 (CONTROL_STATION_FRONT_CAMERA)",
+            ),
         ]
 
     def frame_for(self, camera_id: str) -> bytes | None:
@@ -352,7 +364,14 @@ class UnconfiguredArmCameraStreamManager:
 class OpenCVArmCameraStreamManager:
     """Own configured V4L2 devices once and expose their latest JPEG frames."""
 
-    def __init__(self, joint_enabled: bool = True) -> None:
+    def __init__(
+        self, joint_enabled: bool = True, policy_active: Callable[[], bool] | None = None
+    ) -> None:
+        # The learned-policy client opens the Front Camera itself, and V4L2 lets only one
+        # process stream it, so the dashboard gives it up while a policy run is requested or alive.
+        self._policy_active = policy_active
+        self._front_policy_hold = False
+        self._policy_active_cache = (0.0, False)
         joint_device = os.environ.get(
             "CONTROL_STATION_JOINT_CAMERA",
             os.environ.get(
@@ -364,6 +383,12 @@ class OpenCVArmCameraStreamManager:
             "CONTROL_STATION_HEAD_CAMERA",
             "/dev/v4l/by-id/usb-Jieli_Technology_USB_Composite_Device-video-index0",
         ).strip()
+        front_device = os.environ.get(
+            "CONTROL_STATION_FRONT_CAMERA",
+            os.environ.get("CONTROL_STATION_POLICY_FRONT_CAMERA", ""),
+        ).strip()
+        front_weights = os.environ.get("CONTROL_STATION_FRONT_YOLO_WEIGHTS", "").strip()
+        front_prompts = os.environ.get("CONTROL_STATION_FRONT_YOLO_WORLD_PROMPTS", "").strip()
         head_weights = os.environ.get("CONTROL_STATION_HEAD_YOLO_WEIGHTS", "").strip()
         head_prompts = os.environ.get("CONTROL_STATION_HEAD_YOLO_WORLD_PROMPTS", "").strip()
         joint_weights = os.environ.get("CONTROL_STATION_JOINT_YOLO_WEIGHTS", "").strip()
@@ -389,20 +414,50 @@ class OpenCVArmCameraStreamManager:
                 ),
             ),
             "joint_camera": joint_feed,
+            "front_camera": _CameraFeed(
+                "front_camera",
+                "FRONT",
+                front_device or None,
+                detector=(
+                    _YoloDetector(front_weights, "CONTROL_STATION_FRONT_YOLO")
+                    if front_weights or front_prompts
+                    else None
+                ),
+            ),
         }
-        head_feed = self._feeds["head_camera"]
-        if joint_feed.device and head_feed.device:
-            if os.path.realpath(joint_feed.device) == os.path.realpath(head_feed.device):
-                message = (
-                    "Head Camera와 Joint Camera 경로가 같은 V4L2 장치로 연결됩니다. "
-                    "실제 장착을 확인한 뒤 CONTROL_STATION_HEAD_CAMERA와 "
-                    "CONTROL_STATION_JOINT_CAMERA를 서로 다른 장치로 설정하세요."
-                )
-                for feed in (head_feed, joint_feed):
-                    feed.device = None
-                    feed.connection_state = CameraConnectionState.DISCONNECTED
-                    feed.stream_state = CameraStreamState.ERROR
-                    feed.error_message = message
+        front_feed = self._feeds["front_camera"]
+        if not front_feed.device:
+            front_feed.error_message = "Front Camera 장치 경로 미설정 (CONTROL_STATION_FRONT_CAMERA)"
+        by_device: dict[str, list[_CameraFeed]] = {}
+        for feed in self._feeds.values():
+            if feed.device:
+                by_device.setdefault(os.path.realpath(feed.device), []).append(feed)
+        for shared in by_device.values():
+            if len(shared) < 2:
+                continue
+            labels = "와 ".join(f"{feed.position.title()} Camera" for feed in shared)
+            message = (
+                f"{labels} 경로가 같은 V4L2 장치로 연결됩니다. 실제 장착을 확인한 뒤 "
+                "CONTROL_STATION_HEAD_CAMERA, CONTROL_STATION_JOINT_CAMERA, "
+                "CONTROL_STATION_FRONT_CAMERA를 서로 다른 장치로 설정하세요."
+            )
+            for feed in shared:
+                feed.device = None
+                feed.connection_state = CameraConnectionState.DISCONNECTED
+                feed.stream_state = CameraStreamState.ERROR
+                feed.error_message = message
+        for feed in self._feeds.values():
+            feed.released.set()
+            env_name = f"CONTROL_STATION_{feed.position}_CAMERA_RESOLUTION"
+            raw_size = os.environ.get(env_name, "").strip()
+            size_match = re.fullmatch(r"(\d{2,5})x(\d{2,5})", raw_size)
+            if size_match:
+                feed.capture_size = (int(size_match.group(1)), int(size_match.group(2)))
+            elif raw_size and feed.device:
+                feed.device = None
+                feed.connection_state = CameraConnectionState.DISCONNECTED
+                feed.stream_state = CameraStreamState.ERROR
+                feed.error_message = f"{env_name} 형식이 잘못되었습니다: {raw_size} (예: 1280x720)"
         self._closed = threading.Event()
         for feed in self._feeds.values():
             if feed.device:
@@ -429,6 +484,36 @@ class OpenCVArmCameraStreamManager:
             return f"카메라 자원 해제 실패: {exc}"
         return None
 
+    def _held_for_policy(self, feed: _CameraFeed) -> bool:
+        """Return whether the learned-policy client should own this camera instead."""
+        if feed.camera_id != "front_camera":
+            return False
+        if self._front_policy_hold:
+            return True
+        if self._policy_active is None:
+            return False
+        checked_at, active = self._policy_active_cache
+        now = time.monotonic()
+        if now - checked_at >= 0.2:
+            try:
+                active = bool(self._policy_active())
+            except Exception:
+                active = False
+            self._policy_active_cache = (now, active)
+        return active
+
+    def hold_front_for_policy(self, hold: bool, timeout: float = 5.0) -> bool:
+        """Close the dashboard Front Camera capture before a policy run opens the device.
+
+        Returns False when the capture was not confirmed closed within ``timeout``.
+        """
+        self._front_policy_hold = hold
+        self._policy_active_cache = (0.0, False)
+        feed = self._feeds["front_camera"]
+        if not hold or not feed.device or feed.thread is None:
+            return True
+        return feed.released.wait(timeout)
+
     def _capture_loop(self, feed: _CameraFeed) -> None:
         try:
             import cv2
@@ -446,6 +531,19 @@ class OpenCVArmCameraStreamManager:
             device = feed.device
             if not device:
                 return
+            # Clear before checking the hold so a concurrent hold request waits for this capture.
+            feed.released.clear()
+            if self._held_for_policy(feed):
+                feed.released.set()
+                with feed.lock:
+                    feed.detections = []  # no live frame backs the last detections while held
+                    feed.connection_state = CameraConnectionState.DISCONNECTED
+                    feed.stream_state = CameraStreamState.STOPPED
+                    feed.error_message = (
+                        "학습 정책 실행이 Front Camera를 사용하는 동안 관제 화면 수신을 멈췄습니다"
+                    )
+                self._closed.wait(0.25)
+                continue
             resolved_device = os.path.realpath(device)
             video_match = re.fullmatch(r"/dev/video(\d+)", resolved_device)
             if not os.path.exists(resolved_device):
@@ -453,6 +551,7 @@ class OpenCVArmCameraStreamManager:
                     feed.connection_state = CameraConnectionState.DISCONNECTED
                     feed.stream_state = CameraStreamState.ERROR
                     feed.error_message = f"카메라 장치 경로가 없습니다: {device}"
+                feed.released.set()
                 self._closed.wait(2)
                 continue
 
@@ -470,6 +569,7 @@ class OpenCVArmCameraStreamManager:
                     feed.error_message = f"카메라 열기 실패: {exc}"
                     if release_error:
                         feed.error_message += f" · {release_error}"
+                feed.released.set()
                 self._closed.wait(2)
                 continue
             if not opened:
@@ -480,6 +580,7 @@ class OpenCVArmCameraStreamManager:
                     feed.error_message = f"카메라를 열 수 없습니다: {feed.device} (다른 프로그램 점유 여부 확인)"
                     if release_error:
                         feed.error_message += f" · {release_error}"
+                feed.released.set()
                 self._closed.wait(2)
                 continue
 
@@ -488,8 +589,8 @@ class OpenCVArmCameraStreamManager:
                 # MJPEG explicitly so simultaneous streams do not reserve the
                 # bus bandwidth required by uncompressed YUYV.
                 capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-                capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                capture.set(cv2.CAP_PROP_FRAME_WIDTH, feed.capture_size[0])
+                capture.set(cv2.CAP_PROP_FRAME_HEIGHT, feed.capture_size[1])
                 capture.set(cv2.CAP_PROP_FPS, 30)
             except Exception as exc:
                 release_error = self._release_capture(capture)
@@ -499,6 +600,7 @@ class OpenCVArmCameraStreamManager:
                     feed.error_message = f"카메라 형식 설정 실패: {exc}"
                     if release_error:
                         feed.error_message += f" · {release_error}"
+                feed.released.set()
                 self._closed.wait(2)
                 continue
             with feed.lock:
@@ -510,6 +612,8 @@ class OpenCVArmCameraStreamManager:
             capture_failure: str | None = None
             try:
                 while not self._closed.is_set():
+                    if self._held_for_policy(feed):
+                        break
                     ok, image = capture.read()
                     if not ok:
                         failed_reads += 1
@@ -581,6 +685,9 @@ class OpenCVArmCameraStreamManager:
             finally:
                 release_error = self._release_capture(capture)
                 capture_failure = capture_failure or release_error
+                feed.released.set()
+            if self._held_for_policy(feed) and not capture_failure:
+                continue  # the next pass reports the hold and waits without an error state
             if not self._closed.is_set():
                 with feed.lock:
                     feed.connection_state = CameraConnectionState.DISCONNECTED
