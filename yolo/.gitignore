@@ -4,3 +4,4 @@ runs/
 test_results/
 *.pt
 camera_frames/
+docs/images/  # 학습 기록 사진은 training-log.docx 안에 들어 있으므로 따로 올리지 않는다.
