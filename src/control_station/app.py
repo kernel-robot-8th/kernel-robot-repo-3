@@ -19,6 +19,7 @@ from control_station.arm_commands import ARM_ROBOT_IDS, ArmCommandStore
 from control_station.arms import ArmConfigError, load_arms
 from control_station.arm_supervisor import ArmTeleopSupervisor
 from control_station.policy_run_supervisor import PolicyRunSupervisor
+from control_station.camera_counts import ShelfStockCounter, load_counter_from_env
 from control_station.camera_adapters import (
     OpenCVArmCameraStreamManager,
     UnconfiguredArmCameraStreamManager,
@@ -276,8 +277,19 @@ def main() -> None:
         fleet = PinkyFleetClient(fleet_url)
         fleet_status, fleet_confirm, dispatch = fleet.fleet_status, fleet.fleet_confirm, None
         print(f"주문 흐름의 핑키 신호: 핑키 관제 {fleet_url}", flush=True)
+    # Counting for the stock check and the per-object transfer check: the cameras' YOLO detections when
+    # CONTROL_STATION_ORDER_COUNTS=camera (shelf cams with slot zones, the top cam inside the Pinky tray), else the
+    # mock world. With camera counts but mock picks, a person has to move each object during the pick step.
+    shelf_stock, pinky_load = world.shelf_stock, world.pinky_load
+    if os.environ.get("CONTROL_STATION_ORDER_COUNTS", "").strip() == "camera":
+        shelf_stock = ShelfStockCounter(server.camera_manager.snapshots, server.shelf_slot_zones, slot_map, server.arms)
+        load_counter = load_counter_from_env(server.camera_manager.snapshots, Path(__file__).resolve().parents[2],
+                                             parking_spot_id)
+        pinky_load = load_counter
+        print(f"주문 흐름의 개수 세기: 카메라 YOLO (핑키 쟁반 {load_counter.camera_id} {load_counter.region_or_none()})",
+              flush=True)
     server.order_devices = OrderDevices(
-        world.shelf_stock, world.pinky_load, fleet_status, fleet_confirm, order_parking, world.pick, dispatch,
+        shelf_stock, pinky_load, fleet_status, fleet_confirm, order_parking, world.pick, dispatch,
     )
     try:
         arrival_timeout_s = float(os.environ.get("CONTROL_STATION_ARRIVAL_TIMEOUT_S", "600"))

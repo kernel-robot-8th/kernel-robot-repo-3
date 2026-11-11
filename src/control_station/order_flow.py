@@ -145,6 +145,17 @@ class OrderFlow:
     def _name(pinky_id: str) -> str:
         return PINKY_NAMES.get(pinky_id, pinky_id)
 
+    @staticmethod
+    def _observe(what: str, observe: Callable[..., dict[str, Any]], *args: Any) -> dict[str, Any]:
+        """A count from the cameras (or the mock); no count stops the order with the observer's error code."""
+        try:
+            return observe(*args)
+        except OrderFlowError:
+            raise
+        except Exception as exc:
+            raise OrderFlowError(getattr(exc, "error_code", "COUNT_FAILED"), f"{what}을(를) 세지 못했습니다: {exc}",
+                                 "cameras") from exc
+
     def _ordered(self, ctx: StepContext) -> Counter:
         return Counter({item["object_class"]: int(item["quantity"]) for item in ctx.task["order_items"]})
 
@@ -177,7 +188,7 @@ class OrderFlow:
         return {"source": "control_station", "outcome": "ORDER_VALID", "order_items": ctx.task["order_items"]}
 
     def _check_shelf_stock(self, ctx: StepContext) -> dict[str, Any]:
-        observation = self.devices.shelf_stock()
+        observation = self._observe("선반 재고", self.devices.shelf_stock)
         totals: Counter = Counter()
         for counts in observation["shelves"].values():
             totals.update(counts)
@@ -192,7 +203,7 @@ class OrderFlow:
 
     def _plan_arm_sequence(self, ctx: StepContext) -> dict[str, Any]:
         checked = next((step.get("result") for step in ctx.task["steps"] if step["step_type"] == "CHECK_SHELF_STOCK"), None)
-        shelves = (checked or {}).get("shelves") or self.devices.shelf_stock()["shelves"]
+        shelves = (checked or {}).get("shelves") or self._observe("선반 재고", self.devices.shelf_stock)["shelves"]
         available = {shelf: Counter(counts) for shelf, counts in shelves.items()}
         pairs = []
         steps = ctx.task["steps"]
@@ -332,8 +343,8 @@ class OrderFlow:
         raise OrderFlowError("PINKY_SIGNAL_NOT_APPLIED", f"핑키 {self._name(pinky)}가 도킹완료 뒤 정지 유지 단계로 바뀌지 않았습니다", "pinky_fleet")
 
     def _counts(self, ctx: StepContext, object_class: str) -> tuple[int, int, dict[str, Any], dict[str, Any]]:
-        shelf = self.devices.shelf_stock()
-        load = self.devices.pinky_load(self._pinky(ctx))
+        shelf = self._observe("선반 재고", self.devices.shelf_stock)
+        load = self._observe("핑키 위 물건", self.devices.pinky_load, self._pinky(ctx))
         on_shelves = sum(counts.get(object_class, 0) for counts in shelf["shelves"].values())
         return on_shelves, load["counts"].get(object_class, 0), shelf, load
 
@@ -378,7 +389,7 @@ class OrderFlow:
         return {"source": load.get("source"), "outcome": "TRANSFERRED", "unit": unit, "simulated": load.get("simulated", False)}
 
     def _verify_load_total(self, ctx: StepContext) -> dict[str, Any]:
-        load = self.devices.pinky_load(self._pinky(ctx))
+        load = self._observe("핑키 위 물건", self.devices.pinky_load, self._pinky(ctx))
         seen = Counter({name: count for name, count in load["counts"].items() if name not in NOT_CARGO and count > 0})
         ordered = self._ordered(ctx)
         ok = seen == ordered
