@@ -125,7 +125,21 @@ OMX에는 좌표를 보내지 않습니다(2026-11-11 결정). 팔은 기록한 
 
 ### 작업 생성과 대상 명세 (현재 API)
 
-`POST /api/tasks`는 `destination`, `arm_job`, 선택적 `pick_request`만 받습니다. 나머지 최상위 필드는 HTTP 400으로 거부해 필드명 오타나 아직 지원하지 않는 값을 조용히 무시하지 않습니다. `destination`과 `arm_job`은 필수 문자열이고, `pick_request`는 생략/`null`이거나 `{category, color?, shelf_level?}` 계약을 따라야 합니다. `category`는 1–80자, `color`는 1–40자이며 두 필드 모두 ASCII C0 및 DEL 제어 문자를 포함할 수 없습니다. 성공 응답은 저장된 `PENDING` 작업이며 인식·작업 단계 실행·로봇 명령을 시작하지 않습니다.
+`POST /api/tasks`는 주문(`order_items`, 선택 `pinky_id`, 아래 "주문과 핑키 관제 신호") 또는 이전 형식인 `destination`, `arm_job`, 선택적 `pick_request`를 받습니다. 나머지 최상위 필드는 HTTP 400으로 거부해 필드명 오타나 아직 지원하지 않는 값을 조용히 무시하지 않습니다. `destination`과 `arm_job`은 필수 문자열이고, `pick_request`는 생략/`null`이거나 `{category, color?, shelf_level?}` 계약을 따라야 합니다. `category`는 1–80자, `color`는 1–40자이며 두 필드 모두 ASCII C0 및 DEL 제어 문자를 포함할 수 없습니다. 성공 응답은 저장된 `PENDING` 작업이며 인식·작업 단계 실행·로봇 명령을 시작하지 않습니다.
+
+### 주문과 핑키 관제 신호 (현재 API, 2026-11-11)
+
+주문은 `POST /api/tasks`의 `order_items`(`[{"object_class": "carrot", "quantity": 1}, ...]`, 1–5종·종류별 1–5개)와 선택 `pinky_id`(`10`/`11`/`12`)로 등록합니다. 물체 이름은 학습 정책 파일의 클래스·이름·별칭(당근, carrot)으로 받고 클래스 이름으로 저장합니다. 같은 물체는 수량을 합칩니다. `pinky_id`가 없으면 끝나지 않은 주문이나 경보를 확인하지 않은 멈춘 주문이 없는 핑키를 10→11→12 순서로 배정하고, 없으면 HTTP 409 `PINKY_UNAVAILABLE`입니다. 단계 목록과 멈춤 코드는 [주문 흐름](../implementation/order-flow.md)에 있습니다.
+
+핑키 팀 관제(`origin/pinky_fleet`)와는 HTTP로 주고받습니다.
+
+| 관제가 보내거나 읽는 것 | 핑키 관제 | 의미 |
+|---|---|---|
+| 핑키 단계 | `GET /api/status` → `robots[].route.{status, phase, mission_token}` | `docking_manual`=5번 정지·도킹완료 대기, `docked_manual`=정지 유지·수령 대기, 경로 없음·끝남=`parked` |
+| 도킹완료 | `POST /api/robots/<id>/operator-confirm` `{"action":"dock_complete","token":<docking_manual 토큰>}` | 천장 카메라 주차 판정이 `ARRIVED`일 때만 보냄 |
+| 수령 완료 | 같은 경로 `{"action":"received","token":<docked_manual 토큰>}` | 핑키 위 총량이 주문과 같을 때만 보냄 |
+
+응답 202는 핑키 관제가 신호를 받아 로봇에 기록했다는 뜻입니다. 핑키가 실제로 움직였는지는 다음 `GET /api/status` 단계로 확인합니다. 409(단계·토큰 불일치)는 `PINKY_SIGNAL_REJECTED`, 502(로봇 전달 실패)는 `PINKY_SIGNAL_NOT_DELIVERED`, 무응답은 `PINKY_FLEET_UNREACHABLE`로 기록하고 자동으로 다시 보내지 않습니다.
 
 ### 카메라 관측 결과 (현재 API)
 
@@ -229,7 +243,7 @@ Pinky가 멈춘 뒤 천장 카메라로 "등록된 주차 위치와 얼마나 �
 |---|---|---|
 | UI ↔ 관제 | localhost HTTP API | 원격 배포 인증·TLS·접근 제어 |
 | 관제 ↔ 저장소 | SQLite, SQLAlchemy ORM, Alembic | 원격/다중 사용자 배포 DB |
-| 관제 ↔ Pinky | ROS 2/Nav2 action client를 기본 방향으로 검토 | 배포판, domain, action 이름·타입, namespace, frame, lifecycle 진단; 현재는 action server discovery만 구현 |
+| 관제 ↔ Pinky | 임무 단계와 도킹완료·수령 완료 신호는 핑키 팀 관제 HTTP(`origin/pinky_fleet`, 위 "주문과 핑키 관제 신호"). 주차 판정은 관제 쪽 C++ ROS 2 노드 | 핑키 관제 외부 접속(기본 127.0.0.1만 열림)과 인증; 주행 명령은 핑키 팀이 담당 |
 | 관제 ↔ OMX | HTTP 명령 큐: 워커가 long-poll로 명령을 가져가고 이벤트를 보고하며, `ACCEPTED`에 200을 받아야 실행 ([OMX 명령 HTTP 인터페이스](../implementation/arm-command-api.md)); 현장 read-only register probe 확인 | 실물 LeRobot 워커, 카메라 좌표로 명령 생성, 작업 단계 연결, 실행 중 결과 제한 시간, 안전 작업 영역, 원격 배포 인증; LeRobot `send_action()`은 관절 목표 쓰기 함수이므로 XYZ→관절 IK는 워커 쪽에 필요 |
 | 카메라 ↔ 관제 | 현재 OpenCV 캡처와 브라우저용 MJPEG | 배포 장치 ID, 동시 스트림 성능, 장착 위치 최종 확인 |
 | 주문 서비스 ↔ 관제 | 주문 ID·물품·수량·픽업 위치가 필요 | endpoint, HTTP/event 방식, 인증, payload, 재시도와 저장 책임자 |
@@ -241,10 +255,10 @@ Pinky가 멈춘 뒤 천장 카메라로 "등록된 주차 위치와 얼마나 �
 - [ ] 한 주문을 여러 운송 작업으로 나누는 조건과 `order_id`-`task_id` 관계
 - [ ] Pinky Nav2 action 계약과 map frame
 - [ ] OMX 작업 명령, READY, 파지·적재 완료와 오류 신호 (전달 방식과 이벤트는 [HTTP 인터페이스](../implementation/arm-command-api.md)로 초안 구현; `reason_code` 목록·READY 신호·실물 워커는 미정)
-- [ ] 적재 완료 신호 토픽 이름·메시지 형식을 핑키 팀과 합의
+- [ ] 핑키 관제 외부 접속 주소·인증과, 관제가 `dock_complete`를 자동으로 보내는 것에 대한 핑키 팀 합의
 - [ ] 장치 이벤트 ID·sequence·시각 제공 여부와 heartbeat 주기
 - [ ] timeout/stale 기준과 운영자의 보류·재개 절차
 - [ ] 주차 정렬 `MISALIGNED`·판정 불가 때 운영자 처리 절차(재주행 요청 방식, 재판정 시점). `ARRIVED`를 팔 단계 조건에 넣는 것은 2026-11-02에 결정
 - [ ] 주차 허용 오차(팔 작업 허용치와 Pinky 재주차 반복성 기준; 현재 `pinky_dock_1`은 임시 25 mm / 5°)와 `NEAR`/`FAR` 경계
-- [ ] `spot_id` ↔ 목적지(주차·적재 위치), `marker_id` ↔ `robot_id` 매핑
+- [ ] `spot_id` ↔ 목적지(주차·적재 위치), `marker_id` ↔ `robot_id` 매핑 (지금 `pinky_dock_1`은 마커 21 핑키 한 대 기준)
 - [ ] 시야 확인 없는(`view_check: OFF`) 판정을 진행 근거로 받아들일지

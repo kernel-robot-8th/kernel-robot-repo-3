@@ -12,6 +12,7 @@
 ## 현재 코드
 
 - [구현 현황](implementation/current-state.md): API, 코드 위치, 구현된 기능과 미구현 기능
+- [주문 흐름](implementation/order-flow.md): 주문 → 선반 확인 → 팔 배정 → 핑키 도착 → 적재 → 확인 → 핑키 완료 신호, 모의/실제 경계, 핑키 관제 HTTP, 카메라 개수 세기, 주문 진행 화면
 - 제한 규칙 기반 자연어 해석은 [실행 방법](implementation/runbook.md)의 작업 이력 절차를 참고하세요. 결과는 task 등록 전 검토가 필요한 초안입니다.
 - [ROS 2·관제 인터페이스 조사](implementation/ros2-inventory.md): 현재 workspace와 관제 경계, 정적 토픽/action 목록 및 확인되지 않은 runtime 정보
 - [정면 카메라 선반 위치 보정](implementation/shelf-pose-calibration.md): 선반 모서리를 찍어 solvePnP로 정면 카메라 위치를 구하고 6칸 영역을 화면에 투영하는 도구
@@ -19,7 +20,6 @@
 - [카메라 내부 보정](implementation/camera-intrinsic-calibration.md): 체커보드로 카메라 내부 파라미터를 구하는 오프라인 도구 (천장 카메라 주차 판정과 정면 카메라 선반 위치 보정에 사용)
 - [캘리브레이션 파일 지도](implementation/calibration-files.md): 카메라별 보정 스크립트, 결과 파일 위치와 현황, 팀 체커보드 인쇄 파일
 - [선반 층 영상 영역 초안](implementation/shelf-image-regions.md): 저장된 관측 frame에 polygon 좌표를 입력하는 브라우저 도구와 provenance를 확인해 review-only ROI artifact를 만드는 CLI
-- [OMX 실물 자세 기록 — 2026-10-31](implementation/omx-live-pose-record-2026-10-31.md): 딸기를 손목 카메라 시야에 넣기까지의 초기/현재 관측, 엔코더 snapshot 및 재현 제한
 - [실행 방법](implementation/runbook.md): 모의 서버와 팔 텔레오퍼레이션 실행
 - [개발 로드맵](development-plan.md): 에픽 순서, 목적, 의존성 및 전체 진행 상황
 - [Pinky 도착 판정과 로봇 진행 계획](plans/pinky-arrival-gate.md): 천장 카메라 주차 판정을 팔 단계 시작 조건으로 쓰는 흐름, 미정 항목과 실물 적용 전 조건

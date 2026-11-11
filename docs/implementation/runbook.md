@@ -13,6 +13,32 @@ python -m pip install -r requirements.txt
 
 브라우저에서 <http://127.0.0.1:8000>을 엽니다. 기본 모드에서는 로봇 제어를 시작하지 않습니다. 서버를 종료하려면 실행 중인 터미널에서 `Ctrl+C`를 누릅니다.
 
+## 주문 흐름 실행 (주문 진행 탭)
+
+주문 → 선반 확인 → 팔 배정 → 핑키 도착 → 적재 → 확인 → 핑키 완료 신호 흐름과 모의/실제 경계는 [주문 흐름](order-flow.md)에 정리했습니다. 이 PC의 실행 순서는 다음과 같습니다.
+
+```bash
+set -a; source .control-station/control-station.env; set +a
+# 터미널 A: 탑 캠 + 주차 판정 노드 (탑 캠은 이 노드만 엽니다)
+source /opt/ros/jazzy/setup.bash; source cpp/install/setup.bash
+ros2 launch parking_vision_ros ceiling_parking.launch.py repository_root:=$PWD spot_id:=pinky_dock_1
+# 터미널 B: 관제 (탑 캠은 CONTROL_STATION_HEAD_CAMERA=ros:/ceiling_camera/image_raw/compressed로 받음)
+./run-control-station.sh
+```
+
+브라우저의 **주문 진행** 탭에서 주문을 등록하면 바로 시작합니다. 관련 설정:
+
+| 설정 | 뜻 |
+|---|---|
+| `CONTROL_STATION_PINKY_FLEET_URL` | 핑키 팀 관제 주소(예: `http://<핑키 관제 PC>:8765`). 없으면 모의 핑키 |
+| `CONTROL_STATION_ORDER_COUNTS=camera` | 선반 재고·핑키 위 개수를 카메라 YOLO로 셈. 없으면 모의 세계 |
+| `CONTROL_STATION_ORDER_PARKING=mock` | 주차 위치가 설정돼 있어도 핑키 도착을 모의로 판정 |
+| `CONTROL_STATION_LOAD_CAMERA`, `CONTROL_STATION_PINKY_TRAY_REGION`, `CONTROL_STATION_PINKY_TRAY_MARGIN`, `CONTROL_STATION_LOAD_IGNORE_CLASSES` | 핑키 위 물건을 셀 카메라(기본 `head_camera`), 쟁반 영역(픽셀 `x1,y1,x2,y2`, 없으면 등록 마커 둘레 1.6변), 세지 않을 클래스(기본 `car`) |
+| `CONTROL_STATION_ARRIVAL_TIMEOUT_S` | 핑키 도착을 기다리는 최대 시간(기본 600초) |
+| `CONTROL_STATION_MOCK_PINKY_DRIVE_S`, `CONTROL_STATION_MOCK_PICK_S`, `CONTROL_STATION_MOCK_SHELF_STOCK`, `CONTROL_STATION_MOCK_FAULTS` | 모의 핑키 이동 시간, 모의 집기 시간, 모의 선반 재고, 처음부터 넣을 모의 사고 |
+
+팔 집기는 아직 모의라서 실물 팔은 움직이지 않습니다. 카메라로 개수를 셀 때는 집기 단계 동안 사람이 물체를 핑키 위로 옮겨야 옮김 확인을 통과합니다.
+
 ## 모의 작업 흐름 실행
 
 
@@ -96,7 +122,7 @@ CONTROL_STATION_ARM_PROGRAM=/경로/lerobot-teleoperate ./run-control-station.sh
 
 ### Front Camera 화면
 
-Front Camera는 학습 정책 client의 `front` 입력과 같은 카메라입니다. `CONTROL_STATION_FRONT_CAMERA`를 지정하면 관제 화면에 Front Camera 카드가 추가되고, 지정하지 않으면 `CONTROL_STATION_POLICY_FRONT_CAMERA`를 같은 장치로 사용합니다. 둘 다 없으면 카드에 경로 미설정을 표시하고 장치를 열지 않습니다. `CONTROL_STATION_FRONT_YOLO_WEIGHTS`를 지정하면 Head Camera와 같은 방식으로 YOLO 검출을 표시하고, 지정하지 않으면 영상만 표시합니다(아래 "카메라별 YOLO 검출 표시" 참고).
+Front Camera는 학습 정책 client의 `front` 입력과 같은 카메라입니다. `CONTROL_STATION_FRONT_CAMERA`를 지정하면 관제 화면에 Front Camera 카드가 추가되고, 지정하지 않으면 `CONTROL_STATION_POLICY_FRONT_CAMERA`를 같은 장치로 사용합니다. 둘 다 없으면 장치를 열지 않고, 2026-11-11부터는 카메라 목록에서도 보이지 않습니다. `CONTROL_STATION_FRONT_YOLO_WEIGHTS`를 지정하면 Head Camera와 같은 방식으로 YOLO 검출을 표시하고, 지정하지 않으면 영상만 표시합니다(아래 "카메라별 YOLO 검출 표시" 참고).
 
 Head Camera와 Front Camera가 같은 기종(HCAM0)이면 `/dev/v4l/by-id` 경로가 둘 중 하나만 가리키고, 다시 꽂을 때마다 가리키는 장치가 바뀔 수 있습니다. 2026-11-10 이 노트북에서는 USB 포트 1이 Head, 포트 2가 Front였으므로 포트 기준 경로로 지정합니다. 포트를 바꿔 꽂으면 경로도 바뀌므로 화면으로 역할을 다시 확인하세요.
 
