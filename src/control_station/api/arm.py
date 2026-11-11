@@ -15,18 +15,47 @@ if TYPE_CHECKING:
 
 
 def get_status(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
-    """팔 텔레오퍼레이션 상태"""
-    h._json(200, {"arm": h.app.arm_supervisor.snapshot()})
+    """팔 텔레오퍼레이션·학습 정책 한 번 실행 상태"""
+    h._json(200, {"arm": h.app.arm_supervisor.snapshot(), "policy_run": h.app.policy_run_supervisor.snapshot()})
 
 
 def post_teleop(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
-    """팔 텔레오퍼레이션 시작·정지"""
+    """팔 텔레오퍼레이션 시작·정지, 학습 정책 한 번 실행 시작·중단 (둘은 동시에 실행하지 않음)"""
+    policy_route = route.startswith("/api/arm/policy/")
+    response_key = "policy_run" if policy_route else "arm"
     try:
-        state = h.app.arm_supervisor.start() if route == "/api/arm/start" else h.app.arm_supervisor.stop()
+        with h.app.arm_control_lock:
+            if route == "/api/arm/start":
+                if h.app.policy_run_supervisor.snapshot()["process_alive"]:
+                    raise RuntimeError("학습 정책 실행이 끝날 때까지 텔레오퍼레이션을 시작할 수 없습니다.")
+                state = h.app.arm_supervisor.start()
+            elif route == "/api/arm/stop":
+                state = h.app.arm_supervisor.stop()
+            elif route == "/api/arm/policy/start":
+                if h.app.arm_supervisor.snapshot()["process_alive"]:
+                    raise RuntimeError("텔레오퍼레이션을 종료한 뒤 학습 정책을 실행하세요.")
+                profile_ids = parse_qs(urlsplit(h.path).query).get("profile_id", [])
+                if len(profile_ids) > 1:
+                    raise RuntimeError("profile_id는 하나만 지정할 수 있습니다.")
+                hold_front = getattr(h.app.camera_manager, "hold_front_for_policy", None)
+                if hold_front is not None and not hold_front(True):
+                    hold_front(False)
+                    raise RuntimeError(
+                        "관제 화면이 Front Camera를 놓았는지 확인하지 못해 정책을 시작하지 않았습니다. 잠시 뒤 다시 시도하세요."
+                    )
+                try:
+                    state = h.app.policy_run_supervisor.start(profile_ids[0] if profile_ids else None)
+                finally:
+                    # A live policy process keeps the camera released through policy_active.
+                    if hold_front is not None:
+                        hold_front(False)
+            else:
+                state = h.app.policy_run_supervisor.stop()
     except RuntimeError as exc:
-        h._json(409, {"error": str(exc), "arm": h.app.arm_supervisor.snapshot()})
+        snapshot = h.app.policy_run_supervisor.snapshot() if policy_route else h.app.arm_supervisor.snapshot()
+        h._json(409, {"error": str(exc), response_key: snapshot})
         return
-    h._json(202, {"arm": state})
+    h._json(202, {response_key: state})
 
 
 POLICY_IN_FLIGHT = frozenset({"DISPATCHED", "ACCEPTED", "RUNNING"})

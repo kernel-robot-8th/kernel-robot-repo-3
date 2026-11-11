@@ -22,6 +22,7 @@ from unittest import mock
 from control_station.app import WEB_DIR, ControlStationHandler, ControlStationServer
 from control_station.arm_commands import ArmCommandStore
 from control_station.arm_supervisor import ArmTeleopSupervisor
+from control_station.policy_run_supervisor import PolicyRunSupervisor
 from control_station.coordinate_target_drafts import CoordinateTargetDraftStore
 from control_station.models import CameraConnectionState, CameraSnapshot, CameraStreamState, FrameFreshness
 from control_station.parking_ros import ParkingObservationError
@@ -161,6 +162,8 @@ class ApiTestCase(unittest.TestCase):
         server.mode = "mock"
         server.robot_provider = FakeProvider()
         server.arm_supervisor = ArmTeleopSupervisor(disabled_reason="테스트에서는 팔을 쓰지 않습니다")
+        server.policy_run_supervisor = PolicyRunSupervisor(disabled_reason="테스트에서는 정책을 실행하지 않습니다")
+        server.arm_control_lock = threading.RLock()
         server.camera_manager = self.cameras
         server.task_store = self.task_store
         server.arm_commands = ArmCommandStore(self.task_store.session_factory, slot_map=slot_map)

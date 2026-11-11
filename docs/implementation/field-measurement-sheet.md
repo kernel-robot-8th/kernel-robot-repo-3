@@ -37,7 +37,6 @@
 
 2026-10-31 호스트의 read-only V4L2 관측에서는 HCAM0가 `/dev/video4`, Innomaker U20CAM-720P가 `/dev/video6`이었습니다. 각 by-id 경로는 `/dev/video4`·`/dev/video6`으로 해석됐습니다. Innomaker의 1280×720 단일 MJPG frame은 가까운 표면 위주라 선반과 역할을 식별하지 못했고, HCAM0에서 읽은 단일 stream artifact는 JPEG frame으로 decode되지 않았습니다. 파일은 `.control-station/physical-camera-readonly/`에 보존했으며 이 관측만으로 장치 고장, 물리 장착 또는 Head/Joint 역할을 판정하지 않습니다.
 
-현재 MuJoCo 시야 탐색은 측정되지 않은 링크6 부착 위치 60개를 가정한 합성 비교입니다([탐색 결과와 제한](mujoco-omx.md)). 시뮬레이터의 상위 camera pose를 장착 설계값으로 복사하지 말고, 실물을 확인한 뒤 다음 항목을 기록합니다.
 
 | Wrist camera / 장착 입력 | 현장 기록 | 확인 근거 |
 |---|---|---|
@@ -121,15 +120,12 @@ RGB 전용 고정 카메라 MVP를 선택했을 때만 이 절차를 사용합�
 
 ### TCP·그리퍼 파지 기하 입력
 
-MuJoCo의 `link6`는 시뮬레이션 모델의 body origin입니다. 물리 로봇에서 대응하는 frame이나 그리퍼 TCP라고 확인된 값이 아닙니다. 아래 항목이 확인되기 전에는 `link6` pose를 물체 grasp pose로 사용하거나 그리퍼 joint 목표를 개방 폭으로 환산하지 않습니다.
 
 | 측정 항목 | 현장 기록 | 측정 근거/불확실성 |
 |---|---|---|
 | 실물 OMX 변형/그리퍼 모델·revision·serial 및 대응하는 공식 description | 미확인 | 명판·제조사 자료·장치 description hash |
 | 실제 flange/손목 기준 frame 이름과 원점 정의 | 미확인 | 확인한 URDF/TF 또는 제조사 도면 |
 | TCP 기준 frame 이름과 실물 tool point 정의 | 미확인 | 접촉 위치와 대상 작업 기준으로 사람이 정의 |
-| TCP translation `(x,y,z)` 및 orientation quaternion `(w,x,y,z)` relative to named parent frame | 미확인 | 측정 장치·반복 측정값·오차 범위 기록; MuJoCo pose와 혼합 금지 |
-| 실물 측정 parent frame과 MuJoCo `link6` 간 대응 transform 및 근거 | 미확인 | 대응하는 robot revision/model frame을 확인하고 공통 기준점에서 변환을 측정·검증; 이름 유사성만으로 대응시키지 않음 |
 | 좌/우 finger 식별, 닫힘 방향 및 실제 물체 접촉면 표시 | 미확인 | 실제 장치 사진에 접촉면을 표시하고 frame/축 기록 |
 | TCP frame 기준의 closing/approach unit axis 3D 방향 | 미확인 | 축 표시 사진/fixture 측정과 축 방향 uncertainty; 두 축의 직교성 검토 |
 | 좌/우 finger contact patch vertex 목록, TCP frame `(x,y,z)` m | 미확인 | 접촉 pad만 캘리퍼스/도면으로 측정; 각 patch 최소 3점 및 source file hash |
@@ -139,17 +135,13 @@ MuJoCo의 `link6`는 시뮬레이션 모델의 body origin입니다. 물리 로�
 | 파지 대상별 허용 폭·접촉 위치·하중 조건 | 미확인 | 물체 실측/공식 질량 출처와 승인된 작업 시나리오 |
 | 파지 성공/미끄러짐을 확인하는 독립 관측 신호 | 미확인 | 실제 sensor/controller interface와 terminal meaning |
 
-실제 frame 대응과 TCP 측정이 끝난 뒤에만 [TCP 변환 artifact schema](link6-tcp-transform.schema.json)에 맞는 `DRAFT_ONLY` JSON을 작성합니다. Artifact와 두 근거 파일(frame mapping, TCP 측정 source)은 `.control-station/omx-calibrations/` 아래에 두며, 원본 측정값·불확실성·장치 revision·frame mapping 검토 정보를 기록합니다. 운영자가 수집한 근거 파일을 이 디렉터리에 복사하고, 실제 TCP와 대응 관계를 확인한 후에만 `scripts/create_link6_tcp_transform_draft.py`를 사용합니다. 생성기는 link6 기준으로 이미 계산된 TCP 변환을 요구하며 frame 변환이나 측정을 대신하지 않습니다. 파일 계약과 source hash는 MuJoCo 비의존 `scripts/validate_link6_tcp_transform.py --artifact <artifact.json>`으로 확인할 수 있습니다. MuJoCo IK는 `--tcp-transform-json`으로 검증된 artifact를 읽을 수 있지만, 파일 구조·해시 확인은 물리 변환의 정확성이나 로봇 안전 승인이 아닙니다. 현재 저장소에는 근거 자료나 실측 artifact가 없습니다.
 
 그 다음 단계에서 측정된 tool geometry를 machine-readable 초안으로 기록하려면 [gripper geometry measurement schema](gripper-geometry-measurement.schema.json)를 사용합니다. 작성기 입력은 [measurement input schema](gripper-geometry-measurement-input.schema.json)에 맞춥니다. JSON은 같은 물리 모델/revision과 TCP calibration ID를 참조하고, TCP 좌표계에서 측정한 jaw closing/approach 단위축, 두 finger 접촉 패치 polygon, 측정된 min/max 접촉면 간격 및 원본 evidence hash를 담습니다. `scripts/create_gripper_geometry_draft.py --measurement-record <record.json> --output <geometry.json>`은 관리 디렉터리 안의 운영자 측정 기록과 검증된 TCP artifact를 연결해 no-overwrite `DRAFT_ONLY` artifact를 생성합니다. 측정 기록 JSON 자체가 hash-linked evidence source가 되며, 입력과 출력 모두 `.control-station/omx-calibrations/` 아래에 보관합니다. 생성된 파일은 `scripts/validate_gripper_geometry.py --artifact <geometry.json>`으로 다시 확인합니다. 검증기는 schema 필드, 축 단위/직교성, 접촉 polygon의 중복점·퇴화 vertex 순서 면적, 간격 범위, TCP artifact의 source hash와 모델 일치, geometry evidence hash를 확인합니다. 결과는 계약과 source가 일치한다는 뜻만 가지며 측정 정확도, 실제 접촉 가능성 또는 파지 성공을 판정하지 않습니다. 현재 저장소에는 현장 geometry measurement record나 artifact가 없고, 이 도구들은 robot control 입력을 만들지 않습니다.
 
 생성기에는 다음 값이 필요합니다: 실물 모델명/revision과 물리 parent frame, link6 좌표계로 정리한 TCP translation (m) 및 normalized quaternion `(w,x,y,z)`, mapping/TCP 측정 근거 파일, 측정 방법·timezone이 포함된 ISO 8601 시각·확인자, translation/orientation uncertainty, 그리고 mapping 근거를 사람이 대조했다는 `--frame-mapping-reviewed` 확인. 두 근거 역할은 같은 파일에서 함께 설명해도 됩니다. 이 플래그는 검토 사실을 artifact에 기록할 뿐, 값을 승인하거나 변환의 정확성을 증명하지 않습니다. 출력 파일은 기존 파일을 덮어쓰지 않으며 관리 디렉터리 바로 아래 JSON으로만 생성됩니다. 실측 없는 예시 숫자를 넣어 실행하지 않습니다.
 
-기록 순서는 실물 변형과 기준 frame 출처 확인, TCP 및 손가락 접촉면의 치수화, 개방 폭 정의, 상태값과 실제 폭의 대응 근거 확인, 승인된 제한 시험에서 반복 오차 확인입니다. 하드웨어를 움직이는 단계는 이 문서 작성이나 MuJoCo 계산만으로 허가되지 않습니다. 감독자·중단 조건·비상 정지 절차·명령 인터페이스가 확인된 별도 승인 절차에서만 수행합니다. MuJoCo collision mesh 거리나 pose IK 수렴은 위 물리 측정값과 파지 성공을 대신하지 않습니다.
 
-저장소 MuJoCo joint origins/axes와 ROBOTIS upstream OMX-F URDF의 정적 대조는 확인됐으나, URDF 관절 제한은 MJCF 제한과 다르고 설치 장치가 이 모델 revision과 일치하는지는 검증되지 않았습니다. 현장 작성자는 이 칸을 실제 장치 모델명/공식 URDF 및 펌웨어·설정 출처로 채워야 합니다.
 
-이 정보가 확인되기 전에는 MuJoCo의 placeholder 치수나 관절 범위, LeRobot의 정규화 `*.pos`, 임의 world 좌표를 실제 장치 값으로 변환하지 않습니다. 자동 작업 adapter는 명령 접수와 terminal 결과를 구분해 제공하는 실제 인터페이스를 확인한 뒤 설계합니다.
 
 ## 6. 자료 기록 형식
 

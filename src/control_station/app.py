@@ -18,9 +18,9 @@ from control_station.act_policies import ActPolicyError, load_act_policies
 from control_station.camera_to_arm import CameraToArmError, load_camera_to_arm
 from control_station.arm_commands import ArmCommandStore
 from control_station.arm_supervisor import ArmTeleopSupervisor
+from control_station.policy_run_supervisor import PolicyRunSupervisor
 from control_station.camera_adapters import (
     OpenCVArmCameraStreamManager,
-    Ros2SimulationCameraStreamManager,
     UnconfiguredArmCameraStreamManager,
 )
 from control_station.coordinate_target_drafts import CoordinateTargetDraftStore
@@ -154,13 +154,10 @@ def main() -> None:
     server = ControlStationServer((host, port), handler)
     server.mode = mode
     server.robot_provider = provider
-    server.arm_supervisor = ArmTeleopSupervisor(
-        disabled_reason=(
-            "MuJoCo 관측 모드에서는 실물 LeRobot 텔레오퍼레이션을 사용할 수 없습니다."
-            if mode == "mujoco"
-            else None
-        )
-    )
+    server.arm_supervisor = ArmTeleopSupervisor(disabled_reason=None)
+    # One-shot LeRobot policy client started from the control station (POST /api/arm/policy/start).
+    server.policy_run_supervisor = PolicyRunSupervisor()
+    server.arm_control_lock = threading.RLock()
     head_detector_configured = any(
         os.environ.get(name, "").strip()
         for name in (
@@ -179,14 +176,19 @@ def main() -> None:
     server.parking_camera_id = os.environ.get("CONTROL_STATION_PARKING_CAMERA", "").strip() or (
         "head_camera" if parking_spot_id else None
     )
-    if mode == "mujoco":
-        raw_domain = os.environ.get("CONTROL_STATION_MOBILE_DOMAIN", os.environ.get("ROS_DOMAIN_ID"))
-        if raw_domain is None:
-            raise RuntimeError("MuJoCo 카메라 구독에 ROS domain ID를 지정해야 합니다.")
-        server.camera_manager = Ros2SimulationCameraStreamManager(int(raw_domain))
-    elif not (
+    front_camera_configured = any(
+        os.environ.get(name, "").strip()
+        for name in (
+            "CONTROL_STATION_FRONT_CAMERA",
+            "CONTROL_STATION_POLICY_FRONT_CAMERA",
+            "CONTROL_STATION_FRONT_YOLO_WEIGHTS",
+            "CONTROL_STATION_FRONT_YOLO_WORLD_PROMPTS",
+        )
+    )
+    if not (
         server.arm_supervisor.enabled
         or head_detector_configured
+        or front_camera_configured
         or server.parking_camera_id
         or os.environ.get("CONTROL_STATION_SHELF_CAMERA", "").strip()
         or os.environ.get("CONTROL_STATION_HEAD_CAMERA", "").strip().startswith("ros:")
@@ -194,7 +196,8 @@ def main() -> None:
         server.camera_manager = UnconfiguredArmCameraStreamManager()
     else:
         server.camera_manager = OpenCVArmCameraStreamManager(
-            joint_enabled=server.arm_supervisor.enabled
+            joint_enabled=server.arm_supervisor.enabled,
+            policy_active=lambda: bool(server.policy_run_supervisor.snapshot()["process_alive"]),
         )
     server.task_store = task_store
     try:
@@ -259,11 +262,7 @@ def main() -> None:
         "CONTROL_STATION_COORDINATE_DRAFT_DIR", ".control-station/coordinate-target-drafts"
     )
     server.coordinate_target_drafts = CoordinateTargetDraftStore(draft_dir)
-    mode_label = {
-        "mock": "모의",
-        "ros2": "ROS 2",
-        "mujoco": "MuJoCo 시뮬레이션 관측",
-    }[mode]
+    mode_label = {"mock": "모의", "ros2": "ROS 2"}[mode]
     print(f"관제 서버 ({mode_label} 모드): http://{host}:{port}", flush=True)
     try:
         server.serve_forever()
@@ -275,6 +274,7 @@ def main() -> None:
             server.parking_tracker.close()
         server.camera_manager.close()
         server.arm_supervisor.close()
+        server.policy_run_supervisor.close()
         server.task_orchestrator.close()
         task_store.close()
         provider.close()

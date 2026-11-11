@@ -14,7 +14,7 @@ import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 from control_station.models import (
     CameraConnectionState,
@@ -25,13 +25,7 @@ from control_station.models import (
 
 
 PIXEL_TRANSFORM_ID = "opencv-v4l2-capture-no-app-geometry-v1"
-MUJOCO_ROS_PIXEL_TRANSFORM_ID = "mujoco-ros-rgb8-to-bgr8-no-app-geometry-v1"
 MAX_OBSERVATION_IMAGE_BYTES = 64 * 1024 * 1024
-MAX_RETAINED_DEPTH_BYTES = 16 * 1024 * 1024
-MAX_DEPTH_SUMMARY_CANDIDATES = 32
-MAX_DEPTH_SUMMARY_TOTAL_PIXELS = 8_000_000
-MAX_SOURCE_STAMP_HISTORY = 64
-DEPTH_REGION_SUMMARY_POLICY_VERSION = "exact-rgb-depth-stamp-bbox-raw-summary-v1"
 COLOR_HINT_ALGORITHM_VERSION = "hsv-inner-box-thresholds-v1"
 YOLO_WORLD_REQUEST_PROMPT_POLICY_VERSION = "yolo-world-request-class-one-shot-v1"
 
@@ -151,6 +145,10 @@ class _CameraFeed:
     lent: threading.Event = field(default_factory=threading.Event)
     handed_over: threading.Event = field(default_factory=threading.Event)
     lent_reason: str = ""
+    # Set while this process holds no open capture, so another process may open the device.
+    released: threading.Event = field(default_factory=threading.Event)
+    # Requested capture size. Some sensors crop the field of view at 4:3, so a wider mode may show more.
+    capture_size: tuple[int, int] = (640, 480)
 
 
 class _YoloDetector:
@@ -341,6 +339,14 @@ class UnconfiguredArmCameraStreamManager:
                 stream_state=CameraStreamState.UNKNOWN,
                 error_message="팔 카메라 스트림을 사용하려면 --arm 모드로 실행하세요",
             ),
+            CameraSnapshot(
+                id="front_camera",
+                robot_id="arm-01",
+                position="FRONT",
+                connection_state=CameraConnectionState.UNKNOWN,
+                stream_state=CameraStreamState.UNKNOWN,
+                error_message="Front Camera 장치 경로 미설정 (CONTROL_STATION_FRONT_CAMERA)",
+            ),
         ]
 
     def frame_for(self, camera_id: str) -> bytes | None:
@@ -447,7 +453,14 @@ class _RosImageSource:
 class OpenCVArmCameraStreamManager:
     """Own configured V4L2 devices once and expose their latest JPEG frames."""
 
-    def __init__(self, joint_enabled: bool = True) -> None:
+    def __init__(
+        self, joint_enabled: bool = True, policy_active: Callable[[], bool] | None = None
+    ) -> None:
+        # The learned-policy client opens the Front Camera itself, and V4L2 lets only one
+        # process stream it, so the dashboard gives it up while a policy run is requested or alive.
+        self._policy_active = policy_active
+        self._front_policy_hold = False
+        self._policy_active_cache = (0.0, False)
         joint_device = os.environ.get(
             "CONTROL_STATION_JOINT_CAMERA",
             os.environ.get(
@@ -459,6 +472,12 @@ class OpenCVArmCameraStreamManager:
             "CONTROL_STATION_HEAD_CAMERA",
             "/dev/v4l/by-id/usb-Jieli_Technology_USB_Composite_Device-video-index0",
         ).strip()
+        front_device = os.environ.get(
+            "CONTROL_STATION_FRONT_CAMERA",
+            os.environ.get("CONTROL_STATION_POLICY_FRONT_CAMERA", ""),
+        ).strip()
+        front_weights = os.environ.get("CONTROL_STATION_FRONT_YOLO_WEIGHTS", "").strip()
+        front_prompts = os.environ.get("CONTROL_STATION_FRONT_YOLO_WORLD_PROMPTS", "").strip()
         head_weights = os.environ.get("CONTROL_STATION_HEAD_YOLO_WEIGHTS", "").strip()
         head_prompts = os.environ.get("CONTROL_STATION_HEAD_YOLO_WORLD_PROMPTS", "").strip()
         joint_weights = os.environ.get("CONTROL_STATION_JOINT_YOLO_WEIGHTS", "").strip()
@@ -484,20 +503,17 @@ class OpenCVArmCameraStreamManager:
                 ),
             ),
             "joint_camera": joint_feed,
+            "front_camera": _CameraFeed(
+                "front_camera",
+                "FRONT",
+                front_device or None,
+                detector=(
+                    _YoloDetector(front_weights, "CONTROL_STATION_FRONT_YOLO")
+                    if front_weights or front_prompts
+                    else None
+                ),
+            ),
         }
-        head_feed = self._feeds["head_camera"]
-        if joint_feed.device and head_feed.device:
-            if os.path.realpath(joint_feed.device) == os.path.realpath(head_feed.device):
-                message = (
-                    "Head Camera와 Joint Camera 경로가 같은 V4L2 장치로 연결됩니다. "
-                    "실제 장착을 확인한 뒤 CONTROL_STATION_HEAD_CAMERA와 "
-                    "CONTROL_STATION_JOINT_CAMERA를 서로 다른 장치로 설정하세요."
-                )
-                for feed in (head_feed, joint_feed):
-                    feed.device = None
-                    feed.connection_state = CameraConnectionState.DISCONNECTED
-                    feed.stream_state = CameraStreamState.ERROR
-                    feed.error_message = message
         # Optional shelf camera looking at the shelf and arms from the front; its id matches the
         # shelf_camera intrinsic calibration. Its YOLO detections are shown like the other feeds, but it has
         # no Pick & Place task observation step.
@@ -517,15 +533,39 @@ class OpenCVArmCameraStreamManager:
                 robot_id=None,  # a fixed view of the shelf, not a camera on the arm
             )
             self._feeds["shelf_camera"] = shelf_feed
-            for other in (head_feed, joint_feed):
-                if other.device and os.path.realpath(other.device) == os.path.realpath(shelf_device):
-                    shelf_feed.device = None
-                    shelf_feed.connection_state = CameraConnectionState.DISCONNECTED
-                    shelf_feed.stream_state = CameraStreamState.ERROR
-                    shelf_feed.error_message = (
-                        f"선반 카메라 경로가 {other.camera_id}와 같은 V4L2 장치입니다. "
-                        "CONTROL_STATION_SHELF_CAMERA를 다른 장치로 설정하세요."
-                    )
+        front_feed = self._feeds["front_camera"]
+        if not front_feed.device:
+            front_feed.error_message = "Front Camera 장치 경로 미설정 (CONTROL_STATION_FRONT_CAMERA)"
+        by_device: dict[str, list[_CameraFeed]] = {}
+        for feed in self._feeds.values():
+            if feed.device:
+                by_device.setdefault(os.path.realpath(feed.device), []).append(feed)
+        for shared in by_device.values():
+            if len(shared) < 2:
+                continue
+            labels = "와 ".join(f"{feed.position.title()} Camera" for feed in shared)
+            message = (
+                f"{labels} 경로가 같은 V4L2 장치로 연결됩니다. 실제 장착을 확인한 뒤 "
+                "CONTROL_STATION_HEAD_CAMERA, CONTROL_STATION_JOINT_CAMERA, "
+                "CONTROL_STATION_FRONT_CAMERA, CONTROL_STATION_SHELF_CAMERA를 서로 다른 장치로 설정하세요."
+            )
+            for feed in shared:
+                feed.device = None
+                feed.connection_state = CameraConnectionState.DISCONNECTED
+                feed.stream_state = CameraStreamState.ERROR
+                feed.error_message = message
+        for feed in self._feeds.values():
+            feed.released.set()
+            env_name = f"CONTROL_STATION_{feed.position}_CAMERA_RESOLUTION"
+            raw_size = os.environ.get(env_name, "").strip()
+            size_match = re.fullmatch(r"(\d{2,5})x(\d{2,5})", raw_size)
+            if size_match:
+                feed.capture_size = (int(size_match.group(1)), int(size_match.group(2)))
+            elif raw_size and feed.device:
+                feed.device = None
+                feed.connection_state = CameraConnectionState.DISCONNECTED
+                feed.stream_state = CameraStreamState.ERROR
+                feed.error_message = f"{env_name} 형식이 잘못되었습니다: {raw_size} (예: 1280x720)"
         self._closed = threading.Event()
         self._ros_sources: list[_RosImageSource] = []
         if any(feed.device and feed.device.startswith(ROS_SOURCE_PREFIX) for feed in self._feeds.values()):
@@ -582,6 +622,36 @@ class OpenCVArmCameraStreamManager:
             return f"카메라 자원 해제 실패: {exc}"
         return None
 
+    def _held_for_policy(self, feed: _CameraFeed) -> bool:
+        """Return whether the learned-policy client should own this camera instead."""
+        if feed.camera_id != "front_camera":
+            return False
+        if self._front_policy_hold:
+            return True
+        if self._policy_active is None:
+            return False
+        checked_at, active = self._policy_active_cache
+        now = time.monotonic()
+        if now - checked_at >= 0.2:
+            try:
+                active = bool(self._policy_active())
+            except Exception:
+                active = False
+            self._policy_active_cache = (now, active)
+        return active
+
+    def hold_front_for_policy(self, hold: bool, timeout: float = 5.0) -> bool:
+        """Close the dashboard Front Camera capture before a policy run opens the device.
+
+        Returns False when the capture was not confirmed closed within ``timeout``.
+        """
+        self._front_policy_hold = hold
+        self._policy_active_cache = (0.0, False)
+        feed = self._feeds["front_camera"]
+        if not hold or not feed.device or feed.thread is None:
+            return True
+        return feed.released.wait(timeout)
+
     def _capture_loop(self, feed: _CameraFeed) -> None:
         try:
             import cv2
@@ -609,10 +679,24 @@ class OpenCVArmCameraStreamManager:
                     feed.connection_state = CameraConnectionState.DISCONNECTED
                     feed.stream_state = CameraStreamState.STOPPED
                     feed.error_message = feed.lent_reason
+                feed.released.set()
                 feed.handed_over.set()
                 while feed.lent.is_set() and not self._closed.is_set():
                     self._closed.wait(0.2)
                 feed.handed_over.clear()
+                continue
+            # Clear before checking the hold so a concurrent hold request waits for this capture.
+            feed.released.clear()
+            if self._held_for_policy(feed):
+                feed.released.set()
+                with feed.lock:
+                    feed.detections = []  # no live frame backs the last detections while held
+                    feed.connection_state = CameraConnectionState.DISCONNECTED
+                    feed.stream_state = CameraStreamState.STOPPED
+                    feed.error_message = (
+                        "학습 정책 실행이 Front Camera를 사용하는 동안 관제 화면 수신을 멈췄습니다"
+                    )
+                self._closed.wait(0.25)
                 continue
             resolved_device = os.path.realpath(device)
             video_match = re.fullmatch(r"/dev/video(\d+)", resolved_device)
@@ -621,6 +705,7 @@ class OpenCVArmCameraStreamManager:
                     feed.connection_state = CameraConnectionState.DISCONNECTED
                     feed.stream_state = CameraStreamState.ERROR
                     feed.error_message = f"카메라 장치 경로가 없습니다: {device}"
+                feed.released.set()
                 self._closed.wait(2)
                 continue
 
@@ -638,6 +723,7 @@ class OpenCVArmCameraStreamManager:
                     feed.error_message = f"카메라 열기 실패: {exc}"
                     if release_error:
                         feed.error_message += f" · {release_error}"
+                feed.released.set()
                 self._closed.wait(2)
                 continue
             if not opened:
@@ -648,6 +734,7 @@ class OpenCVArmCameraStreamManager:
                     feed.error_message = f"카메라를 열 수 없습니다: {feed.device} (다른 프로그램 점유 여부 확인)"
                     if release_error:
                         feed.error_message += f" · {release_error}"
+                feed.released.set()
                 self._closed.wait(2)
                 continue
 
@@ -656,8 +743,8 @@ class OpenCVArmCameraStreamManager:
                 # MJPEG explicitly so simultaneous streams do not reserve the
                 # bus bandwidth required by uncompressed YUYV.
                 capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-                capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                capture.set(cv2.CAP_PROP_FRAME_WIDTH, feed.capture_size[0])
+                capture.set(cv2.CAP_PROP_FRAME_HEIGHT, feed.capture_size[1])
                 capture.set(cv2.CAP_PROP_FPS, 30)
             except Exception as exc:
                 release_error = self._release_capture(capture)
@@ -667,6 +754,7 @@ class OpenCVArmCameraStreamManager:
                     feed.error_message = f"카메라 형식 설정 실패: {exc}"
                     if release_error:
                         feed.error_message += f" · {release_error}"
+                feed.released.set()
                 self._closed.wait(2)
                 continue
             with feed.lock:
@@ -678,6 +766,8 @@ class OpenCVArmCameraStreamManager:
             capture_failure: str | None = None
             try:
                 while not self._closed.is_set() and not feed.lent.is_set():
+                    if self._held_for_policy(feed):
+                        break
                     ok, image = capture.read()
                     if not ok:
                         failed_reads += 1
@@ -703,6 +793,9 @@ class OpenCVArmCameraStreamManager:
             finally:
                 release_error = self._release_capture(capture)
                 capture_failure = capture_failure or release_error
+                feed.released.set()
+            if self._held_for_policy(feed) and not capture_failure:
+                continue  # the next pass reports the hold and waits without an error state
             if feed.lent.is_set():
                 continue  # closed on purpose; the top of the loop reports it and waits
             if not self._closed.is_set():
@@ -1084,987 +1177,3 @@ class OpenCVArmCameraStreamManager:
                 feed.connection_state = CameraConnectionState.DISCONNECTED
                 if feed.stream_state != CameraStreamState.ERROR:
                     feed.stream_state = CameraStreamState.STOPPED
-
-
-class Ros2SimulationCameraStreamManager(UnconfiguredArmCameraStreamManager):
-    """Expose one read-only MuJoCo RGB Image topic through the existing MJPEG API."""
-
-    CAMERA_ID = "mujoco_fixed_camera"
-    IMAGE_TOPIC = "/mujoco_omx/fixed_camera/color/image_raw"
-    DEPTH_TOPIC = "/mujoco_omx/fixed_camera/depth/image_raw"
-    CAMERA_INFO_TOPIC = "/mujoco_omx/fixed_camera/camera_info"
-    POINT_CLOUD_TOPIC = "/mujoco_omx/fixed_camera/points"
-    FRAME_ID = "placeholder_fixed_camera_optical_frame"
-    TARGET_FRAME_ID = "mujoco_omx/link0"
-
-    def __init__(self, domain_id: int) -> None:
-        try:
-            import rclpy
-            from rclpy.context import Context
-            from rclpy.executors import SingleThreadedExecutor
-            from rclpy.node import Node
-            from tf2_ros import Buffer, TransformListener
-            from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
-        except ImportError as exc:
-            raise RuntimeError(
-                "MuJoCo 카메라 관측에는 ROS 2 Jazzy, sensor_msgs, tf2_ros가 필요합니다."
-            ) from exc
-
-        self._context = Context()
-        self._context.init(domain_id=domain_id)
-        self._node = Node("control_station_mujoco_camera", context=self._context)
-        self._executor = SingleThreadedExecutor(context=self._context)
-        self._executor.add_node(self._node)
-        self._tf_buffer = Buffer(node=self._node)
-        self._tf_listener = TransformListener(
-            self._tf_buffer, self._node, spin_thread=False
-        )
-        self._feed = _CameraFeed(
-            self.CAMERA_ID,
-            "FIXED",
-            self.IMAGE_TOPIC,
-            error_message="MuJoCo ROS RGB frame 수신 대기",
-        )
-        self._feeds = {self.CAMERA_ID: self._feed}
-        self._source_stamp: dict[str, int] | None = None
-        self._source_frame_id: str | None = None
-        self._rgb_frame_source_headers: dict[int, dict[str, object]] = {}
-        self._rgb_stamp_occurrences: dict[tuple[int, int], int] = {}
-        self._depth_observation: dict[str, object] = {"state": "NO_SAMPLE"}
-        self._depth_received_monotonic: float | None = None
-        self._depth_frames: dict[tuple[int, int], dict[str, object]] = {}
-        self._depth_stamp_occurrences: dict[tuple[int, int], int] = {}
-        self._depth_retained_bytes = 0
-        self._camera_info_observation: dict[str, object] = {"state": "NO_SAMPLE"}
-        self._camera_info_received_monotonic: float | None = None
-        self._point_cloud_observation: dict[str, object] = {"state": "NO_SAMPLE"}
-        self._point_cloud_received_monotonic: float | None = None
-        detector_weights = os.environ.get("CONTROL_STATION_HEAD_YOLO_WEIGHTS", "").strip()
-        detector_prompts = os.environ.get(
-            "CONTROL_STATION_HEAD_YOLO_WORLD_PROMPTS", ""
-        ).strip()
-        self._detector = (
-            _YoloDetector(detector_weights, "CONTROL_STATION_HEAD_YOLO")
-            if detector_weights or detector_prompts
-            else None
-        )
-        self._detector_thread: threading.Thread | None = None
-        if self._detector is not None:
-            self._detector_thread = threading.Thread(
-                target=self._detector.load,
-                name="mujoco-fixed-camera-detector-loader",
-                daemon=True,
-            )
-            self._detector_thread.start()
-        self._closed = threading.Event()
-        self._subscription = self._node.create_subscription(
-            Image, self.IMAGE_TOPIC, self._on_image, 1
-        )
-        self._depth_subscription = self._node.create_subscription(
-            Image, self.DEPTH_TOPIC, self._on_depth, 1
-        )
-        self._camera_info_subscription = self._node.create_subscription(
-            CameraInfo, self.CAMERA_INFO_TOPIC, self._on_camera_info, 1
-        )
-        self._point_cloud_subscription = self._node.create_subscription(
-            PointCloud2, self.POINT_CLOUD_TOPIC, self._on_point_cloud, 1
-        )
-        self._point_cloud_float32 = PointField.FLOAT32
-        self._thread = threading.Thread(
-            target=self._executor.spin,
-            name="mujoco-camera-observer",
-            daemon=True,
-        )
-        self._thread.start()
-
-    def _on_image(self, message) -> None:  # type: ignore[no-untyped-def]
-        try:
-            import cv2
-            import numpy as np
-
-            width = int(message.width)
-            height = int(message.height)
-            step = int(message.step)
-            if (
-                message.encoding != "rgb8"
-                or str(message.header.frame_id) != self.FRAME_ID
-                or width <= 0
-                or height <= 0
-                or width > 8192
-                or height > 8192
-                or step < width * 3
-                or step * height > MAX_OBSERVATION_IMAGE_BYTES
-                or len(message.data) != step * height
-            ):
-                raise ValueError("지원하지 않거나 크기가 유효하지 않은 ROS RGB8 frame")
-            rows = np.frombuffer(message.data, dtype=np.uint8).reshape(height, step)
-            rgb = rows[:, : width * 3].reshape(height, width, 3)
-            bgr = np.ascontiguousarray(rgb[:, :, ::-1])
-            raw_pixels = bgr.tobytes(order="C")
-            frame_sha256 = hashlib.sha256(raw_pixels).hexdigest()
-            encoded, jpeg = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            if not encoded:
-                raise RuntimeError("ROS RGB frame의 JPEG 변환에 실패했습니다")
-            captured_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
-            captured_monotonic = time.monotonic()
-            source_stamp = self._message_stamp(message)
-            source_stamp_key = (source_stamp["sec"], source_stamp["nanosec"])
-
-            with self._feed.lock:
-                stamp_occurrence = self._increment_stamp_occurrence(
-                    self._rgb_stamp_occurrences, source_stamp_key
-                )
-                self._feed.sequence += 1
-                sequence = self._feed.sequence
-                self._feed.frame_width = width
-                self._feed.frame_height = height
-                self._feed.frame_sha256 = frame_sha256
-                self._feed.raw_frames[sequence] = (
-                    frame_sha256,
-                    raw_pixels,
-                    width,
-                    height,
-                    captured_at,
-                    captured_monotonic,
-                )
-                self._rgb_frame_source_headers[sequence] = {
-                    "source_stamp": source_stamp,
-                    "source_frame_id": str(message.header.frame_id),
-                    "stamp_occurrence": stamp_occurrence,
-                }
-                while len(self._feed.raw_frames) > 5:
-                    expired_sequence = min(self._feed.raw_frames)
-                    del self._feed.raw_frames[expired_sequence]
-                    self._rgb_frame_source_headers.pop(expired_sequence, None)
-                self._feed.frame = jpeg.tobytes()
-                self._feed.last_frame_at = captured_at
-                self._feed.last_frame_monotonic = captured_monotonic
-                self._feed.frame_times.append(captured_monotonic)
-                self._feed.frame_times = [
-                    value for value in self._feed.frame_times
-                    if captured_monotonic - value <= 2.0
-                ]
-                self._feed.connection_state = CameraConnectionState.CONNECTED
-                self._feed.stream_state = CameraStreamState.STREAMING
-                self._feed.error_message = None
-                self._source_stamp = source_stamp
-                self._source_frame_id = str(message.header.frame_id)
-        except Exception as exc:
-            with self._feed.lock:
-                self._feed.stream_state = CameraStreamState.ERROR
-                self._feed.error_message = f"MuJoCo ROS RGB frame 거부: {exc}"[:512]
-
-    @staticmethod
-    def _message_stamp(message) -> dict[str, int]:  # type: ignore[no-untyped-def]
-        result = {
-            "sec": int(message.header.stamp.sec),
-            "nanosec": int(message.header.stamp.nanosec),
-        }
-        if not 0 <= result["nanosec"] < 1_000_000_000:
-            raise ValueError("ROS source stamp nanosec 범위가 유효하지 않습니다")
-        return result
-
-    @staticmethod
-    def _increment_stamp_occurrence(
-        history: dict[tuple[int, int], int], key: tuple[int, int]
-    ) -> int:
-        occurrence = history.pop(key, 0) + 1
-        history[key] = occurrence
-        while len(history) > MAX_SOURCE_STAMP_HISTORY:
-            history.pop(next(iter(history)))
-        return occurrence
-
-    @staticmethod
-    def _rgb_header_match(
-        observation: dict[str, object],
-        *,
-        rgb_stamp: dict[str, int] | None,
-        rgb_frame_id: str | None,
-        rgb_width: int | None,
-        rgb_height: int | None,
-    ) -> str:
-        if observation.get("state") != "OBSERVED":
-            return "SOURCE_UNAVAILABLE"
-        if rgb_stamp is None or rgb_frame_id is None or rgb_width is None or rgb_height is None:
-            return "RGB_UNAVAILABLE"
-        if (
-            observation.get("source_stamp") != rgb_stamp
-            or observation.get("source_frame_id") != rgb_frame_id
-        ):
-            return "HEADER_MISMATCH"
-        if observation.get("width") != rgb_width or observation.get("height") != rgb_height:
-            return "DIMENSIONS_MISMATCH"
-        return "HEADER_AND_DIMENSIONS_MATCH"
-
-    def _on_depth(self, message) -> None:  # type: ignore[no-untyped-def]
-        try:
-            width, height, step = int(message.width), int(message.height), int(message.step)
-            encoding = str(message.encoding)
-            source_stamp = self._message_stamp(message)
-            stamp_key = (source_stamp["sec"], source_stamp["nanosec"])
-            bytes_per_pixel = {"32FC1": 4, "16UC1": 2}.get(encoding)
-            if (
-                encoding not in {"32FC1", "16UC1"}
-                or str(message.header.frame_id) != self.FRAME_ID
-                or width <= 0
-                or height <= 0
-                or width > 8192
-                or height > 8192
-                or bytes_per_pixel is None
-                or step < width * bytes_per_pixel
-                or step % bytes_per_pixel != 0
-                or step * height > MAX_OBSERVATION_IMAGE_BYTES
-                or len(message.data) != step * height
-            ):
-                raise ValueError("지원하지 않거나 크기/좌표계가 유효하지 않은 depth frame")
-            observation = {
-                "state": "OBSERVED",
-                "topic": self.DEPTH_TOPIC,
-                "encoding": encoding,
-                "width": width,
-                "height": height,
-                "step_bytes": step,
-                "data_bytes": len(message.data),
-                "is_bigendian": bool(message.is_bigendian),
-                "source_stamp": source_stamp,
-                "source_frame_id": str(message.header.frame_id),
-            }
-            retain_for_review = len(message.data) <= MAX_RETAINED_DEPTH_BYTES
-            observation["review_frame_retained"] = retain_for_review
-            with self._feed.lock:
-                stamp_occurrence = self._increment_stamp_occurrence(
-                    self._depth_stamp_occurrences, stamp_key
-                )
-            observation["source_stamp_occurrence"] = stamp_occurrence
-            payload = bytes(message.data) if retain_for_review else None
-            retained = (
-                {
-                    "encoding": encoding,
-                    "width": width,
-                    "height": height,
-                    "step_bytes": step,
-                    "data": payload,
-                    "is_bigendian": bool(message.is_bigendian),
-                    "source_stamp": source_stamp,
-                    "source_frame_id": str(message.header.frame_id),
-                    "source_stamp_occurrence": stamp_occurrence,
-                    "received_monotonic": time.monotonic(),
-                }
-                if payload is not None
-                else None
-            )
-            with self._feed.lock:
-                previous = self._depth_frames.pop(stamp_key, None)
-                if previous is not None:
-                    self._depth_retained_bytes -= len(previous["data"])
-                if retained is not None:
-                    self._depth_frames[stamp_key] = retained
-                    self._depth_retained_bytes += len(message.data)
-                    while (
-                        len(self._depth_frames) > 5
-                        or self._depth_retained_bytes > MAX_RETAINED_DEPTH_BYTES
-                    ):
-                        oldest_key = next(iter(self._depth_frames))
-                        oldest = self._depth_frames.pop(oldest_key)
-                        self._depth_retained_bytes -= len(oldest["data"])
-                self._depth_observation = observation
-                self._depth_received_monotonic = time.monotonic()
-        except Exception as exc:
-            try:
-                failed_stamp_key = (
-                    int(message.header.stamp.sec),
-                    int(message.header.stamp.nanosec),
-                )
-            except Exception:
-                failed_stamp_key = None
-            with self._feed.lock:
-                if failed_stamp_key is not None:
-                    previous = self._depth_frames.pop(failed_stamp_key, None)
-                    if previous is not None:
-                        self._depth_retained_bytes -= len(previous["data"])
-                self._depth_observation = {
-                    "state": "INVALID",
-                    "topic": self.DEPTH_TOPIC,
-                    "message": str(exc)[:256],
-                }
-                self._depth_received_monotonic = None
-
-    def summarize_detection_depth(
-        self, camera: CameraSnapshot, candidates: list[dict[str, object]]
-    ) -> dict[str, object]:
-        """Summarize raw depth samples only for detections on the exact RGB header."""
-        result: dict[str, object] = {
-            "schema_version": 1,
-            "policy_version": DEPTH_REGION_SUMMARY_POLICY_VERSION,
-            "candidate_limit": MAX_DEPTH_SUMMARY_CANDIDATES,
-            "summary_pixel_limit": MAX_DEPTH_SUMMARY_TOTAL_PIXELS,
-            "review_required": True,
-            "used_for_selection": False,
-            "target_pose_use": False,
-            "camera_id": camera.id,
-            "rgb_frame_sequence": camera.frame_sequence,
-            "rgb_frame_sha256": camera.frame_sha256,
-            "rgb_source_stamp": camera.source_stamp,
-            "rgb_source_frame_id": camera.source_frame_id,
-            "candidates": [],
-        }
-        if camera.position != "FIXED" or camera.id != self.CAMERA_ID:
-            result["state"] = "CAMERA_NOT_SUPPORTED"
-            return result
-        if camera.frame_freshness.value != "FRESH" or camera.source_stamp is None:
-            result["state"] = "RGB_FRAME_UNAVAILABLE"
-            return result
-        if not candidates:
-            result["state"] = "NO_CANDIDATES"
-            return result
-        if len(candidates) > MAX_DEPTH_SUMMARY_CANDIDATES:
-            result["state"] = "CANDIDATE_LIMIT_EXCEEDED"
-            return result
-        with self._feed.lock:
-            rgb_frame = self._feed.raw_frames.get(camera.frame_sequence)
-            if rgb_frame is None or rgb_frame[0] != camera.frame_sha256:
-                result["state"] = "RGB_FRAME_NOT_RETAINED"
-                return result
-            rgb_header = self._rgb_frame_source_headers.get(camera.frame_sequence)
-            if (
-                rgb_header is None
-                or rgb_header.get("source_stamp") != camera.source_stamp
-                or rgb_header.get("source_frame_id") != camera.source_frame_id
-            ):
-                result["state"] = "RGB_HEADER_MISMATCH"
-                return result
-            if rgb_header.get("stamp_occurrence") != 1:
-                result["state"] = "RGB_STAMP_NOT_UNIQUE"
-                return result
-            rgb_age = time.monotonic() - rgb_frame[5]
-            if rgb_age > 2.0:
-                result["state"] = "RGB_FRAME_STALE"
-                return result
-        stamp = camera.source_stamp
-        stamp_key = (int(stamp["sec"]), int(stamp["nanosec"]))
-        with self._feed.lock:
-            depth_frame = self._depth_frames.get(stamp_key)
-            if depth_frame is None:
-                result["state"] = "NO_EXACT_DEPTH_FRAME"
-                return result
-            frame = dict(depth_frame)
-        if time.monotonic() - float(frame["received_monotonic"]) > 2.0:
-            result["state"] = "DEPTH_FRAME_STALE"
-            return result
-        if (
-            frame["source_stamp"] != camera.source_stamp
-            or frame["source_frame_id"] != camera.source_frame_id
-        ):
-            result["state"] = "DEPTH_HEADER_MISMATCH"
-            return result
-        if frame["source_stamp_occurrence"] != 1:
-            result["state"] = "DEPTH_STAMP_NOT_UNIQUE"
-            return result
-        if frame["width"] != camera.frame_width or frame["height"] != camera.frame_height:
-            result["state"] = "DEPTH_DIMENSIONS_MISMATCH"
-            return result
-
-        try:
-            import numpy as np
-        except ImportError:
-            result["state"] = "NUMPY_UNAVAILABLE"
-            return result
-        encoding = str(frame["encoding"])
-        bytes_per_pixel = {"32FC1": 4, "16UC1": 2}.get(encoding)
-        width = int(frame["width"])
-        height = int(frame["height"])
-        step = int(frame["step_bytes"])
-        if bytes_per_pixel is None or step % bytes_per_pixel != 0:
-            result["state"] = "DEPTH_ENCODING_UNSUPPORTED"
-            return result
-        byte_order = ">" if frame["is_bigendian"] else "<"
-        dtype = np.dtype(f"{byte_order}{'f4' if encoding == '32FC1' else 'u2'}")
-        row_values = step // bytes_per_pixel
-        image = np.frombuffer(frame["data"], dtype=dtype).reshape(height, row_values)[:, :width]
-        pixel_summaries: list[dict[str, object]] = []
-        summarized_pixel_count = 0
-        for index, candidate in enumerate(candidates):
-            if (
-                candidate.get("camera_id") != camera.id
-                or candidate.get("frame_sequence") != camera.frame_sequence
-                or candidate.get("captured_at") != camera.last_frame_at
-                or candidate.get("frame_sha256") != camera.frame_sha256
-                or candidate.get("pixel_transform_id") != camera.pixel_transform_id
-                or candidate.get("frame_width") != width
-                or candidate.get("frame_height") != height
-            ):
-                pixel_summaries.append(
-                    {"candidate_index": index, "state": "CANDIDATE_PROVENANCE_MISMATCH"}
-                )
-                continue
-            bbox = candidate.get("bbox_xyxy_px")
-            if (
-                not isinstance(bbox, list)
-                or len(bbox) != 4
-                or any(
-                    isinstance(value, bool)
-                    or not isinstance(value, (int, float))
-                    or not math.isfinite(value)
-                    for value in bbox
-                )
-            ):
-                pixel_summaries.append({"candidate_index": index, "state": "INVALID_BBOX"})
-                continue
-            x1, y1, x2, y2 = (float(value) for value in bbox)
-            if (
-                x1 < 0
-                or y1 < 0
-                or x2 > width
-                or y2 > height
-                or x2 <= x1
-                or y2 <= y1
-            ):
-                pixel_summaries.append({"candidate_index": index, "state": "BBOX_OUT_OF_FRAME"})
-                continue
-            left, top = math.floor(x1), math.floor(y1)
-            right, bottom = math.ceil(x2), math.ceil(y2)
-            bbox_pixel_count = (right - left) * (bottom - top)
-            if summarized_pixel_count + bbox_pixel_count > MAX_DEPTH_SUMMARY_TOTAL_PIXELS:
-                pixel_summaries.append(
-                    {"candidate_index": index, "state": "SUMMARY_PIXEL_BUDGET_EXCEEDED"}
-                )
-                continue
-            summarized_pixel_count += bbox_pixel_count
-            region = image[top:bottom, left:right]
-            finite = np.isfinite(region)
-            finite_values = region[finite]
-            positive_values = finite_values[finite_values > 0]
-            zero_count = int(np.count_nonzero(finite_values == 0))
-            summary: dict[str, object] = {
-                "candidate_index": index,
-                "state": (
-                    "POSITIVE_FINITE_SAMPLES"
-                    if positive_values.size
-                    else "NO_POSITIVE_FINITE_SAMPLES"
-                ),
-                "bbox_xyxy_px": [left, top, right, bottom],
-                "pixel_count": int(region.size),
-                "finite_sample_count": int(finite_values.size),
-                "positive_sample_count": int(positive_values.size),
-                "nonpositive_sample_count": int(finite_values.size - positive_values.size),
-                "zero_sample_count": zero_count,
-                "nonfinite_sample_count": int(region.size - finite_values.size),
-                "value_encoding": encoding,
-                "numeric_unit_status": "NOT_INTERPRETED",
-                "sample_policy": "FINITE_POSITIVE_RAW_VALUES_ONLY",
-                "review_required": True,
-                "used_for_selection": False,
-                "target_pose_use": False,
-            }
-            if positive_values.size:
-                summary.update(
-                    {
-                        "raw_value_min": float(np.min(positive_values)),
-                        "raw_value_median": float(np.median(positive_values)),
-                        "raw_value_max": float(np.max(positive_values)),
-                    }
-                )
-            pixel_summaries.append(summary)
-        result.update(
-            {
-                "state": "SUMMARIZED",
-                "depth_source_stamp": frame["source_stamp"],
-                "depth_source_frame_id": frame["source_frame_id"],
-                "depth_source_stamp_occurrence": frame["source_stamp_occurrence"],
-                "depth_width": width,
-                "depth_height": height,
-                "depth_encoding": encoding,
-                "depth_is_bigendian": bool(frame["is_bigendian"]),
-                "summarized_pixel_count": summarized_pixel_count,
-                "rgb_frame_age_seconds": round(rgb_age, 3),
-                "depth_received_age_seconds": round(
-                    time.monotonic() - float(frame["received_monotonic"]), 3
-                ),
-                "depth_data_sha256": hashlib.sha256(frame["data"]).hexdigest(),
-                "candidates": pixel_summaries,
-            }
-        )
-        return result
-
-    def _on_camera_info(self, message) -> None:  # type: ignore[no-untyped-def]
-        try:
-            width, height = int(message.width), int(message.height)
-            distortion_model = str(message.distortion_model)
-            d = [float(value) for value in message.d]
-            k = [float(value) for value in message.k]
-            r = [float(value) for value in message.r]
-            p = [float(value) for value in message.p]
-            binning_x, binning_y = int(message.binning_x), int(message.binning_y)
-            roi_x, roi_y = int(message.roi.x_offset), int(message.roi.y_offset)
-            roi_width, roi_height = int(message.roi.width), int(message.roi.height)
-            if (
-                str(message.header.frame_id) != self.FRAME_ID
-                or width <= 0
-                or height <= 0
-                or width > 8192
-                or height > 8192
-                or len(distortion_model) > 64
-                or len(d) > 64
-                or len(k) != 9
-                or len(r) != 9
-                or len(p) != 12
-                or not all(math.isfinite(value) for value in [*d, *k, *r, *p])
-                or binning_x < 0
-                or binning_y < 0
-                or min(roi_x, roi_y, roi_width, roi_height) < 0
-                or (roi_width > 0 and roi_x + roi_width > width)
-                or (roi_height > 0 and roi_y + roi_height > height)
-            ):
-                raise ValueError("CameraInfo 크기, 계수 또는 좌표계가 유효하지 않습니다")
-            observation = {
-                "state": "OBSERVED",
-                "topic": self.CAMERA_INFO_TOPIC,
-                "width": width,
-                "height": height,
-                "distortion_model": distortion_model,
-                "d": d,
-                "k": k,
-                "r": r,
-                "p": p,
-                "binning_x": binning_x,
-                "binning_y": binning_y,
-                "roi": {
-                    "x_offset": roi_x,
-                    "y_offset": roi_y,
-                    "height": roi_height,
-                    "width": roi_width,
-                    "do_rectify": bool(message.roi.do_rectify),
-                },
-                "source_stamp": self._message_stamp(message),
-                "source_frame_id": str(message.header.frame_id),
-                "calibration_use": "OBSERVATION_ONLY_UNVALIDATED",
-            }
-            with self._feed.lock:
-                self._camera_info_observation = observation
-                self._camera_info_received_monotonic = time.monotonic()
-        except Exception as exc:
-            with self._feed.lock:
-                self._camera_info_observation = {
-                    "state": "INVALID",
-                    "topic": self.CAMERA_INFO_TOPIC,
-                    "message": str(exc)[:256],
-                    "calibration_use": "OBSERVATION_ONLY_UNVALIDATED",
-                }
-                self._camera_info_received_monotonic = None
-
-    def _on_point_cloud(self, message) -> None:  # type: ignore[no-untyped-def]
-        try:
-            width, height = int(message.width), int(message.height)
-            point_step, row_step = int(message.point_step), int(message.row_step)
-            data_bytes = len(message.data)
-            if len(message.fields) > 64:
-                raise ValueError("PointCloud2 field 개수가 제한을 초과했습니다")
-            fields = {str(field.name): field for field in message.fields}
-            if (
-                str(message.header.frame_id) != self.FRAME_ID
-                or width <= 0
-                or height <= 0
-                or width > 8192
-                or height > 8192
-                or point_step <= 0
-                or row_step < width * point_step
-                or row_step * height > MAX_OBSERVATION_IMAGE_BYTES
-                or data_bytes != row_step * height
-                or len(fields) != len(message.fields)
-                or any(
-                    name not in fields
-                    or int(fields[name].datatype) != self._point_cloud_float32
-                    or int(fields[name].count) != 1
-                    or int(fields[name].offset) < 0
-                    or int(fields[name].offset) + 4 > point_step
-                    for name in ("x", "y", "z")
-                )
-            ):
-                raise ValueError("지원하지 않거나 크기/필드/좌표계가 유효하지 않은 PointCloud2")
-            observation = {
-                "state": "OBSERVED",
-                "topic": self.POINT_CLOUD_TOPIC,
-                "width": width,
-                "height": height,
-                "fields": [
-                    {
-                        "name": str(field.name),
-                        "offset": int(field.offset),
-                        "datatype": int(field.datatype),
-                        "count": int(field.count),
-                    }
-                    for field in message.fields
-                ],
-                "point_step_bytes": point_step,
-                "row_step_bytes": row_step,
-                "data_bytes": data_bytes,
-                "is_bigendian": bool(message.is_bigendian),
-                "is_dense": bool(message.is_dense),
-                "source_stamp": self._message_stamp(message),
-                "source_frame_id": str(message.header.frame_id),
-                "coordinates_use": "SIMULATION_CAMERA_FRAME_OBSERVATION_ONLY",
-            }
-            with self._feed.lock:
-                self._point_cloud_observation = observation
-                self._point_cloud_received_monotonic = time.monotonic()
-        except Exception as exc:
-            with self._feed.lock:
-                self._point_cloud_observation = {
-                    "state": "INVALID",
-                    "topic": self.POINT_CLOUD_TOPIC,
-                    "message": str(exc)[:256],
-                    "coordinates_use": "SIMULATION_CAMERA_FRAME_OBSERVATION_ONLY",
-                }
-                self._point_cloud_received_monotonic = None
-
-    def snapshots(self) -> list[CameraSnapshot]:
-        with self._feed.lock:
-            now = time.monotonic()
-            age = (
-                now - self._feed.last_frame_monotonic
-                if self._feed.last_frame_monotonic is not None
-                else None
-            )
-            freshness = (
-                FrameFreshness.UNKNOWN
-                if age is None
-                else FrameFreshness.FRESH if age <= 2.0 else FrameFreshness.STALE
-            )
-            frame_rate = None
-            if len(self._feed.frame_times) >= 2:
-                elapsed = self._feed.frame_times[-1] - self._feed.frame_times[0]
-                if elapsed > 0:
-                    frame_rate = round((len(self._feed.frame_times) - 1) / elapsed, 1)
-            depth_observation = dict(self._depth_observation)
-            depth_observation["rgb_header_dimension_match"] = self._rgb_header_match(
-                depth_observation,
-                rgb_stamp=self._source_stamp,
-                rgb_frame_id=self._source_frame_id,
-                rgb_width=self._feed.frame_width,
-                rgb_height=self._feed.frame_height,
-            )
-            if self._depth_received_monotonic is not None:
-                depth_observation["freshness"] = (
-                    "FRESH" if now - self._depth_received_monotonic <= 2.0 else "STALE"
-                )
-            camera_info_observation = dict(self._camera_info_observation)
-            camera_info_observation["rgb_header_dimension_match"] = self._rgb_header_match(
-                camera_info_observation,
-                rgb_stamp=self._source_stamp,
-                rgb_frame_id=self._source_frame_id,
-                rgb_width=self._feed.frame_width,
-                rgb_height=self._feed.frame_height,
-            )
-            if self._camera_info_received_monotonic is not None:
-                camera_info_observation["freshness"] = (
-                    "FRESH" if now - self._camera_info_received_monotonic <= 2.0 else "STALE"
-                )
-            point_cloud_observation = dict(self._point_cloud_observation)
-            point_cloud_observation["rgb_header_dimension_match"] = self._rgb_header_match(
-                point_cloud_observation,
-                rgb_stamp=self._source_stamp,
-                rgb_frame_id=self._source_frame_id,
-                rgb_width=self._feed.frame_width,
-                rgb_height=self._feed.frame_height,
-            )
-            if self._point_cloud_received_monotonic is not None:
-                point_cloud_observation["freshness"] = (
-                    "FRESH" if now - self._point_cloud_received_monotonic <= 2.0 else "STALE"
-                )
-            tf_observation = self._camera_to_base_tf_observation(
-                rgb_stamp=self._source_stamp,
-                rgb_frame_id=self._source_frame_id,
-                rgb_received_monotonic=self._feed.last_frame_monotonic,
-            )
-            return [
-                CameraSnapshot(
-                    id=self.CAMERA_ID,
-                    robot_id="arm-01",
-                    position="FIXED",
-                    connection_state=self._feed.connection_state,
-                    stream_state=(
-                        self._feed.stream_state
-                        if self._feed.frame is not None
-                        or self._feed.stream_state == CameraStreamState.ERROR
-                        else CameraStreamState.NO_FRAMES
-                    ),
-                    frame_freshness=freshness,
-                    last_frame_at=self._feed.last_frame_at,
-                    frame_sequence=self._feed.sequence,
-                    frame_width=self._feed.frame_width,
-                    frame_height=self._feed.frame_height,
-                    frame_sha256=self._feed.frame_sha256,
-                    pixel_transform_id=MUJOCO_ROS_PIXEL_TRANSFORM_ID,
-                    source_stamp=self._source_stamp,
-                    source_frame_id=self._source_frame_id,
-                    depth_observation=depth_observation,
-                    camera_info_observation=camera_info_observation,
-                    point_cloud_observation=point_cloud_observation,
-                    tf_observation=tf_observation,
-                    frame_rate=frame_rate,
-                    error_message=(
-                        self._feed.error_message
-                        or (self._detector.error_message if self._detector else None)
-                    ),
-                    detector_state=(self._detector.state if self._detector else None),
-                    detector_model_type=(
-                        self._detector.detector_model_type if self._detector else None
-                    ),
-                    detector_prompts=(
-                        list(self._detector.prompts) if self._detector else None
-                    ),
-                    detector_classes=(
-                        list(self._detector.class_names)
-                        if self._detector and self._detector.state == "ready"
-                        else None
-                    ),
-                    detector_confidence_threshold=(
-                        self._detector.confidence_threshold if self._detector else None
-                    ),
-                    detector_weights_sha256=(
-                        self._detector.weights_sha256 if self._detector else None
-                    ),
-                    detector_inference_image_size=(
-                        self._detector.inference_image_size if self._detector else None
-                    ),
-                    detector_device=(self._detector.device if self._detector else None),
-                    detector_ultralytics_version=(
-                        self._detector.ultralytics_version if self._detector else None
-                    ),
-                    stream_url=(
-                        f"/streams/{self.CAMERA_ID}.mjpg"
-                        if self._feed.frame is not None else None
-                    ),
-                )
-            ]
-
-    def _camera_to_base_tf_observation(
-        self,
-        *,
-        rgb_stamp: dict[str, int] | None,
-        rgb_frame_id: str | None,
-        rgb_received_monotonic: float | None,
-    ) -> dict[str, object]:
-        base = {
-            "target_frame_id": self.TARGET_FRAME_ID,
-            "source_frame_id": rgb_frame_id,
-            "source_stamp": rgb_stamp,
-            "transform_basis": "SIMULATION_ONLY_PLACEHOLDER",
-            "target_pose_use": False,
-        }
-        if rgb_stamp is None or rgb_frame_id is None or rgb_received_monotonic is None:
-            return {"state": "NO_RGB", **base}
-        age = time.monotonic() - rgb_received_monotonic
-        if age > 2.0:
-            return {"state": "RGB_STALE", "rgb_age_seconds": round(age, 3), **base}
-        try:
-            from rclpy.duration import Duration
-            from rclpy.time import Time
-            from builtin_interfaces.msg import Time as TimeMessage
-
-            stamp_message = TimeMessage(
-                sec=rgb_stamp["sec"], nanosec=rgb_stamp["nanosec"]
-            )
-            transform = self._tf_buffer.lookup_transform(
-                self.TARGET_FRAME_ID,
-                rgb_frame_id,
-                Time.from_msg(stamp_message),
-                timeout=Duration(seconds=0.0),
-            )
-            translation = transform.transform.translation
-            rotation = transform.transform.rotation
-            values = [
-                float(translation.x),
-                float(translation.y),
-                float(translation.z),
-                float(rotation.x),
-                float(rotation.y),
-                float(rotation.z),
-                float(rotation.w),
-            ]
-            if not all(math.isfinite(value) for value in values):
-                raise ValueError("TF returned non-finite transform values")
-            return {
-                "state": "AVAILABLE",
-                **base,
-                "transform_stamp": self._message_stamp(transform),
-                "translation_xyz_m": values[:3],
-                "rotation_xyzw": values[3:],
-                "rgb_age_seconds": round(age, 3),
-            }
-        except Exception as exc:
-            return {
-                "state": "LOOKUP_FAILED",
-                **base,
-                "error_type": type(exc).__name__,
-                "rgb_age_seconds": round(age, 3),
-            }
-
-    def frame_for(self, camera_id: str) -> bytes | None:
-        if camera_id != self.CAMERA_ID:
-            return None
-        with self._feed.lock:
-            return self._feed.frame
-
-    def detect_for_observation(self, camera: CameraSnapshot) -> CameraSnapshot:
-        """Run the configured detector on the exact retained frame in a task snapshot."""
-        if camera.id != self.CAMERA_ID:
-            raise ValueError("camera stream not found")
-        detector = self._detector
-        if detector is None:
-            raise RuntimeError("MuJoCo fixed camera detector is not configured")
-        if detector.state != "ready":
-            raise RuntimeError(detector.error_message or "MuJoCo detector is not ready")
-        if (
-            isinstance(camera.frame_sequence, bool)
-            or not isinstance(camera.frame_sequence, int)
-            or camera.frame_sequence <= 0
-            or not isinstance(camera.frame_sha256, str)
-        ):
-            raise ValueError("requested observation has no frame sequence/hash")
-        with self._feed.lock:
-            captured = self._feed.raw_frames.get(camera.frame_sequence)
-            if captured is None or captured[0] != camera.frame_sha256:
-                raise RuntimeError("requested observation frame is no longer retained")
-            frame_sha256, raw_pixels, width, height, captured_at, captured_monotonic = captured
-        if (
-            captured_at != camera.last_frame_at
-            or width != camera.frame_width
-            or height != camera.frame_height
-        ):
-            raise RuntimeError("requested observation frame provenance changed")
-        try:
-            import numpy as np
-        except ImportError as exc:
-            raise RuntimeError("NumPy is required for detector inference") from exc
-        image = np.frombuffer(raw_pixels, dtype=np.uint8).reshape((height, width, 3)).copy()
-        detections = detector.detect(image)
-        for detection in detections:
-            detection.update(
-                {
-                    "camera_id": camera.id,
-                    "captured_at": captured_at,
-                    "frame_sequence": camera.frame_sequence,
-                    "frame_sha256": frame_sha256,
-                    "pixel_transform_id": camera.pixel_transform_id,
-                }
-            )
-        freshness = (
-            FrameFreshness.FRESH
-            if time.monotonic() - captured_monotonic <= 2.0
-            else FrameFreshness.STALE
-        )
-        with self._feed.lock:
-            current_connection_state = self._feed.connection_state
-            current_stream_state = self._feed.stream_state
-        return replace(
-            camera,
-            connection_state=current_connection_state,
-            stream_state=current_stream_state,
-            frame_freshness=freshness,
-            detector_state=detector.state,
-            detector_model_type=detector.detector_model_type,
-            detector_prompts=list(detector.prompts),
-            detector_classes=list(detector.class_names),
-            detector_confidence_threshold=detector.confidence_threshold,
-            detector_weights_sha256=detector.weights_sha256,
-            detector_inference_image_size=detector.inference_image_size,
-            detector_device=detector.device,
-            detector_ultralytics_version=detector.ultralytics_version,
-            detector_inference_frame_sequence=camera.frame_sequence,
-            detections=detections,
-        )
-
-    def detect_for_prompt(self, camera: CameraSnapshot, prompt: str) -> CameraSnapshot:
-        if camera.id != self.CAMERA_ID:
-            raise ValueError("camera stream not found")
-        detector = self._detector
-        if detector is None or detector.detector_model_type != "YOLO_WORLD_OPEN_VOCAB":
-            raise RuntimeError("MuJoCo fixed camera has no YOLO-World detector")
-        if (
-            isinstance(camera.frame_sequence, bool)
-            or not isinstance(camera.frame_sequence, int)
-            or camera.frame_sequence <= 0
-            or not isinstance(camera.frame_sha256, str)
-        ):
-            raise ValueError("requested observation has no frame sequence/hash")
-        with self._feed.lock:
-            captured = self._feed.raw_frames.get(camera.frame_sequence)
-            if captured is None or captured[0] != camera.frame_sha256:
-                raise RuntimeError("requested observation frame is no longer retained")
-            frame_sha256, raw_pixels, width, height, captured_at, captured_monotonic = captured
-        if (
-            captured_at != camera.last_frame_at
-            or width != camera.frame_width
-            or height != camera.frame_height
-        ):
-            raise RuntimeError("requested observation frame provenance changed")
-        try:
-            import numpy as np
-        except ImportError as exc:
-            raise RuntimeError("NumPy is required for request-prompt inference") from exc
-        image = np.frombuffer(raw_pixels, dtype=np.uint8).reshape((height, width, 3)).copy()
-        detections = detector.detect_for_prompt(image, prompt)
-        for detection in detections:
-            detection.update(
-                {
-                    "camera_id": camera.id,
-                    "captured_at": captured_at,
-                    "frame_sequence": camera.frame_sequence,
-                    "frame_sha256": frame_sha256,
-                    "pixel_transform_id": camera.pixel_transform_id,
-                }
-            )
-        freshness = (
-            FrameFreshness.FRESH
-            if time.monotonic() - captured_monotonic <= 2.0
-            else FrameFreshness.STALE
-        )
-        with self._feed.lock:
-            current_connection_state = self._feed.connection_state
-            current_stream_state = self._feed.stream_state
-        return replace(
-            camera,
-            connection_state=current_connection_state,
-            stream_state=current_stream_state,
-            frame_freshness=freshness,
-            detector_state=detector.state,
-            detector_model_type=detector.detector_model_type,
-            detector_prompts=list(detector.prompts),
-            detector_classes=[prompt.strip()],
-            detector_confidence_threshold=detector.confidence_threshold,
-            detector_weights_sha256=detector.weights_sha256,
-            detector_inference_image_size=detector.inference_image_size,
-            detector_device=detector.device,
-            detector_ultralytics_version=detector.ultralytics_version,
-            detector_inference_frame_sequence=camera.frame_sequence,
-            detections=detections,
-        )
-
-    def sequence_for(self, camera_id: str) -> int:
-        if camera_id != self.CAMERA_ID:
-            return -1
-        with self._feed.lock:
-            return self._feed.sequence
-
-    def save_observation_frame(
-        self, camera_id: str, frame_sequence: int, frame_sha256: str, task_id: str
-    ) -> dict[str, object]:
-        if camera_id != self.CAMERA_ID:
-            raise ValueError("camera stream not found")
-        return OpenCVArmCameraStreamManager.save_observation_frame(
-            self, camera_id, frame_sequence, frame_sha256, task_id
-        )
-
-    def delete_observation_frame(self, relative_path: str) -> None:
-        OpenCVArmCameraStreamManager.delete_observation_frame(self, relative_path)
-
-    def close(self) -> None:
-        self._closed.set()
-        self._executor.shutdown(timeout_sec=2.0)
-        self._executor.remove_node(self._node)
-        self._node.destroy_node()
-        self._thread.join(timeout=2.0)
-        if self._detector_thread is not None:
-            self._detector_thread.join(timeout=2.0)
-        self._context.try_shutdown()

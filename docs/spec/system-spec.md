@@ -16,7 +16,6 @@
 
 - 이동 로봇과 로봇팔의 연결 및 실행 상태 조회
 - 작업 생성, 명시적 실행, 진행 상태·최종 결과·이력 조회
-- 제한된 자연어 작업 입력을 검토용 구조화 초안으로 변환 (현재 parser는 상자/병·일부 색상·숫자 및 일부 한국어 서수 층·목적지 표현을 지원하고, Head 또는 MuJoCo simulation fixed camera의 ready YOLO-World가 있을 때만 단일 미등록 한국어 대상구를 검토용 one-shot prompt 초안으로 지원)
 - 이동 명령의 접수와 최종 결과 확인
 - 이동 성공이 확인된 작업에서만 팔 작업 시작
 - 작업·단계별 오류, timeout, 취소 및 결과 불명 처리
@@ -85,7 +84,6 @@
 
 ### Camera
 
-필수 개념은 `id`, `robot_id`, `position`(`HEAD`, `JOINT` 또는 simulation-only `FIXED`), `connection_state`, `stream_state`, `frame_freshness`, `last_frame_at`, 선택적 `frame_rate`, `error_message`, `reconnect_state`입니다. `FIXED`는 현재 MuJoCo 시뮬레이션 카메라 역할을 식별하며 실물 고정 카메라 연결을 의미하지 않습니다.
 
 ## 4. 상태와 전이 규칙
 
@@ -218,7 +216,6 @@ NEEDS_INTERVENTION → CANCELED | FAILED | RUNNING
 | `POST` | `/api/tasks/{task_id}/start` | 실행 요청 접수; 신규 요청은 `202 Accepted`, 같은 활성 작업의 중복 요청은 현재 상태와 `200 OK` 반환 |
 | `POST` | `/api/tasks/{task_id}/cancel` | 취소 요청 접수; 진행 중 작업은 `202 Accepted`; 미실행 작업의 즉시 취소 또는 반복 취소는 현재 상태와 `200 OK` 반환; 실행 중 정지 결과는 별도 확인 |
 
-비동기 실행 API의 `202` 응답은 “접수됨”을 뜻하며 작업 완료를 뜻하지 않습니다. 잘못된 필드·형식은 `400`, 없는 작업 ID는 `404`, 로봇 사용 중·상태 충돌·중복 실행은 `409`, 지원하지 않는 미디어 형식은 `415`로 응답합니다. 현재 task start/cancel, task target-observation, task target-selection, task projection-draft 경로의 오류 응답은 안정적인 `error_code`와 사람이 읽을 수 있는 `message`, 기존 클라이언트 호환용 `error`를 함께 반환합니다. 카메라의 GET target-observation과 나머지 API 경로는 아직 이 계약으로 일괄 정리되지 않았습니다. 작업 실행이 접수된 뒤 생기는 장치 오류는 HTTP 오류가 아니라 task/step 상태와 이력 이벤트로 반환합니다. 현재 task start/cancel은 `mock` mode 전용입니다. `mujoco` mode는 명시적 ROS domain에서 MuJoCo joint/action 상태와 fixed RGB/depth/CameraInfo metadata, 선택형 XYZ point-cloud metadata를 read-only 관측하고 `--arm` 물리 텔레오퍼레이션·물리 카메라를 비활성화하며, ROS 2 hardware-status mode에서도 task 실행 API를 거부합니다. camera metadata와 XYZ cloud field observation은 calibration validity, sample synchronization, object localization 또는 3D target을 뜻하지 않습니다.
 
 `destination`, `arm_task`의 세부 JSON 스키마, 페이지네이션, 인증, API 버저닝은 실제 목적지 표현과 배포 범위를 확정한 후 정합니다. 현재 `pick_request` 입력은 `category`(필수 문자열), `color`(선택 문자열), `shelf_level`(선택 1–999,999,999 정수)를 저장합니다. category는 `TARGET_OBSERVED` 감사 이벤트로 카메라 후보 분류에 사용됩니다. 색상은 미보정 HSV hint와, 선반 층은 명시적으로 활성화된 camera ROI draft와 비교한 검토 상태를 선택적으로 기록할 수 있지만 두 결과 모두 후보를 필터링·선택하지 않습니다. 이 감사 기록은 실행 단계 완료·3D 위치 추정·로봇 제어에 연결되지 않습니다. 로컬 개발 단계의 localhost 바인딩을 외부 네트워크 접근이 가능한 서비스로 간주하지 않습니다.
 

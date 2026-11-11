@@ -106,11 +106,6 @@ def target_observation(
         status = "PIXEL_TRANSFORM_UNKNOWN"
     elif not isinstance(camera.frame_sha256, str) or not SHA256.fullmatch(camera.frame_sha256):
         status = "FRAME_PROVENANCE_UNKNOWN"
-    elif (
-        camera.position == "FIXED"
-        and camera.detector_inference_frame_sequence != camera.frame_sequence
-    ):
-        status = "DETECTOR_NOT_RUN"
     elif camera.detector_classes is not None and not any(
         name.casefold() == target_class.casefold() for name in camera.detector_classes
     ):
@@ -155,25 +150,12 @@ def target_observation(
         "frame_freshness": camera.frame_freshness.value,
         "frame_sequence": camera.frame_sequence,
         "captured_at": camera.last_frame_at,
-        "source_stamp": camera.source_stamp,
-        "source_frame_id": camera.source_frame_id,
-        "source_stamp_clock_status": (
-            "ROS_SOURCE_HEADER_NOT_ALIGNED_WITH_HOST_CLOCK"
-            if camera.source_stamp is not None
-            else "NOT_PROVIDED"
-        ),
         "frame_width": camera.frame_width,
         "frame_height": camera.frame_height,
         "frame_sha256": camera.frame_sha256,
         "pixel_transform_id": camera.pixel_transform_id,
         "candidate_count": candidate_count,
         "candidates": candidates,
-        "depth_region_observation": {
-            "state": "NOT_REQUESTED",
-            "review_required": True,
-            "used_for_selection": False,
-            "target_pose_use": False,
-        },
         "decision_scope": "OBSERVATION_ONLY",
         "arm_command_sent": False,
     }
@@ -618,24 +600,7 @@ def _observe_with_detectors(
     request_prompt_error: str | None = None
     fixed_detector_attempted = False
     fixed_detector_error: str | None = None
-    if (
-        camera.position == "FIXED"
-        and camera.detector_state == "ready"
-        and camera.connection_state.value == "CONNECTED"
-        and camera.stream_state.value == "STREAMING"
-        and camera.frame_freshness.value == "FRESH"
-        and isinstance(camera.frame_sequence, int)
-        and not isinstance(camera.frame_sequence, bool)
-        and camera.frame_sequence > 0
-        and isinstance(camera.frame_sha256, str)
-    ):
-        detect_observation = getattr(h.app.camera_manager, "detect_for_observation", None)
-        if callable(detect_observation):
-            fixed_detector_attempted = True
-            try:
-                camera = detect_observation(camera)
-            except Exception as exc:
-                fixed_detector_error = f"{type(exc).__name__}: {exc}"[:512]
+    # The MuJoCo fixed camera (its own inference path) was removed on main; only request prompts remain.
     if (
         camera.detector_state == "ready"
         and camera.detector_model_type == "YOLO_WORLD_OPEN_VOCAB"
@@ -704,7 +669,7 @@ def post_target_observation(h: ControlStationHandler, route: str, parts: list[st
     if camera is None:
         h._json_error(404, "CAMERA_NOT_FOUND", "Camera not found")
         return
-    observation_step_type = {"HEAD": "DETECT_TARGETS", "FIXED": "DETECT_TARGETS", "JOINT": "REFINE_TARGET"}.get(
+    observation_step_type = {"HEAD": "DETECT_TARGETS", "JOINT": "REFINE_TARGET"}.get(
         camera.position
     )
     if observation_step_type is None:
@@ -757,34 +722,6 @@ def post_target_observation(h: ControlStationHandler, route: str, parts: list[st
                 detector_provenance["prompt_inference_error"] = prompt_error
         if prompt_error is not None:
             observation["status"] = "REQUEST_PROMPT_INFERENCE_ERROR"
-    if fixed_attempted:
-        detector_provenance = observation.get("detector_provenance")
-        if isinstance(detector_provenance, dict):
-            detector_provenance["inference_scope"] = "FIXED_CAMERA_TASK_OBSERVATION"
-            if fixed_error is not None:
-                detector_provenance["inference_error"] = fixed_error
-        if fixed_error is not None:
-            observation["status"] = "DETECTOR_INFERENCE_ERROR"
-    if camera.position == "FIXED":
-        summarize_depth = getattr(h.app.camera_manager, "summarize_detection_depth", None)
-        if callable(summarize_depth):
-            try:
-                observation["depth_region_observation"] = summarize_depth(camera, observation["candidates"])
-            except Exception as exc:
-                observation["depth_region_observation"] = {
-                    "state": "SUMMARY_ERROR",
-                    "error": f"{type(exc).__name__}: {exc}"[:256],
-                    "review_required": True,
-                    "used_for_selection": False,
-                    "target_pose_use": False,
-                }
-        else:
-            observation["depth_region_observation"] = {
-                "state": "UNAVAILABLE",
-                "review_required": True,
-                "used_for_selection": False,
-                "target_pose_use": False,
-            }
     event_payload: dict[str, object] = {
         "event": "TARGET_OBSERVED",
         "pick_request": pick_request,

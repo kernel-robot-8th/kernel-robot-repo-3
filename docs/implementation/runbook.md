@@ -15,7 +15,6 @@ python -m pip install -r requirements.txt
 
 ## 모의 작업 흐름 실행
 
-작업 이력의 자연어 입력에서 `명령 해석`을 누르면 `POST /api/tasks/parse-command`가 제한된 한국어 문형의 초안을 반환하고 구조화 작업 폼에 채웁니다. 지원 예시는 `2번째 선반의 빨간 상자를 집어서 왼쪽 정리함에 넣어줘`, `두 번째 선반의 빨간 상자를 집어서 왼쪽 정리함에 넣어줘`, `파란 병을 찾아 오른쪽 정리함에 넣어줘`, `상자를 오른쪽 정리함으로 옮겨줘`입니다. `상자를 집어서 가방 안에 넣어줘` 형태에서는 `가방`을 목적지 후보로 추출합니다. 한 작업은 물체 한 개를 대상으로 합니다. `빨간 상자 두 개`, `두 상자`, `상자들`과 같은 복수·수량 표현은 자동으로 한 개 요청으로 축약하지 않고 대상 누락/경고를 표시합니다. detector class가 알려져 있으면 문장 안에 쓴 label을 직접 대조하고, 상자/병 한국어 별칭도 해당 class와 연결합니다. Head Camera 또는 MuJoCo fixed camera가 ready YOLO-World인 경우에는 `2번째 선반에 있는 작은 텀블러를 집어서 왼쪽 정리함에 넣어줘`처럼 단일 한국어 대상구를 one-shot prompt 검토 초안으로 채울 수 있습니다. 이 대상구는 문장 해석 결과일 뿐 detector 검출이나 대상을 특정했다는 증거가 아니며, 작업 폼에서 사람이 확인·수정해야 합니다. YOLO-World가 ready가 아니거나 closed-set 모델이면 vocabulary 밖 category는 기존처럼 폼에서 직접 입력해야 합니다. 일부 영어 class/color label은 인식하지만 일반 영어 문장은 지원하지 않습니다. 아라비아 숫자 또는 일부 한국어 서수의 선반 층과 집기 동사 뒤 목적지도 추출합니다. 여러 대상·수량, 대조/부정 표현, destination 선택은 자동 선택하지 않고 누락/경고로 표시합니다. 색상 조건은 지원하는 색상 별칭을 폼에서 참고할 수 있지만 자유 입력도 허용합니다. 현재 색상 비교는 6개 색상 및 지원 한국어 별칭의 미보정 HSV hint에 한정되며 다른 색상은 작업에 보존되더라도 관측 비교에서 지원되지 않는 상태로 표시됩니다. 색상과 층은 각각 색상 hint와 활성 ROI 초안이 있으면 검토용 비교만 수행하며 후보 선택에는 쓰지 않는다고 안내합니다. 이 호출은 task를 만들지 않으므로 값을 확인·수정한 뒤 `작업 등록`을 별도로 눌러야 합니다. 일반 자연어 이해나 작업 실행 기능으로 간주하지 않습니다.
 
 API 확인:
 
@@ -113,7 +112,47 @@ CONTROL_STATION_ARM_PROGRAM=/경로/lerobot-teleoperate ./run-control-station.sh
 
 장치 번호는 연결 순서에 따라 바뀔 수 있습니다. 2026-10-31 read-only 열거에서는 HCAM0가 `/dev/video4`, Innomaker U20CAM-720P가 `/dev/video6`이었습니다. 기존 구성에서 `/dev/video4`를 Joint Camera로 선택했던 기록에 따라 이제 그 슬롯의 기본 경로를 Innomaker by-id로 고정했고 Head Camera는 HCAM0 by-id를 사용합니다. 단일 frame만으로 물리 장착 위치를 검증한 것은 아니므로 `--arm`을 실행하기 전에 `v4l2-ctl --list-devices`, `/dev/v4l/by-id`, 관제 화면을 통해 사람이 역할을 확인하세요. 환경 변수로 같은 실물 capture node를 두 슬롯에 지정하면 관제는 양쪽 stream을 열지 않고 충돌 오류를 표시합니다.
 
+### Front Camera 화면
+
+Front Camera는 학습 정책 client의 `front` 입력과 같은 카메라입니다. `CONTROL_STATION_FRONT_CAMERA`를 지정하면 관제 화면에 Front Camera 카드가 추가되고, 지정하지 않으면 `CONTROL_STATION_POLICY_FRONT_CAMERA`를 같은 장치로 사용합니다. 둘 다 없으면 카드에 경로 미설정을 표시하고 장치를 열지 않습니다. `CONTROL_STATION_FRONT_YOLO_WEIGHTS`를 지정하면 Head Camera와 같은 방식으로 YOLO 검출을 표시하고, 지정하지 않으면 영상만 표시합니다(아래 "카메라별 YOLO 검출 표시" 참고).
+
+Head Camera와 Front Camera가 같은 기종(HCAM0)이면 `/dev/v4l/by-id` 경로가 둘 중 하나만 가리키고, 다시 꽂을 때마다 가리키는 장치가 바뀔 수 있습니다. 2026-11-10 이 노트북에서는 USB 포트 1이 Head, 포트 2가 Front였으므로 포트 기준 경로로 지정합니다. 포트를 바꿔 꽂으면 경로도 바뀌므로 화면으로 역할을 다시 확인하세요.
+
+```bash
+CONTROL_STATION_HEAD_CAMERA=/dev/v4l/by-path/pci-0000:00:14.0-usb-0:1:1.0-video-index0 \
+CONTROL_STATION_FRONT_CAMERA=/dev/v4l/by-path/pci-0000:00:14.0-usb-0:2:1.0-video-index0 \
+./run-control-station.sh
+```
+
+카메라는 기본으로 640×480 MJPEG를 요청합니다. 센서가 4:3 모드에서 시야를 잘라내는 경우 `CONTROL_STATION_HEAD_CAMERA_RESOLUTION=1280x720`처럼 카메라별(`HEAD`, `JOINT`, `FRONT`)로 다른 모드를 요청할 수 있습니다. 해상도를 바꾸면 검출의 픽셀 좌표 기준도 그 해상도로 바뀌고, 처리량이 늘어 프레임률이 낮아질 수 있습니다. 실제 시야가 넓어지는지는 카메라마다 화면으로 확인해야 합니다.
+
+V4L2 장치는 한 프로세스만 영상을 받을 수 있어, 관제가 Front Camera를 열고 있으면 정책 client가 같은 장치를 열지 못합니다. 그래서 정책 시작 요청을 받으면 관제가 Front Camera capture를 먼저 닫고, 닫힌 것을 확인한 뒤 정책 client를 시작합니다. 정책 프로세스가 살아 있는 동안 카드는 `연결 끊김`/`중지`와 사용 중 안내를 표시하고, 프로세스가 끝나면 자동으로 다시 엽니다. 5초 안에 닫힘을 확인하지 못하면 정책을 시작하지 않고 409 오류를 반환합니다. 이 해제는 Front Camera만 대상으로 하며, 정책의 `wrist` 입력과 Joint Camera가 같은 장치인 경우는 처리하지 않습니다.
+
 실제 팔 제어는 운영체제의 장치 권한, LeRobot 의존성 및 사용자별 OMX 지원 코드가 있어야 합니다. 이 구성은 현재 관제 저장소에 포함되지 않습니다. 저장소만 복제한 환경에서는 첫 번째 절차로 대시보드와 API를 실행할 수 있습니다.
+
+## 학습 정책 한 번 실행
+
+LeRobot async inference 정책 서버를 별도 터미널에서 먼저 실행합니다. 제어 서버의 정책 실행 버튼은 async client만 시작하며 정책 서버를 자동으로 띄우지 않습니다.
+
+```bash
+cd ~/Desktop/lerobot
+source venv/bin/activate
+python -m lerobot.async_inference.policy_server --host=127.0.0.1 --port=8080 \
+  --fps=30 --inference_latency=0.033 --obs_queue_timeout=1
+```
+
+LeRobot client에 `--max_action_steps` 옵션이 포함되도록 `~/Desktop/lerobot/src/lerobot` checkout을 사용합니다. 관제 서버는 `opencv`와 `omx_follower` config를 client보다 먼저 import합니다. 정책 프로필은 저장소의 `config/policy_profiles.json`에서 읽습니다. 현재 **사과 집기**는 모델 `neverlish/omx_act_record-test-20261104-1`과 학습 당시 task 문자열 `Pick up Doll`을 사용합니다. 표시 이름과 학습 조건 문자열은 서로 다른 용도입니다. 서버를 다시 시작하지 않고 프로필 항목을 추가하려면 `CONTROL_STATION_POLICY_PROFILES`로 지정한 JSON 파일을 편집한 뒤 서버를 재시작하세요. 각 항목은 고유한 `id`, 화면 표시용 `name`, LeRobot `policy_type`, `model`, 학습 task 문자열 `task`를 가집니다. 프로필 선택 UI와 API는 이 목록을 읽어 실행하므로 코드 변경 없이 추가 정책을 등록할 수 있습니다. 관제 서버를 시작할 때 정책 실행을 활성화하고, 한 번의 시연에 맞는 총 액션 상한을 지정합니다.
+
+```bash
+cd /경로/kernel-robot-repo-3
+CONTROL_STATION_POLICY_ENABLED=1 \
+CONTROL_STATION_POLICY_MAX_ACTION_STEPS=300 \
+./run-control-station.sh
+```
+
+`300`은 설정 예시입니다. 실제 실행 전에 시연 한 회의 길이에 맞게 양의 정수로 바꾸세요. 이는 LeRobot이 로봇에 보낸 총 action 수이며 `actions_per_chunk=100`과는 별개입니다. 기본 프로필은 `neverlish/omx_act_record-test-20261104-1`, task `Pick up Doll`, follower `/dev/omx_follower`, 카메라 `/dev/video7` 및 `/dev/video9`, ACT/CUDA, 30 FPS, chunk 100, threshold 0.7입니다. 설정은 `CONTROL_STATION_POLICY_*` 환경변수로 바꿀 수 있습니다. Python은 기본 `~/Desktop/lerobot/venv/bin/python`을 사용하며 `CONTROL_STATION_LEROBOT_DIR`와 `CONTROL_STATION_LEROBOT_PYTHON`으로 checkout/환경 경로를 지정할 수 있습니다.
+
+관제의 **학습 정책 한 번 실행** 버튼 또는 `POST /api/arm/policy/start?profile_id=apple_pick`가 클라이언트를 시작합니다. 응답과 상태 조회의 `run_id`로 실행을 식별할 수 있습니다. client는 설정된 총 액션 수를 보내면 종료하고 관제 상태를 `LIMIT_REACHED`로 표시합니다. 이는 제한에 도달했다는 뜻이며 물체를 잡거나 놓았다는 결과가 아닙니다. **중단 요청** 또는 `POST /api/arm/policy/stop`은 실행을 멈추도록 요청하고 결과를 `INTERRUPTED`/미확정으로 표시합니다. 텔레오퍼레이션과 정책 client는 동시에 시작할 수 없습니다. 실행 로그는 `.control-station/logs/policy-run-<run_id>.log`에 남으므로 해당 로그와 카메라/실물 상태를 확인하세요. 관제 UI의 프로세스 상태만으로 팔 준비나 Pick & Place 성공을 판단하지 않습니다.
 
 ## OMX 읽기 전용 상태 조회
 
@@ -176,7 +215,6 @@ CONTROL_STATION_PARKING_CAMERA=head_camera CONTROL_STATION_PARKING_SPOT=pinky_do
 
 ## 카메라별 YOLO 검출 표시
 
-Physical Head Camera와 Joint Camera에 각각 별도의 로컬 YOLO 모델과 YOLO-World vocabulary를 opt-in 설정할 수 있습니다. Head model은 `--arm` 없이도 Head Camera 피드와 함께 열립니다. Joint Camera와 그 detector는 `--arm` 모드에서만 열립니다. `mujoco` mode에서는 같은 Head YOLO 설정을 simulation fixed-camera detector에 적용할 수 있고, 모델은 background loader가 준비합니다. 각 feed에 별도 model instance를 로드하므로 동시에 켜면 추가 메모리와 추론 자원이 필요합니다.
 
 ```bash
 source .venv/bin/activate
@@ -202,8 +240,11 @@ CONTROL_STATION_JOINT_YOLO_WEIGHTS=/경로/wrist-refine.pt \
 | `CONTROL_STATION_JOINT_YOLO_WORLD_PROMPTS` | 없음 | Joint Camera YOLO-World의 고정 prompt 목록; weights도 명시해야 모델이 로드됩니다 |
 | `CONTROL_STATION_JOINT_YOLO_CONF` | `0.25` | Joint Camera detector confidence threshold |
 | `CONTROL_STATION_JOINT_YOLO_DEVICE` | 자동 | Joint Camera detector device (`0` 또는 `cpu`) |
+| `CONTROL_STATION_FRONT_YOLO_WEIGHTS` | 없음 (꺼짐) | Front Camera 전용 YOLO 가중치 `.pt` 경로. 학습 정책 실행 중에는 카메라와 함께 검출도 멈춥니다. |
+| `CONTROL_STATION_FRONT_YOLO_WORLD_PROMPTS` | 없음 | Front Camera YOLO-World의 고정 prompt 목록; weights도 명시해야 모델이 로드됩니다 |
+| `CONTROL_STATION_FRONT_YOLO_CONF` | `0.25` | Front Camera detector confidence threshold |
+| `CONTROL_STATION_FRONT_YOLO_DEVICE` | 자동 | Front Camera detector device (`0` 또는 `cpu`) |
 
-MuJoCo 고정 카메라에서 task 관측을 수행하려면 simulator와 `mujoco` mode 관제 서버를 실행하면서 Head detector 변수도 함께 전달합니다. 예를 들어 `CONTROL_STATION_MODE=mujoco CONTROL_STATION_MOBILE_DOMAIN=15 CONTROL_STATION_HEAD_YOLO_WEIGHTS=/경로/shelf-search.pt ./run-control-station.sh`처럼 실행합니다. detector가 활성화되어도 task 관측 API가 요청될 때만 해당 raw frame에 추론하며 결과는 review event로 남습니다. 모델 weights가 없으면 detector는 꺼진 상태로 관측되고, 설치된 모델의 정확도나 좌표·파지 성능을 보장하지 않습니다.
 
 YOLO-World는 별도 데이터셋 episode 수집이나 fine-tuning 없이 지정한 text vocabulary에 대한 open-vocabulary 후보를 생성합니다. `requirements-vision.txt`의 Ultralytics 의존성을 재사용합니다. 가중치 파일은 이 저장소에 포함되지 않으며 존재하는 파일 경로를 명시해야 합니다. 상시 카메라 검출의 prompt list는 관제 프로세스 시작 시 고정됩니다. 대기 task에서 **카메라에서 대상 관측**을 명시적으로 요청하면, YOLO-World에서만 설정 vocabulary에 없는 task category를 일회성 prompt로 적용해 정확히 캡처한 raw frame을 추론하고 기존 vocabulary를 복원합니다. 일반 `GET` 관측은 모델 prompt를 변경하지 않으며, closed-set YOLO에는 요청별 prompt 기능이 없습니다. 프롬프트 class 후보는 관측/대상 명령 초안에 제공되지만 정확도 보정, 자동 후보 선택 또는 로봇 제어에 쓰이지 않습니다. 검증된 저장 가중치가 준비되면 다음처럼 opt-in으로 켤 수 있습니다.
 
@@ -215,7 +256,6 @@ CONTROL_STATION_HEAD_YOLO_WORLD_PROMPTS='box,bottle,medicine bottle,can' \
 
 Ultralytics는 YOLO-World prompt class를 `set_classes()`로 지정하는 API를 제공하며, 이 모드도 bbox object detection만 제공하고 segmentation은 생성하지 않습니다. [Ultralytics YOLO-World 문서](https://docs.ultralytics.com/models/yolo-world)
 
-각 camera 카드에는 physical feed의 박스가 그려진 영상과 detector의 종류·class·confidence·보조 색상 힌트 및 provenance가 나타납니다. `/api/cameras` 응답은 해당 camera의 전체 weights SHA-256과 YOLO-World prompt 목록을 반환하고, 같은 provenance를 task `TARGET_OBSERVED` event에도 저장합니다. 자연어 명령 초안은 제한 문법과 Head 또는 MuJoCo `FIXED` 선반 탐색 camera detector class를 대조하므로, 지원되지 않는 category는 작업 폼의 대상 종류를 사람이 입력해야 합니다. 그 저장된 `pick_request.category`로 task 관측을 요청하면 MuJoCo fixed feed도 해당 raw frame을 검출하며, YOLO-World camera의 고정 vocabulary에 없는 category는 one-shot prompt로 사용합니다. closed-set camera는 여전히 해당 detector class label과 일치해야 합니다. 각 camera의 관측은 설정된 weights/model provenance로 별도 기록됩니다. Joint Camera 검출은 접근 직전 후보 관측에만 표시되며 자동 선택, 재인식 성공 판단 또는 팔 동작으로 연결되지 않습니다. device가 `null`이면 backend 자동 선택 요청이며 실제 선택 장치를 기록한 값은 아닙니다. SHA-256은 모델 파일 경로를 노출하지 않고 사용한 파일 내용을 식별합니다. 색상 힌트는 detection bbox 안쪽 crop의 미보정 HSV pixel fraction이며 확률이 아니고 자동 필터/선택에 쓰지 않습니다. 상시 camera worker의 가중치 로드 또는 프레임 추론 오류는 해당 서버 프로세스에서 자동 재시도하지 않고 detector 상태를 오류로 유지합니다. task별 one-shot YOLO-World prompt 추론 실패는 해당 관측 이벤트에 기록하며, 기본 vocabulary 복원까지 실패한 경우에는 detector 상태도 오류로 전환합니다. 설정이나 가중치를 수정한 뒤 오류 상태 detector를 다시 시작하려면 관제 프로세스를 재시작하세요. 이 동안 camera raw frame은 계속 표시됩니다.
 
 검출 결과는 표시 전용입니다. 로봇 명령이나 작업 상태 판단에 쓰지 않습니다. 카메라는 한 프로그램만 열 수 있으므로 다른 카메라 프로그램을 먼저 종료합니다.
 
@@ -425,27 +465,21 @@ domain을 지정하지 않으면 `ROS_DOMAIN_ID`, 없으면 `0`을 사용합니�
 
 `/api/robots`는 ROS 2 모드에서 Nav2 action-server 발견을 표시합니다. `CONTROL_STATION_ARM_TRAJECTORY_ACTION_NAME`을 설정하면 해당 `control_msgs/action/FollowJointTrajectory` endpoint의 server 발견 여부도 확인합니다. 이는 discovery-only이며 goal을 보내지 않고 controller readiness나 안전을 증명하지 않습니다. OMX 관절 상태를 함께 보려면 `CONTROL_STATION_ARM_JOINT_STATES_TOPIC`에 ROS graph에서 출처를 확인한 절대 토픽 이름을 지정합니다. 설정 전에는 팔 관절 topic을 구독하지 않습니다. 저장소 inventory에서 `/joint_states`가 주행 시뮬레이터 모델에도 사용되는 것을 확인했으므로, 토픽 이름만으로 OMX source를 판정하지 마세요. 관제는 지정 topic의 `sensor_msgs/msg/JointState`를 읽기만 하며 joint 이름·원본 position 숫자·원본 ROS stamp/frame ID·관제 수신 시각과 freshness를 표시합니다. 메시지에는 joint type이 없어 position 단위를 미확정으로 표시합니다. 배열 길이 불일치, 빈/중복 이름, 비유한 position은 `invalid`로 표시하고 position 배열을 응답에서 제외합니다. 기본 freshness 한계는 2초이고 `CONTROL_STATION_ARM_JOINT_STATES_MAX_AGE`로 조절할 수 있습니다. 원본 ROS stamp는 clock 기준을 확인하지 않으므로 카메라 시각과 비교하거나 TF 변환에 사용할 수 없습니다.
 
-MuJoCo 상태를 관제에서 읽으려면 시뮬레이터와 관제 서버를 동일한, 실물 로봇 및 다른 simulator와 분리한 `ROS_DOMAIN_ID`로 실행합니다. 예를 들어 domain `15`를 운영자가 비워 둔 것을 확인한 경우:
 
 ```bash
-# 터미널 A: MuJoCo 시뮬레이션만 실행
 source /opt/ros/jazzy/setup.bash
 cd simulation/ros2_ws
-ROS_DOMAIN_ID=15 ./run_mujoco_sim.sh
 
 # 터미널 B: 같은 domain에서 상태만 관측
 source /opt/ros/jazzy/setup.bash
 source simulation/ros2_ws/install/setup.bash
-CONTROL_STATION_MODE=mujoco \
 CONTROL_STATION_MOBILE_DOMAIN=15 \
 ./run-control-station.sh
 ```
 
 ROS mode를 처음 실행하기 전 `.venv/bin/python -m pip install -r requirements-ros.txt`로 선택적 PyYAML 의존성을 설치합니다. `rclpy`가 이 Python 모듈을 필요로 하며, system `dist-packages` 전체를 venv 앞에 두면 OpenCV/Numpy 버전이 섞일 수 있어 사용하지 않습니다. ROS setup과 workspace overlay source는 계속 필요합니다. ROS 연동이 필요 없는 mock 모드는 이 선택 의존성을 요구하지 않습니다.
 
-domain 번호는 예시이며, 실제 graph와 실물 제어 환경에 쓰이지 않는지 먼저 확인합니다. `mujoco` mode는 domain 1–232를 요구하며 simulator package에 고정된 joint-state topic과 trajectory action만 read-only 관측합니다. 이 mode는 Pinky/Nav2 discovery, LeRobot 팔 텔레오퍼레이션, OpenCV 실물 camera open을 하지 않습니다. `--arm`은 이 mode에서 거부됩니다. 이 검사는 실제 domain 격리를 증명하지 않습니다. MuJoCo launch는 노드/controller 이름을 `/mujoco_omx` namespace에 두지만 `ROS_DOMAIN_ID`를 직접 설정하지 않습니다. 관제는 action-server discovery와 `JointState` subscription만 사용하며 action goal, service request, joint command를 보내지 않습니다. action server 발견 또는 토픽 수신은 controller/팔 준비, 안전, 명령 수락 가능 또는 Pick & Place 성공을 뜻하지 않습니다. system prefix에는 MuJoCo ROS plugin이 없지만, 2026-10-31에 필요한 apt package를 `/tmp` 임시 overlay로 추출한 격리 domain `231`에서 launch와 fixed RGB feed 및 관제 API를 runtime 확인했습니다. 이 확인은 system prefix 설치나 장시간 안정성을 뜻하지 않습니다.
 
-2026-10-31에 격리 domain `231`과 임시 ROS binary overlay에서 이 절차로 MuJoCo camera manager 및 관제 서버를 실행해 `/api/health`, `/api/cameras`, fixed-camera task 관측 경로를 확인했습니다. `requirements-ros.txt`의 PyYAML을 프로젝트 `.venv`에 설치한 상태에서 frame sequence `2`, source frame `placeholder_fixed_camera_optical_frame`, clock 정렬 미확인 source stamp 상태가 기록됐습니다. detector weights가 없어 결과는 `DETECTOR_NOT_CONFIGURED`였고, task는 `PENDING`으로 남았으며 `arm_command_sent`는 `false`였습니다. 실제 물체 검출·3D 위치 추정·팔 명령은 수행하지 않았습니다. 이 확인은 해당 임시 overlay와 호스트의 ROS Python 경로에 한정되며, 기본 설치 절차나 장시간 안정성을 증명하지 않습니다.
 
 graph 목록만 확인할 때는 작업 서버를 실행하지 않고 다음 read-only discovery 명령을 사용합니다. node/topic daemon 응답이 오래되었거나 XML-RPC 오류가 나면 `--no-daemon`을 붙여 현재 graph를 직접 조회합니다.
 

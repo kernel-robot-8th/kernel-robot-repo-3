@@ -91,7 +91,7 @@ def post_parse_command(h: ControlStationHandler, route: str, parts: list[str], b
         h._json(400, {"error": "text must contain 1 to 500 characters"})
         return
     search_camera_detector = next(
-        (camera for camera in h.app.camera_manager.snapshots() if camera.position in {"HEAD", "FIXED"}),
+        (camera for camera in h.app.camera_manager.snapshots() if camera.position == "HEAD"),
         None,
     )
     detector_ready = search_camera_detector is not None and search_camera_detector.detector_state == "ready"

@@ -67,7 +67,8 @@ GET_ROUTES: tuple[Route, ...] = (
 POST_ROUTES: tuple[Route, ...] = (
     Route(_task_action("start", "cancel"), tasks.post_task_control,
           "Cross-origin task-control request rejected", reads_body=False),
-    Route(lambda route, parts: route in {"/api/arm/start", "/api/arm/stop"}, arm.post_teleop,
+    Route(lambda route, parts: route in {"/api/arm/start", "/api/arm/stop", "/api/arm/policy/start", "/api/arm/policy/stop"},
+          arm.post_teleop,
           "Cross-origin arm-control request rejected", cross_origin_error_code=False, reads_body=False),
     Route(_task_action("target-observation"), observations.post_target_observation,
           "Cross-origin task-observation request rejected"),

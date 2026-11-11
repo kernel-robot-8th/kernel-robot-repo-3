@@ -67,12 +67,6 @@ class CameraSnapshot:
     frame_height: int | None = None
     frame_sha256: str | None = None
     pixel_transform_id: str | None = None
-    source_stamp: dict[str, int] | None = None
-    source_frame_id: str | None = None
-    depth_observation: dict[str, object] | None = None
-    camera_info_observation: dict[str, object] | None = None
-    point_cloud_observation: dict[str, object] | None = None
-    tf_observation: dict[str, object] | None = None
     frame_rate: float | None = None
     error_message: str | None = None
     stream_url: str | None = None
