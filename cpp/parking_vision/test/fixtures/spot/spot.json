@@ -1,0 +1,82 @@
+{
+  "schema_version": 2,
+  "spot_id": "parity_dock",
+  "camera_id": "ceiling_camera",
+  "pixel_transform_id": "opencv-v4l2-capture-no-app-geometry-v1",
+  "intrinsic_calibration": {
+    "path": "ceiling_camera.json",
+    "sha256": "04bbe7b66d20364301c8103d6b327d9f889dfca8d8e72ee0c6bb4866b8751d06",
+    "calibration_id": "parity-fixture"
+  },
+  "aruco_dictionary": "DICT_4X4_50",
+  "marker_id": 21,
+  "marker_side_mm": 70.0,
+  "marker_forward_axis": "-x",
+  "opencv_version": "4.6.0",
+  "reference_pose_in_camera": {
+    "rotation": [
+      [
+        0.9658495828559234,
+        -0.018591537644577747,
+        -0.2584355587473408
+      ],
+      [
+        0.018591537644580065,
+        -0.9898787393860652,
+        0.14069270073271284
+      ],
+      [
+        -0.2584355587473406,
+        -0.14069270073271317,
+        -0.955728322241988
+      ]
+    ],
+    "translation_mm": [
+      151.09825361677701,
+      -82.25811293300065,
+      1145.5375001847347
+    ]
+  },
+  "reference_corners_px": [
+    [
+      419.5577392578125,
+      139.55772399902344
+    ],
+    [
+      479.4422912597656,
+      139.55772399902344
+    ],
+    [
+      479.4422912597656,
+      199.44227600097656
+    ],
+    [
+      419.5577392578125,
+      199.44227600097656
+    ]
+  ],
+  "anchors": [
+    {
+      "marker_id": 3,
+      "center_px": [
+        149.5,
+        389.5
+      ]
+    },
+    {
+      "marker_id": 1,
+      "center_px": [
+        109.5,
+        89.5
+      ]
+    }
+  ],
+  "view_check": {
+    "mode": "FIXED_MARKERS",
+    "max_anchor_shift_px": 15.0
+  },
+  "tolerance": {
+    "position_mm": 20.0,
+    "yaw_deg": 5.0
+  }
+}

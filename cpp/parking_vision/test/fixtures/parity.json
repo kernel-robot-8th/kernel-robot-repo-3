@@ -1,0 +1,6601 @@
+{
+ "generated_by": "cpp/parking_vision/tools/make_parity_fixtures.py",
+ "python_opencv_version": "4.6.0",
+ "distorted_camera": {
+  "camera_matrix": [
+   [
+    986.0,
+    0.0,
+    182.0
+   ],
+   [
+    0.0,
+    985.0,
+    222.5
+   ],
+   [
+    0.0,
+    0.0,
+    1.0
+   ]
+  ],
+  "distortion": [
+   -0.38,
+   0.06,
+   0.006,
+   0.0025,
+   0.07
+  ]
+ },
+ "marker_side_mm": 70.0,
+ "geometry_cases": [
+  {
+   "name": "distorted_floor_0",
+   "plane": {
+    "rotation": [
+     [
+      0.9999938318838582,
+      -0.0003258182695736364,
+      0.00349714693617812
+     ],
+     [
+      -0.001815698083733104,
+      -0.900276394610105,
+      0.43531496246775087
+     ],
+     [
+      0.0030065652673334576,
+      -0.43531862715749464,
+      -0.900271433188351
+     ]
+    ],
+    "translation_mm": [
+     -260.1756718890252,
+     -675.9991452608549,
+     1340.4663065384223
+    ]
+   },
+   "corners_px": [
+    [
+     29.128271244782155,
+     -181.14925681752317
+    ],
+    [
+     10.367375811884443,
+     -217.1951118722485
+    ],
+    [
+     51.140765335951784,
+     -237.19921971282497
+    ],
+    [
+     70.09277451034419,
+     -201.03210829556116
+    ]
+   ],
+   "expected": {
+    "x_mm": 42.963673172169436,
+    "y_mm": -16.992915058981787,
+    "yaw_deg": 114.85951483327199,
+    "side_mm": 70.01896408223044
+   }
+  },
+  {
+   "name": "distorted_floor_1",
+   "plane": {
+    "rotation": [
+     [
+      0.9999938318838582,
+      -0.0003258182695736364,
+      0.00349714693617812
+     ],
+     [
+      -0.001815698083733104,
+      -0.900276394610105,
+      0.43531496246775087
+     ],
+     [
+      0.0030065652673334576,
+      -0.43531862715749464,
+      -0.900271433188351
+     ]
+    ],
+    "translation_mm": [
+     -260.1756718890252,
+     -675.9991452608549,
+     1340.4663065384223
+    ]
+   },
+   "corners_px": [
+    [
+     93.61642620194162,
+     -218.48712727648018
+    ],
+    [
+     75.30211964119545,
+     -179.39860133791836
+    ],
+    [
+     33.76737764435421,
+     -193.91137817546462
+    ],
+    [
+     51.91787686553138,
+     -232.70623161210483
+    ]
+   ],
+   "expected": {
+    "x_mm": 79.32637790648438,
+    "y_mm": -24.474732883540874,
+    "yaw_deg": -113.60871787431698,
+    "side_mm": 70.03087589845329
+   }
+  },
+  {
+   "name": "distorted_floor_2",
+   "plane": {
+    "rotation": [
+     [
+      0.9999938318838582,
+      -0.0003258182695736364,
+      0.00349714693617812
+     ],
+     [
+      -0.001815698083733104,
+      -0.900276394610105,
+      0.43531496246775087
+     ],
+     [
+      0.0030065652673334576,
+      -0.43531862715749464,
+      -0.900271433188351
+     ]
+    ],
+    "translation_mm": [
+     -260.1756718890252,
+     -675.9991452608549,
+     1340.4663065384223
+    ]
+   },
+   "corners_px": [
+    [
+     -1.6292273785042823,
+     -297.01871195468345
+    ],
+    [
+     42.30868943912378,
+     -297.23348555134123
+    ],
+    [
+     36.93842080441897,
+     -258.34926353442665
+    ],
+    [
+     -7.119430225784583,
+     -258.5076672444858
+    ]
+   ],
+   "expected": {
+    "x_mm": 6.3761917110864985,
+    "y_mm": 106.64901954559252,
+    "yaw_deg": -5.8615149721666056,
+    "side_mm": 69.93353982083966
+   }
+  },
+  {
+   "name": "distorted_floor_3",
+   "plane": {
+    "rotation": [
+     [
+      0.9999938318838582,
+      -0.0003258182695736364,
+      0.00349714693617812
+     ],
+     [
+      -0.001815698083733104,
+      -0.900276394610105,
+      0.43531496246775087
+     ],
+     [
+      0.0030065652673334576,
+      -0.43531862715749464,
+      -0.900271433188351
+     ]
+    ],
+    "translation_mm": [
+     -260.1756718890252,
+     -675.9991452608549,
+     1340.4663065384223
+    ]
+   },
+   "corners_px": [
+    [
+     -3.572434814702376,
+     -258.13908081705836
+    ],
+    [
+     40.875635528365535,
+     -262.24842624988736
+    ],
+    [
+     40.78841429156904,
+     -222.1512961861403
+    ],
+    [
+     -3.765232843980243,
+     -218.41671419095996
+    ]
+   ],
+   "expected": {
+    "x_mm": 8.850131705412991,
+    "y_mm": 39.4627362392673,
+    "yaw_deg": 0.40564154481458575,
+    "side_mm": 69.98941861530415
+   }
+  },
+  {
+   "name": "distorted_floor_4",
+   "plane": {
+    "rotation": [
+     [
+      0.9999938318838582,
+      -0.0003258182695736364,
+      0.00349714693617812
+     ],
+     [
+      -0.001815698083733104,
+      -0.900276394610105,
+      0.43531496246775087
+     ],
+     [
+      0.0030065652673334576,
+      -0.43531862715749464,
+      -0.900271433188351
+     ]
+    ],
+    "translation_mm": [
+     -260.1756718890252,
+     -675.9991452608549,
+     1340.4663065384223
+    ]
+   },
+   "corners_px": [
+    [
+     -39.1138964490743,
+     -204.043338338132
+    ],
+    [
+     -0.1371529165812433,
+     -189.28400664365057
+    ],
+    [
+     -19.49775990191179,
+     -150.58814247793873
+    ],
+    [
+     -58.18494080346201,
+     -165.7099722397311
+    ]
+   ],
+   "expected": {
+    "x_mm": -67.03961678822927,
+    "y_mm": -61.789303456462754,
+    "yaw_deg": -26.65786716609294,
+    "side_mm": 69.98222645537257
+   }
+  },
+  {
+   "name": "distorted_floor_5",
+   "plane": {
+    "rotation": [
+     [
+      0.9999938318838582,
+      -0.0003258182695736364,
+      0.00349714693617812
+     ],
+     [
+      -0.001815698083733104,
+      -0.900276394610105,
+      0.43531496246775087
+     ],
+     [
+      0.0030065652673334576,
+      -0.43531862715749464,
+      -0.900271433188351
+     ]
+    ],
+    "translation_mm": [
+     -260.1756718890252,
+     -675.9991452608549,
+     1340.4663065384223
+    ]
+   },
+   "corners_px": [
+    [
+     58.92443489700669,
+     -178.6010319207046
+    ],
+    [
+     103.21802714347807,
+     -190.70764819246227
+    ],
+    [
+     114.48962572139983,
+     -149.76867980483001
+    ],
+    [
+     70.24607776319452,
+     -137.89428258255418
+    ]
+   ],
+   "expected": {
+    "x_mm": 114.62967754088507,
+    "y_mm": -96.10505182845728,
+    "yaw_deg": 14.011396622632153,
+    "side_mm": 70.03519354867724
+   }
+  },
+  {
+   "name": "distorted_floor_6",
+   "plane": {
+    "rotation": [
+     [
+      0.9999938318838582,
+      -0.0003258182695736364,
+      0.00349714693617812
+     ],
+     [
+      -0.001815698083733104,
+      -0.900276394610105,
+      0.43531496246775087
+     ],
+     [
+      0.0030065652673334576,
+      -0.43531862715749464,
+      -0.900271433188351
+     ]
+    ],
+    "translation_mm": [
+     -260.1756718890252,
+     -675.9991452608549,
+     1340.4663065384223
+    ]
+   },
+   "corners_px": [
+    [
+     33.46870807451597,
+     -263.82913990979773
+    ],
+    [
+     55.697158506463694,
+     -299.34991338255224
+    ],
+    [
+     95.20298531474542,
+     -283.3098958886945
+    ],
+    [
+     72.87806781350903,
+     -247.40554368572487
+    ]
+   ],
+   "expected": {
+    "x_mm": 79.5363260257997,
+    "y_mm": 92.42594963207048,
+    "yaw_deg": 61.26959440825163,
+    "side_mm": 69.98730347603292
+   }
+  },
+  {
+   "name": "distorted_floor_7",
+   "plane": {
+    "rotation": [
+     [
+      0.9999938318838582,
+      -0.0003258182695736364,
+      0.00349714693617812
+     ],
+     [
+      -0.001815698083733104,
+      -0.900276394610105,
+      0.43531496246775087
+     ],
+     [
+      0.0030065652673334576,
+      -0.43531862715749464,
+      -0.900271433188351
+     ]
+    ],
+    "translation_mm": [
+     -260.1756718890252,
+     -675.9991452608549,
+     1340.4663065384223
+    ]
+   },
+   "corners_px": [
+    [
+     56.02051979842062,
+     -209.88046882613662
+    ],
+    [
+     45.86386158823788,
+     -248.7855887939773
+    ],
+    [
+     90.20003677472572,
+     -260.5817225475807
+    ],
+    [
+     100.49717750182133,
+     -221.52628597798366
+    ]
+   ],
+   "expected": {
+    "x_mm": 93.78312417598383,
+    "y_mm": 24.28697779416511,
+    "yaw_deg": 103.29468958322835,
+    "side_mm": 70.02973244661612
+   }
+  }
+ ],
+ "pose_cases": [
+  {
+   "name": "distorted_floor_0",
+   "corners_px": [
+    [
+     29.128271244782155,
+     -181.14925681752317
+    ],
+    [
+     10.367375811884443,
+     -217.1951118722485
+    ],
+    [
+     51.140765335951784,
+     -237.19921971282497
+    ],
+    [
+     70.09277451034419,
+     -201.03210829556116
+    ]
+   ],
+   "expected": {
+    "rotation": [
+     [
+      -0.42056473851427933,
+      -0.9072573151223731,
+      0.0030765037556796104
+     ],
+     [
+      -0.8156893133165322,
+      0.3795980869375192,
+      0.4365274751199279
+     ],
+     [
+      -0.39721057999456644,
+      0.18107859219222494,
+      -0.8996856665469679
+     ]
+    ],
+    "translation_mm": [
+     -217.1424591783445,
+     -660.5812878146211,
+     1347.5923123409393
+    ]
+   }
+  },
+  {
+   "name": "distorted_floor_1",
+   "corners_px": [
+    [
+     93.61642620194162,
+     -218.48712727648018
+    ],
+    [
+     75.30211964119545,
+     -179.39860133791836
+    ],
+    [
+     33.76737764435421,
+     -193.91137817546462
+    ],
+    [
+     51.91787686553138,
+     -232.70623161210483
+    ]
+   ],
+   "expected": {
+    "rotation": [
+     [
+      -0.4003627375232597,
+      0.9163514432425234,
+      0.0031162269214169147
+     ],
+     [
+      0.82483229999512,
+      0.3588915130569924,
+      0.4368621736204943
+     ],
+     [
+      0.3992008959003496,
+      0.17747370036996168,
+      -0.8995230571749405
+     ]
+    ],
+    "translation_mm": [
+     -180.75839716416127,
+     -653.8050663124975,
+     1350.734102416977
+    ]
+   }
+  },
+  {
+   "name": "distorted_floor_2",
+   "corners_px": [
+    [
+     -1.6292273785042823,
+     -297.01871195468345
+    ],
+    [
+     42.30868943912378,
+     -297.23348555134123
+    ],
+    [
+     36.93842080441897,
+     -258.34926353442665
+    ],
+    [
+     -7.119430225784583,
+     -258.5076672444858
+    ]
+   ],
+   "expected": {
+    "rotation": [
+     [
+      0.9948052975829843,
+      0.10150755337791245,
+      0.007657447881582402
+     ],
+     [
+      0.0886365326217303,
+      -0.9007422873626401,
+      0.425213942435471
+     ],
+     [
+      0.05005981407901791,
+      -0.4223263529119979,
+      -0.905060476791703
+     ]
+    ],
+    "translation_mm": [
+     -254.0263815645047,
+     -772.627196078374,
+     1295.0520215336462
+    ]
+   }
+  },
+  {
+   "name": "distorted_floor_3",
+   "corners_px": [
+    [
+     -3.572434814702376,
+     -258.13908081705836
+    ],
+    [
+     40.875635528365535,
+     -262.24842624988736
+    ],
+    [
+     40.78841429156904,
+     -222.1512961861403
+    ],
+    [
+     -3.765232843980243,
+     -218.41671419095996
+    ]
+   ],
+   "expected": {
+    "rotation": [
+     [
+      0.9999586477988385,
+      -0.007494233607704061,
+      0.005151616731915059
+     ],
+     [
+      -0.008985528072694256,
+      -0.9014773208280977,
+      0.43273305896112185
+     ],
+     [
+      0.001401063015788966,
+      -0.4327614544933826,
+      -0.9015073824030493
+     ]
+    ],
+    "translation_mm": [
+     -251.39306075465828,
+     -711.7031113847376,
+     1323.607673227413
+    ]
+   }
+  },
+  {
+   "name": "distorted_floor_4",
+   "corners_px": [
+    [
+     -39.1138964490743,
+     -204.043338338132
+    ],
+    [
+     -0.1371529165812433,
+     -189.28400664365057
+    ],
+    [
+     -19.49775990191179,
+     -150.58814247793873
+    ],
+    [
+     -58.18494080346201,
+     -165.7099722397311
+    ]
+   ],
+   "expected": {
+    "rotation": [
+     [
+      0.8938842369601219,
+      0.44829442017713855,
+      0.0017560615774148136
+     ],
+     [
+      0.4025519721165158,
+      -0.804386880375008,
+      0.43693667324415153
+     ],
+     [
+      0.1972888254801179,
+      -0.3898638987115961,
+      -0.899490555715884
+     ]
+    ],
+    "translation_mm": [
+     -327.21074620556476,
+     -620.2762939155031,
+     1367.2243575836358
+    ]
+   }
+  },
+  {
+   "name": "distorted_floor_5",
+   "corners_px": [
+    [
+     58.92443489700669,
+     -178.6010319207046
+    ],
+    [
+     103.21802714347807,
+     -190.70764819246227
+    ],
+    [
+     114.48962572139983,
+     -149.76867980483001
+    ],
+    [
+     70.24607776319452,
+     -137.89428258255418
+    ]
+   ],
+   "expected": {
+    "rotation": [
+     [
+      0.9701502249495361,
+      -0.2425029824867401,
+      0.0009189751907669463
+     ],
+     [
+      -0.21834829805064251,
+      -0.8718563948775352,
+      0.4383953095660756
+     ],
+     [
+      -0.10551095568116703,
+      -0.42550996486120424,
+      -0.8987817911123164
+     ]
+    ],
+    "translation_mm": [
+     -145.41443572291456,
+     -589.2660295735166,
+     1381.6692698326872
+    ]
+   }
+  },
+  {
+   "name": "distorted_floor_6",
+   "corners_px": [
+    [
+     33.46870807451597,
+     -263.82913990979773
+    ],
+    [
+     55.697158506463694,
+     -299.34991338255224
+    ],
+    [
+     95.20298531474542,
+     -283.3098958886945
+    ],
+    [
+     72.87806781350903,
+     -247.40554368572487
+    ]
+   ],
+   "expected": {
+    "rotation": [
+     [
+      0.47902225787234853,
+      -0.8777689971088631,
+      0.007698323023797665
+     ],
+     [
+      -0.7955697070957086,
+      -0.43042435223012643,
+      0.4263844722300809
+     ],
+     [
+      -0.37095352487141353,
+      -0.21037220520253364,
+      -0.9045092689761098
+     ]
+    ],
+    "translation_mm": [
+     -180.6689200866623,
+     -759.3698349686247,
+     1300.4845356722867
+    ]
+   }
+  },
+  {
+   "name": "distorted_floor_7",
+   "corners_px": [
+    [
+     56.02051979842062,
+     -209.88046882613662
+    ],
+    [
+     45.86386158823788,
+     -248.7855887939773
+    ],
+    [
+     90.20003677472572,
+     -260.5817225475807
+    ],
+    [
+     100.49717750182133,
+     -221.52628597798366
+    ]
+   ],
+   "expected": {
+    "rotation": [
+     [
+      -0.23035926041902366,
+      -0.9730906873752395,
+      0.00539678448563094
+     ],
+     [
+      -0.8760886339460657,
+      0.20980359636830814,
+      0.4341096133713702
+     ],
+     [
+      -0.42356028686565617,
+      0.09527310792929944,
+      -0.9008438923008665
+     ]
+    ],
+    "translation_mm": [
+     -166.34184345860672,
+     -697.793588204512,
+     1329.7144272864684
+    ]
+   }
+  }
+ ],
+ "spot": {
+  "path": "spot/spot.json",
+  "reference": {
+   "x_mm": -1.0215482985742597e-05,
+   "y_mm": -1.8762966439211937e-05,
+   "yaw_deg": 0.003889815779714987,
+   "side_mm": 70.00141496365775
+  }
+ },
+ "frame_cases": [
+  {
+   "name": "registered/registered",
+   "image": "frames/registered.png",
+   "spot": "registered",
+   "expected": {
+    "offset": {
+     "dx_mm": -1.7838464495767425e-05,
+     "dy_mm": -1.2112035818745426e-09,
+     "dyaw_deg": 1.5660361896152608e-11
+    },
+    "corners": [
+     [
+      419.5577392578125,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      199.44227600097656
+     ],
+     [
+      419.5577392578125,
+      199.44227600097656
+     ]
+    ],
+    "reason": "",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 1.52587890625e-05,
+    "view_shift_xy_px": [
+     1.52587890625e-05,
+     0.0
+    ]
+   }
+  },
+  {
+   "name": "registered/moved",
+   "image": "frames/moved.png",
+   "spot": "registered",
+   "expected": {
+    "offset": {
+     "dx_mm": 23.290998416837624,
+     "dy_mm": -11.643304378342233,
+     "dyaw_deg": 0.15130768300937802
+    },
+    "corners": [
+     [
+      439.5577392578125,
+      149.55772399902344
+     ],
+     [
+      499.4422912597656,
+      149.55772399902344
+     ],
+     [
+      499.4422912597656,
+      209.44227600097656
+     ],
+     [
+      439.5577392578125,
+      209.44227600097656
+     ]
+    ],
+    "reason": "",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 1.52587890625e-05,
+    "view_shift_xy_px": [
+     1.52587890625e-05,
+     0.0
+    ]
+   }
+  },
+  {
+   "name": "registered/rotated_7deg",
+   "image": "frames/rotated_7deg.png",
+   "spot": "registered",
+   "expected": {
+    "offset": {
+     "dx_mm": -0.0023410689403240426,
+     "dy_mm": 0.0007855934878939763,
+     "dyaw_deg": 7.116561464564626
+    },
+    "corners": [
+     [
+      416.1471252441406,
+      143.55702209472656
+     ],
+     [
+      475.4429931640625,
+      136.1471405029297
+     ],
+     [
+      482.84661865234375,
+      195.44871520996094
+     ],
+     [
+      423.5513000488281,
+      202.84664916992188
+     ]
+    ],
+    "reason": "",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 1.52587890625e-05,
+    "view_shift_xy_px": [
+     1.52587890625e-05,
+     0.0
+    ]
+   }
+  },
+  {
+   "name": "registered/camera_like_registered",
+   "image": "frames/camera_like_registered.png",
+   "spot": "registered",
+   "expected": {
+    "offset": {
+     "dx_mm": 0.017869576052534697,
+     "dy_mm": 0.0006299265596236836,
+     "dyaw_deg": 0.028008492010911823
+    },
+    "corners": [
+     [
+      419.6031188964844,
+      139.6748809814453
+     ],
+     [
+      479.3116760253906,
+      139.62132263183594
+     ],
+     [
+      479.3738098144531,
+      199.345458984375
+     ],
+     [
+      419.7125244140625,
+      199.35108947753906
+     ]
+    ],
+    "reason": "",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 0.013518167794102556,
+    "view_shift_xy_px": [
+     -0.013322830200195312,
+     -0.0022897720336914062
+    ]
+   }
+  },
+  {
+   "name": "registered/camera_like_moved",
+   "image": "frames/camera_like_moved.png",
+   "spot": "registered",
+   "expected": {
+    "offset": {
+     "dx_mm": 23.305030853321426,
+     "dy_mm": -11.669657760947734,
+     "dyaw_deg": 0.18242772739407087
+    },
+    "corners": [
+     [
+      439.6426696777344,
+      149.7047882080078
+     ],
+     [
+      499.3747863769531,
+      149.6728057861328
+     ],
+     [
+      499.3577880859375,
+      209.34471130371094
+     ],
+     [
+      439.6687316894531,
+      209.37681579589844
+     ]
+    ],
+    "reason": "",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 0.001370742953913238,
+    "view_shift_xy_px": [
+     0.0002536773681640625,
+     0.0013470649719238281
+    ]
+   }
+  },
+  {
+   "name": "registered/camera_like_rotated",
+   "image": "frames/camera_like_rotated.png",
+   "spot": "registered",
+   "expected": {
+    "offset": {
+     "dx_mm": -0.007722481930478864,
+     "dy_mm": 0.002364649769685201,
+     "dyaw_deg": -11.983117775619093
+    },
+    "corners": [
+     [
+      426.5491943359375,
+      134.14126586914062
+     ],
+     [
+      484.8702392578125,
+      146.51646423339844
+     ],
+     [
+      472.443359375,
+      204.84324645996094
+     ],
+     [
+      414.1078796386719,
+      192.4568328857422
+     ]
+    ],
+    "reason": "",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 0.009520682209792157,
+    "view_shift_xy_px": [
+     0.0010776519775390625,
+     -0.009459495544433594
+    ]
+   }
+  },
+  {
+   "name": "registered/drift_2_1",
+   "image": "frames/drift_2_1.png",
+   "spot": "registered",
+   "expected": {
+    "offset": {
+     "dx_mm": -1.7838464495767425e-05,
+     "dy_mm": -1.2112035818745426e-09,
+     "dyaw_deg": 1.5660361896152608e-11
+    },
+    "corners": [
+     [
+      420.5577392578125,
+      141.55772399902344
+     ],
+     [
+      480.4422912597656,
+      141.55772399902344
+     ],
+     [
+      480.4422912597656,
+      201.44227600097656
+     ],
+     [
+      420.5577392578125,
+      201.44227600097656
+     ]
+    ],
+    "reason": "",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 2.236074801479359,
+    "view_shift_xy_px": [
+     1.0000152587890625,
+     2.0
+    ]
+   }
+  },
+  {
+   "name": "registered/drift_10_-4",
+   "image": "frames/drift_10_-4.png",
+   "spot": "registered",
+   "expected": {
+    "offset": {
+     "dx_mm": -1.7838464495767425e-05,
+     "dy_mm": -1.2112035818745426e-09,
+     "dyaw_deg": 1.5660361896152608e-11
+    },
+    "corners": [
+     [
+      415.5577392578125,
+      149.55772399902344
+     ],
+     [
+      475.4422912597656,
+      149.55772399902344
+     ],
+     [
+      475.4422912597656,
+      209.44227600097656
+     ],
+     [
+      415.5577392578125,
+      209.44227600097656
+     ]
+    ],
+    "reason": "",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 10.770323947306336,
+    "view_shift_xy_px": [
+     -3.9999847412109375,
+     10.0
+    ]
+   }
+  },
+  {
+   "name": "registered/wrapped_96",
+   "image": "frames/wrapped_96.png",
+   "spot": "registered",
+   "expected": {
+    "offset": null,
+    "corners": null,
+    "reason": "fixed markers moved 96.0 px from registration",
+    "blocking_status": "VIEW_UNVERIFIED",
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 96.00001525878906,
+    "view_shift_xy_px": [
+     96.00001525878906,
+     0.0
+    ]
+   }
+  },
+  {
+   "name": "registered/no_fixed_marker",
+   "image": "frames/no_fixed_marker.png",
+   "spot": "registered",
+   "expected": {
+    "offset": null,
+    "corners": null,
+    "reason": "no fixed marker visible to verify the camera view",
+    "blocking_status": null,
+    "skipped_status": "VIEW_UNVERIFIED",
+    "view_shift_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "name": "registered/missing_pinky",
+   "image": "frames/missing_pinky.png",
+   "spot": "registered",
+   "expected": {
+    "offset": null,
+    "corners": null,
+    "reason": "marker not visible",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 1.52587890625e-05,
+    "view_shift_xy_px": [
+     1.52587890625e-05,
+     0.0
+    ]
+   }
+  },
+  {
+   "name": "registered/duplicate",
+   "image": "frames/duplicate.png",
+   "spot": "registered",
+   "expected": {
+    "offset": null,
+    "corners": null,
+    "reason": "marker 21 seen 2 times",
+    "blocking_status": "AMBIGUOUS",
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 1.52587890625e-05,
+    "view_shift_xy_px": [
+     1.52587890625e-05,
+     0.0
+    ]
+   }
+  },
+  {
+   "name": "registered/lifted",
+   "image": "frames/lifted.png",
+   "spot": "registered",
+   "expected": {
+    "offset": null,
+    "corners": [
+     [
+      419.5577392578125,
+      139.55772399902344
+     ],
+     [
+      499.4422912597656,
+      139.55772399902344
+     ],
+     [
+      499.4422912597656,
+      219.44227600097656
+     ],
+     [
+      419.5577392578125,
+      219.44227600097656
+     ]
+    ],
+    "reason": "marker side 93.2 mm on the registered plane (printed 70 mm)",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 1.52587890625e-05,
+    "view_shift_xy_px": [
+     1.52587890625e-05,
+     0.0
+    ]
+   }
+  },
+  {
+   "name": "registered/anchor_moved",
+   "image": "frames/anchor_moved.png",
+   "spot": "registered",
+   "expected": {
+    "offset": null,
+    "corners": null,
+    "reason": "fixed markers moved differently (4.0 px apart); one may have been moved",
+    "blocking_status": "VIEW_UNVERIFIED",
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 4.0000152587890625,
+    "view_shift_xy_px": [
+     4.0000152587890625,
+     0.0
+    ]
+   }
+  },
+  {
+   "name": "single_anchor/registered",
+   "image": "frames/registered.png",
+   "spot": "single_anchor",
+   "expected": {
+    "offset": {
+     "dx_mm": -1.7838464495767425e-05,
+     "dy_mm": -1.2112035818745426e-09,
+     "dyaw_deg": 1.5660361896152608e-11
+    },
+    "corners": [
+     [
+      419.5577392578125,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      199.44227600097656
+     ],
+     [
+      419.5577392578125,
+      199.44227600097656
+     ]
+    ],
+    "reason": "",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 1.52587890625e-05,
+    "view_shift_xy_px": [
+     1.52587890625e-05,
+     0.0
+    ]
+   }
+  },
+  {
+   "name": "single_anchor/drift_2_1",
+   "image": "frames/drift_2_1.png",
+   "spot": "single_anchor",
+   "expected": {
+    "offset": {
+     "dx_mm": -1.7838464495767425e-05,
+     "dy_mm": -1.2112035818745426e-09,
+     "dyaw_deg": 1.5660361896152608e-11
+    },
+    "corners": [
+     [
+      420.5577392578125,
+      141.55772399902344
+     ],
+     [
+      480.4422912597656,
+      141.55772399902344
+     ],
+     [
+      480.4422912597656,
+      201.44227600097656
+     ],
+     [
+      420.5577392578125,
+      201.44227600097656
+     ]
+    ],
+    "reason": "",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 2.236074801479359,
+    "view_shift_xy_px": [
+     1.0000152587890625,
+     2.0
+    ]
+   }
+  },
+  {
+   "name": "single_anchor/drift_10_-4",
+   "image": "frames/drift_10_-4.png",
+   "spot": "single_anchor",
+   "expected": {
+    "offset": null,
+    "corners": null,
+    "reason": "only one fixed marker visible and it moved 10.8 px; cannot tell camera drift from a moved marker",
+    "blocking_status": "VIEW_UNVERIFIED",
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 10.770323947306336,
+    "view_shift_xy_px": [
+     -3.9999847412109375,
+     10.0
+    ]
+   }
+  },
+  {
+   "name": "single_anchor_trusted/drift_2_1",
+   "image": "frames/drift_2_1.png",
+   "spot": "single_anchor_trusted",
+   "expected": {
+    "offset": {
+     "dx_mm": -1.7838464495767425e-05,
+     "dy_mm": -1.2112035818745426e-09,
+     "dyaw_deg": 1.5660361896152608e-11
+    },
+    "corners": [
+     [
+      420.5577392578125,
+      141.55772399902344
+     ],
+     [
+      480.4422912597656,
+      141.55772399902344
+     ],
+     [
+      480.4422912597656,
+      201.44227600097656
+     ],
+     [
+      420.5577392578125,
+      201.44227600097656
+     ]
+    ],
+    "reason": "",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 2.236074801479359,
+    "view_shift_xy_px": [
+     1.0000152587890625,
+     2.0
+    ]
+   }
+  },
+  {
+   "name": "single_anchor_trusted/drift_10_-4",
+   "image": "frames/drift_10_-4.png",
+   "spot": "single_anchor_trusted",
+   "expected": {
+    "offset": {
+     "dx_mm": -1.7838464495767425e-05,
+     "dy_mm": -1.2112035818745426e-09,
+     "dyaw_deg": 1.5660361896152608e-11
+    },
+    "corners": [
+     [
+      415.5577392578125,
+      149.55772399902344
+     ],
+     [
+      475.4422912597656,
+      149.55772399902344
+     ],
+     [
+      475.4422912597656,
+      209.44227600097656
+     ],
+     [
+      415.5577392578125,
+      209.44227600097656
+     ]
+    ],
+    "reason": "",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 10.770323947306336,
+    "view_shift_xy_px": [
+     -3.9999847412109375,
+     10.0
+    ]
+   }
+  },
+  {
+   "name": "view_check_off/registered",
+   "image": "frames/registered.png",
+   "spot": "view_check_off",
+   "expected": {
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.0
+    },
+    "corners": [
+     [
+      419.5577392578125,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      199.44227600097656
+     ],
+     [
+      419.5577392578125,
+      199.44227600097656
+     ]
+    ],
+    "reason": "",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "name": "view_check_off/wrapped_96",
+   "image": "frames/wrapped_96.png",
+   "spot": "view_check_off",
+   "expected": {
+    "offset": {
+     "dx_mm": 109.4582556276238,
+     "dy_mm": 0.007340271687780842,
+     "dyaw_deg": -9.605524687117395e-05
+    },
+    "corners": [
+     [
+      515.5577392578125,
+      139.55772399902344
+     ],
+     [
+      575.4423217773438,
+      139.55772399902344
+     ],
+     [
+      575.4423217773438,
+      199.44227600097656
+     ],
+     [
+      515.5577392578125,
+      199.44227600097656
+     ]
+    ],
+    "reason": "",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "name": "view_check_off/no_fixed_marker",
+   "image": "frames/no_fixed_marker.png",
+   "spot": "view_check_off",
+   "expected": {
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.0
+    },
+    "corners": [
+     [
+      419.5577392578125,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      199.44227600097656
+     ],
+     [
+      419.5577392578125,
+      199.44227600097656
+     ]
+    ],
+    "reason": "",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "name": "max_view_shift_3/drift_2_1",
+   "image": "frames/drift_2_1.png",
+   "spot": "max_view_shift_3",
+   "expected": {
+    "offset": {
+     "dx_mm": -1.7838464495767425e-05,
+     "dy_mm": -1.2112035818745426e-09,
+     "dyaw_deg": 1.5660361896152608e-11
+    },
+    "corners": [
+     [
+      420.5577392578125,
+      141.55772399902344
+     ],
+     [
+      480.4422912597656,
+      141.55772399902344
+     ],
+     [
+      480.4422912597656,
+      201.44227600097656
+     ],
+     [
+      420.5577392578125,
+      201.44227600097656
+     ]
+    ],
+    "reason": "",
+    "blocking_status": null,
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 2.236074801479359,
+    "view_shift_xy_px": [
+     1.0000152587890625,
+     2.0
+    ]
+   }
+  },
+  {
+   "name": "max_view_shift_3/drift_10_-4",
+   "image": "frames/drift_10_-4.png",
+   "spot": "max_view_shift_3",
+   "expected": {
+    "offset": null,
+    "corners": null,
+    "reason": "fixed markers moved 10.8 px from registration",
+    "blocking_status": "VIEW_UNVERIFIED",
+    "skipped_status": "NOT_FOUND",
+    "view_shift_px": 10.770323947306336,
+    "view_shift_xy_px": [
+     -3.9999847412109375,
+     10.0
+    ]
+   }
+  }
+ ],
+ "judge_sequence": {
+  "frames": 3,
+  "steps": [
+   {
+    "image": "frames/registered.png",
+    "expected": {
+     "status": "ARRIVED",
+     "offset": {
+      "dx_mm": -1.7838464495767425e-05,
+      "dy_mm": -1.2112035818745426e-09,
+      "dyaw_deg": 1.5660361896152608e-11
+     },
+     "reason": "within tolerance",
+     "view_shift_px": 1.52587890625e-05,
+     "deviation_level": "WITHIN"
+    }
+   },
+   {
+    "image": "frames/camera_like_registered.png",
+    "expected": {
+     "status": "ARRIVED",
+     "offset": {
+      "dx_mm": 0.008925868794019465,
+      "dy_mm": 0.00031496267421005086,
+      "dyaw_deg": 0.014004246013286092
+     },
+     "reason": "within tolerance",
+     "view_shift_px": 0.013518167794102556,
+     "deviation_level": "WITHIN"
+    }
+   },
+   {
+    "image": "frames/missing_pinky.png",
+    "expected": {
+     "status": "ARRIVED",
+     "offset": {
+      "dx_mm": 0.008925868794019465,
+      "dy_mm": 0.00031496267421005086,
+      "dyaw_deg": 0.014004246013286092
+     },
+     "reason": "within tolerance",
+     "view_shift_px": 1.52587890625e-05,
+     "deviation_level": "WITHIN"
+    }
+   },
+   {
+    "image": "frames/moved.png",
+    "expected": {
+     "status": "ARRIVED",
+     "offset": {
+      "dx_mm": 0.017869576052534697,
+      "dy_mm": -1.2112035818745426e-09,
+      "dyaw_deg": 0.028008492010911823
+     },
+     "reason": "within tolerance",
+     "view_shift_px": 1.52587890625e-05,
+     "deviation_level": "WITHIN"
+    }
+   },
+   {
+    "image": "frames/camera_like_moved.png",
+    "expected": {
+     "status": "MISALIGNED",
+     "offset": {
+      "dx_mm": 23.290998416837624,
+      "dy_mm": -11.643304378342233,
+      "dyaw_deg": 0.15130768300937802
+     },
+     "reason": "position 26 mm > 20 mm",
+     "view_shift_px": 0.001370742953913238,
+     "deviation_level": "NEAR"
+    }
+   },
+   {
+    "image": "frames/moved.png",
+    "expected": {
+     "status": "MISALIGNED",
+     "offset": {
+      "dx_mm": 23.290998416837624,
+      "dy_mm": -11.643304378342233,
+      "dyaw_deg": 0.15130768300937802
+     },
+     "reason": "position 26 mm > 20 mm",
+     "view_shift_px": 1.52587890625e-05,
+     "deviation_level": "NEAR"
+    }
+   },
+   {
+    "image": "frames/no_fixed_marker.png",
+    "expected": {
+     "status": "MISALIGNED",
+     "offset": {
+      "dx_mm": 23.290998416837624,
+      "dy_mm": -11.643304378342233,
+      "dyaw_deg": 0.15130768300937802
+     },
+     "reason": "position 26 mm > 20 mm",
+     "view_shift_px": null,
+     "deviation_level": "NEAR"
+    }
+   },
+   {
+    "image": "frames/wrapped_96.png",
+    "expected": {
+     "status": "VIEW_UNVERIFIED",
+     "offset": null,
+     "reason": "fixed markers moved 96.0 px from registration",
+     "view_shift_px": 96.00001525878906,
+     "deviation_level": null
+    }
+   },
+   {
+    "image": "frames/missing_pinky.png",
+    "expected": {
+     "status": "NOT_FOUND",
+     "offset": null,
+     "reason": "marker not visible",
+     "view_shift_px": 1.52587890625e-05,
+     "deviation_level": null
+    }
+   },
+   {
+    "image": "frames/missing_pinky.png",
+    "expected": {
+     "status": "NOT_FOUND",
+     "offset": null,
+     "reason": "marker not visible",
+     "view_shift_px": 1.52587890625e-05,
+     "deviation_level": null
+    }
+   },
+   {
+    "image": "frames/missing_pinky.png",
+    "expected": {
+     "status": "NOT_FOUND",
+     "offset": null,
+     "reason": "marker not visible",
+     "view_shift_px": 1.52587890625e-05,
+     "deviation_level": null
+    }
+   },
+   {
+    "image": "frames/registered.png",
+    "expected": {
+     "status": "ARRIVED",
+     "offset": {
+      "dx_mm": -1.7838464495767425e-05,
+      "dy_mm": -1.2112035818745426e-09,
+      "dyaw_deg": 1.5660361896152608e-11
+     },
+     "reason": "within tolerance",
+     "view_shift_px": 1.52587890625e-05,
+     "deviation_level": "WITHIN"
+    }
+   }
+  ]
+ },
+ "observation_cases": [
+  {
+   "name": "arrived",
+   "frames": [
+    "before:moved",
+    "before:moved",
+    "before:moved",
+    "registered",
+    "camera_like_registered",
+    "registered",
+    "camera_like_registered",
+    "registered",
+    "camera_like_registered",
+    "registered",
+    "camera_like_registered",
+    "registered",
+    "camera_like_registered",
+    "registered",
+    "camera_like_registered",
+    "registered",
+    "camera_like_registered",
+    "registered",
+    "camera_like_registered",
+    "registered",
+    "camera_like_registered",
+    "registered",
+    "camera_like_registered"
+   ],
+   "expected": {
+    "status": "ARRIVED",
+    "reason": "within tolerance",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ],
+    "frames_used": 15,
+    "frames_examined": 15,
+    "frame_sequence_range": [
+     4,
+     18
+    ]
+   }
+  },
+  {
+   "name": "too_few_frames",
+   "frames": [
+    "registered",
+    "registered",
+    "registered"
+   ],
+   "expected": {
+    "status": "NOT_FOUND",
+    "reason": "only 3 usable frames (< 5)",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ],
+    "frames_used": 3,
+    "frames_examined": 3,
+    "frame_sequence_range": [
+     1,
+     3
+    ]
+   }
+  },
+  {
+   "name": "view_change_clears_earlier_frames",
+   "frames": [
+    "registered",
+    "registered",
+    "registered",
+    "registered",
+    "registered",
+    "registered",
+    "wrapped_96",
+    "moved",
+    "moved",
+    "moved",
+    "moved",
+    "moved",
+    "moved"
+   ],
+   "expected": {
+    "status": "MISALIGNED",
+    "reason": "position 26 mm > 20 mm",
+    "deviation_level": "NEAR",
+    "offset": {
+     "dx_mm": 23.3,
+     "dy_mm": -11.6,
+     "dyaw_deg": 0.15
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      439.6,
+      149.6
+     ],
+     [
+      499.4,
+      149.6
+     ],
+     [
+      499.4,
+      209.4
+     ],
+     [
+      439.6,
+      209.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ],
+    "frames_used": 6,
+    "frames_examined": 13,
+    "frame_sequence_range": [
+     1,
+     13
+    ]
+   }
+  },
+  {
+   "name": "skipped_frames_keep_earlier_ones",
+   "frames": [
+    "registered",
+    "registered",
+    "registered",
+    "registered",
+    "missing_pinky",
+    "missing_pinky",
+    "missing_pinky",
+    "no_fixed_marker",
+    "no_fixed_marker",
+    "camera_like_moved",
+    "camera_like_moved",
+    "camera_like_moved",
+    "camera_like_moved"
+   ],
+   "expected": {
+    "status": "ARRIVED",
+    "reason": "within tolerance",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 11.7,
+     "dy_mm": -5.8,
+     "dyaw_deg": 0.09
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      439.6,
+      149.7
+     ],
+     [
+      499.4,
+      149.7
+     ],
+     [
+      499.4,
+      209.3
+     ],
+     [
+      439.7,
+      209.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ],
+    "frames_used": 8,
+    "frames_examined": 13,
+    "frame_sequence_range": [
+     1,
+     13
+    ]
+   }
+  },
+  {
+   "name": "duplicate_marker_last",
+   "frames": [
+    "registered",
+    "registered",
+    "registered",
+    "registered",
+    "registered",
+    "registered",
+    "duplicate"
+   ],
+   "expected": {
+    "status": "AMBIGUOUS",
+    "reason": "marker 21 seen 2 times",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": 0.0,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null,
+    "frames_used": 0,
+    "frames_examined": 7,
+    "frame_sequence_range": [
+     1,
+     7
+    ]
+   }
+  },
+  {
+   "name": "only_stale_frames",
+   "frames": [
+    "before:registered",
+    "before:registered",
+    "before:registered",
+    "before:registered",
+    "before:registered"
+   ],
+   "expected": {
+    "error_code": "PARKING_CAMERA_UNAVAILABLE"
+   }
+  },
+  {
+   "name": "resolution_mismatch",
+   "frames": [
+    "registered",
+    "small"
+   ],
+   "expected": {
+    "error_code": "PARKING_CAMERA_UNAVAILABLE"
+   }
+  }
+ ],
+ "tracker_ticks": [
+  {
+   "now": 0.1,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": null,
+    "reason": "\uc544\uc9c1 \ud504\ub808\uc784\uc744 \ubc1b\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 0.2,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": null,
+    "reason": "\uc544\uc9c1 \ud504\ub808\uc784\uc744 \ubc1b\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 0.30000000000000004,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": null,
+    "reason": "\uc544\uc9c1 \ud504\ub808\uc784\uc744 \ubc1b\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 0.4,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": null,
+    "reason": "\uc544\uc9c1 \ud504\ub808\uc784\uc744 \ubc1b\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 0.5,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": null,
+    "reason": "\uc544\uc9c1 \ud504\ub808\uc784\uc744 \ubc1b\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 0.6,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": null,
+    "reason": "\uc544\uc9c1 \ud504\ub808\uc784\uc744 \ubc1b\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 0.7,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": null,
+    "reason": "\uc544\uc9c1 \ud504\ub808\uc784\uc744 \ubc1b\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 0.7999999999999999,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": null,
+    "reason": "\uc544\uc9c1 \ud504\ub808\uc784\uc744 \ubc1b\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 0.8999999999999999,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": null,
+    "reason": "\uc544\uc9c1 \ud504\ub808\uc784\uc744 \ubc1b\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 0.9999999999999999,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": null,
+    "reason": "\uc544\uc9c1 \ud504\ub808\uc784\uc744 \ubc1b\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 1.0999999999999999,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": null,
+    "reason": "\uc544\uc9c1 \ud504\ub808\uc784\uc744 \ubc1b\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 1.2,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": null,
+    "reason": "\uc544\uc9c1 \ud504\ub808\uc784\uc744 \ubc1b\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 1.3,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": null,
+    "reason": "\uc544\uc9c1 \ud504\ub808\uc784\uc744 \ubc1b\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 1.4000000000000001,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": null,
+    "reason": "\uc544\uc9c1 \ud504\ub808\uc784\uc744 \ubc1b\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 1.5000000000000002,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": null,
+    "reason": "\uc544\uc9c1 \ud504\ub808\uc784\uc744 \ubc1b\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 1.6000000000000003,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": null,
+    "reason": "\uc544\uc9c1 \ud504\ub808\uc784\uc744 \ubc1b\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 1.7000000000000004,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": null,
+    "reason": "\uc544\uc9c1 \ud504\ub808\uc784\uc744 \ubc1b\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 1.8000000000000005,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": null,
+    "reason": "\uc544\uc9c1 \ud504\ub808\uc784\uc744 \ubc1b\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 1.9000000000000006,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": null,
+    "reason": "\uc544\uc9c1 \ud504\ub808\uc784\uc744 \ubc1b\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 2.0000000000000004,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": null,
+    "reason": "\uc544\uc9c1 \ud504\ub808\uc784\uc744 \ubc1b\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 2.1000000000000005,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "CAMERA_UNAVAILABLE",
+    "frame_sequence": null,
+    "reason": "\uc0c8 \ud504\ub808\uc784\uc774 \ub4e4\uc5b4\uc624\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 2.2000000000000006,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "CAMERA_UNAVAILABLE",
+    "frame_sequence": null,
+    "reason": "\uc0c8 \ud504\ub808\uc784\uc774 \ub4e4\uc5b4\uc624\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 2.3000000000000007,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "CAMERA_UNAVAILABLE",
+    "frame_sequence": null,
+    "reason": "\uc0c8 \ud504\ub808\uc784\uc774 \ub4e4\uc5b4\uc624\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 2.400000000000001,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "CAMERA_UNAVAILABLE",
+    "frame_sequence": null,
+    "reason": "\uc0c8 \ud504\ub808\uc784\uc774 \ub4e4\uc5b4\uc624\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 2.500000000000001,
+   "feed": "empty",
+   "image": null,
+   "sequence": 0,
+   "expected": {
+    "state": "CAMERA_UNAVAILABLE",
+    "frame_sequence": null,
+    "reason": "\uc0c8 \ud504\ub808\uc784\uc774 \ub4e4\uc5b4\uc624\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 2.600000000000001,
+   "feed": "frame",
+   "image": "frames/missing_pinky.png",
+   "sequence": 1,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": 1,
+    "reason": "marker not visible",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 2.700000000000001,
+   "feed": "frame",
+   "image": "frames/missing_pinky.png",
+   "sequence": 2,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": 2,
+    "reason": "marker not visible",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 2.800000000000001,
+   "feed": "frame",
+   "image": "frames/missing_pinky.png",
+   "sequence": 3,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": 3,
+    "reason": "marker not visible",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 2.9000000000000012,
+   "feed": "frame",
+   "image": "frames/missing_pinky.png",
+   "sequence": 4,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": 4,
+    "reason": "marker not visible",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 3.0000000000000013,
+   "feed": "frame",
+   "image": "frames/missing_pinky.png",
+   "sequence": 5,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": 5,
+    "reason": "marker not visible",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 3.1000000000000014,
+   "feed": "frame",
+   "image": "frames/drive_0.png",
+   "sequence": 6,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 6,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "NEAR",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -23.4,
+     "dyaw_deg": 0.3
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      159.6
+     ],
+     [
+      479.4,
+      159.6
+     ],
+     [
+      479.4,
+      219.4
+     ],
+     [
+      419.6,
+      219.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 3.2000000000000015,
+   "feed": "frame",
+   "image": "frames/drive_1.png",
+   "sequence": 7,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 7,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -18.7,
+     "dyaw_deg": 0.24
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      155.6
+     ],
+     [
+      479.4,
+      155.6
+     ],
+     [
+      479.4,
+      215.4
+     ],
+     [
+      419.6,
+      215.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 3.3000000000000016,
+   "feed": "frame",
+   "image": "frames/drive_2.png",
+   "sequence": 8,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 8,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -14.1,
+     "dyaw_deg": 0.18
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      151.6
+     ],
+     [
+      479.4,
+      151.6
+     ],
+     [
+      479.4,
+      211.4
+     ],
+     [
+      419.6,
+      211.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 3.4000000000000017,
+   "feed": "frame",
+   "image": "frames/drive_3.png",
+   "sequence": 9,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 9,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -9.4,
+     "dyaw_deg": 0.12
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      147.6
+     ],
+     [
+      479.4,
+      147.6
+     ],
+     [
+      479.4,
+      207.4
+     ],
+     [
+      419.6,
+      207.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 3.5000000000000018,
+   "feed": "frame",
+   "image": "frames/drive_4.png",
+   "sequence": 10,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 10,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -4.7,
+     "dyaw_deg": 0.06
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      143.6
+     ],
+     [
+      479.4,
+      143.6
+     ],
+     [
+      479.4,
+      203.4
+     ],
+     [
+      419.6,
+      203.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 3.600000000000002,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 11,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 11,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 3.700000000000002,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 12,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 12,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 3.800000000000002,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 13,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 13,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 3.900000000000002,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 14,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 14,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 4.000000000000002,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 15,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 15,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 4.100000000000001,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 16,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 16,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 4.200000000000001,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 17,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 17,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 4.300000000000001,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 18,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 18,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 4.4,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 19,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 19,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 4.5,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 20,
+   "expected": {
+    "state": "IN_POSITION",
+    "frame_sequence": 20,
+    "reason": "1\ucd08 \uc774\uc0c1 \uba48\ucdb0 \uc788\uc74c",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 4.6,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 21,
+   "expected": {
+    "state": "IN_POSITION",
+    "frame_sequence": 21,
+    "reason": "1\ucd08 \uc774\uc0c1 \uba48\ucdb0 \uc788\uc74c",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 4.699999999999999,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 22,
+   "expected": {
+    "state": "IN_POSITION",
+    "frame_sequence": 22,
+    "reason": "1\ucd08 \uc774\uc0c1 \uba48\ucdb0 \uc788\uc74c",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 4.799999999999999,
+   "feed": "frame",
+   "image": "frames/drift_2_1.png",
+   "sequence": 23,
+   "expected": {
+    "state": "IN_POSITION",
+    "frame_sequence": 23,
+    "reason": "1\ucd08 \uc774\uc0c1 \uba48\ucdb0 \uc788\uc74c",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 2.2,
+    "marker_corners_px": [
+     [
+      420.6,
+      141.6
+     ],
+     [
+      480.4,
+      141.6
+     ],
+     [
+      480.4,
+      201.4
+     ],
+     [
+      420.6,
+      201.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     1.0,
+     2.0
+    ]
+   }
+  },
+  {
+   "now": 4.899999999999999,
+   "feed": "frame",
+   "image": "frames/drift_2_1.png",
+   "sequence": 24,
+   "expected": {
+    "state": "IN_POSITION",
+    "frame_sequence": 24,
+    "reason": "1\ucd08 \uc774\uc0c1 \uba48\ucdb0 \uc788\uc74c",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 2.2,
+    "marker_corners_px": [
+     [
+      420.6,
+      141.6
+     ],
+     [
+      480.4,
+      141.6
+     ],
+     [
+      480.4,
+      201.4
+     ],
+     [
+      420.6,
+      201.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     1.0,
+     2.0
+    ]
+   }
+  },
+  {
+   "now": 4.999999999999998,
+   "feed": "frame",
+   "image": "frames/drift_2_1.png",
+   "sequence": 25,
+   "expected": {
+    "state": "IN_POSITION",
+    "frame_sequence": 25,
+    "reason": "1\ucd08 \uc774\uc0c1 \uba48\ucdb0 \uc788\uc74c",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 2.2,
+    "marker_corners_px": [
+     [
+      420.6,
+      141.6
+     ],
+     [
+      480.4,
+      141.6
+     ],
+     [
+      480.4,
+      201.4
+     ],
+     [
+      420.6,
+      201.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     1.0,
+     2.0
+    ]
+   }
+  },
+  {
+   "now": 5.099999999999998,
+   "feed": "frame",
+   "image": "frames/moved.png",
+   "sequence": 26,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 26,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "NEAR",
+    "offset": {
+     "dx_mm": 23.3,
+     "dy_mm": -11.6,
+     "dyaw_deg": 0.15
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      439.6,
+      149.6
+     ],
+     [
+      499.4,
+      149.6
+     ],
+     [
+      499.4,
+      209.4
+     ],
+     [
+      439.6,
+      209.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 5.1999999999999975,
+   "feed": "frame",
+   "image": "frames/moved.png",
+   "sequence": 27,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 27,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "NEAR",
+    "offset": {
+     "dx_mm": 23.3,
+     "dy_mm": -11.6,
+     "dyaw_deg": 0.15
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      439.6,
+      149.6
+     ],
+     [
+      499.4,
+      149.6
+     ],
+     [
+      499.4,
+      209.4
+     ],
+     [
+      439.6,
+      209.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 5.299999999999997,
+   "feed": "frame",
+   "image": "frames/moved.png",
+   "sequence": 28,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 28,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "NEAR",
+    "offset": {
+     "dx_mm": 23.3,
+     "dy_mm": -11.6,
+     "dyaw_deg": 0.15
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      439.6,
+      149.6
+     ],
+     [
+      499.4,
+      149.6
+     ],
+     [
+      499.4,
+      209.4
+     ],
+     [
+      439.6,
+      209.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 5.399999999999997,
+   "feed": "frame",
+   "image": "frames/moved.png",
+   "sequence": 29,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 29,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "NEAR",
+    "offset": {
+     "dx_mm": 23.3,
+     "dy_mm": -11.6,
+     "dyaw_deg": 0.15
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      439.6,
+      149.6
+     ],
+     [
+      499.4,
+      149.6
+     ],
+     [
+      499.4,
+      209.4
+     ],
+     [
+      439.6,
+      209.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 5.4999999999999964,
+   "feed": "frame",
+   "image": "frames/moved.png",
+   "sequence": 30,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 30,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "NEAR",
+    "offset": {
+     "dx_mm": 23.3,
+     "dy_mm": -11.6,
+     "dyaw_deg": 0.15
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      439.6,
+      149.6
+     ],
+     [
+      499.4,
+      149.6
+     ],
+     [
+      499.4,
+      209.4
+     ],
+     [
+      439.6,
+      209.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 5.599999999999996,
+   "feed": "frame",
+   "image": "frames/moved.png",
+   "sequence": 31,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 31,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "NEAR",
+    "offset": {
+     "dx_mm": 23.3,
+     "dy_mm": -11.6,
+     "dyaw_deg": 0.15
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      439.6,
+      149.6
+     ],
+     [
+      499.4,
+      149.6
+     ],
+     [
+      499.4,
+      209.4
+     ],
+     [
+      439.6,
+      209.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 5.699999999999996,
+   "feed": "frame",
+   "image": "frames/moved.png",
+   "sequence": 32,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 32,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "NEAR",
+    "offset": {
+     "dx_mm": 23.3,
+     "dy_mm": -11.6,
+     "dyaw_deg": 0.15
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      439.6,
+      149.6
+     ],
+     [
+      499.4,
+      149.6
+     ],
+     [
+      499.4,
+      209.4
+     ],
+     [
+      439.6,
+      209.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 5.799999999999995,
+   "feed": "frame",
+   "image": "frames/moved.png",
+   "sequence": 33,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 33,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "NEAR",
+    "offset": {
+     "dx_mm": 23.3,
+     "dy_mm": -11.6,
+     "dyaw_deg": 0.15
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      439.6,
+      149.6
+     ],
+     [
+      499.4,
+      149.6
+     ],
+     [
+      499.4,
+      209.4
+     ],
+     [
+      439.6,
+      209.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 5.899999999999995,
+   "feed": "frame",
+   "image": "frames/moved.png",
+   "sequence": 34,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 34,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "NEAR",
+    "offset": {
+     "dx_mm": 23.3,
+     "dy_mm": -11.6,
+     "dyaw_deg": 0.15
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      439.6,
+      149.6
+     ],
+     [
+      499.4,
+      149.6
+     ],
+     [
+      499.4,
+      209.4
+     ],
+     [
+      439.6,
+      209.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 5.999999999999995,
+   "feed": "frame",
+   "image": "frames/moved.png",
+   "sequence": 35,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 35,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "NEAR",
+    "offset": {
+     "dx_mm": 23.3,
+     "dy_mm": -11.6,
+     "dyaw_deg": 0.15
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      439.6,
+      149.6
+     ],
+     [
+      499.4,
+      149.6
+     ],
+     [
+      499.4,
+      209.4
+     ],
+     [
+      439.6,
+      209.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 6.099999999999994,
+   "feed": "frame",
+   "image": "frames/moved.png",
+   "sequence": 36,
+   "expected": {
+    "state": "OFF_POSITION",
+    "frame_sequence": 36,
+    "reason": "1\ucd08 \uc774\uc0c1 \uba48\ucdb0 \uc788\uc74c",
+    "deviation_level": "NEAR",
+    "offset": {
+     "dx_mm": 23.3,
+     "dy_mm": -11.6,
+     "dyaw_deg": 0.15
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      439.6,
+      149.6
+     ],
+     [
+      499.4,
+      149.6
+     ],
+     [
+      499.4,
+      209.4
+     ],
+     [
+      439.6,
+      209.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 6.199999999999994,
+   "feed": "frame",
+   "image": "frames/moved.png",
+   "sequence": 37,
+   "expected": {
+    "state": "OFF_POSITION",
+    "frame_sequence": 37,
+    "reason": "1\ucd08 \uc774\uc0c1 \uba48\ucdb0 \uc788\uc74c",
+    "deviation_level": "NEAR",
+    "offset": {
+     "dx_mm": 23.3,
+     "dy_mm": -11.6,
+     "dyaw_deg": 0.15
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      439.6,
+      149.6
+     ],
+     [
+      499.4,
+      149.6
+     ],
+     [
+      499.4,
+      209.4
+     ],
+     [
+      439.6,
+      209.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 6.299999999999994,
+   "feed": "frame",
+   "image": "frames/wrapped_96.png",
+   "sequence": 38,
+   "expected": {
+    "state": "VIEW_UNVERIFIED",
+    "frame_sequence": 38,
+    "reason": "fixed markers moved 96.0 px from registration",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": 96.0,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 6.399999999999993,
+   "feed": "frame",
+   "image": "frames/wrapped_96.png",
+   "sequence": 39,
+   "expected": {
+    "state": "VIEW_UNVERIFIED",
+    "frame_sequence": 39,
+    "reason": "fixed markers moved 96.0 px from registration",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": 96.0,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 6.499999999999993,
+   "feed": "frame",
+   "image": "frames/wrapped_96.png",
+   "sequence": 40,
+   "expected": {
+    "state": "VIEW_UNVERIFIED",
+    "frame_sequence": 40,
+    "reason": "fixed markers moved 96.0 px from registration",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": 96.0,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 6.5999999999999925,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 41,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 41,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 6.699999999999992,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 42,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 42,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 6.799999999999992,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 43,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 43,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 6.8999999999999915,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 44,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 44,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 6.999999999999991,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 45,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 45,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 7.099999999999991,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 46,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 46,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 7.19999999999999,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 47,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 47,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 7.29999999999999,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 48,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 48,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 7.39999999999999,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 49,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 49,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 7.499999999999989,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 50,
+   "expected": {
+    "state": "IN_POSITION",
+    "frame_sequence": 50,
+    "reason": "1\ucd08 \uc774\uc0c1 \uba48\ucdb0 \uc788\uc74c",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 7.599999999999989,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 51,
+   "expected": {
+    "state": "IN_POSITION",
+    "frame_sequence": 51,
+    "reason": "1\ucd08 \uc774\uc0c1 \uba48\ucdb0 \uc788\uc74c",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 7.699999999999989,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 52,
+   "expected": {
+    "state": "IN_POSITION",
+    "frame_sequence": 52,
+    "reason": "1\ucd08 \uc774\uc0c1 \uba48\ucdb0 \uc788\uc74c",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 7.799999999999988,
+   "feed": "frame",
+   "image": "frames/duplicate.png",
+   "sequence": 53,
+   "expected": {
+    "state": "AMBIGUOUS",
+    "frame_sequence": 53,
+    "reason": "marker 21 seen 2 times",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": 0.0,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 7.899999999999988,
+   "feed": "frame",
+   "image": "frames/duplicate.png",
+   "sequence": 54,
+   "expected": {
+    "state": "AMBIGUOUS",
+    "frame_sequence": 54,
+    "reason": "marker 21 seen 2 times",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": 0.0,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 7.999999999999988,
+   "feed": "frame",
+   "image": "frames/camera_like_registered.png",
+   "sequence": 55,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 55,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 8.099999999999987,
+   "feed": "frame",
+   "image": "frames/camera_like_registered.png",
+   "sequence": 56,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 56,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 8.199999999999987,
+   "feed": "frame",
+   "image": "frames/camera_like_registered.png",
+   "sequence": 57,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 57,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 8.299999999999986,
+   "feed": "frame",
+   "image": "frames/camera_like_registered.png",
+   "sequence": 58,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 58,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 8.399999999999986,
+   "feed": "frame",
+   "image": "frames/camera_like_registered.png",
+   "sequence": 59,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 59,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 8.499999999999986,
+   "feed": "frame",
+   "image": "frames/camera_like_registered.png",
+   "sequence": 60,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 60,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 8.599999999999985,
+   "feed": "frame",
+   "image": "frames/camera_like_registered.png",
+   "sequence": 61,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 61,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 8.699999999999985,
+   "feed": "frame",
+   "image": "frames/camera_like_registered.png",
+   "sequence": 62,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 62,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 8.799999999999985,
+   "feed": "frame",
+   "image": "frames/camera_like_registered.png",
+   "sequence": 63,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 63,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 8.899999999999984,
+   "feed": "frame",
+   "image": "frames/camera_like_registered.png",
+   "sequence": 64,
+   "expected": {
+    "state": "IN_POSITION",
+    "frame_sequence": 64,
+    "reason": "1\ucd08 \uc774\uc0c1 \uba48\ucdb0 \uc788\uc74c",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 8.999999999999984,
+   "feed": "frame",
+   "image": "frames/camera_like_registered.png",
+   "sequence": 65,
+   "expected": {
+    "state": "IN_POSITION",
+    "frame_sequence": 65,
+    "reason": "1\ucd08 \uc774\uc0c1 \uba48\ucdb0 \uc788\uc74c",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 9.099999999999984,
+   "feed": "frame",
+   "image": "frames/camera_like_registered.png",
+   "sequence": 66,
+   "expected": {
+    "state": "IN_POSITION",
+    "frame_sequence": 66,
+    "reason": "1\ucd08 \uc774\uc0c1 \uba48\ucdb0 \uc788\uc74c",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 9.199999999999983,
+   "feed": "frame",
+   "image": "frames/missing_pinky.png",
+   "sequence": 67,
+   "expected": {
+    "state": "IN_POSITION",
+    "frame_sequence": 67,
+    "reason": "1\ucd08 \uc774\uc0c1 \uba48\ucdb0 \uc788\uc74c",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 9.299999999999983,
+   "feed": "frame",
+   "image": "frames/missing_pinky.png",
+   "sequence": 68,
+   "expected": {
+    "state": "IN_POSITION",
+    "frame_sequence": 68,
+    "reason": "1\ucd08 \uc774\uc0c1 \uba48\ucdb0 \uc788\uc74c",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 9.399999999999983,
+   "feed": "frame",
+   "image": "frames/missing_pinky.png",
+   "sequence": 69,
+   "expected": {
+    "state": "IN_POSITION",
+    "frame_sequence": 69,
+    "reason": "1\ucd08 \uc774\uc0c1 \uba48\ucdb0 \uc788\uc74c",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 9.499999999999982,
+   "feed": "frame",
+   "image": "frames/missing_pinky.png",
+   "sequence": 70,
+   "expected": {
+    "state": "IN_POSITION",
+    "frame_sequence": 70,
+    "reason": "1\ucd08 \uc774\uc0c1 \uba48\ucdb0 \uc788\uc74c",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 9.599999999999982,
+   "feed": "frame",
+   "image": "frames/missing_pinky.png",
+   "sequence": 71,
+   "expected": {
+    "state": "IN_POSITION",
+    "frame_sequence": 71,
+    "reason": "1\ucd08 \uc774\uc0c1 \uba48\ucdb0 \uc788\uc74c",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 9.699999999999982,
+   "feed": "frame",
+   "image": "frames/missing_pinky.png",
+   "sequence": 72,
+   "expected": {
+    "state": "IN_POSITION",
+    "frame_sequence": 72,
+    "reason": "1\ucd08 \uc774\uc0c1 \uba48\ucdb0 \uc788\uc74c",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 9.799999999999981,
+   "feed": "frame",
+   "image": "frames/missing_pinky.png",
+   "sequence": 73,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 73,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 9.89999999999998,
+   "feed": "frame",
+   "image": "frames/missing_pinky.png",
+   "sequence": 74,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 74,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 9.99999999999998,
+   "feed": "frame",
+   "image": "frames/missing_pinky.png",
+   "sequence": 75,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 75,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 10.09999999999998,
+   "feed": "frame",
+   "image": "frames/missing_pinky.png",
+   "sequence": 76,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 76,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": 0.0,
+     "dy_mm": 0.0,
+     "dyaw_deg": 0.03
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.7
+     ],
+     [
+      479.3,
+      139.6
+     ],
+     [
+      479.4,
+      199.3
+     ],
+     [
+      419.7,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     -0.0,
+     -0.0
+    ]
+   }
+  },
+  {
+   "now": 10.19999999999998,
+   "feed": "frame",
+   "image": "frames/missing_pinky.png",
+   "sequence": 77,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": 77,
+    "reason": "marker not visible",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 10.29999999999998,
+   "feed": "frame",
+   "image": "frames/missing_pinky.png",
+   "sequence": 78,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": 78,
+    "reason": "marker not visible",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 10.399999999999979,
+   "feed": "frame",
+   "image": "frames/no_fixed_marker.png",
+   "sequence": 79,
+   "expected": {
+    "state": "VIEW_UNVERIFIED",
+    "frame_sequence": 79,
+    "reason": "no fixed marker visible to verify the camera view",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 10.499999999999979,
+   "feed": "frame",
+   "image": "frames/no_fixed_marker.png",
+   "sequence": 80,
+   "expected": {
+    "state": "VIEW_UNVERIFIED",
+    "frame_sequence": 80,
+    "reason": "no fixed marker visible to verify the camera view",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 10.599999999999978,
+   "feed": "frame",
+   "image": "frames/no_fixed_marker.png",
+   "sequence": 81,
+   "expected": {
+    "state": "VIEW_UNVERIFIED",
+    "frame_sequence": 81,
+    "reason": "no fixed marker visible to verify the camera view",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 10.699999999999978,
+   "feed": "missing",
+   "image": null,
+   "sequence": 81,
+   "expected": {
+    "state": "CAMERA_UNAVAILABLE",
+    "frame_sequence": null,
+    "reason": "\uce74\uba54\ub77c feed\uac00 \uc5c6\uc2b5\ub2c8\ub2e4: head_camera",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 10.799999999999978,
+   "feed": "missing",
+   "image": null,
+   "sequence": 81,
+   "expected": {
+    "state": "CAMERA_UNAVAILABLE",
+    "frame_sequence": null,
+    "reason": "\uce74\uba54\ub77c feed\uac00 \uc5c6\uc2b5\ub2c8\ub2e4: head_camera",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 10.899999999999977,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 82,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 82,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 10.999999999999977,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 83,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 83,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 11.099999999999977,
+   "feed": "frame",
+   "image": "frames/registered.png",
+   "sequence": 84,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 84,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 11.199999999999976,
+   "feed": "frame",
+   "image": "frames/lifted.png",
+   "sequence": 85,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 85,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 11.299999999999976,
+   "feed": "frame",
+   "image": "frames/lifted.png",
+   "sequence": 86,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 86,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 11.399999999999975,
+   "feed": "frame",
+   "image": "frames/lifted.png",
+   "sequence": 87,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 87,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 11.499999999999975,
+   "feed": "frame",
+   "image": "frames/lifted.png",
+   "sequence": 88,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 88,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 11.599999999999975,
+   "feed": "frame",
+   "image": "frames/lifted.png",
+   "sequence": 89,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 89,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 11.699999999999974,
+   "feed": "frame",
+   "image": "frames/lifted.png",
+   "sequence": 90,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 90,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 11.799999999999974,
+   "feed": "frame",
+   "image": "frames/lifted.png",
+   "sequence": 91,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 91,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 11.899999999999974,
+   "feed": "frame",
+   "image": "frames/lifted.png",
+   "sequence": 92,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 92,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 11.999999999999973,
+   "feed": "frame",
+   "image": "frames/lifted.png",
+   "sequence": 93,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 93,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 12.099999999999973,
+   "feed": "frame",
+   "image": "frames/lifted.png",
+   "sequence": 94,
+   "expected": {
+    "state": "MOVING",
+    "frame_sequence": 94,
+    "reason": "\uc6c0\uc9c1\uc774\ub294 \uc911",
+    "deviation_level": "WITHIN",
+    "offset": {
+     "dx_mm": -0.0,
+     "dy_mm": -0.0,
+     "dyaw_deg": 0.0
+    },
+    "view_shift_px": 0.0,
+    "marker_corners_px": [
+     [
+      419.6,
+      139.6
+     ],
+     [
+      479.4,
+      139.6
+     ],
+     [
+      479.4,
+      199.4
+     ],
+     [
+      419.6,
+      199.4
+     ]
+    ],
+    "view_shift_xy_px": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "now": 12.199999999999973,
+   "feed": "frame",
+   "image": "frames/lifted.png",
+   "sequence": 95,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": 95,
+    "reason": "marker side 93.2 mm on the registered plane (printed 70 mm)",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  },
+  {
+   "now": 12.299999999999972,
+   "feed": "frame",
+   "image": "frames/lifted.png",
+   "sequence": 96,
+   "expected": {
+    "state": "NOT_IN_VIEW",
+    "frame_sequence": 96,
+    "reason": "marker side 93.2 mm on the registered plane (printed 70 mm)",
+    "deviation_level": null,
+    "offset": null,
+    "view_shift_px": null,
+    "marker_corners_px": null,
+    "view_shift_xy_px": null
+   }
+  }
+ ],
+ "registration_cases": [
+  {
+   "name": "steady",
+   "frames": [
+    "frames/reg_0.png",
+    "frames/reg_1.png",
+    "frames/reg_2.png",
+    "frames/reg_3.png",
+    "frames/reg_4.png"
+   ],
+   "options": {
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "anchor_ids": null,
+    "trust_single_anchor": false,
+    "no_anchors": false,
+    "tolerance_mm": 30.0,
+    "tolerance_deg": 5.0
+   },
+   "expected": {
+    "schema_version": 2,
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "pixel_transform_id": "opencv-v4l2-capture-no-app-geometry-v1",
+    "image_size_px": {
+     "width": 640,
+     "height": 480
+    },
+    "aruco_dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "position_method": "corner rays intersected with the registered marker plane",
+    "opencv_version": "4.6.0",
+    "reference_pose_in_camera": {
+     "rotation": [
+      [
+       0.9658495828559234,
+       -0.018591537644577747,
+       -0.2584355587473408
+      ],
+      [
+       0.018591537644580065,
+       -0.9898787393860652,
+       0.14069270073271284
+      ],
+      [
+       -0.2584355587473406,
+       -0.14069270073271317,
+       -0.955728322241988
+      ]
+     ],
+     "translation_mm": [
+      151.09825361677701,
+      -82.25811293300065,
+      1145.5375001847347
+     ]
+    },
+    "reference_corners_px": [
+     [
+      419.5577392578125,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      199.44227600097656
+     ],
+     [
+      419.5577392578125,
+      199.44227600097656
+     ]
+    ],
+    "reference_marker_side_on_plane_mm": 70.0,
+    "reference_frame_count": 5,
+    "reference_jitter": {
+     "position_mm": 0.31,
+     "yaw_deg": 0.003
+    },
+    "anchors": [
+     {
+      "marker_id": 1,
+      "center_px": [
+       109.5,
+       89.5
+      ]
+     },
+     {
+      "marker_id": 3,
+      "center_px": [
+       149.5,
+       389.5
+      ]
+     }
+    ],
+    "view_check": {
+     "mode": "FIXED_MARKERS",
+     "max_anchor_shift_px": 15.0
+    },
+    "tolerance": {
+     "position_mm": 30.0,
+     "yaw_deg": 5.0
+    },
+    "axes": "dx +: \ub9c8\ucee4 \uc624\ub978\ucabd \ubcc0 \ubc29\ud5a5, dy +: \ub9c8\ucee4 \uc717\ubcc0(\ud654\uc0b4\ud45c) \ubc29\ud5a5, dyaw +: \ucc9c\uc7a5 \uce74\uba54\ub77c\uc5d0\uc11c \ubcfc \ub54c \ubc18\uc2dc\uacc4",
+    "status": "DRAFT_ONLY",
+    "review_required": true,
+    "usable_for_robot_control": false,
+    "keys": [
+     "schema_version",
+     "spot_id",
+     "camera_id",
+     "pixel_transform_id",
+     "image_size_px",
+     "intrinsic_calibration",
+     "aruco_dictionary",
+     "marker_id",
+     "marker_side_mm",
+     "marker_forward_axis",
+     "position_method",
+     "opencv_version",
+     "reference_pose_in_camera",
+     "reference_corners_px",
+     "reference_marker_side_on_plane_mm",
+     "reference_frame_count",
+     "reference_jitter",
+     "anchors",
+     "view_check",
+     "tolerance",
+     "axes",
+     "created_at",
+     "status",
+     "review_required",
+     "usable_for_robot_control"
+    ],
+    "intrinsic_calibration_sha256": "04bbe7b66d20364301c8103d6b327d9f889dfca8d8e72ee0c6bb4866b8751d06"
+   }
+  },
+  {
+   "name": "requested_anchor",
+   "frames": [
+    "frames/reg_0.png",
+    "frames/reg_1.png",
+    "frames/reg_2.png",
+    "frames/reg_3.png",
+    "frames/reg_4.png"
+   ],
+   "options": {
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "anchor_ids": [
+     3
+    ],
+    "trust_single_anchor": false,
+    "no_anchors": false,
+    "tolerance_mm": 30.0,
+    "tolerance_deg": 5.0
+   },
+   "expected": {
+    "schema_version": 2,
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "pixel_transform_id": "opencv-v4l2-capture-no-app-geometry-v1",
+    "image_size_px": {
+     "width": 640,
+     "height": 480
+    },
+    "aruco_dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "position_method": "corner rays intersected with the registered marker plane",
+    "opencv_version": "4.6.0",
+    "reference_pose_in_camera": {
+     "rotation": [
+      [
+       0.9658495828559234,
+       -0.018591537644577747,
+       -0.2584355587473408
+      ],
+      [
+       0.018591537644580065,
+       -0.9898787393860652,
+       0.14069270073271284
+      ],
+      [
+       -0.2584355587473406,
+       -0.14069270073271317,
+       -0.955728322241988
+      ]
+     ],
+     "translation_mm": [
+      151.09825361677701,
+      -82.25811293300065,
+      1145.5375001847347
+     ]
+    },
+    "reference_corners_px": [
+     [
+      419.5577392578125,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      199.44227600097656
+     ],
+     [
+      419.5577392578125,
+      199.44227600097656
+     ]
+    ],
+    "reference_marker_side_on_plane_mm": 70.0,
+    "reference_frame_count": 5,
+    "reference_jitter": {
+     "position_mm": 0.31,
+     "yaw_deg": 0.003
+    },
+    "anchors": [
+     {
+      "marker_id": 3,
+      "center_px": [
+       149.5,
+       389.5
+      ]
+     }
+    ],
+    "view_check": {
+     "mode": "FIXED_MARKERS",
+     "max_anchor_shift_px": 15.0
+    },
+    "tolerance": {
+     "position_mm": 30.0,
+     "yaw_deg": 5.0
+    },
+    "axes": "dx +: \ub9c8\ucee4 \uc624\ub978\ucabd \ubcc0 \ubc29\ud5a5, dy +: \ub9c8\ucee4 \uc717\ubcc0(\ud654\uc0b4\ud45c) \ubc29\ud5a5, dyaw +: \ucc9c\uc7a5 \uce74\uba54\ub77c\uc5d0\uc11c \ubcfc \ub54c \ubc18\uc2dc\uacc4",
+    "status": "DRAFT_ONLY",
+    "review_required": true,
+    "usable_for_robot_control": false,
+    "keys": [
+     "schema_version",
+     "spot_id",
+     "camera_id",
+     "pixel_transform_id",
+     "image_size_px",
+     "intrinsic_calibration",
+     "aruco_dictionary",
+     "marker_id",
+     "marker_side_mm",
+     "marker_forward_axis",
+     "position_method",
+     "opencv_version",
+     "reference_pose_in_camera",
+     "reference_corners_px",
+     "reference_marker_side_on_plane_mm",
+     "reference_frame_count",
+     "reference_jitter",
+     "anchors",
+     "view_check",
+     "tolerance",
+     "axes",
+     "created_at",
+     "status",
+     "review_required",
+     "usable_for_robot_control"
+    ],
+    "intrinsic_calibration_sha256": "04bbe7b66d20364301c8103d6b327d9f889dfca8d8e72ee0c6bb4866b8751d06"
+   }
+  },
+  {
+   "name": "no_anchors",
+   "frames": [
+    "frames/reg_0.png",
+    "frames/reg_1.png",
+    "frames/reg_2.png",
+    "frames/reg_3.png",
+    "frames/reg_4.png"
+   ],
+   "options": {
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "anchor_ids": null,
+    "trust_single_anchor": false,
+    "no_anchors": true,
+    "tolerance_mm": 30.0,
+    "tolerance_deg": 5.0
+   },
+   "expected": {
+    "schema_version": 2,
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "pixel_transform_id": "opencv-v4l2-capture-no-app-geometry-v1",
+    "image_size_px": {
+     "width": 640,
+     "height": 480
+    },
+    "aruco_dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "position_method": "corner rays intersected with the registered marker plane",
+    "opencv_version": "4.6.0",
+    "reference_pose_in_camera": {
+     "rotation": [
+      [
+       0.9658495828559234,
+       -0.018591537644577747,
+       -0.2584355587473408
+      ],
+      [
+       0.018591537644580065,
+       -0.9898787393860652,
+       0.14069270073271284
+      ],
+      [
+       -0.2584355587473406,
+       -0.14069270073271317,
+       -0.955728322241988
+      ]
+     ],
+     "translation_mm": [
+      151.09825361677701,
+      -82.25811293300065,
+      1145.5375001847347
+     ]
+    },
+    "reference_corners_px": [
+     [
+      419.5577392578125,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      199.44227600097656
+     ],
+     [
+      419.5577392578125,
+      199.44227600097656
+     ]
+    ],
+    "reference_marker_side_on_plane_mm": 70.0,
+    "reference_frame_count": 5,
+    "reference_jitter": {
+     "position_mm": 0.31,
+     "yaw_deg": 0.003
+    },
+    "anchors": [],
+    "view_check": {
+     "mode": "OFF"
+    },
+    "tolerance": {
+     "position_mm": 30.0,
+     "yaw_deg": 5.0
+    },
+    "axes": "dx +: \ub9c8\ucee4 \uc624\ub978\ucabd \ubcc0 \ubc29\ud5a5, dy +: \ub9c8\ucee4 \uc717\ubcc0(\ud654\uc0b4\ud45c) \ubc29\ud5a5, dyaw +: \ucc9c\uc7a5 \uce74\uba54\ub77c\uc5d0\uc11c \ubcfc \ub54c \ubc18\uc2dc\uacc4",
+    "status": "DRAFT_ONLY",
+    "review_required": true,
+    "usable_for_robot_control": false,
+    "keys": [
+     "schema_version",
+     "spot_id",
+     "camera_id",
+     "pixel_transform_id",
+     "image_size_px",
+     "intrinsic_calibration",
+     "aruco_dictionary",
+     "marker_id",
+     "marker_side_mm",
+     "marker_forward_axis",
+     "position_method",
+     "opencv_version",
+     "reference_pose_in_camera",
+     "reference_corners_px",
+     "reference_marker_side_on_plane_mm",
+     "reference_frame_count",
+     "reference_jitter",
+     "anchors",
+     "view_check",
+     "tolerance",
+     "axes",
+     "created_at",
+     "status",
+     "review_required",
+     "usable_for_robot_control"
+    ],
+    "intrinsic_calibration_sha256": "04bbe7b66d20364301c8103d6b327d9f889dfca8d8e72ee0c6bb4866b8751d06"
+   }
+  },
+  {
+   "name": "trusted_single_anchor",
+   "frames": [
+    "frames/reg_0.png",
+    "frames/reg_1.png",
+    "frames/reg_2.png",
+    "frames/reg_3.png",
+    "frames/reg_4.png"
+   ],
+   "options": {
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "anchor_ids": [
+     1
+    ],
+    "trust_single_anchor": true,
+    "no_anchors": false,
+    "tolerance_mm": 30.0,
+    "tolerance_deg": 5.0
+   },
+   "expected": {
+    "schema_version": 2,
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "pixel_transform_id": "opencv-v4l2-capture-no-app-geometry-v1",
+    "image_size_px": {
+     "width": 640,
+     "height": 480
+    },
+    "aruco_dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "position_method": "corner rays intersected with the registered marker plane",
+    "opencv_version": "4.6.0",
+    "reference_pose_in_camera": {
+     "rotation": [
+      [
+       0.9658495828559234,
+       -0.018591537644577747,
+       -0.2584355587473408
+      ],
+      [
+       0.018591537644580065,
+       -0.9898787393860652,
+       0.14069270073271284
+      ],
+      [
+       -0.2584355587473406,
+       -0.14069270073271317,
+       -0.955728322241988
+      ]
+     ],
+     "translation_mm": [
+      151.09825361677701,
+      -82.25811293300065,
+      1145.5375001847347
+     ]
+    },
+    "reference_corners_px": [
+     [
+      419.5577392578125,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      199.44227600097656
+     ],
+     [
+      419.5577392578125,
+      199.44227600097656
+     ]
+    ],
+    "reference_marker_side_on_plane_mm": 70.0,
+    "reference_frame_count": 5,
+    "reference_jitter": {
+     "position_mm": 0.31,
+     "yaw_deg": 0.003
+    },
+    "anchors": [
+     {
+      "marker_id": 1,
+      "center_px": [
+       109.5,
+       89.5
+      ]
+     }
+    ],
+    "view_check": {
+     "mode": "FIXED_MARKERS",
+     "max_anchor_shift_px": 15.0,
+     "single_anchor_trusted": true
+    },
+    "tolerance": {
+     "position_mm": 30.0,
+     "yaw_deg": 5.0
+    },
+    "axes": "dx +: \ub9c8\ucee4 \uc624\ub978\ucabd \ubcc0 \ubc29\ud5a5, dy +: \ub9c8\ucee4 \uc717\ubcc0(\ud654\uc0b4\ud45c) \ubc29\ud5a5, dyaw +: \ucc9c\uc7a5 \uce74\uba54\ub77c\uc5d0\uc11c \ubcfc \ub54c \ubc18\uc2dc\uacc4",
+    "status": "DRAFT_ONLY",
+    "review_required": true,
+    "usable_for_robot_control": false,
+    "keys": [
+     "schema_version",
+     "spot_id",
+     "camera_id",
+     "pixel_transform_id",
+     "image_size_px",
+     "intrinsic_calibration",
+     "aruco_dictionary",
+     "marker_id",
+     "marker_side_mm",
+     "marker_forward_axis",
+     "position_method",
+     "opencv_version",
+     "reference_pose_in_camera",
+     "reference_corners_px",
+     "reference_marker_side_on_plane_mm",
+     "reference_frame_count",
+     "reference_jitter",
+     "anchors",
+     "view_check",
+     "tolerance",
+     "axes",
+     "created_at",
+     "status",
+     "review_required",
+     "usable_for_robot_control"
+    ],
+    "intrinsic_calibration_sha256": "04bbe7b66d20364301c8103d6b327d9f889dfca8d8e72ee0c6bb4866b8751d06"
+   }
+  },
+  {
+   "name": "moved_while_registering",
+   "frames": [
+    "frames/reg_0.png",
+    "frames/reg_1.png",
+    "frames/reg_2.png",
+    "frames/reg_3.png",
+    "frames/moved.png"
+   ],
+   "options": {
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "anchor_ids": null,
+    "trust_single_anchor": false,
+    "no_anchors": false,
+    "tolerance_mm": 30.0,
+    "tolerance_deg": 5.0
+   },
+   "expected": {
+    "rejected": "moved while registering (26.0 mm / 0.0 deg) - keep Pinky still"
+   }
+  },
+  {
+   "name": "unsteady_anchor_skipped",
+   "frames": [
+    "frames/reg_0.png",
+    "frames/reg_1.png",
+    "frames/reg_2.png",
+    "frames/reg_3.png",
+    "frames/anchor_moved.png"
+   ],
+   "options": {
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "anchor_ids": null,
+    "trust_single_anchor": false,
+    "no_anchors": false,
+    "tolerance_mm": 30.0,
+    "tolerance_deg": 5.0
+   },
+   "expected": {
+    "schema_version": 2,
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "pixel_transform_id": "opencv-v4l2-capture-no-app-geometry-v1",
+    "image_size_px": {
+     "width": 640,
+     "height": 480
+    },
+    "aruco_dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "position_method": "corner rays intersected with the registered marker plane",
+    "opencv_version": "4.6.0",
+    "reference_pose_in_camera": {
+     "rotation": [
+      [
+       0.9658495828559234,
+       -0.018591537644577747,
+       -0.2584355587473408
+      ],
+      [
+       0.018591537644580065,
+       -0.9898787393860652,
+       0.14069270073271284
+      ],
+      [
+       -0.2584355587473406,
+       -0.14069270073271317,
+       -0.955728322241988
+      ]
+     ],
+     "translation_mm": [
+      151.09825361677701,
+      -82.25811293300065,
+      1145.5375001847347
+     ]
+    },
+    "reference_corners_px": [
+     [
+      419.5577392578125,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      139.55772399902344
+     ],
+     [
+      479.4422912597656,
+      199.44227600097656
+     ],
+     [
+      419.5577392578125,
+      199.44227600097656
+     ]
+    ],
+    "reference_marker_side_on_plane_mm": 70.0,
+    "reference_frame_count": 5,
+    "reference_jitter": {
+     "position_mm": 0.31,
+     "yaw_deg": 0.003
+    },
+    "anchors": [
+     {
+      "marker_id": 1,
+      "center_px": [
+       109.5,
+       89.5
+      ]
+     }
+    ],
+    "view_check": {
+     "mode": "FIXED_MARKERS",
+     "max_anchor_shift_px": 15.0
+    },
+    "tolerance": {
+     "position_mm": 30.0,
+     "yaw_deg": 5.0
+    },
+    "axes": "dx +: \ub9c8\ucee4 \uc624\ub978\ucabd \ubcc0 \ubc29\ud5a5, dy +: \ub9c8\ucee4 \uc717\ubcc0(\ud654\uc0b4\ud45c) \ubc29\ud5a5, dyaw +: \ucc9c\uc7a5 \uce74\uba54\ub77c\uc5d0\uc11c \ubcfc \ub54c \ubc18\uc2dc\uacc4",
+    "status": "DRAFT_ONLY",
+    "review_required": true,
+    "usable_for_robot_control": false,
+    "keys": [
+     "schema_version",
+     "spot_id",
+     "camera_id",
+     "pixel_transform_id",
+     "image_size_px",
+     "intrinsic_calibration",
+     "aruco_dictionary",
+     "marker_id",
+     "marker_side_mm",
+     "marker_forward_axis",
+     "position_method",
+     "opencv_version",
+     "reference_pose_in_camera",
+     "reference_corners_px",
+     "reference_marker_side_on_plane_mm",
+     "reference_frame_count",
+     "reference_jitter",
+     "anchors",
+     "view_check",
+     "tolerance",
+     "axes",
+     "created_at",
+     "status",
+     "review_required",
+     "usable_for_robot_control"
+    ],
+    "intrinsic_calibration_sha256": "04bbe7b66d20364301c8103d6b327d9f889dfca8d8e72ee0c6bb4866b8751d06"
+   }
+  },
+  {
+   "name": "unsteady_requested_anchor",
+   "frames": [
+    "frames/reg_0.png",
+    "frames/reg_1.png",
+    "frames/reg_2.png",
+    "frames/reg_3.png",
+    "frames/anchor_moved.png"
+   ],
+   "options": {
+    "spot_id": "parity_dock",
+    "camera_id": "ceiling_camera",
+    "dictionary": "DICT_4X4_50",
+    "marker_id": 21,
+    "marker_side_mm": 70.0,
+    "marker_forward_axis": "-x",
+    "anchor_ids": [
+     3
+    ],
+    "trust_single_anchor": false,
+    "no_anchors": false,
+    "tolerance_mm": 30.0,
+    "tolerance_deg": 5.0
+   },
+   "expected": {
+    "rejected": "fixed marker 3 was not seen steadily in every frame"
+   }
+  }
+ ]
+}

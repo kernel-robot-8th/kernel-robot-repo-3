@@ -1,0 +1,7 @@
+# Example parameters. Paths are resolved against the working directory unless absolute.
+pinky_parking:
+  ros__parameters:
+    repository_root: .            # spots: <root>/.control-station/parking-spots/<spot_id>.json
+    spot_id: pinky_dock_1         # spot followed by ~/state; ~/check takes the spot_id per request
+    image_topic: /ceiling_camera/image_raw
+    track_rate_hz: 10.0

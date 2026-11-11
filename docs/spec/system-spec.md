@@ -71,7 +71,10 @@
 3. `VERIFY_ARRIVAL`
 4. `EXECUTE_ARM_TASK`
 5. `VERIFY_ARM_RESULT`
-6. `FINALIZE_TASK`
+6. `VERIFY_LOAD`
+7. `FINALIZE_TASK`
+
+`VERIFY_ARM_RESULT`는 팔이 보고한 결과, `VERIFY_LOAD`는 관제가 수레 위 물품 개수를 관측해 목표 수량과 비교한 결과입니다. 팔의 적재 성공 보고만으로 적재 완료로 보지 않고, `VERIFY_LOAD`가 성공해야 Pinky 출발 단계로 넘어갑니다([데이터 흐름](data-flow.md)의 "목표 수량 적재 성공 확인").
 
 작업이 이동만 요구하는 경우 등 선택 단계의 존재 여부는 작업 유형에 따라 정합니다. MVP에서 기본 시나리오는 위 순서를 따릅니다.
 
@@ -146,6 +149,7 @@ NEEDS_INTERVENTION → CANCELED | FAILED | RUNNING
 3. 이동 로봇 상태가 연결되고 새 작업을 허용할 수 있음.
 4. 작업이 취소·실패·개입 필요 상태가 아님.
 5. 팔 로봇이 연결되고 작업 가능 상태임.
+6. Pinky 정차 위치의 주차 정렬 관측이, 이동 성공 결과 이후에 캡처된 프레임으로 `ARRIVED`임. `MISALIGNED`나 판정 불가(`NOT_FOUND`/`AMBIGUOUS`/`VIEW_UNVERIFIED`)이거나 해당 위치가 등록돼 있지 않으면 이 조건을 만족하지 않음. 관측 형식은 [주차 정렬 관측 계약 초안](interface-contracts.md#pinky-주차-정렬-관측-초안)을 따름. (2026-11-02 결정. 모의 작업의 `VERIFY_ARRIVAL`에 `CONTROL_STATION_PARKING_SPOT`으로 연결)
 
 수락 이벤트, 진행률 100%, Nav2 서버 발견만으로 도착 성공을 추정하지 않습니다. timeout이나 연결 단절로 결과가 불명확하면 팔 단계를 실행하지 않습니다.
 
@@ -204,7 +208,6 @@ NEEDS_INTERVENTION → CANCELED | FAILED | RUNNING
 | `GET` | `/api/health` | 서버 가동 및 실행 모드 조회 |
 | `GET` | `/api/robots` | 각 로봇의 연결·준비·실행 상태 조회 |
 | `GET` | `/api/cameras` | 카메라마다 연결·스트림·프레임 상태 조회 |
-| `POST` | `/api/tasks/{task_id}/target-observation` | 대기 중 작업에 현재 카메라 후보 판정 이벤트 저장; task/step 상태 및 로봇 명령에는 영향 없음 |
 | `POST` | `/api/tasks/parse-command` | 자연어 작업 명령의 제한 문법 초안 해석; DB·task 상태 및 로봇 명령에는 영향 없음 |
 | `POST` | `/api/tasks` | 입력 검증 후 `PENDING` 작업·표준 단계·`TASK_CREATED` 이벤트 생성; 성공은 `201 Created`; 명령은 보내지 않음 |
 | `GET` | `/api/tasks` | 작업 요약 목록 조회 |

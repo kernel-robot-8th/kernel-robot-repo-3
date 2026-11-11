@@ -1,0 +1,117 @@
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPOSITORY_ROOT / "scripts"))
+
+from omx_slot_motion import ARM_JOINTS, Rejected, SlotMotion, add_motion_arguments  # noqa: E402
+
+
+def fake_motion(*options: str) -> SlotMotion:
+    parser = argparse.ArgumentParser()
+    add_motion_arguments(parser)
+    # The fake arm starts at the recorded "home" pose, which is re-taught on site; a wide --max-delta keeps these
+    # tests independent of how far home is from the slot (later options override it).
+    return SlotMotion(parser.parse_args(["--fake-follower", "--profile-velocity", "200", "--max-delta", "4096", *options]))
+
+
+def soon() -> datetime:
+    return datetime.now(timezone.utc) + timedelta(seconds=30)
+
+
+class SlotMotionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.motion = fake_motion()
+        self.version = self.motion.slot_map_version
+
+    def plan(self, slot_id: str = "slot_a_2_1", **overrides: object) -> dict[str, int]:
+        arguments = {"slot_map_version": self.version, "valid_until": soon(), **overrides}
+        with self.motion.follower():
+            return self.motion.plan(slot_id, **arguments)
+
+    def test_checks_reject_before_anything_moves(self) -> None:
+        cases = {
+            "SLOT_MAP_MISMATCH": {"slot_map_version": "other"},
+            "POSE_NOT_RECORDED": {"slot_id": "slot_a_2_2"},
+            "EXPIRED": {"valid_until": datetime.now(timezone.utc) - timedelta(seconds=1)},
+        }
+        start = self.motion.fake_bus.sync_read("Present_Position", list(ARM_JOINTS))
+        for reason, overrides in cases.items():
+            with self.subTest(reason), self.assertRaises(Rejected) as raised:
+                self.plan(**overrides)
+            self.assertEqual(raised.exception.reason_code, reason)
+        far = fake_motion("--max-delta", "100")
+        with far.follower(), self.assertRaises(Rejected) as raised:
+            far.plan("slot_a_2_1", far.slot_map_version, soon())
+        self.assertEqual(raised.exception.reason_code, "TARGET_TOO_FAR")
+        self.assertEqual(self.motion.fake_bus.sync_read("Present_Position", list(ARM_JOINTS)), start)
+
+    def test_reaches_the_recorded_pose_and_reports_it_as_simulated(self) -> None:
+        goal = self.plan()
+        reports: list[dict[str, int]] = []
+        with self.motion.follower():
+            outcome = self.motion.move(goal, lambda: False, lambda present, _error: reports.append(present))
+        self.assertEqual(outcome.outcome, "SUCCEEDED")
+        self.assertTrue(outcome.pose_reached and outcome.simulated)
+        self.assertLessEqual(outcome.max_error_ticks, 15)
+        self.assertNotEqual(reports[0], goal)  # the first report comes before the goal is written
+
+    def test_synced_move_brings_every_joint_in_together(self) -> None:
+        motion = fake_motion("--profile-velocity", "60")
+        with motion.follower():
+            start = motion.present()
+            goal = {name: start[name] + offset for name, offset in zip(ARM_JOINTS, (30, 425, -797, 651, -486))}
+            velocity, _ = motion.synced_profiles(start, goal)
+            self.assertEqual(velocity["elbow_flex"], 60)  # the longest travel keeps the full speed
+            self.assertLess(velocity["shoulder_pan"], 5)
+            arrivals: dict[str, float] = {}
+            began = time.monotonic()
+
+            def watch(present: dict[str, int], _error: int) -> None:
+                for name in ARM_JOINTS:
+                    if name not in arrivals and abs(goal[name] - present[name]) <= 15:
+                        arrivals[name] = time.monotonic() - began
+
+            outcome = motion.move(goal, lambda: False, watch, sync=True)
+        self.assertEqual(outcome.outcome, "SUCCEEDED")
+        moving = [arrivals[name] for name in ARM_JOINTS if name != "shoulder_pan"]
+        self.assertLess(max(moving) - min(moving), 0.35 * max(moving))
+
+    def test_cancel_holds_the_arm_where_it_is(self) -> None:
+        motion = fake_motion("--profile-velocity", "1")  # about 16 ticks/s: still far from the goal
+        with motion.follower():
+            goal = motion.plan("slot_a_2_1", motion.slot_map_version, soon())
+            outcome = motion.move(goal, lambda: True)
+        self.assertEqual(outcome.outcome, "CANCELED")
+        self.assertFalse(outcome.pose_reached)
+        self.assertGreater(outcome.max_error_ticks, 15)
+        arm_goal = {name: motion.fake_bus.goal[name] for name in ARM_JOINTS}  # the fake bus also has the gripper
+        self.assertEqual(arm_goal, {name: float(value) for name, value in outcome.final_ticks.items()})
+
+    def test_timeout_fails_without_claiming_the_pose(self) -> None:
+        motion = fake_motion("--profile-velocity", "1", "--move-timeout", "0.2")
+        with motion.follower():
+            goal = motion.plan("slot_a_2_1", motion.slot_map_version, soon())
+            outcome = motion.move(goal, lambda: False)
+        self.assertEqual((outcome.outcome, outcome.reason_code, outcome.pose_reached), ("FAILED", "MOVE_TIMEOUT", False))
+
+    def test_cancel_check_error_stops_with_unknown_result(self) -> None:
+        motion = fake_motion("--profile-velocity", "1")
+
+        def broken() -> bool:
+            raise ConnectionError("control station unreachable")
+
+        with motion.follower():
+            goal = motion.plan("slot_a_2_1", motion.slot_map_version, soon())
+            outcome = motion.move(goal, broken)
+        self.assertEqual((outcome.outcome, outcome.reason_code), ("RESULT_UNKNOWN", "CANCEL_CHECK_FAILED"))
+
+
+if __name__ == "__main__":
+    unittest.main()

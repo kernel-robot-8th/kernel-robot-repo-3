@@ -1,0 +1,33 @@
+{
+  "camera_id": "ceiling_camera",
+  "pixel_transform_id": "opencv-v4l2-capture-no-app-geometry-v1",
+  "calibration_id": "parity-fixture",
+  "camera_matrix": [
+    [
+      980.0,
+      0.0,
+      320.0
+    ],
+    [
+      0.0,
+      980.0,
+      240.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "distortion_coefficients": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "image_size_px": {
+    "width": 640,
+    "height": 480
+  }
+}

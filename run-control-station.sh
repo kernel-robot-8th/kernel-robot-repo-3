@@ -20,6 +20,22 @@ case "${1:-}" in
   *) usage >&2; exit 2 ;;
 esac
 
+# The C++ parking node and ros:<topic> cameras need ROS 2 and the cpp/ workspace interfaces.
+if [[ -n "${CONTROL_STATION_PARKING_SPOT:-}" || "${CONTROL_STATION_HEAD_CAMERA:-}" == ros:* \
+      || "${CONTROL_STATION_SHELF_CAMERA:-}" == ros:* ]]; then
+  set +u  # ROS setup scripts read unset variables
+  if [[ -z "${ROS_DISTRO:-}" && -f /opt/ros/jazzy/setup.bash ]]; then
+    source /opt/ros/jazzy/setup.bash
+  fi
+  if [[ -f "${REPO_DIR}/cpp/install/setup.bash" ]]; then
+    source "${REPO_DIR}/cpp/install/setup.bash"
+  else
+    printf 'cpp/install/setup.bash가 없습니다. cpp/에서 colcon build를 먼저 실행하세요.\n' >&2
+    exit 2
+  fi
+  set -u
+fi
+
 mkdir -p "${LOG_DIR}"
 export CONTROL_STATION_ARM_LOG="${CONTROL_STATION_ARM_LOG:-${LOG_DIR}/arm-${SESSION_ID}.log}"
 exec > >(tee -a "${SESSION_LOG}") 2>&1

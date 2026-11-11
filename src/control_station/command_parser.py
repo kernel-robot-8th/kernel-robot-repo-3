@@ -445,3 +445,79 @@ def parse_pick_command(
         "missing_fields": missing_fields,
         "warnings": warnings,
     }
+
+
+_ORDER_COUNT_WORDS = {"한": 1, "하나": 1, "두": 2, "둘": 2, "세": 3, "셋": 3, "석": 3, "네": 4, "넷": 4, "다섯": 5}
+# A count right after the object name: "당근 2개", "당근 두 개", "사과 하나", "carrot x2", "당근2".
+# The count ends with a unit (개), or else with the end, punctuation or a joining particle (랑, 하고, 와…), so
+# "한테" or "두고" are not read as counts.
+_ORDER_COUNT_PATTERN = re.compile(
+    r"\s*(?:x\s*)?(?:(?P<digits>\d{1,2})|(?P<word>다섯|하나|한|두|둘|세|셋|석|네|넷))\s*"
+    r"(?:개|ea|pcs?|(?=$|[\s,.!?·]|이랑|랑|하고|와|과|도|만|씩|을|를|이|가|은|는|으로|로|에))",
+    re.I,
+)
+ORDER_PARSER = "RULE_BASED_ORDER_DRAFT"
+
+
+def parse_order_text(text: str, policies: Any) -> dict[str, Any]:
+    """Order sentence -> draft order items, using the trained-policy names (당근, 물티슈, 사과…) as the vocabulary.
+
+    "당근 1개랑 사과 두 개" -> [{carrot, 1}, {apple, 2}]. A name without a count means one. Names are matched
+    longest first so 티슈 inside 물티슈 is not counted twice. Negated names (사과 말고) are left out with a
+    warning. The result is a draft for the operator to review; it creates no task.
+    """
+    normalized = " ".join(text.split())
+    warnings: list[str] = []
+    totals: dict[str, int] = {}
+    if policies is None:
+        return {"parser": ORDER_PARSER, "review_required": True, "task_created": False, "order_items": [],
+                "warnings": ["정책 정의 파일이 없어 주문 물체를 알 수 없습니다."]}
+    vocabulary = sorted(
+        {
+            (name, policy["object_class"])
+            for policy in policies.policies.values()
+            for name in (policy["label"], policy["object_class"], *policy["aliases"])
+        },
+        key=lambda pair: -len(pair[0]),
+    )
+    taken: list[tuple[int, int]] = []
+    hits: list[tuple[int, str, int]] = []  # (position in the sentence, object class, quantity)
+    for name, object_class in vocabulary:
+        pattern = (
+            rf"(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])"
+            if name.isascii()
+            else rf"(?<![가-힣]){re.escape(name)}"
+        )
+        for match in re.finditer(pattern, normalized, re.I):
+            start, end = match.span()
+            if any(start < other_end and other_start < end for other_start, other_end in taken):
+                continue
+            taken.append((start, end))
+            if _term_is_negated(normalized[start:], name):
+                warnings.append(f"'{name}'에 부정·제외 표현이 있어 주문에 넣지 않았습니다.")
+                continue
+            rest = normalized[end:]
+            particle = re.match(r"(?:을|를|이|가|은|는|도)?", rest)
+            count = _ORDER_COUNT_PATTERN.match(rest[particle.end() if particle else 0:])
+            quantity = 1
+            if count is not None:
+                quantity = int(count.group("digits")) if count.group("digits") else _ORDER_COUNT_WORDS[count.group("word")]
+            if quantity < 1:
+                warnings.append(f"'{name}' 수량이 0이라 넣지 않았습니다.")
+                continue
+            hits.append((start, object_class, quantity))
+    for _, object_class, quantity in sorted(hits):  # keep the order the operator said them in
+        totals[object_class] = totals.get(object_class, 0) + quantity
+    if not totals and not warnings:
+        warnings.append("주문할 수 있는 물체 이름을 찾지 못했습니다.")
+    for object_class, quantity in totals.items():
+        if quantity > 5:
+            warnings.append(f"{object_class} {quantity}개: 한 주문에 종류별 5개까지만 받습니다.")
+    return {
+        "parser": ORDER_PARSER,
+        "review_required": True,
+        "task_created": False,
+        "order_items": [{"object_class": name, "quantity": quantity} for name, quantity in totals.items()],
+        "warnings": warnings,
+    }
+

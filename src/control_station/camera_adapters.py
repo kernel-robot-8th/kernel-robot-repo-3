@@ -7,13 +7,10 @@ from importlib.metadata import version as package_version
 import math
 import os
 import re
-import tempfile
 import threading
 import time
-import uuid
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Callable, Protocol
 
 from control_station.models import (
@@ -25,9 +22,7 @@ from control_station.models import (
 
 
 PIXEL_TRANSFORM_ID = "opencv-v4l2-capture-no-app-geometry-v1"
-MAX_OBSERVATION_IMAGE_BYTES = 64 * 1024 * 1024
 COLOR_HINT_ALGORITHM_VERSION = "hsv-inner-box-thresholds-v1"
-YOLO_WORLD_REQUEST_PROMPT_POLICY_VERSION = "yolo-world-request-class-one-shot-v1"
 
 
 def _sha256_file(path: str) -> str:
@@ -105,15 +100,7 @@ def _estimate_color_hint(image, bbox_xyxy):  # type: ignore[no-untyped-def]
 class CameraStreamManager(Protocol):
     def snapshots(self) -> list[CameraSnapshot]: ...
 
-    def detect_for_prompt(self, camera: CameraSnapshot, prompt: str) -> CameraSnapshot: ...
-
     def frame_for(self, camera_id: str) -> bytes | None: ...
-
-    def save_observation_frame(
-        self, camera_id: str, frame_sequence: int, frame_sha256: str, task_id: str
-    ) -> dict[str, object]: ...
-
-    def delete_observation_frame(self, relative_path: str) -> None: ...
 
     def close(self) -> None: ...
 
@@ -127,7 +114,6 @@ class _CameraFeed:
     frame_width: int | None = None
     frame_height: int | None = None
     frame_sha256: str | None = None
-    raw_frames: dict[int, tuple[str, bytes, int, int, str, float]] = field(default_factory=dict)
     connection_state: CameraConnectionState = CameraConnectionState.UNKNOWN
     stream_state: CameraStreamState = CameraStreamState.UNKNOWN
     last_frame_at: str | None = None
@@ -136,9 +122,15 @@ class _CameraFeed:
     error_message: str | None = None
     sequence: int = 0
     detector: "_YoloDetector | None" = None
+    robot_id: str | None = "arm-01"
     detections: list[dict[str, object]] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
     thread: threading.Thread | None = None
+    # Set while another program (the arm worker running a LeRobot policy) needs this V4L2 device: the capture
+    # loop closes the device, sets `handed_over`, and reopens it once `lent` is cleared.
+    lent: threading.Event = field(default_factory=threading.Event)
+    handed_over: threading.Event = field(default_factory=threading.Event)
+    lent_reason: str = ""
     # Set while this process holds no open capture, so another process may open the device.
     released: threading.Event = field(default_factory=threading.Event)
     # Requested capture size. Some sensors crop the field of view at 4:3, so a wider mode may show more.
@@ -282,35 +274,6 @@ class _YoloDetector:
             _, detections = self._predict(image, render=False)
             return detections
 
-    def detect_for_prompt(self, image, prompt: str) -> list[dict[str, object]]:  # type: ignore[no-untyped-def]
-        if self.detector_model_type != "YOLO_WORLD_OPEN_VOCAB" or not self.prompts:
-            raise RuntimeError("요청별 prompt는 YOLO-World detector에서만 지원합니다")
-        if (
-            not isinstance(prompt, str)
-            or not prompt.strip()
-            or len(prompt.strip()) > 80
-            or any(ord(character) < 32 or ord(character) == 127 for character in prompt)
-        ):
-            raise ValueError("요청 prompt는 제어 문자가 없는 1–80자 문자열이어야 합니다")
-        if self.state != "ready" or self._model is None:
-            raise RuntimeError("YOLO-World detector가 준비되지 않았습니다")
-
-        normalized_prompt = prompt.strip()
-        with self._inference_lock:
-            if self.state != "ready" or self._model is None:
-                raise RuntimeError("YOLO-World detector is no longer ready")
-            try:
-                self._model.set_classes([normalized_prompt])
-                _, detections = self._predict(image, render=False)
-                return detections
-            finally:
-                try:
-                    self._model.set_classes(self.prompts)
-                except Exception as exc:
-                    self.state = "error"
-                    self.error_message = f"YOLO-World 기본 prompt 복원 실패: {exc}"
-                    raise RuntimeError(self.error_message) from exc
-
 
 class UnconfiguredArmCameraStreamManager:
     """Report camera slots without opening any physical device."""
@@ -333,32 +296,96 @@ class UnconfiguredArmCameraStreamManager:
                 stream_state=CameraStreamState.UNKNOWN,
                 error_message="팔 카메라 스트림을 사용하려면 --arm 모드로 실행하세요",
             ),
-            CameraSnapshot(
-                id="front_camera",
-                robot_id="arm-01",
-                position="FRONT",
-                connection_state=CameraConnectionState.UNKNOWN,
-                stream_state=CameraStreamState.UNKNOWN,
-                error_message="Front Camera 장치 경로 미설정 (CONTROL_STATION_FRONT_CAMERA)",
-            ),
         ]
 
     def frame_for(self, camera_id: str) -> bytes | None:
         return None
 
-    def detect_for_prompt(self, camera: CameraSnapshot, prompt: str) -> CameraSnapshot:
-        raise RuntimeError("camera streams and detectors are not configured")
-
-    def save_observation_frame(
-        self, camera_id: str, frame_sequence: int, frame_sha256: str, task_id: str
-    ) -> dict[str, object]:
-        raise ValueError("camera stream manager has no captured frame to save")
-
-    def delete_observation_frame(self, relative_path: str) -> None:
-        return
-
     def close(self) -> None:
         return
+
+
+# CONTROL_STATION_*_CAMERA=ros:<image topic> reads that camera from a ROS camera driver node instead of V4L2.
+ROS_SOURCE_PREFIX = "ros:"
+
+
+class _RosImageSource:
+    """Latest frame of one sensor_msgs Image or CompressedImage topic, as BGR with its capture time."""
+
+    def __init__(self, topic: str) -> None:
+        import numpy as np
+        from rclpy.context import Context
+        from rclpy.executors import SingleThreadedExecutor
+        from rclpy.node import Node
+        from rclpy.qos import qos_profile_sensor_data
+        from sensor_msgs.msg import CompressedImage, Image
+
+        raw_domain = os.environ.get("CONTROL_STATION_MOBILE_DOMAIN", os.environ.get("ROS_DOMAIN_ID"))
+        if raw_domain is None:
+            raise RuntimeError("ROS domain ID(CONTROL_STATION_MOBILE_DOMAIN 또는 ROS_DOMAIN_ID)가 필요합니다")
+        self._np = np
+        self._compressed = topic.endswith("/compressed")
+        self._latest: tuple[object, str, float] | None = None
+        self._ready = threading.Condition()
+        self._context = Context()
+        self._context.init(domain_id=int(raw_domain))
+        name = "control_station_camera_" + re.sub(r"[^A-Za-z0-9_]", "_", topic.strip("/"))
+        self._node = Node(name[:200], context=self._context)
+        # Best effort subscribes to both reliable and best-effort drivers and never queues stale frames.
+        self._node.create_subscription(
+            CompressedImage if self._compressed else Image, topic, self._on_image, qos_profile_sensor_data
+        )
+        self._executor = SingleThreadedExecutor(context=self._context)
+        self._executor.add_node(self._node)
+        self._thread = threading.Thread(target=self._executor.spin, name=f"ros-camera-{topic}", daemon=True)
+        self._thread.start()
+
+    def _to_bgr(self, message):  # type: ignore[no-untyped-def]
+        import cv2
+
+        np = self._np
+        if self._compressed:
+            return cv2.imdecode(np.frombuffer(message.data, dtype=np.uint8), cv2.IMREAD_COLOR)
+        pixels = np.frombuffer(message.data, dtype=np.uint8)
+        if message.encoding in ("bgr8", "rgb8"):
+            image = pixels.reshape(message.height, message.step)[:, : message.width * 3].reshape(
+                message.height, message.width, 3
+            )
+            return image[:, :, ::-1].copy() if message.encoding == "rgb8" else image.copy()
+        if message.encoding == "mono8":
+            gray = pixels.reshape(message.height, message.step)[:, : message.width]
+            return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        raise ValueError(f"지원하지 않는 영상 encoding: {message.encoding}")
+
+    def _on_image(self, message) -> None:  # type: ignore[no-untyped-def]
+        received_monotonic = time.monotonic()
+        received_wall = time.time()
+        image = self._to_bgr(message)
+        if image is None:
+            return
+        stamp = message.header.stamp.sec + message.header.stamp.nanosec / 1e9
+        # A frame counts as captured at its stamp but never later than it arrived, like the C++ parking node.
+        age = max(0.0, received_wall - stamp) if stamp > 0 else 0.0
+        captured_wall = received_wall - age
+        captured_at = datetime.fromtimestamp(captured_wall, tz=timezone.utc).isoformat(timespec="milliseconds")
+        with self._ready:
+            self._latest = (image, captured_at, received_monotonic - age)
+            self._ready.notify_all()
+
+    def next_frame(self, timeout_s: float) -> tuple[object, str, float] | None:
+        with self._ready:
+            if self._latest is None:
+                self._ready.wait(timeout_s)
+            frame, self._latest = self._latest, None
+        return frame
+
+    def close(self) -> None:
+        with self._ready:
+            self._ready.notify_all()
+        self._executor.shutdown()
+        self._node.destroy_node()
+        self._context.try_shutdown()
+        self._thread.join(timeout=2)
 
 
 class OpenCVArmCameraStreamManager:
@@ -425,6 +452,25 @@ class OpenCVArmCameraStreamManager:
                 ),
             ),
         }
+        # Optional shelf camera looking at the shelf and arms from the front; its id matches the
+        # shelf_camera intrinsic calibration. Its YOLO detections are shown like the other feeds, but it has
+        # no Pick & Place task observation step.
+        shelf_device = os.environ.get("CONTROL_STATION_SHELF_CAMERA", "").strip()
+        if shelf_device:
+            shelf_weights = os.environ.get("CONTROL_STATION_SHELF_YOLO_WEIGHTS", "").strip()
+            shelf_prompts = os.environ.get("CONTROL_STATION_SHELF_YOLO_WORLD_PROMPTS", "").strip()
+            shelf_feed = _CameraFeed(
+                "shelf_camera",
+                "SHELF",
+                shelf_device,
+                detector=(
+                    _YoloDetector(shelf_weights, "CONTROL_STATION_SHELF_YOLO")
+                    if shelf_weights or shelf_prompts
+                    else None
+                ),
+                robot_id=None,  # a fixed view of the shelf, not a camera on the arm
+            )
+            self._feeds["shelf_camera"] = shelf_feed
         front_feed = self._feeds["front_camera"]
         if not front_feed.device:
             front_feed.error_message = "Front Camera 장치 경로 미설정 (CONTROL_STATION_FRONT_CAMERA)"
@@ -439,7 +485,7 @@ class OpenCVArmCameraStreamManager:
             message = (
                 f"{labels} 경로가 같은 V4L2 장치로 연결됩니다. 실제 장착을 확인한 뒤 "
                 "CONTROL_STATION_HEAD_CAMERA, CONTROL_STATION_JOINT_CAMERA, "
-                "CONTROL_STATION_FRONT_CAMERA를 서로 다른 장치로 설정하세요."
+                "CONTROL_STATION_FRONT_CAMERA, CONTROL_STATION_SHELF_CAMERA를 서로 다른 장치로 설정하세요."
             )
             for feed in shared:
                 feed.device = None
@@ -459,6 +505,14 @@ class OpenCVArmCameraStreamManager:
                 feed.stream_state = CameraStreamState.ERROR
                 feed.error_message = f"{env_name} 형식이 잘못되었습니다: {raw_size} (예: 1280x720)"
         self._closed = threading.Event()
+        self._ros_sources: list[_RosImageSource] = []
+        if any(feed.device and feed.device.startswith(ROS_SOURCE_PREFIX) for feed in self._feeds.values()):
+            try:
+                # Import here, before the capture threads: rclpy's first import is not safe from two threads
+                # (another thread may be importing it for the parking node at the same time).
+                import rclpy.node  # noqa: F401
+            except ImportError:
+                pass  # each ros: feed reports the missing ROS environment itself
         for feed in self._feeds.values():
             if feed.device:
                 feed.thread = threading.Thread(
@@ -475,6 +529,28 @@ class OpenCVArmCameraStreamManager:
                         feed.stream_state = CameraStreamState.ERROR
                         feed.error_message = f"카메라 worker 시작 실패: {exc}"
                     feed.thread = None
+
+    def lend_devices(self, devices: list[str], reason: str, timeout_s: float = 3.0) -> list[str]:
+        """Close the V4L2 feeds that open any of `devices` so another program can open them. Returns the ids of
+        the feeds that were closed in time; a feed still open after `timeout_s` is left lent and not listed."""
+        wanted = {os.path.realpath(device) for device in devices if device and not device.startswith(ROS_SOURCE_PREFIX)}
+        feeds = [
+            feed for feed in self._feeds.values()
+            if feed.thread is not None and feed.device and not feed.device.startswith(ROS_SOURCE_PREFIX)
+            and os.path.realpath(feed.device) in wanted
+        ]
+        for feed in feeds:
+            feed.lent_reason = reason
+            feed.lent.set()
+        deadline = time.monotonic() + timeout_s
+        return [feed.camera_id for feed in feeds if feed.handed_over.wait(max(0.0, deadline - time.monotonic()))]
+
+    def take_back_devices(self) -> list[str]:
+        """Reopen every lent feed."""
+        lent = [feed for feed in self._feeds.values() if feed.lent.is_set()]
+        for feed in lent:
+            feed.lent.clear()
+        return [feed.camera_id for feed in lent]
 
     @staticmethod
     def _release_capture(capture) -> str | None:  # type: ignore[no-untyped-def]
@@ -527,10 +603,26 @@ class OpenCVArmCameraStreamManager:
         if feed.detector is not None:
             feed.detector.load()
 
+        if feed.device and feed.device.startswith(ROS_SOURCE_PREFIX):
+            self._ros_capture_loop(feed, feed.device.removeprefix(ROS_SOURCE_PREFIX), cv2)
+            return
+
         while not self._closed.is_set():
             device = feed.device
             if not device:
                 return
+            if feed.lent.is_set():
+                # The device is closed here; wait until it is given back.
+                with feed.lock:
+                    feed.connection_state = CameraConnectionState.DISCONNECTED
+                    feed.stream_state = CameraStreamState.STOPPED
+                    feed.error_message = feed.lent_reason
+                feed.released.set()
+                feed.handed_over.set()
+                while feed.lent.is_set() and not self._closed.is_set():
+                    self._closed.wait(0.2)
+                feed.handed_over.clear()
+                continue
             # Clear before checking the hold so a concurrent hold request waits for this capture.
             feed.released.clear()
             if self._held_for_policy(feed):
@@ -611,7 +703,7 @@ class OpenCVArmCameraStreamManager:
             failed_reads = 0
             capture_failure: str | None = None
             try:
-                while not self._closed.is_set():
+                while not self._closed.is_set() and not feed.lent.is_set():
                     if self._held_for_policy(feed):
                         break
                     ok, image = capture.read()
@@ -627,59 +719,13 @@ class OpenCVArmCameraStreamManager:
                         self._closed.wait(0.05)
                         continue
                     failed_reads = 0
-                    captured_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
-                    captured_monotonic = time.monotonic()
-                    raw_height, raw_width = image.shape[:2]
-                    raw_pixels = image.tobytes(order="C")
-                    frame_sha256 = hashlib.sha256(raw_pixels).hexdigest()
-                    detections: list[dict[str, object]] = []
-                    detector = feed.detector
-                    if detector is not None and detector.state == "ready":
-                        try:
-                            image, detections = detector.annotate(image)
-                        except Exception as exc:  # keep streaming raw frames if inference fails
-                            detector.state, detector.error_message = "error", f"YOLO 추론 실패: {exc}"
-                    encoded, jpeg = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                    if not encoded:
-                        continue
-                    frame_height, frame_width = image.shape[:2]
-                    with feed.lock:
-                        feed.sequence += 1
-                        frame_sequence = feed.sequence
-                        feed.frame_width = int(frame_width)
-                        feed.frame_height = int(frame_height)
-                        feed.frame_sha256 = frame_sha256
-                        feed.raw_frames[frame_sequence] = (
-                            frame_sha256,
-                            raw_pixels,
-                            int(raw_width),
-                            int(raw_height),
-                            captured_at,
-                            captured_monotonic,
-                        )
-                        while len(feed.raw_frames) > 5:
-                            del feed.raw_frames[min(feed.raw_frames)]
-                        for detection in detections:
-                            detection.update(
-                                {
-                                    "camera_id": feed.camera_id,
-                                    "captured_at": captured_at,
-                                    "frame_sequence": frame_sequence,
-                                    "frame_sha256": frame_sha256,
-                                    "pixel_transform_id": PIXEL_TRANSFORM_ID,
-                                }
-                            )
-                        feed.frame = jpeg.tobytes()
-                        feed.detections = detections
-                        feed.last_frame_at = captured_at
-                        feed.last_frame_monotonic = captured_monotonic
-                        feed.frame_times.append(captured_monotonic)
-                        feed.frame_times = [
-                            stamp for stamp in feed.frame_times if captured_monotonic - stamp <= 2
-                        ]
-                        feed.connection_state = CameraConnectionState.CONNECTED
-                        feed.stream_state = CameraStreamState.STREAMING
-                        feed.error_message = None
+                    self._publish_frame(
+                        feed,
+                        image,
+                        datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+                        time.monotonic(),
+                        cv2,
+                    )
             except Exception as exc:
                 capture_failure = f"카메라 프레임 처리 실패: {exc}"
             finally:
@@ -688,6 +734,8 @@ class OpenCVArmCameraStreamManager:
                 feed.released.set()
             if self._held_for_policy(feed) and not capture_failure:
                 continue  # the next pass reports the hold and waits without an error state
+            if feed.lent.is_set():
+                continue  # closed on purpose; the top of the loop reports it and waits
             if not self._closed.is_set():
                 with feed.lock:
                     feed.connection_state = CameraConnectionState.DISCONNECTED
@@ -697,9 +745,89 @@ class OpenCVArmCameraStreamManager:
                     )
                 self._closed.wait(2)
 
+    def _publish_frame(self, feed: _CameraFeed, image, captured_at: str, captured_monotonic: float, cv2) -> None:  # type: ignore[no-untyped-def]
+        """Run YOLO on one BGR frame and make it the feed's latest JPEG."""
+        frame_sha256 = hashlib.sha256(image.tobytes(order="C")).hexdigest()
+        detections: list[dict[str, object]] = []
+        detector = feed.detector
+        if detector is not None and detector.state == "ready":
+            try:
+                image, detections = detector.annotate(image)
+            except Exception as exc:  # keep streaming raw frames if inference fails
+                detector.state, detector.error_message = "error", f"YOLO 추론 실패: {exc}"
+        encoded, jpeg = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        if not encoded:
+            return
+        frame_height, frame_width = image.shape[:2]
+        with feed.lock:
+            feed.sequence += 1
+            frame_sequence = feed.sequence
+            feed.frame_width = int(frame_width)
+            feed.frame_height = int(frame_height)
+            feed.frame_sha256 = frame_sha256
+            for detection in detections:
+                detection.update(
+                    {
+                        "camera_id": feed.camera_id,
+                        "captured_at": captured_at,
+                        "frame_sequence": frame_sequence,
+                        "frame_sha256": frame_sha256,
+                        "pixel_transform_id": PIXEL_TRANSFORM_ID,
+                    }
+                )
+            feed.frame = jpeg.tobytes()
+            feed.detections = detections
+            feed.last_frame_at = captured_at
+            feed.last_frame_monotonic = captured_monotonic
+            feed.frame_times.append(captured_monotonic)
+            feed.frame_times = [
+                stamp for stamp in feed.frame_times if captured_monotonic - stamp <= 2
+            ]
+            feed.connection_state = CameraConnectionState.CONNECTED
+            feed.stream_state = CameraStreamState.STREAMING
+            feed.error_message = None
+
+    def _ros_capture_loop(self, feed: _CameraFeed, topic: str, cv2) -> None:  # type: ignore[no-untyped-def]
+        """Take the feed's frames from a ROS image topic that a camera driver node publishes.
+
+        The driver owns the device, so the control station and the C++ parking node can share one camera
+        (docs/plans/pinky-parking-ros2-node.md). The geometry is the same 640x480 MJPEG capture with no crop or
+        flip, so detections keep PIXEL_TRANSFORM_ID. A topic ending in /compressed is decoded here; it is the one
+        to use across processes, since raw 640x480 images were mostly dropped between processes on 2026-11-02.
+        """
+        try:
+            source = _RosImageSource(topic)
+        except Exception as exc:
+            with feed.lock:
+                feed.connection_state = CameraConnectionState.DISCONNECTED
+                feed.stream_state = CameraStreamState.ERROR
+                feed.error_message = f"ROS 영상 구독 실패 ({topic}): {exc}"
+            return
+        self._ros_sources.append(source)
+        with feed.lock:
+            feed.connection_state = CameraConnectionState.CONNECTED
+            feed.stream_state = CameraStreamState.NO_FRAMES
+            feed.error_message = None
+        while not self._closed.is_set():
+            frame = source.next_frame(timeout_s=2.0)
+            if frame is None:
+                if not self._closed.is_set():
+                    with feed.lock:
+                        feed.stream_state = CameraStreamState.NO_FRAMES
+                        feed.error_message = f"ROS 영상 토픽에서 2초 동안 프레임이 없습니다: {topic}"
+                continue
+            image, captured_at, captured_monotonic = frame
+            try:
+                self._publish_frame(feed, image, captured_at, captured_monotonic, cv2)
+            except Exception as exc:
+                with feed.lock:
+                    feed.error_message = f"카메라 프레임 처리 실패: {exc}"
+
     def snapshots(self) -> list[CameraSnapshot]:
         result = []
         for feed in self._feeds.values():
+            if feed.camera_id == "front_camera" and not feed.device:
+                continue  # not configured on this PC: not shown (set CONTROL_STATION_FRONT_CAMERA to use it)
             with feed.lock:
                 configured = feed.device is not None
                 freshness = FrameFreshness.UNKNOWN
@@ -717,7 +845,7 @@ class OpenCVArmCameraStreamManager:
                 result.append(
                     CameraSnapshot(
                         id=feed.camera_id,
-                        robot_id="arm-01",
+                        robot_id=feed.robot_id,
                         position=feed.position,
                         connection_state=(
                             feed.connection_state if configured else CameraConnectionState.UNKNOWN
@@ -778,183 +906,6 @@ class OpenCVArmCameraStreamManager:
         with feed.lock:
             return feed.frame
 
-    def detect_for_prompt(self, camera: CameraSnapshot, prompt: str) -> CameraSnapshot:
-        camera_id = camera.id
-        feed = self._feeds.get(camera_id)
-        if feed is None:
-            raise ValueError("camera stream not found")
-        detector = feed.detector
-        if detector is None or detector.detector_model_type != "YOLO_WORLD_OPEN_VOCAB":
-            raise RuntimeError("camera has no YOLO-World detector")
-        try:
-            import numpy as np
-        except ImportError as exc:
-            raise RuntimeError("NumPy is required for request-prompt inference") from exc
-
-        if (
-            isinstance(camera.frame_sequence, bool)
-            or not isinstance(camera.frame_sequence, int)
-            or camera.frame_sequence <= 0
-            or not isinstance(camera.frame_sha256, str)
-        ):
-            raise ValueError("requested observation has no frame sequence/hash")
-        with feed.lock:
-            captured = feed.raw_frames.get(camera.frame_sequence)
-            if captured is None or captured[0] != camera.frame_sha256:
-                raise RuntimeError("requested observation frame is no longer retained")
-            (
-                frame_sha256,
-                raw_pixels,
-                frame_width,
-                frame_height,
-                captured_at,
-                captured_monotonic,
-            ) = captured
-        if (
-            frame_sha256 != camera.frame_sha256
-            or captured_at != camera.last_frame_at
-            or frame_width != camera.frame_width
-            or frame_height != camera.frame_height
-        ):
-            raise RuntimeError("requested observation frame provenance changed")
-        image = np.frombuffer(raw_pixels, dtype=np.uint8).reshape(
-            (frame_height, frame_width, 3)
-        ).copy()
-        detections = detector.detect_for_prompt(image, prompt)
-        frame_freshness = (
-            FrameFreshness.FRESH
-            if time.monotonic() - captured_monotonic <= 2
-            else FrameFreshness.STALE
-        )
-        for detection in detections:
-            detection.update(
-                {
-                    "camera_id": camera_id,
-                    "captured_at": captured_at,
-                    "frame_sequence": camera.frame_sequence,
-                    "frame_sha256": frame_sha256,
-                    "pixel_transform_id": camera.pixel_transform_id or PIXEL_TRANSFORM_ID,
-                }
-            )
-        return replace(
-            camera,
-            connection_state=camera.connection_state,
-            stream_state=camera.stream_state,
-            frame_freshness=frame_freshness,
-            last_frame_at=captured_at,
-            frame_sequence=camera.frame_sequence,
-            frame_width=frame_width,
-            frame_height=frame_height,
-            frame_sha256=frame_sha256,
-            pixel_transform_id=camera.pixel_transform_id or PIXEL_TRANSFORM_ID,
-            detector_state=detector.state,
-            detector_classes=[prompt.strip()],
-            detections=detections,
-        )
-
-    def save_observation_frame(
-        self, camera_id: str, frame_sequence: int, frame_sha256: str, task_id: str
-    ) -> dict[str, object]:
-        if not re.fullmatch(r"TASK-[A-F0-9]{8}", task_id):
-            raise ValueError("task_id has an unsupported format")
-        feed = self._feeds.get(camera_id)
-        if feed is None:
-            raise ValueError("camera stream not found")
-        with feed.lock:
-            captured = feed.raw_frames.get(frame_sequence)
-            if captured is None or captured[0] != frame_sha256:
-                raise ValueError("requested observation frame is no longer available or does not match")
-            _, raw_pixels, width, height, _, _ = captured
-
-        try:
-            import cv2
-            import numpy as np
-        except ImportError as exc:
-            raise RuntimeError("OpenCV and NumPy are required to save an observation image") from exc
-        image = np.frombuffer(raw_pixels, dtype=np.uint8).reshape((height, width, 3))
-        try:
-            encoded, png = cv2.imencode(".png", image)
-        except cv2.error as exc:
-            raise RuntimeError(f"OpenCV could not encode the observation image: {exc}") from exc
-        if not encoded:
-            raise RuntimeError("OpenCV could not encode the observation image")
-        image_bytes = png.tobytes()
-        if len(image_bytes) > MAX_OBSERVATION_IMAGE_BYTES:
-            raise ValueError("encoded observation image exceeds the 64 MiB limit")
-        image_sha256 = hashlib.sha256(image_bytes).hexdigest()
-
-        repository_root = Path(__file__).resolve().parents[2]
-        control_directory = repository_root / ".control-station"
-        artifact_root = control_directory / "observations"
-        if control_directory.is_symlink() or artifact_root.is_symlink():
-            raise ValueError("observation artifact directories cannot be symbolic links")
-        artifact_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if artifact_root.resolve(strict=True) != artifact_root:
-            raise ValueError("observation artifact directory cannot use symbolic-link path components")
-        task_directory = artifact_root / task_id
-        task_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if task_directory.is_symlink() or task_directory.resolve(strict=True) != task_directory:
-            raise ValueError("task observation directory cannot use symbolic links")
-        filename = f"frame-{frame_sequence}-{uuid.uuid4().hex}.png"
-        destination = task_directory / filename
-        temporary_path: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="wb", dir=task_directory, prefix=".frame-", suffix=".tmp", delete=False
-            ) as temporary_file:
-                temporary_path = Path(temporary_file.name)
-                temporary_file.write(image_bytes)
-            os.replace(temporary_path, destination)
-        finally:
-            if temporary_path is not None and temporary_path.exists():
-                temporary_path.unlink()
-
-        return {
-            "path": str(destination.relative_to(repository_root)),
-            "media_type": "image/png",
-            "file_sha256": image_sha256,
-            "source_frame_sha256": frame_sha256,
-            "pixel_format": "BGR8",
-            "width": width,
-            "height": height,
-        }
-
-    def delete_observation_frame(self, relative_path: str) -> None:
-        path_parts = relative_path.split("/") if isinstance(relative_path, str) else []
-        if (
-            len(path_parts) != 4
-            or path_parts[0] != ".control-station"
-            or path_parts[1] != "observations"
-            or not re.fullmatch(r"TASK-[A-F0-9]{8}", path_parts[2])
-            or not re.fullmatch(r"frame-[0-9]+-[0-9a-f]{32}\.png", path_parts[3])
-        ):
-            raise ValueError("observation artifact path has an unsupported format")
-        try:
-            repository_root = Path(__file__).resolve().parents[2]
-            control_directory = repository_root / ".control-station"
-            artifact_root = control_directory / "observations"
-            task_directory = artifact_root / path_parts[2]
-            candidate = task_directory / path_parts[3]
-            if any(
-                path.is_symlink()
-                for path in (control_directory, artifact_root, task_directory, candidate)
-            ):
-                raise ValueError("observation artifact path cannot use symbolic links")
-            resolved_root = artifact_root.resolve(strict=True)
-            resolved_task = task_directory.resolve(strict=True)
-            resolved_candidate = candidate.resolve(strict=False)
-        except (OSError, RuntimeError) as exc:
-            raise ValueError("observation artifact path cannot be resolved safely") from exc
-        if (
-            resolved_root != artifact_root
-            or resolved_task != task_directory
-            or resolved_task.parent != resolved_root
-            or resolved_candidate != candidate
-            or candidate.suffix != ".png"
-        ):
-            raise ValueError("observation artifact path is outside the managed image directory")
-        candidate.unlink(missing_ok=True)
-
     def sequence_for(self, camera_id: str) -> int:
         feed = self._feeds.get(camera_id)
         if feed is None:
@@ -964,6 +915,8 @@ class OpenCVArmCameraStreamManager:
 
     def close(self) -> None:
         self._closed.set()
+        for source in self._ros_sources:
+            source.close()
         for feed in self._feeds.values():
             worker = feed.thread
             if worker is None:

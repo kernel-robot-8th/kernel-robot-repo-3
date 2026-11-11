@@ -1,6 +1,6 @@
 # 개발 로드맵
 
-이 로드맵은 기존 Python 관제시스템과 ROS 2/Gazebo workspace를 보존하면서, 에피소드 없는 제한적 Pick & Place를 단계적으로 추가하는 계획입니다. 목표 요구사항은 [시스템 개발 명세](spec/system-spec.md), 현재 확인된 기능은 [구현 현황](implementation/current-state.md), 픽업 세부 작업은 [에픽 7](epics/epic-07-episode-free-shelf-picking.md)을 기준으로 합니다.
+이 로드맵은 기존 Python 관제시스템과 ROS 2/Gazebo workspace를 보존하면서, 에피소드 없는 제한적 Pick & Place를 단계적으로 추가하는 계획입니다. 목표 요구사항은 [시스템 개발 명세](spec/system-spec.md), 현재 확인된 기능은 [구현 현황](implementation/current-state.md)을 기준으로 합니다. 2026-11-11부터 팔은 좌표 없이 칸 자세 재생과 학습(ACT) 정책으로만 움직이고, 작업 흐름은 핑키 도착 확인 → OMX 물체 배정 → 적재 확인 → 핑키 완료 신호 순서입니다.
 
 ## 계획 원칙
 
@@ -46,7 +46,7 @@
 
 6주 종료 시점의 목표는 검증된 단일 물체 시나리오와 다음 실물 수용 단계의 준비 상태입니다. 미확정 장치 인터페이스나 안전 경계를 일정 때문에 추정해 실물 동작을 완료 조건으로 약속하지 않습니다.
 
-OMX 팔의 관절 목표 재생과 말단 좌표 제어는 별도 [단계별 좌표 제어 계획](plans/omx-coordinate-control.md)에서 다룹니다. 이 로드맵의 Pick & Place 구현은 모델·좌표계·관절 한계와 물리 측정 조건을 확인한 범위 안에서 진행합니다.
+말단 좌표 제어(카메라→팔 좌표, IK)는 2026-11-11에 계획에서 뺐습니다. 팔은 기록한 관절 자세(칸, home)와 물체별 학습 정책으로만 움직입니다.
 
 ## 주요 위험과 대응
 
@@ -65,7 +65,7 @@ OMX 팔의 관절 목표 재생과 말단 좌표 제어는 별도 [단계별 좌
 
 | 작업 | 예정 문서/파일 | 의존성 | 확인 방법 | 완료 조건 |
 | --- | --- | --- | --- | --- |
-| 첫 고정 시나리오 및 camera/TCP/gripper 입력 확정 | `docs/epics/epic-07-episode-free-shelf-picking.md`, `docs/implementation/runbook.md`, `docs/implementation/field-measurement-sheet.md` | 운영 시나리오, 물리 카메라 위치·RGB/Depth, 설치 그리퍼 변형/기준 frame 확인 | 현장 입력표에 출처를 기록하고 camera frame/ROI, TCP 기준 pose, finger contact patch와 유효 개방 폭의 측정 방법을 확인 | 선반 한 칸·물체 한 종류·목적지 하나와 필요한 센서/보정 및 tool geometry 조건이 정의되고, 미측정/승인 필요 항목이 분리됨 |
+| 핑키 도착 → 정책 집기 → 적재 확인 → 핑키 완료 신호 | `src/control_station/task_orchestrator.py`, `src/control_station/load_check.py`, `docs/implementation/runbook.md` | 천장 카메라 주차 판정, 물체별 ACT 정책, 적재 확인 YOLO 모델, 핑키 팀과 합의한 완료 신호 토픽 | 모의 흐름 테스트, 실물은 사용자 승인 뒤 단계별 확인 | 적재 확인을 통과한 작업만 완료 신호를 한 번 보내고, 실패하면 신호 없이 멈춤 |
 
 저장소 기록상 simulator-only ROS runtime prerequisite는 2026-10-31 임시 apt overlay에서 launch/controller activation, JointState·RGB-D·CameraInfo·TF read-only 관측, FollowJointTrajectory server discovery까지 확인했습니다. action goal이나 joint command는 보내지 않았으며 system prefix 설치나 장기 안정성은 확인하지 않았습니다. Fixed-camera task observation과 raw depth bbox 통계도 코드/문서에 연결됐지만 detector weights가 없어 실제 모델 inference는 미확인입니다. schema v3/v4 camera capture와 다섯 IK endpoint wrist-view 검토 및 virtual camera attachment sweep도 simulation-only 자료로 남아 있습니다. scene baseline/aimed camera는 다섯 endpoint에서 target depth pixel을 만들지 못했고, 가상 local camera position 60개 중 34개가 다섯 상태 모두에서 bbox edge margin 5 px 이상을 보였습니다. 이 결과는 physical camera 장착, 카메라/그리퍼/선반 충돌, 실제 접근 가시성을 입증하지 않습니다.
 

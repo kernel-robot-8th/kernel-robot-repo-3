@@ -10,7 +10,7 @@ from typing import Any
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import select, update
+from sqlalchemy import exists, or_, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
@@ -26,6 +26,17 @@ from control_station.models import StepStatus, TaskStatus
 
 
 ROBOT_ID_BY_KIND = {"MOBILE": "mobile-01", "ARM": "arm-01"}
+# The three Pinky robots by their ROS domain, as the Pinky fleet dashboard names them (P0=10, P1=11, P2=12).
+PINKY_IDS = ("10", "11", "12")
+PINKY_NAMES = {"10": "P0", "11": "P1", "12": "P2"}
+# An order holds its Pinky from creation until it ends, so a pending order also keeps the Pinky busy.
+_ORDER_HOLDING_STATUSES = (
+    TaskStatus.PENDING.value,
+    TaskStatus.VALIDATING.value,
+    TaskStatus.RUNNING.value,
+    TaskStatus.CANCELING.value,
+    TaskStatus.NEEDS_INTERVENTION.value,
+)
 
 
 DEFAULT_TASK_STEPS = (
@@ -34,25 +45,38 @@ DEFAULT_TASK_STEPS = (
     ("VERIFY_ARRIVAL", ROBOT_ID_BY_KIND["MOBILE"]),
     ("EXECUTE_ARM_TASK", ROBOT_ID_BY_KIND["ARM"]),
     ("VERIFY_ARM_RESULT", ROBOT_ID_BY_KIND["ARM"]),
+    ("VERIFY_LOAD", None),
     ("FINALIZE_TASK", None),
 )
 
-PICK_AND_PLACE_STEPS = (
-    ("VALIDATE_REQUEST", None),
-    ("DETECT_TARGETS", None),
-    ("SELECT_TARGET", None),
-    ("ESTIMATE_TARGET_POSE", None),
-    ("VALIDATE_GRASP", None),
-    ("APPROACH_TARGET", ROBOT_ID_BY_KIND["ARM"]),
-    ("REFINE_TARGET", ROBOT_ID_BY_KIND["ARM"]),
-    ("GRASP_TARGET", ROBOT_ID_BY_KIND["ARM"]),
-    ("VERIFY_GRASP", ROBOT_ID_BY_KIND["ARM"]),
-    ("LIFT_TARGET", ROBOT_ID_BY_KIND["ARM"]),
-    ("MOVE_TO_DESTINATION", ROBOT_ID_BY_KIND["ARM"]),
-    ("PLACE_TARGET", ROBOT_ID_BY_KIND["ARM"]),
-    ("VERIFY_PLACEMENT", ROBOT_ID_BY_KIND["ARM"]),
-    ("FINALIZE_TASK", None),
-)
+def order_step_definitions(
+    order_items: list[dict[str, object]], pinky_id: str
+) -> list[tuple[str, str | None, dict[str, object] | None]]:
+    """Steps of one order: (step_type, robot_id, detail). One PICK_ITEM + VERIFY_TRANSFER pair per object unit;
+    the arm of each pair is filled in by PLAN_ARM_SEQUENCE after the shelf stock check."""
+    pinky = f"pinky-{pinky_id}"
+    units = [
+        {"object_class": item["object_class"], "unit": index, "of": item["quantity"]}
+        for item in order_items
+        for index in range(1, int(item["quantity"]) + 1)  # type: ignore[call-overload]
+    ]
+    steps: list[tuple[str, str | None, dict[str, object] | None]] = [
+        ("VALIDATE_ORDER", None, None),
+        ("CHECK_SHELF_STOCK", None, None),
+        ("PLAN_ARM_SEQUENCE", None, None),
+        ("WAIT_PINKY_ARRIVAL", pinky, None),
+        ("CONFIRM_DOCKING", pinky, None),
+    ]
+    for unit in units:
+        steps.append(("PICK_ITEM", None, dict(unit)))
+        steps.append(("VERIFY_TRANSFER", None, dict(unit)))
+    steps += [
+        ("VERIFY_LOAD_TOTAL", None, None),
+        ("NOTIFY_PINKY_RECEIVED", pinky, None),
+        ("FINALIZE_TASK", None, None),
+    ]
+    return steps
+
 
 TASK_TRANSITIONS = {
     TaskStatus.PENDING: {TaskStatus.VALIDATING, TaskStatus.CANCELED},
@@ -143,6 +167,25 @@ class StateTransitionConflict(InvalidStateTransition):
     pass
 
 
+def _pinky_holding_orders():  # type: ignore[no-untyped-def]
+    """Orders that keep their Pinky: unfinished ones, and stopped (FAILED) ones until the operator acknowledged the
+    alert, because a stopped order's Pinky may still stand at the loading spot."""
+    acknowledged = exists().where(
+        TaskEventRecord.task_id == TaskRecord.id, TaskEventRecord.event_type == "ALERT_ACKNOWLEDGED"
+    )
+    return select(TaskRecord.pinky_id, TaskRecord.id).where(
+        TaskRecord.pinky_id.is_not(None),
+        or_(
+            TaskRecord.status.in_(_ORDER_HOLDING_STATUSES),
+            (TaskRecord.status == TaskStatus.FAILED.value) & ~acknowledged,
+        ),
+    )
+
+
+class PinkyUnavailable(RuntimeError):
+    """Every Pinky (or the requested one) already carries an unfinished order."""
+
+
 class TaskStore:
     def __init__(self, db_path: str | None = None) -> None:
         self.path = Path(db_path) if db_path else database_path()
@@ -152,6 +195,11 @@ class TaskStore:
         # claims in that process while the database CAS protects each task row.
         self._claim_lock = Lock()
         self._migrate()
+
+    @property
+    def session_factory(self) -> sessionmaker:
+        """Sessions on the migrated task database, shared with the arm command queue."""
+        return self._sessions
 
     def claim_task(self, task_id: str) -> tuple[dict[str, Any], bool]:
         """Atomically reserve one pending task for this server process.
@@ -176,18 +224,23 @@ class TaskStore:
                     raise InvalidStateTransition(
                         f"Task cannot start from {current.value}"
                     )
-                active = session.scalars(
-                    select(TaskRecord).where(
-                        TaskRecord.status.in_(
-                            [
-                                TaskStatus.VALIDATING.value,
-                                TaskStatus.RUNNING.value,
-                                TaskStatus.CANCELING.value,
-                                TaskStatus.NEEDS_INTERVENTION.value,
-                            ]
-                        )
+                running = select(TaskRecord).where(
+                    TaskRecord.status.in_(
+                        [
+                            TaskStatus.VALIDATING.value,
+                            TaskStatus.RUNNING.value,
+                            TaskStatus.CANCELING.value,
+                            TaskStatus.NEEDS_INTERVENTION.value,
+                        ]
                     )
-                ).first()
+                )
+                if task.pinky_id is not None:
+                    # Orders for different Pinkys run side by side (the loading spot is shared through the flow's
+                    # station lock); a task without a Pinky still runs alone.
+                    running = running.where(
+                        (TaskRecord.pinky_id.is_(None)) | (TaskRecord.pinky_id == task.pinky_id)
+                    )
+                active = session.scalars(running).first()
                 if active is not None:
                     raise StateTransitionConflict(
                         f"Task {active.id} is already active"
@@ -291,7 +344,8 @@ class TaskStore:
             "destination": task.destination,
             "arm_job": task.arm_job,
             "pick_request": task.pick_request,
-            "workflow": "PICK_AND_PLACE" if task.pick_request else "TRANSPORT_AND_ARM",
+            "order_items": task.order_items,
+            "pinky_id": task.pinky_id,
             "status": task.status,
             "created_at": task.created_at,
             "started_at": task.started_at,
@@ -320,6 +374,7 @@ class TaskStore:
             "started_at": step.started_at,
             "finished_at": step.finished_at,
             "result": step.result,
+            "detail": step.detail,
             "error": (
                 {"code": step.error_code, "message": step.error_message}
                 if step.error_code is not None or step.error_message is not None
@@ -355,135 +410,47 @@ class TaskStore:
             ).all()
             return [self._present(task) for task in tasks]
 
+    def recent_orders(self, limit: int = 12) -> list[dict[str, Any]]:
+        """The latest orders (tasks with order_items) with their steps and events, newest first."""
+        with self._sessions() as session:
+            tasks = session.scalars(
+                select(TaskRecord)
+                .where(TaskRecord.order_items.is_not(None))
+                .order_by(TaskRecord.created_at.desc(), TaskRecord.id.desc())
+                .limit(limit)
+            ).all()
+            return [self._present_with_history(task) for task in tasks]
+
+    def acknowledge_alert(self, task_id: str, note: str) -> dict[str, Any]:
+        """Record that the operator saw a stopped order's alert; the task state does not change."""
+        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        with self._sessions.begin() as session:
+            task = session.get(TaskRecord, task_id)
+            if task is None:
+                raise TaskNotFoundError(task_id)
+            session.add(
+                TaskEventRecord(
+                    id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
+                    task_id=task_id,
+                    step_id=None,
+                    event_type="ALERT_ACKNOWLEDGED",
+                    previous_status=task.status,
+                    new_status=task.status,
+                    occurred_at=now,
+                    received_at=now,
+                    payload={"source": "operator", "event": "ALERT_ACKNOWLEDGED", "note": note},
+                )
+            )
+            session.flush()
+            session.expire(task, ["events"])
+            return self._present_with_history(task)
+
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         with self._sessions() as session:
             task = session.get(TaskRecord, task_id)
             if task is None:
                 return None
             return self._present_with_history(task)
-
-    def record_task_event(
-        self,
-        task_id: str,
-        event_type: str,
-        payload: dict[str, object],
-        *,
-        expected_status: TaskStatus,
-        step_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Append task/optional-step evidence without changing task or step state."""
-        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
-        with self._sessions.begin() as session:
-            result = session.execute(
-                update(TaskRecord)
-                .where(
-                    TaskRecord.id == task_id,
-                    TaskRecord.status == expected_status.value,
-                )
-                .values(status=expected_status.value)
-            )
-            if result.rowcount != 1:
-                task = session.get(TaskRecord, task_id)
-                if task is None:
-                    raise TaskNotFoundError(task_id)
-                raise StateTransitionConflict(
-                    f"Expected task state {expected_status.value}, found {task.status}"
-                )
-            task = session.get(TaskRecord, task_id)
-            if task is None:
-                raise TaskNotFoundError(task_id)
-            if step_id is not None:
-                step = session.get(TaskStepRecord, step_id)
-                if step is None or step.task_id != task_id:
-                    raise StepNotFoundError(step_id)
-                if step.status != StepStatus.PENDING.value:
-                    raise StateTransitionConflict(
-                        f"Expected step state PENDING, found {step.status}"
-                    )
-            session.add(
-                TaskEventRecord(
-                    id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
-                    task_id=task_id,
-                    step_id=step_id,
-                    event_type=event_type,
-                    previous_status=task.status,
-                    new_status=task.status,
-                    occurred_at=now,
-                    received_at=now,
-                    payload={"source": "camera_observation", **payload},
-                )
-            )
-            session.flush()
-            session.expire(task, ["events"])
-            return self._present_with_history(task)
-
-    def record_target_selection_event(
-        self,
-        task_id: str,
-        payload: dict[str, object],
-        *,
-        expected_status: TaskStatus,
-        step_id: str,
-    ) -> tuple[dict[str, Any], str, bool]:
-        """Atomically append or retrieve an identical operator selection event."""
-        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
-        with self._sessions.begin() as session:
-            result = session.execute(
-                update(TaskRecord)
-                .where(
-                    TaskRecord.id == task_id,
-                    TaskRecord.status == expected_status.value,
-                )
-                .values(status=expected_status.value)
-            )
-            if result.rowcount != 1:
-                task = session.get(TaskRecord, task_id)
-                if task is None:
-                    raise TaskNotFoundError(task_id)
-                raise StateTransitionConflict(
-                    f"Expected task state {expected_status.value}, found {task.status}"
-                )
-            task = session.get(TaskRecord, task_id)
-            if task is None:
-                raise TaskNotFoundError(task_id)
-
-            existing_events = session.scalars(
-                select(TaskEventRecord).where(
-                    TaskEventRecord.task_id == task_id,
-                    TaskEventRecord.event_type == "TARGET_SELECTED",
-                )
-            ).all()
-            matching_events = [
-                event
-                for event in existing_events
-                if event.step_id == step_id and event.payload == payload
-            ]
-            if matching_events:
-                existing = matching_events[-1]
-                return self._present_with_history(task), existing.id, True
-
-            step = session.get(TaskStepRecord, step_id)
-            if step is None or step.task_id != task_id:
-                raise StepNotFoundError(step_id)
-            if step.status != StepStatus.PENDING.value:
-                raise StateTransitionConflict(
-                    f"Expected step state PENDING, found {step.status}"
-                )
-            event = TaskEventRecord(
-                id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
-                task_id=task_id,
-                step_id=step_id,
-                event_type="TARGET_SELECTED",
-                previous_status=task.status,
-                new_status=task.status,
-                occurred_at=now,
-                received_at=now,
-                payload={"source": "operator_review", **payload},
-            )
-            session.add(event)
-            session.flush()
-            session.expire(task, ["events"])
-            return self._present_with_history(task), event.id, False
 
     def record_step_event(
         self,
@@ -548,83 +515,16 @@ class TaskStore:
             session.expire(task, ["events"])
             return self._present_with_history(task)
 
-    def record_projection_draft_event(
-        self,
-        task_id: str,
-        payload: dict[str, object],
-        *,
-        expected_status: TaskStatus,
-        step_id: str,
-    ) -> tuple[dict[str, Any], str, bool]:
-        """Atomically append one projection review event per draft ID and artifact hash."""
-        draft_id = payload.get("draft_id")
-        artifact_sha256 = payload.get("artifact_sha256")
-        if not isinstance(draft_id, str) or not isinstance(artifact_sha256, str):
-            raise ValueError("projection event requires draft ID and artifact hash")
-        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    def set_step_plan(self, task_id: str, step_id: str, robot_id: str | None, detail: dict[str, object]) -> None:
+        """Fill in the planned arm and object unit of a step that has not started yet."""
         with self._sessions.begin() as session:
-            result = session.execute(
-                update(TaskRecord)
-                .where(
-                    TaskRecord.id == task_id,
-                    TaskRecord.status == expected_status.value,
-                )
-                .values(status=expected_status.value)
-            )
-            if result.rowcount != 1:
-                task = session.get(TaskRecord, task_id)
-                if task is None:
-                    raise TaskNotFoundError(task_id)
-                raise StateTransitionConflict(
-                    f"Expected task state {expected_status.value}, found {task.status}"
-                )
-            task = session.get(TaskRecord, task_id)
-            if task is None:
-                raise TaskNotFoundError(task_id)
-            existing_events = session.scalars(
-                select(TaskEventRecord).where(
-                    TaskEventRecord.task_id == task_id,
-                    TaskEventRecord.event_type == "TARGET_PLANE_PROJECTION_RECORDED",
-                )
-            ).all()
-            matching_events = [
-                event
-                for event in existing_events
-                if isinstance(event.payload, dict) and event.payload.get("draft_id") == draft_id
-            ]
-            if matching_events:
-                existing = matching_events[-1]
-                if (
-                    existing.payload.get("artifact_sha256") != artifact_sha256
-                    or existing.step_id != step_id
-                ):
-                    raise StateTransitionConflict(
-                        "Projection draft ID is already linked to a different artifact or step"
-                    )
-                return self._present_with_history(task), existing.id, True
-
             step = session.get(TaskStepRecord, step_id)
             if step is None or step.task_id != task_id:
                 raise StepNotFoundError(step_id)
             if step.status != StepStatus.PENDING.value:
-                raise StateTransitionConflict(
-                    f"Expected step state PENDING, found {step.status}"
-                )
-            event = TaskEventRecord(
-                id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
-                task_id=task_id,
-                step_id=step_id,
-                event_type="TARGET_PLANE_PROJECTION_RECORDED",
-                previous_status=task.status,
-                new_status=task.status,
-                occurred_at=now,
-                received_at=now,
-                payload={"source": "projection_draft_review", **payload},
-            )
-            session.add(event)
-            session.flush()
-            session.expire(task, ["events"])
-            return self._present_with_history(task), event.id, False
+                raise StateTransitionConflict(f"Expected step state PENDING, found {step.status}")
+            step.robot_id = robot_id
+            step.detail = detail
 
     def transition_task(
         self,
@@ -782,22 +682,35 @@ class TaskStore:
             session.expire(task, ["steps", "events"])
             return self._present_with_history(task)
 
+    def busy_pinkies(self) -> dict[str, str]:
+        """Pinky ID -> the unfinished order holding it."""
+        with self._sessions() as session:
+            rows = session.execute(_pinky_holding_orders()).all()
+            return {pinky_id: task_id for pinky_id, task_id in rows}
+
     def create_task(
         self,
         destination: str,
         arm_job: str,
         pick_request: dict[str, object] | None = None,
+        order_items: list[dict[str, object]] | None = None,
+        pinky_id: str | None = None,
     ) -> dict[str, Any]:
+        """Store a task. An order (order_items) is given a free Pinky, or the requested one if it is free."""
         created_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
         task = TaskRecord(
             id=f"TASK-{uuid.uuid4().hex[:8].upper()}",
             destination=destination,
             arm_job=arm_job,
             pick_request=pick_request,
+            order_items=order_items,
+            pinky_id=None,
             status=TaskStatus.PENDING.value,
             created_at=created_at,
         )
-        step_definitions = PICK_AND_PLACE_STEPS if pick_request else DEFAULT_TASK_STEPS
+        step_definitions: list[tuple[str, str | None, dict[str, object] | None]] = [
+            (step_type, robot_id, None) for step_type, robot_id in DEFAULT_TASK_STEPS
+        ]
         task.steps = [
             TaskStepRecord(
                 id=f"STEP-{uuid.uuid4().hex[:12].upper()}",
@@ -805,8 +718,9 @@ class TaskStore:
                 step_type=step_type,
                 robot_id=robot_id,
                 status="PENDING",
+                detail=detail,
             )
-            for sequence, (step_type, robot_id) in enumerate(step_definitions, start=1)
+            for sequence, (step_type, robot_id, detail) in enumerate(step_definitions, start=1)
         ]
         task.events = [
             TaskEventRecord(
@@ -819,11 +733,43 @@ class TaskStore:
                 payload={
                     "step_ids": [step.id for step in task.steps],
                     "pick_request": pick_request,
+                    "order_items": order_items,
                 },
             )
         ]
 
-        with self._sessions.begin() as session:
+        # The claim lock also serializes Pinky assignment inside this single server process.
+        with self._claim_lock, self._sessions.begin() as session:
+            if order_items is not None:
+                busy = {pinky_id for pinky_id, _ in session.execute(_pinky_holding_orders()).all()}
+                if pinky_id is not None:
+                    if pinky_id in busy:
+                        raise PinkyUnavailable(f"핑키 {pinky_id}는 끝나지 않은 주문이 있습니다")
+                    task.pinky_id = pinky_id
+                else:
+                    free = [candidate for candidate in PINKY_IDS if candidate not in busy]
+                    if not free:
+                        raise PinkyUnavailable("모든 핑키에 끝나지 않은 주문이 있습니다")
+                    task.pinky_id = free[0]
+                # An order runs its own step list, made once the Pinky is known.
+                task.steps = [
+                    TaskStepRecord(
+                        id=f"STEP-{uuid.uuid4().hex[:12].upper()}",
+                        sequence=sequence,
+                        step_type=step_type,
+                        robot_id=robot_id,
+                        status="PENDING",
+                        detail=detail,
+                    )
+                    for sequence, (step_type, robot_id, detail) in enumerate(
+                        order_step_definitions(order_items, task.pinky_id), start=1
+                    )
+                ]
+                task.events[0].payload = {
+                    **task.events[0].payload,
+                    "pinky_id": task.pinky_id,
+                    "step_ids": [step.id for step in task.steps],
+                }
             session.add(task)
             session.flush()
             return self._present_with_history(task)

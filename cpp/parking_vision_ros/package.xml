@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>parking_vision_ros</name>
+  <version>0.1.0</version>
+  <description>ROS 2 component that judges Pinky's parking alignment from a ceiling camera image topic: display-only /pinky_parking/state and the /pinky_parking/check service. Observation only; sends no robot command and does not open the camera.</description>
+  <maintainer email="maintainer@example.com">Kernel Robotics</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>parking_vision</depend>
+  <depend>parking_vision_interfaces</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
+  <depend>sensor_msgs</depend>
+  <depend>cv_bridge</depend>
+  <depend>libopencv-dev</depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -1,218 +1,57 @@
-"""HTTP API and small status page for the robot control station."""
+"""관제 HTTP 서버: 서버 조립(main)과 요청 분배"""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
-import re
 import threading
-import time
-from dataclasses import replace
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 
+from control_station.api import routes
+from control_station.api.common import is_cross_origin, read_json_object
+from control_station.api.observations import evaluate_color_hints, target_observation
+from control_station.act_policies import ActPolicyError, load_act_policies
+from control_station.arm_commands import ARM_ROBOT_IDS, ArmCommandStore
+from control_station.arms import ArmConfigError, load_arms
 from control_station.arm_supervisor import ArmTeleopSupervisor
 from control_station.policy_run_supervisor import PolicyRunSupervisor
+from control_station.camera_counts import ShelfStockCounter, load_counter_from_env
 from control_station.camera_adapters import (
-    MAX_OBSERVATION_IMAGE_BYTES,
     OpenCVArmCameraStreamManager,
     UnconfiguredArmCameraStreamManager,
-    YOLO_WORLD_REQUEST_PROMPT_POLICY_VERSION,
 )
-from control_station.command_parser import (
-    MAX_SHELF_LEVEL,
-    canonicalize_color,
-    parse_pick_command,
-)
-from control_station.coordinate_target_drafts import CoordinateDraftError, CoordinateTargetDraftStore
-from control_station.models import CameraSnapshot, TaskStatus
-from control_station.projection_drafts import (
-    ProjectionDraftError,
-    read_projection_draft_artifact,
-    validate_projection_draft_artifact,
-)
+from control_station.load_check import mock_load_observer_from_env
+from control_station.mock_world import MockWorld
+from control_station.order_flow import OrderDevices, OrderFlow
+from control_station.pinky_fleet import PinkyFleetClient
+from control_station.parking_ros import RosParkingSource
 from control_station.robot_adapters import make_status_provider
-from control_station.shelf_regions import evaluate_shelf_level
-from control_station.store import (
-    StateTransitionConflict,
-    StepNotFoundError,
-    TaskNotFoundError,
-    TaskStore,
-)
-from control_station.task_orchestrator import MockTaskOrchestrator, TaskExecutionConflict
+from control_station.shelf_slot_map import ShelfSlotMapError, load_shelf_slot_map
+from control_station.shelf_slot_zones import ShelfSlotZones, SlotSelectionError, select_slot_for_class
+from control_station.store import TaskStore
+from control_station.task_orchestrator import MockTaskOrchestrator
 
 
 WEB_DIR = Path(__file__).with_name("web")
-COLOR_EVALUATION_ALGORITHM_VERSION = "exact-estimated-hint-match-v1"
-
-
-def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    value: dict[str, Any] = {}
-    for key, item in pairs:
-        if key in value:
-            raise ValueError(f"duplicate JSON object key: {key}")
-        value[key] = item
-    return value
-
-
-def validate_pick_request(value: object) -> dict[str, object] | None:
-    if value is None:
-        return None
-    if not isinstance(value, dict):
-        raise ValueError("pick_request must be an object")
-    allowed = {"category", "color", "shelf_level"}
-    if set(value) - allowed:
-        raise ValueError("pick_request supports only category, color, and shelf_level")
-    category = value.get("category")
-    if (
-        not isinstance(category, str)
-        or not category.strip()
-        or len(category.strip()) > 80
-        or any(ord(character) < 32 or ord(character) == 127 for character in category.strip())
-    ):
-        raise ValueError(
-            "pick_request.category must contain 1 to 80 characters without control characters"
-        )
-    result: dict[str, object] = {"category": category.strip()}
-    if "color" in value and value["color"] is not None:
-        color = value["color"]
-        if (
-            not isinstance(color, str)
-            or not color.strip()
-            or len(color.strip()) > 40
-            or any(ord(character) < 32 or ord(character) == 127 for character in color.strip())
-        ):
-            raise ValueError(
-                "pick_request.color must contain 1 to 40 characters without control characters"
-            )
-        result["color"] = color.strip()
-    if "shelf_level" in value and value["shelf_level"] is not None:
-        shelf_level = value["shelf_level"]
-        if (
-            isinstance(shelf_level, bool)
-            or not isinstance(shelf_level, int)
-            or not 1 <= shelf_level <= MAX_SHELF_LEVEL
-        ):
-            raise ValueError(
-                f"pick_request.shelf_level must be an integer from 1 to {MAX_SHELF_LEVEL}"
-            )
-        result["shelf_level"] = shelf_level
-    return result
-
-
-def validate_stored_pick_request(value: object) -> dict[str, object]:
-    """Reject persisted task conditions that do not match the current API contract."""
-    try:
-        validated = validate_pick_request(value)
-    except ValueError as exc:
-        raise ValueError("Stored pick_request does not match the supported contract") from exc
-    if validated is None or validated != value:
-        raise ValueError("Stored pick_request is missing or is not in canonical form")
-    return validated
-
-
-def pending_pick_step_id(task: dict[str, Any], step_type: str) -> str | None:
-    """Return the unique pending workflow step used to scope review evidence."""
-    steps = task.get("steps")
-    if not isinstance(steps, list):
-        return None
-    matches = [
-        step
-        for step in steps
-        if isinstance(step, dict) and step.get("step_type") == step_type
-    ]
-    if len(matches) != 1 or matches[0].get("status") != "PENDING":
-        return None
-    step_id = matches[0].get("id")
-    return step_id if isinstance(step_id, str) and step_id else None
-
-
-def _verified_observation_frame(
-    task_id: str,
-    artifact: object,
-    frame_sha256: object,
-    frame_width: object,
-    frame_height: object,
-) -> bool:
-    if not re.fullmatch(r"TASK-[A-F0-9]{8}", task_id) or not isinstance(artifact, dict):
-        return False
-    relative_path = artifact.get("path")
-    file_sha256 = artifact.get("file_sha256")
-    if (
-        artifact.get("media_type") != "image/png"
-        or artifact.get("pixel_format") != "BGR8"
-        or artifact.get("source_frame_sha256") != frame_sha256
-        or any(
-            isinstance(artifact.get(dimension), bool)
-            or not isinstance(artifact.get(dimension), int)
-            or artifact.get(dimension) <= 0
-            for dimension in ("width", "height")
-        )
-        or artifact.get("width") != frame_width
-        or artifact.get("height") != frame_height
-        or not isinstance(frame_sha256, str)
-        or not re.fullmatch(r"[0-9a-f]{64}", frame_sha256)
-        or not isinstance(relative_path, str)
-        or not isinstance(file_sha256, str)
-        or not re.fullmatch(r"[0-9a-f]{64}", file_sha256)
-    ):
-        return False
-    path_parts = relative_path.split("/")
-    if (
-        relative_path.startswith("/")
-        or "\\" in relative_path
-        or ".." in path_parts
-        or len(path_parts) != 4
-        or path_parts[:3] != [".control-station", "observations", task_id]
-        or not path_parts[3].endswith(".png")
-        or Path(path_parts[3]).name != path_parts[3]
-    ):
-        return False
-    try:
-        repository_root = Path(__file__).resolve().parents[2]
-        control_directory = repository_root / ".control-station"
-        artifact_root = control_directory / "observations"
-        task_directory = artifact_root / task_id
-        image_path = task_directory / path_parts[3]
-        if any(
-            path.is_symlink()
-            for path in (control_directory, artifact_root, task_directory, image_path)
-        ):
-            return False
-        resolved_artifact_root = artifact_root.resolve(strict=True)
-        resolved_task_directory = task_directory.resolve(strict=True)
-        resolved_image_path = image_path.resolve(strict=True)
-        if (
-            resolved_artifact_root != artifact_root
-            or resolved_task_directory != task_directory
-            or resolved_task_directory.parent != resolved_artifact_root
-            or resolved_image_path != image_path
-            or not image_path.is_file()
-            or image_path.suffix != ".png"
-            or image_path.stat().st_size > MAX_OBSERVATION_IMAGE_BYTES
-        ):
-            return False
-        with image_path.open("rb") as image_file:
-            image_bytes = image_file.read(MAX_OBSERVATION_IMAGE_BYTES + 1)
-    except (OSError, RuntimeError):
-        return False
-    return (
-        len(image_bytes) <= MAX_OBSERVATION_IMAGE_BYTES
-        and hashlib.sha256(image_bytes).hexdigest() == file_sha256
-    )
 
 
 class ControlStationServer(ThreadingHTTPServer):
+    """관제 HTTP 서버 (요청마다 스레드)"""
     daemon_threads = True
     allow_reuse_address = True
 
 
 class ControlStationHandler(SimpleHTTPRequestHandler):
+    """요청을 api/routes.py 경로 표대로 처리 함수에 넘김"""
     server_version = "ControlStation/0.2"
+
+    # Kept on the handler for callers that classify observations directly.
+    _target_observation = staticmethod(target_observation)
+    _evaluate_color_hints = staticmethod(evaluate_color_hints)
 
     @property
     def app(self) -> ControlStationServer:
@@ -222,6 +61,7 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
         super().log_message(format, *args)
 
     def _json(self, status: int, body: dict[str, Any]) -> None:
+        """JSON 응답"""
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -237,6 +77,7 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
         message: str,
         **details: object,
     ) -> None:
+        """오류 응답 (error_code, message, error)"""
         body: dict[str, Any] = {
             "error_code": error_code,
             "message": message,
@@ -246,6 +87,7 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
         self._json(status, body)
 
     def _image(self, payload: bytes) -> None:
+        """PNG 응답"""
         self.send_response(200)
         self.send_header("Content-Type", "image/png")
         self.send_header("Content-Length", str(len(payload)))
@@ -255,1326 +97,68 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
         self.wfile.write(payload)
 
     def do_GET(self) -> None:
-        route = urlsplit(self.path).path
-        if route.startswith("/streams/") and route.endswith(".mjpg"):
-            camera_id = route.removeprefix("/streams/").removesuffix(".mjpg")
-            self._stream_camera(camera_id)
-            return
-        if route == "/api/health":
-            self._json(200, {"status": "ok", "mode": self.app.mode})
-        elif route == "/api/robots":
-            self._json(200, {"robots": self.app.robot_provider.snapshots()})
-        elif route == "/api/cameras":
-            self._json(
-                200,
-                {"cameras": [camera.to_dict() for camera in self.app.camera_manager.snapshots()]},
-            )
-        elif route.startswith("/api/cameras/") and route.endswith("/target-observation"):
-            camera_id = route.removeprefix("/api/cameras/").removesuffix("/target-observation")
-            query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
-            class_names = query.get("class_name", [])
-            colors = query.get("color", [])
-            shelf_levels = query.get("shelf_level", [])
-            if (
-                set(query) - {"class_name", "color", "shelf_level"}
-                or len(class_names) != 1
-                or len(colors) > 1
-                or len(shelf_levels) > 1
-            ):
-                self._json(
-                    400,
-                    {"error": "class_name is required once; color and shelf_level may be provided once"},
-                )
-                return
-            target_class = class_names[0].strip()
-            if not target_class or len(target_class) > 80:
-                self._json(400, {"error": "class_name must contain 1 to 80 characters"})
-                return
-            requested_color = colors[0].strip() if colors else None
-            if requested_color is not None and (not requested_color or len(requested_color) > 40):
-                self._json(400, {"error": "color must contain 1 to 40 characters"})
-                return
-            requested_shelf_level: int | None = None
-            if shelf_levels:
-                raw_level = shelf_levels[0].strip()
-                if (
-                    not re.fullmatch(r"[1-9][0-9]*", raw_level)
-                    or len(raw_level) > len(str(MAX_SHELF_LEVEL))
-                    or int(raw_level) > MAX_SHELF_LEVEL
-                ):
-                    self._json(
-                        400,
-                        {"error": f"shelf_level must be an integer from 1 to {MAX_SHELF_LEVEL}"},
-                    )
-                    return
-                requested_shelf_level = int(raw_level)
-            cameras = self.app.camera_manager.snapshots()
-            camera = next((item for item in cameras if item.id == camera_id), None)
-            if camera is None:
-                self._json(404, {"error": "Camera not found"})
-                return
-            self._json(
-                200,
-                {
-                    "observation": self._target_observation(
-                        camera, target_class, requested_color, requested_shelf_level
-                    )
-                },
-            )
-        elif route.startswith("/api/tasks/") and "/observations/" in route and route.endswith("/image"):
-            parts = route.strip("/").split("/")
-            if (
-                len(parts) != 6
-                or parts[:2] != ["api", "tasks"]
-                or parts[3] != "observations"
-                or parts[5] != "image"
-            ):
-                self._json(404, {"error": "Observation image not found"})
-                return
-            self._serve_observation_image(parts[2], parts[4])
-        elif (
-            route.startswith("/api/tasks/")
-            and "/projection-drafts/" in route
-            and route.endswith("/artifact")
-        ):
-            parts = route.strip("/").split("/")
-            if (
-                len(parts) != 6
-                or parts[:2] != ["api", "tasks"]
-                or parts[3] != "projection-drafts"
-                or parts[5] != "artifact"
-                or not re.fullmatch(r"TASK-[A-F0-9]{8}", parts[2])
-                or not re.fullmatch(r"EVT-[A-F0-9]{12}", parts[4])
-            ):
-                self._json(404, {"error": "Projection draft artifact not found"})
-                return
-            task = self.app.task_store.get_task(parts[2])
-            if task is None:
-                self._json(404, {"error": "Projection draft artifact not found"})
-                return
-            matches = [
-                event
-                for event in task.get("events", [])
-                if isinstance(event, dict) and event.get("id") == parts[4]
-            ]
-            if len(matches) != 1 or matches[0].get("event_type") != "TARGET_PLANE_PROJECTION_RECORDED":
-                self._json(404, {"error": "Projection draft artifact not found"})
-                return
-            event_payload = matches[0].get("payload")
-            if (
-                not isinstance(event_payload, dict)
-                or event_payload.get("source") != "projection_draft_review"
-                or event_payload.get("event") != "TARGET_PLANE_PROJECTION_RECORDED"
-                or event_payload.get("task_state_changed") is not False
-                or event_payload.get("arm_command_sent") is not False
-                or event_payload.get("usable_for_robot_control") is not False
-            ):
-                self._json(409, {"error": "Projection review event payload is invalid"})
-                return
-            try:
-                artifact = read_projection_draft_artifact(
-                    Path(__file__).resolve().parents[2],
-                    event_payload.get("artifact_path"),
-                    event_payload.get("artifact_sha256"),
-                )
-            except ProjectionDraftError as exc:
-                self._json(409, {"error": str(exc)})
-                return
-            if (
-                artifact.get("id") != event_payload.get("draft_id")
-                or artifact.get("task_id") != parts[2]
-                or artifact.get("status") != "DRAFT_ONLY"
-            ):
-                self._json(409, {"error": "Projection artifact no longer matches its review event"})
-                return
-            self._json(200, {"artifact": artifact, "review_event_id": parts[4]})
-        elif route == "/api/arm/status":
-            self._json(
-                200,
-                {
-                    "arm": self.app.arm_supervisor.snapshot(),
-                    "policy_run": self.app.policy_run_supervisor.snapshot(),
-                },
-            )
-        elif route == "/api/tasks":
-            self._json(200, {"tasks": self.app.task_store.list_tasks()})
-        elif route.startswith("/api/tasks/"):
-            task_id = route.removeprefix("/api/tasks/")
-            if not task_id or "/" in task_id:
-                self._json(404, {"error": "Task not found"})
-                return
-            task = self.app.task_store.get_task(task_id)
-            if task is None:
-                self._json(404, {"error": "Task not found"})
-            else:
-                task["local_execution_owner"] = self.app.task_orchestrator.local_worker_state(task_id)
-                self._json(200, {"task": task})
-        else:
-            if route == "/":
-                self.path = "/index.html"
-            elif route.startswith("/api/"):
-                self._json(404, {"error": "API route not found"})
-                return
-            super().do_GET()
-
-    def _serve_observation_image(self, task_id: str, event_id: str) -> None:
-        if not re.fullmatch(r"TASK-[A-F0-9]{8}", task_id) or not re.fullmatch(
-            r"EVT-[A-F0-9]{12}", event_id
-        ):
-            self._json(404, {"error": "Observation image not found"})
-            return
-        task = self.app.task_store.get_task(task_id)
-        if task is None:
-            self._json(404, {"error": "Observation image not found"})
-            return
-        matching_events = [event for event in task["events"] if event.get("id") == event_id]
-        if len(matching_events) != 1:
-            self._json(404, {"error": "Observation image not found"})
-            return
-        event = matching_events[0]
-        payload = event.get("payload")
-        artifact = payload.get("frame_artifact") if isinstance(payload, dict) else None
-        observation = payload.get("observation") if isinstance(payload, dict) else None
-        if (
-            event.get("event_type") != "TARGET_OBSERVED"
-            or not isinstance(artifact, dict)
-            or artifact.get("media_type") != "image/png"
-            or not isinstance(observation, dict)
-            or artifact.get("source_frame_sha256") != observation.get("frame_sha256")
-        ):
-            self._json(404, {"error": "Observation image not found"})
-            return
-
-        relative_path = artifact.get("path")
-        expected_hash = artifact.get("file_sha256")
-        if (
-            not isinstance(relative_path, str)
-            or not isinstance(expected_hash, str)
-            or not re.fullmatch(r"[0-9a-f]{64}", expected_hash)
-            or not _verified_observation_frame(
-                task_id,
-                artifact,
-                observation.get("frame_sha256"),
-                observation.get("frame_width"),
-                observation.get("frame_height"),
-            )
-        ):
-            self._json(404, {"error": "Observation image not found"})
-            return
-        try:
-            repository_root = Path(__file__).resolve().parents[2]
-            artifact_root = repository_root / ".control-station" / "observations"
-            task_artifact_root = artifact_root / task_id
-            image_path = task_artifact_root / relative_path.split("/")[-1]
-            if any(
-                path.is_symlink()
-                for path in (
-                    repository_root / ".control-station",
-                    artifact_root,
-                    task_artifact_root,
-                    image_path,
-                )
-            ):
-                self._json(404, {"error": "Observation image not found"})
-                return
-            resolved_artifact_root = artifact_root.resolve(strict=True)
-            resolved_task_root = task_artifact_root.resolve(strict=True)
-            resolved_image = image_path.resolve(strict=True)
-            if (
-                resolved_artifact_root != artifact_root
-                or resolved_task_root != task_artifact_root
-                or resolved_task_root.parent != resolved_artifact_root
-                or resolved_image != image_path
-                or image_path.suffix != ".png"
-                or not image_path.is_file()
-                or image_path.stat().st_size > MAX_OBSERVATION_IMAGE_BYTES
-            ):
-                self._json(404, {"error": "Observation image not found"})
-                return
-            with image_path.open("rb") as image_file:
-                image_bytes = image_file.read(MAX_OBSERVATION_IMAGE_BYTES + 1)
-        except (OSError, RuntimeError):
-            self._json(404, {"error": "Observation image not found"})
-            return
-        if len(image_bytes) > MAX_OBSERVATION_IMAGE_BYTES:
-            self._json(404, {"error": "Observation image not found"})
-            return
-        if hashlib.sha256(image_bytes).hexdigest() != expected_hash:
-            self._json(409, {"error": "Observation image integrity check failed"})
-            return
-        self._image(image_bytes)
-
-    @staticmethod
-    def _evaluate_color_hints(
-        candidates: list[dict[str, object]], requested_color: str
-    ) -> dict[str, object]:
-        canonical_color = canonicalize_color(requested_color)
-        if canonical_color is None:
-            status = "UNSUPPORTED_REQUEST_COLOR"
-            candidate_indices: list[int] = []
-        elif not candidates:
-            status = "NO_CANDIDATES"
-            candidate_indices = []
-        else:
-            estimated = [
-                (index, candidate.get("color_hint"))
-                for index, candidate in enumerate(candidates)
-                if isinstance(candidate.get("color_hint"), dict)
-                and candidate["color_hint"].get("status") == "ESTIMATED"
-            ]
-            if not estimated:
-                status = "NO_ESTIMATED_COLOR_HINTS"
-                candidate_indices = []
-            else:
-                candidate_indices = [
-                    index
-                    for index, hint in estimated
-                    if isinstance(hint, dict) and hint.get("color") == canonical_color
-                ]
-                status = {
-                    0: "NO_COLOR_HINT_MATCH",
-                    1: "SINGLE_COLOR_HINT_MATCH",
-                }.get(len(candidate_indices), "MULTIPLE_COLOR_HINT_MATCHES")
-        return {
-            "algorithm_version": COLOR_EVALUATION_ALGORITHM_VERSION,
-            "requested_color": requested_color,
-            "canonical_color": canonical_color,
-            "status": status,
-            "candidate_indices": candidate_indices,
-            "review_required": True,
-            "used_for_selection": False,
-        }
-
-    @staticmethod
-    def _target_observation(
-        camera: CameraSnapshot,
-        target_class: str,
-        requested_color: str | None = None,
-        requested_shelf_level: int | None = None,
-    ) -> dict[str, Any]:
-        """Classify a camera observation without creating a robot-control signal."""
-        detector_state = camera.detector_state
-        candidates: list[dict[str, object]] = []
-        candidate_count: int | None = None
-        if detector_state is None:
-            status = "DETECTOR_NOT_CONFIGURED"
-        elif detector_state == "error":
-            status = "DETECTOR_ERROR"
-        elif detector_state == "loading":
-            status = "DETECTOR_LOADING"
-        elif detector_state != "ready":
-            status = "DETECTOR_NOT_READY"
-        elif camera.connection_state.value != "CONNECTED":
-            status = "CAMERA_DISCONNECTED"
-        elif camera.stream_state.value != "STREAMING":
-            status = "CAMERA_STREAM_UNAVAILABLE"
-        elif camera.frame_freshness.value == "STALE":
-            status = "FRAME_STALE"
-        elif camera.frame_freshness.value != "FRESH":
-            status = "FRAME_UNAVAILABLE"
-        elif not isinstance(camera.pixel_transform_id, str) or not re.fullmatch(
-            r"[A-Za-z0-9_.-]{1,80}", camera.pixel_transform_id
-        ):
-            status = "PIXEL_TRANSFORM_UNKNOWN"
-        elif not isinstance(camera.frame_sha256, str) or not re.fullmatch(
-            r"[0-9a-f]{64}", camera.frame_sha256
-        ):
-            status = "FRAME_PROVENANCE_UNKNOWN"
-        elif camera.detector_classes is not None and not any(
-            name.casefold() == target_class.casefold() for name in camera.detector_classes
-        ):
-            status = "CLASS_UNKNOWN"
-        else:
-            candidates = [
-                detection
-                for detection in camera.detections
-                if str(detection.get("class_name", "")).casefold() == target_class.casefold()
-                and detection.get("camera_id") == camera.id
-                and detection.get("frame_sequence") == camera.frame_sequence
-                and detection.get("captured_at") == camera.last_frame_at
-                and detection.get("frame_sha256") == camera.frame_sha256
-                and detection.get("pixel_transform_id") == camera.pixel_transform_id
-            ]
-            candidate_count = len(candidates)
-            if candidate_count == 0:
-                status = "TARGET_NOT_FOUND"
-            elif candidate_count == 1:
-                status = "SINGLE_CANDIDATE"
-            else:
-                status = "AMBIGUOUS"
-        observation = {
-            "observation_schema_version": 3,
-            "camera_id": camera.id,
-            "target_class": target_class,
-            "status": status,
-            "detector_state": detector_state,
-            "detector_inference_frame_sequence": camera.detector_inference_frame_sequence,
-            "camera_connection_state": camera.connection_state.value,
-            "camera_stream_state": camera.stream_state.value,
-            "available_classes": camera.detector_classes,
-            "detector_provenance": {
-                "model_type": camera.detector_model_type,
-                "prompts": camera.detector_prompts,
-                "weights_sha256": camera.detector_weights_sha256,
-                "confidence_threshold": camera.detector_confidence_threshold,
-                "inference_image_size": camera.detector_inference_image_size,
-                "device": camera.detector_device,
-                "ultralytics_version": camera.detector_ultralytics_version,
-            },
-            "frame_freshness": camera.frame_freshness.value,
-            "frame_sequence": camera.frame_sequence,
-            "captured_at": camera.last_frame_at,
-            "frame_width": camera.frame_width,
-            "frame_height": camera.frame_height,
-            "frame_sha256": camera.frame_sha256,
-            "pixel_transform_id": camera.pixel_transform_id,
-            "candidate_count": candidate_count,
-            "candidates": candidates,
-            "decision_scope": "OBSERVATION_ONLY",
-            "arm_command_sent": False,
-        }
-        if requested_color is not None:
-            observation["color_evaluation"] = ControlStationHandler._evaluate_color_hints(
-                candidates, requested_color
-            )
-        if requested_shelf_level is not None:
-            calibration_dir = os.environ.get(
-                "CONTROL_STATION_SHELF_REGION_DIR",
-                ".control-station/shelf-region-calibrations",
-            ).strip() or ".control-station/shelf-region-calibrations"
-            observation["shelf_level_evaluation"] = evaluate_shelf_level(
-                camera_id=camera.id,
-                frame_width=camera.frame_width,
-                frame_height=camera.frame_height,
-                pixel_transform_id=camera.pixel_transform_id,
-                candidates=candidates,
-                requested_level=requested_shelf_level,
-                calibration_dir=calibration_dir,
-            )
-        return observation
-
-    def _stream_camera(self, camera_id: str) -> None:
-        manager = self.app.camera_manager
-        known_ids = {camera.id for camera in manager.snapshots()}
-        if camera_id not in known_ids or not hasattr(manager, "sequence_for"):
-            self._json(404, {"error": "Camera stream not found"})
-            return
-
-        frame = manager.frame_for(camera_id)
-        for _ in range(50):
-            if frame is not None:
-                break
-            time.sleep(0.1)
-            frame = manager.frame_for(camera_id)
-        if frame is None:
-            self._json(503, {"error": "Camera is not producing frames"})
-            return
-
-        self.send_response(200)
-        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
-        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
-        self.send_header("Connection", "close")
-        self.end_headers()
-        last_sequence = -1
-        try:
-            while True:
-                sequence = manager.sequence_for(camera_id)
-                if sequence == last_sequence:
-                    time.sleep(0.02)
-                    continue
-                frame = manager.frame_for(camera_id)
-                if frame is None:
-                    time.sleep(0.05)
-                    continue
-                self.wfile.write(
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n"
-                    + f"Content-Length: {len(frame)}\r\n\r\n".encode("ascii")
-                    + frame
-                    + b"\r\n"
-                )
-                self.wfile.flush()
-                last_sequence = sequence
-        except (BrokenPipeError, ConnectionResetError, OSError):
-            return
-
-    def do_POST(self) -> None:
+        """GET 분배, 맞는 경로가 없으면 웹 화면 파일"""
         route = urlsplit(self.path).path
         parts = route.strip("/").split("/")
-        if len(parts) == 4 and parts[:2] == ["api", "tasks"] and parts[3] in {"start", "cancel"}:
-            origin = self.headers.get("Origin")
-            if origin and urlsplit(origin).netloc != self.headers.get("Host"):
-                message = "Cross-origin task-control request rejected"
-                self._json(
-                    403,
-                    {
-                        "error_code": "CROSS_ORIGIN_REQUEST_REJECTED",
-                        "message": message,
-                        "error": message,
-                    },
-                )
-                return
-            task_id = parts[2]
-            if not task_id:
-                message = "Task not found"
-                self._json(
-                    404,
-                    {
-                        "error_code": "TASK_NOT_FOUND",
-                        "message": message,
-                        "error": message,
-                    },
-                )
-                return
-            try:
-                task, changed = (
-                    self.app.task_orchestrator.start(task_id)
-                    if parts[3] == "start"
-                    else self.app.task_orchestrator.cancel(task_id)
-                )
-            except TaskExecutionConflict as exc:
-                body: dict[str, Any] = {
-                    "error_code": exc.error_code,
-                    "message": str(exc),
-                    "error": str(exc),
-                }
-                if exc.task is not None:
-                    body["task"] = exc.task
-                self._json(409, body)
-                return
-            except LookupError:
-                message = "Task not found"
-                self._json(
-                    404,
-                    {
-                        "error_code": "TASK_NOT_FOUND",
-                        "message": message,
-                        "error": message,
-                    },
-                )
-                return
-            except RuntimeError as exc:
-                self._json(
-                    409,
-                    {
-                        "error_code": "TASK_CONTROL_ERROR",
-                        "message": str(exc),
-                        "error": str(exc),
-                    },
-                )
-                return
-            accepted = changed and task["status"] not in {
-                "SUCCEEDED",
-                "FAILED",
-                "CANCELED",
-            }
-            self._json(202 if accepted else 200, {"task": task, "execution_mode": "mock"})
+        entry = routes.find(routes.GET_ROUTES, route, parts)
+        if entry is not None:
+            entry.handle(self, route, parts, None)
             return
-        if route in {
-            "/api/arm/start",
-            "/api/arm/stop",
-            "/api/arm/policy/start",
-            "/api/arm/policy/stop",
-        }:
-            origin = self.headers.get("Origin")
-            if origin and urlsplit(origin).netloc != self.headers.get("Host"):
-                self._json(403, {"error": "Cross-origin arm-control request rejected"})
-                return
-            policy_route = route.startswith("/api/arm/policy/")
-            response_key = "policy_run" if policy_route else "arm"
-            try:
-                with self.app.arm_control_lock:
-                    if route == "/api/arm/start":
-                        if self.app.policy_run_supervisor.snapshot()["process_alive"]:
-                            raise RuntimeError("학습 정책 실행이 끝날 때까지 텔레오퍼레이션을 시작할 수 없습니다.")
-                        state = self.app.arm_supervisor.start()
-                    elif route == "/api/arm/stop":
-                        state = self.app.arm_supervisor.stop()
-                    elif route == "/api/arm/policy/start":
-                        if self.app.arm_supervisor.snapshot()["process_alive"]:
-                            raise RuntimeError("텔레오퍼레이션을 종료한 뒤 학습 정책을 실행하세요.")
-                        query = parse_qs(urlsplit(self.path).query)
-                        profile_ids = query.get("profile_id", [])
-                        if len(profile_ids) > 1:
-                            raise RuntimeError("profile_id는 하나만 지정할 수 있습니다.")
-                        hold_front = getattr(self.app.camera_manager, "hold_front_for_policy", None)
-                        if hold_front is not None and not hold_front(True):
-                            hold_front(False)
-                            raise RuntimeError(
-                                "관제 화면이 Front Camera를 놓았는지 확인하지 못해 정책을 시작하지 않았습니다. "
-                                "잠시 뒤 다시 시도하세요."
-                            )
-                        try:
-                            state = self.app.policy_run_supervisor.start(
-                                profile_ids[0] if profile_ids else None
-                            )
-                        finally:
-                            # A live policy process keeps the camera released through policy_active.
-                            if hold_front is not None:
-                                hold_front(False)
-                    else:
-                        state = self.app.policy_run_supervisor.stop()
-            except RuntimeError as exc:
-                self._json(
-                    409,
-                    {
-                        "error": str(exc),
-                        response_key: (
-                            self.app.policy_run_supervisor.snapshot()
-                            if policy_route
-                            else self.app.arm_supervisor.snapshot()
-                        ),
-                    },
-                )
-                return
-            self._json(202, {response_key: state})
-            return
-        target_observation_route = (
-            len(parts) == 4
-            and parts[:2] == ["api", "tasks"]
-            and parts[3] == "target-observation"
-        )
-        target_selection_route = (
-            len(parts) == 4
-            and parts[:2] == ["api", "tasks"]
-            and parts[3] == "target-selection"
-        )
-        projection_draft_route = (
-            len(parts) == 4
-            and parts[:2] == ["api", "tasks"]
-            and parts[3] == "projection-draft"
-        )
-        parse_command_route = route == "/api/tasks/parse-command"
-        if parse_command_route:
-            origin = self.headers.get("Origin")
-            if origin and urlsplit(origin).netloc != self.headers.get("Host"):
-                self._json(403, {"error": "Cross-origin command-preview request rejected"})
-                return
-        if target_observation_route:
-            origin = self.headers.get("Origin")
-            if origin and urlsplit(origin).netloc != self.headers.get("Host"):
-                self._json_error(
-                    403,
-                    "CROSS_ORIGIN_REQUEST_REJECTED",
-                    "Cross-origin task-observation request rejected",
-                )
-                return
-        if target_selection_route:
-            origin = self.headers.get("Origin")
-            if origin and urlsplit(origin).netloc != self.headers.get("Host"):
-                self._json_error(
-                    403,
-                    "CROSS_ORIGIN_REQUEST_REJECTED",
-                    "Cross-origin target-selection request rejected",
-                )
-                return
-        if projection_draft_route:
-            origin = self.headers.get("Origin")
-            if origin and urlsplit(origin).netloc != self.headers.get("Host"):
-                self._json_error(
-                    403,
-                    "CROSS_ORIGIN_REQUEST_REJECTED",
-                    "Cross-origin projection-draft request rejected",
-                )
-                return
-        if route == "/api/arm/coordinate-target-drafts":
-            origin = self.headers.get("Origin")
-            if origin and urlsplit(origin).netloc != self.headers.get("Host"):
-                self._json(403, {"error": "Cross-origin coordinate draft request rejected"})
-                return
-        elif (
-            route != "/api/tasks"
-            and not target_observation_route
-            and not target_selection_route
-            and not projection_draft_route
-            and not parse_command_route
-        ):
+        if route == "/":
+            self.path = "/index.html"
+        elif route.startswith("/api/"):
             self._json(404, {"error": "API route not found"})
             return
-        if self.headers.get("Content-Type", "").split(";", 1)[0].strip() != "application/json":
-            self._json(415, {"error": "Content-Type must be application/json"})
-            return
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-        except ValueError:
-            self._json(400, {"error": "Invalid Content-Length"})
-            return
-        if not 0 < length <= 4096:
-            self._json(400, {"error": "Request body must be between 1 and 4096 bytes"})
-            return
-        try:
-            body = json.loads(
-                self.rfile.read(length), object_pairs_hook=_unique_json_object
-            )
-        except (ValueError, UnicodeDecodeError, RecursionError):
-            self._json(
-                400,
-                {"error": "Request body must be valid JSON with unique object keys"},
-            )
-            return
-        if not isinstance(body, dict):
-            self._json(400, {"error": "Request body must be a JSON object"})
-            return
-        if parse_command_route:
-            text = body.get("text")
-            if set(body) != {"text"} or not isinstance(text, str) or not text.strip() or len(text) > 500:
-                self._json(400, {"error": "text must contain 1 to 500 characters"})
-                return
-            search_camera_detector = next(
-                (
-                    camera
-                    for camera in self.app.camera_manager.snapshots()
-                    if camera.position == "HEAD"
-                ),
-                None,
-            )
-            known_classes = (
-                list(dict.fromkeys(search_camera_detector.detector_classes or []))
-                if search_camera_detector is not None
-                and search_camera_detector.detector_state == "ready"
-                else []
-            )
-            allow_open_vocabulary = (
-                search_camera_detector is not None
-                and search_camera_detector.detector_state == "ready"
-                and search_camera_detector.detector_model_type == "YOLO_WORLD_OPEN_VOCAB"
-            )
-            self._json(
-                200,
-                {
-                    "draft": parse_pick_command(
-                        text,
-                        known_classes or None,
-                        allow_open_vocabulary=allow_open_vocabulary,
-                    )
-                },
-            )
-            return
-        if projection_draft_route:
-            task_id = parts[2]
-            if set(body) != {"artifact_path", "artifact_sha256"}:
-                self._json_error(
-                    400,
-                    "INVALID_PROJECTION_DRAFT_REQUEST",
-                    "artifact_path and artifact_sha256 are required",
-                )
-                return
-            task = self.app.task_store.get_task(task_id)
-            if task is None:
-                self._json_error(404, "TASK_NOT_FOUND", "Task not found")
-                return
-            try:
-                validate_stored_pick_request(task.get("pick_request"))
-            except ValueError as exc:
-                self._json_error(409, "PICK_REQUEST_INVALID", str(exc))
-                return
-            try:
-                projection_step_id = pending_pick_step_id(task, "ESTIMATE_TARGET_POSE")
-                if projection_step_id is None:
-                    self._json_error(
-                        409,
-                        "POSE_ESTIMATION_STEP_UNAVAILABLE",
-                        "Task has no unique pending ESTIMATE_TARGET_POSE step",
-                    )
-                    return
-                projection_payload = validate_projection_draft_artifact(
-                    task,
-                    Path(__file__).resolve().parents[2],
-                    body.get("artifact_path"),
-                    body.get("artifact_sha256"),
-                )
-                _, event_id, already_recorded = (
-                    self.app.task_store.record_projection_draft_event(
-                        task_id,
-                        projection_payload,
-                        expected_status=TaskStatus.PENDING,
-                        step_id=projection_step_id,
-                    )
-                )
-            except ProjectionDraftError as exc:
-                self._json_error(409, "PROJECTION_DRAFT_REJECTED", str(exc))
-                return
-            except TaskNotFoundError:
-                self._json_error(404, "TASK_NOT_FOUND", "Task not found")
-                return
-            except StepNotFoundError:
-                self._json_error(
-                    409,
-                    "POSE_ESTIMATION_STEP_UNAVAILABLE",
-                    "Pose-estimation workflow step is unavailable",
-                )
-                return
-            except StateTransitionConflict as exc:
-                self._json_error(409, "TASK_STATE_CONFLICT", str(exc))
-                return
-            self._json(
-                200 if already_recorded else 201,
-                {
-                    "event_id": event_id,
-                    "projection_draft": projection_payload,
-                    "execution_started": False,
-                    "already_recorded": already_recorded,
-                },
-            )
-            return
-        if target_selection_route:
-            task_id = parts[2]
-            observation_event_id = body.get("observation_event_id")
-            candidate_index = body.get("candidate_index")
-            if (
-                set(body) != {"observation_event_id", "candidate_index"}
-                or not isinstance(observation_event_id, str)
-                or not re.fullmatch(r"EVT-[A-F0-9]{12}", observation_event_id)
-                or isinstance(candidate_index, bool)
-                or not isinstance(candidate_index, int)
-                or candidate_index < 0
-            ):
-                self._json_error(
-                    400,
-                    "INVALID_TARGET_SELECTION_REQUEST",
-                    "observation_event_id and a non-negative candidate_index are required",
-                )
-                return
-            task = self.app.task_store.get_task(task_id)
-            if task is None:
-                self._json_error(404, "TASK_NOT_FOUND", "Task not found")
-                return
-            if task.get("pick_request") is None:
-                self._json_error(
-                    409,
-                    "PICK_REQUEST_MISSING",
-                    "Task has no structured pick request",
-                )
-                return
-            try:
-                pick_request = validate_stored_pick_request(task.get("pick_request"))
-            except ValueError as exc:
-                self._json_error(409, "PICK_REQUEST_INVALID", str(exc))
-                return
-            if task["status"] != TaskStatus.PENDING.value:
-                self._json_error(
-                    409,
-                    "TASK_NOT_PENDING",
-                    "A candidate can be recorded only while the task is pending",
-                )
-                return
-            selection_step_id = pending_pick_step_id(task, "SELECT_TARGET")
-            if selection_step_id is None:
-                self._json_error(
-                    409,
-                    "SELECTION_STEP_UNAVAILABLE",
-                    "Task has no unique pending SELECT_TARGET step",
-                )
-                return
-            detection_step_id = pending_pick_step_id(task, "DETECT_TARGETS")
-            if detection_step_id is None:
-                self._json_error(
-                    409,
-                    "DETECTION_STEP_UNAVAILABLE",
-                    "Task has no unique pending DETECT_TARGETS step",
-                )
-                return
-            matches = [event for event in task["events"] if event.get("id") == observation_event_id]
-            if len(matches) != 1:
-                self._json_error(
-                    404,
-                    "OBSERVATION_EVENT_NOT_FOUND",
-                    "Target observation event not found",
-                )
-                return
-            source_event = matches[0]
-            source_payload = source_event.get("payload")
-            observation = source_payload.get("observation") if isinstance(source_payload, dict) else None
-            if (
-                source_event.get("event_type") != "TARGET_OBSERVED"
-                or source_event.get("task_id") != task_id
-                or source_event.get("step_id") not in (None, detection_step_id)
-                or source_event.get("previous_status") != TaskStatus.PENDING.value
-                or source_event.get("new_status") != TaskStatus.PENDING.value
-                or not isinstance(source_payload, dict)
-                or source_payload.get("event") != "TARGET_OBSERVED"
-                or source_payload.get("source") != "camera_observation"
-                or source_payload.get("pick_request") != pick_request
-                or source_payload.get("task_state_changed") is not False
-                or source_payload.get("arm_command_sent") is not False
-                or not isinstance(observation, dict)
-                or isinstance(observation.get("observation_schema_version"), bool)
-                or not isinstance(observation.get("observation_schema_version"), int)
-                or observation.get("observation_schema_version") not in {2, 3}
-                or observation.get("decision_scope") != "OBSERVATION_ONLY"
-                or observation.get("arm_command_sent") is not False
-                or observation.get("frame_freshness") != "FRESH"
-                or observation.get("status") not in {"SINGLE_CANDIDATE", "AMBIGUOUS"}
-                or not isinstance(pick_request, dict)
-                or not isinstance(pick_request.get("category"), str)
-                or not isinstance(observation.get("target_class"), str)
-                or observation.get("target_class", "").casefold()
-                != pick_request.get("category", "").casefold()
-                or not isinstance(observation.get("camera_id"), str)
-                or not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", observation.get("camera_id", ""))
-                or isinstance(observation.get("frame_sequence"), bool)
-                or not isinstance(observation.get("frame_sequence"), int)
-                or observation.get("frame_sequence") <= 0
-                or not isinstance(observation.get("captured_at"), str)
-                or not observation.get("captured_at", "").strip()
-                or not isinstance(observation.get("frame_sha256"), str)
-                or not re.fullmatch(r"[0-9a-f]{64}", observation.get("frame_sha256", ""))
-                or not isinstance(observation.get("pixel_transform_id"), str)
-                or not re.fullmatch(
-                    r"[A-Za-z0-9_.-]{1,80}", observation.get("pixel_transform_id", "")
-                )
-                or any(
-                    isinstance(observation.get(field), bool)
-                    or not isinstance(observation.get(field), int)
-                    or observation.get(field) <= 0
-                    for field in ("frame_width", "frame_height")
-                )
-            ):
-                self._json_error(
-                    409,
-                    "OBSERVATION_NOT_SELECTABLE",
-                    "Source event is not a selectable fresh observation for this task",
-                )
-                return
-            candidates = observation.get("candidates")
-            candidate_count = observation.get("candidate_count")
-            if (
-                not isinstance(candidates, list)
-                or isinstance(candidate_count, bool)
-                or not isinstance(candidate_count, int)
-                or candidate_count != len(candidates)
-                or candidate_count < 1
-                or (
-                    observation.get("status") == "SINGLE_CANDIDATE"
-                    and candidate_count != 1
-                )
-                or (
-                    observation.get("status") == "AMBIGUOUS"
-                    and candidate_count < 2
-                )
-                or candidate_index >= len(candidates)
-            ):
-                self._json_error(
-                    409,
-                    "CANDIDATE_INDEX_OUT_OF_RANGE",
-                    "Candidate index is outside the recorded observation",
-                )
-                return
-            candidate = candidates[candidate_index]
-            if (
-                not isinstance(candidate, dict)
-                or not isinstance(candidate.get("class_name"), str)
-                or candidate.get("class_name", "").casefold()
-                != pick_request.get("category", "").casefold()
-                or candidate.get("camera_id") != observation.get("camera_id")
-                or candidate.get("frame_sequence") != observation.get("frame_sequence")
-                or candidate.get("captured_at") != observation.get("captured_at")
-                or candidate.get("frame_sha256") != observation.get("frame_sha256")
-                or candidate.get("pixel_transform_id") != observation.get("pixel_transform_id")
-                or candidate.get("frame_width") != observation.get("frame_width")
-                or candidate.get("frame_height") != observation.get("frame_height")
-            ):
-                self._json_error(
-                    409,
-                    "CANDIDATE_PROVENANCE_MISMATCH",
-                    "Candidate provenance does not match its observation",
-                )
-                return
-            selection_payload: dict[str, object] = {
-                "event": "TARGET_SELECTED",
-                "source": "operator_review",
-                "selection_scope": "HUMAN_REVIEW_ONLY",
-                "observation_event_id": observation_event_id,
-                "pick_request": pick_request,
-                "detector_provenance": observation.get("detector_provenance"),
-                "camera_id": observation.get("camera_id"),
-                "frame_sequence": observation.get("frame_sequence"),
-                "frame_sha256": observation.get("frame_sha256"),
-                "pixel_transform_id": observation.get("pixel_transform_id"),
-                "candidate_index": candidate_index,
-                "candidate": candidate,
-                "color_evaluation": observation.get("color_evaluation"),
-                "shelf_level_evaluation": observation.get("shelf_level_evaluation"),
-                "task_state_changed": False,
-                "arm_command_sent": False,
-            }
-            latest_task = self.app.task_store.get_task(task_id)
-            if latest_task is None:
-                self._json_error(404, "TASK_NOT_FOUND", "Task not found")
-                return
-            if latest_task["status"] != TaskStatus.PENDING.value:
-                self._json_error(
-                    409,
-                    "TASK_NOT_PENDING",
-                    "A candidate can be recorded only while the task is pending",
-                )
-                return
-            existing_selection = next(
-                (
-                    event
-                    for event in latest_task.get("events", [])
-                    if isinstance(event, dict)
-                    and event.get("event_type") == "TARGET_SELECTED"
-                    and event.get("step_id") == selection_step_id
-                    and event.get("payload") == selection_payload
-                ),
-                None,
-            )
-            if existing_selection is not None:
-                existing_event_id = existing_selection.get("id")
-                if not isinstance(existing_event_id, str):
-                    self._json_error(
-                        500,
-                        "SELECTION_EVENT_NOT_RETRIEVABLE",
-                        "The existing selection event has no readable ID",
-                    )
-                    return
-                self._json(
-                    200,
-                    {
-                        "task": latest_task,
-                        "selection": selection_payload,
-                        "selection_event_id": existing_event_id,
-                        "already_recorded": True,
-                    },
-                )
-                return
-            if not _verified_observation_frame(
-                task_id,
-                source_payload.get("frame_artifact"),
-                observation.get("frame_sha256"),
-                observation.get("frame_width"),
-                observation.get("frame_height"),
-            ):
-                self._json_error(
-                    409,
-                    "SOURCE_FRAME_REQUIRED",
-                    "A saved, hash-verified source frame is required for operator selection",
-                )
-                return
-            try:
-                recorded, selection_event_id, already_recorded = (
-                    self.app.task_store.record_target_selection_event(
-                        task_id,
-                        selection_payload,
-                        expected_status=TaskStatus.PENDING,
-                        step_id=selection_step_id,
-                    )
-                )
-            except TaskNotFoundError:
-                self._json_error(404, "TASK_NOT_FOUND", "Task not found")
-                return
-            except StepNotFoundError:
-                self._json_error(
-                    409,
-                    "SELECTION_STEP_UNAVAILABLE",
-                    "Target-selection workflow step is unavailable",
-                )
-                return
-            except StateTransitionConflict as exc:
-                self._json_error(409, "TASK_STATE_CONFLICT", str(exc))
-                return
-            if not isinstance(selection_event_id, str):
-                self._json_error(
-                    500,
-                    "SELECTION_EVENT_NOT_RETRIEVABLE",
-                    "Selection was recorded but its event ID could not be read back",
-                )
-                return
-            self._json(
-                200 if already_recorded else 201,
-                {
-                    "task": recorded,
-                    "selection": selection_payload,
-                    "selection_event_id": selection_event_id,
-                    "already_recorded": already_recorded,
-                },
-            )
-            return
-        if target_observation_route:
-            task_id = parts[2]
-            camera_id = body.get("camera_id")
-            save_frame = body.get("save_frame", False)
-            if set(body) - {"camera_id", "save_frame"}:
-                self._json_error(
-                    400,
-                    "INVALID_TARGET_OBSERVATION_REQUEST",
-                    "Only camera_id and optional save_frame are accepted",
-                )
-                return
-            if not task_id or not isinstance(camera_id, str) or not camera_id.strip():
-                self._json_error(
-                    400,
-                    "INVALID_TARGET_OBSERVATION_REQUEST",
-                    "task_id and camera_id are required",
-                )
-                return
-            if not isinstance(save_frame, bool):
-                self._json_error(
-                    400,
-                    "INVALID_TARGET_OBSERVATION_REQUEST",
-                    "save_frame must be a boolean",
-                )
-                return
-            task = self.app.task_store.get_task(task_id)
-            if task is None:
-                self._json_error(404, "TASK_NOT_FOUND", "Task not found")
-                return
-            if task.get("pick_request") is None:
-                self._json_error(
-                    409,
-                    "PICK_REQUEST_MISSING",
-                    "Task has no structured pick request",
-                )
-                return
-            try:
-                pick_request = validate_stored_pick_request(task.get("pick_request"))
-            except ValueError as exc:
-                self._json_error(409, "PICK_REQUEST_INVALID", str(exc))
-                return
-            if task["status"] != TaskStatus.PENDING.value:
-                self._json_error(
-                    409,
-                    "TASK_NOT_PENDING",
-                    "Target observation can be recorded only while the task is pending",
-                )
-                return
-            cameras = self.app.camera_manager.snapshots()
-            camera = next((item for item in cameras if item.id == camera_id.strip()), None)
-            if camera is None:
-                self._json_error(404, "CAMERA_NOT_FOUND", "Camera not found")
-                return
-            observation_step_type = {
-                "HEAD": "DETECT_TARGETS",
-                "JOINT": "REFINE_TARGET",
-            }.get(camera.position)
-            if observation_step_type is None:
-                self._json_error(
-                    409,
-                    "CAMERA_ROLE_UNSUPPORTED",
-                    "Camera position has no Pick & Place observation step",
-                )
-                return
-            observation_step_id = pending_pick_step_id(task, observation_step_type)
-            if observation_step_id is None:
-                self._json_error(
-                    409,
-                    "OBSERVATION_STEP_UNAVAILABLE",
-                    f"Task has no unique pending {observation_step_type} step",
-                )
-                return
-            frame_artifact: dict[str, object] | None = None
-            if save_frame:
-                save_observation = getattr(self.app.camera_manager, "save_observation_frame", None)
-                if not callable(save_observation):
-                    self._json_error(
-                        409,
-                        "FRAME_SAVE_UNAVAILABLE",
-                        "Camera manager cannot save observation frames",
-                    )
-                    return
-                frame_sha256 = camera.frame_sha256
-                frame_sequence = camera.frame_sequence
-                if not isinstance(frame_sha256, str) or not isinstance(frame_sequence, int):
-                    self._json_error(
-                        409,
-                        "FRAME_PROVENANCE_UNAVAILABLE",
-                        "The current camera frame has no saveable provenance",
-                    )
-                    return
-                try:
-                    frame_artifact = save_observation(
-                        camera.id, frame_sequence, frame_sha256, task_id
-                    )
-                except (RuntimeError, ValueError, OSError) as exc:
-                    self._json_error(
-                        409,
-                        "FRAME_SAVE_FAILED",
-                        f"Could not save the requested camera frame: {exc}",
-                    )
-                    return
-            target_class = str(pick_request["category"])
-            request_prompt_attempted = False
-            request_prompt_error: str | None = None
-            if (
-                camera.detector_state == "ready"
-                and camera.detector_model_type == "YOLO_WORLD_OPEN_VOCAB"
-                and camera.connection_state.value == "CONNECTED"
-                and camera.stream_state.value == "STREAMING"
-                and camera.frame_freshness.value == "FRESH"
-                and camera.detector_classes is not None
-                and not any(
-                    name.casefold() == target_class.casefold()
-                    for name in camera.detector_classes
-                )
-            ):
-                request_prompt_attempted = True
-                observe_prompt = getattr(
-                    self.app.camera_manager, "detect_for_prompt", None
-                )
-                if callable(observe_prompt):
-                    try:
-                        camera = observe_prompt(camera, target_class)
-                    except Exception as exc:
-                        request_prompt_error = f"{type(exc).__name__}: {exc}"[:512]
-                        try:
-                            latest_camera = next(
-                                (
-                                    item
-                                    for item in self.app.camera_manager.snapshots()
-                                    if item.id == camera.id
-                                ),
-                                None,
-                            )
-                        except Exception:
-                            latest_camera = None
-                        if latest_camera is not None:
-                            camera = replace(
-                                camera,
-                                detector_state=latest_camera.detector_state,
-                                error_message=latest_camera.error_message,
-                            )
-                else:
-                    request_prompt_error = "camera manager does not support request-prompt inference"
-            requested_color = pick_request.get("color")
-            requested_shelf_level = pick_request.get("shelf_level")
-            observation = self._target_observation(
-                camera,
-                target_class,
-                requested_color if isinstance(requested_color, str) else None,
-                requested_shelf_level
-                if isinstance(requested_shelf_level, int)
-                and not isinstance(requested_shelf_level, bool)
-                and requested_shelf_level > 0
-                else None,
-            )
-            if request_prompt_attempted:
-                detector_provenance = observation.get("detector_provenance")
-                if isinstance(detector_provenance, dict):
-                    detector_provenance["prompt_scope"] = "REQUEST_CLASS_ONE_SHOT"
-                    detector_provenance["requested_prompt"] = target_class
-                    detector_provenance["prompt_policy_version"] = (
-                        YOLO_WORLD_REQUEST_PROMPT_POLICY_VERSION
-                    )
-                    detector_provenance["configured_prompts"] = camera.detector_prompts
-                    if request_prompt_error is not None:
-                        detector_provenance["prompt_inference_error"] = request_prompt_error
-                if request_prompt_error is not None:
-                    observation["status"] = "REQUEST_PROMPT_INFERENCE_ERROR"
-            event_payload: dict[str, object] = {
-                "event": "TARGET_OBSERVED",
-                "pick_request": pick_request,
-                "observation": observation,
-                "frame_saved": frame_artifact is not None,
-                "frame_artifact": frame_artifact,
-                "task_state_changed": False,
-                "arm_command_sent": False,
-            }
+        super().do_GET()
 
-            def discard_saved_frame() -> None:
-                if frame_artifact is None:
-                    return
-                delete_observation = getattr(
-                    self.app.camera_manager, "delete_observation_frame", None
-                )
-                if callable(delete_observation):
-                    try:
-                        delete_observation(str(frame_artifact["path"]))
-                    except (OSError, ValueError):
-                        pass
+    def do_POST(self) -> None:
+        """POST 분배: 다른 출처 거부, JSON 본문 읽기"""
+        route = urlsplit(self.path).path
+        parts = route.strip("/").split("/")
+        entry = routes.find(routes.POST_ROUTES, route, parts)
+        if entry is None:
+            self._json(404, {"error": "API route not found"})
+            return
+        if entry.cross_origin_message is not None and is_cross_origin(self):
+            if entry.cross_origin_error_code:
+                self._json_error(403, "CROSS_ORIGIN_REQUEST_REJECTED", entry.cross_origin_message)
+            else:
+                self._json(403, {"error": entry.cross_origin_message})
+            return
+        body = None
+        if entry.reads_body:
+            body = read_json_object(self)
+            if body is None:
+                return
+        entry.handle(self, route, parts, body)
 
-            try:
-                recorded = self.app.task_store.record_task_event(
-                    task_id,
-                    "TARGET_OBSERVED",
-                    event_payload,
-                    expected_status=TaskStatus.PENDING,
-                    step_id=observation_step_id,
-                )
-            except TaskNotFoundError:
-                discard_saved_frame()
-                self._json_error(404, "TASK_NOT_FOUND", "Task not found")
-                return
-            except StepNotFoundError:
-                discard_saved_frame()
-                self._json_error(
-                    409,
-                    "OBSERVATION_STEP_UNAVAILABLE",
-                    "Camera observation workflow step is unavailable",
-                )
-                return
-            except StateTransitionConflict as exc:
-                discard_saved_frame()
-                self._json_error(409, "TASK_STATE_CONFLICT", str(exc))
-                return
-            except ValueError as exc:
-                discard_saved_frame()
-                self._json_error(409, "OBSERVATION_RECORD_REJECTED", str(exc))
-                return
-            except Exception:
-                discard_saved_frame()
-                raise
-            self._json(
-                201,
-                {
-                    "task": recorded,
-                    "observation": observation,
-                    "frame_artifact": frame_artifact,
-                },
-            )
-            return
-        if route == "/api/arm/coordinate-target-drafts":
-            try:
-                draft = self.app.coordinate_target_drafts.create(body)
-            except CoordinateDraftError as exc:
-                self._json(400, {"error": str(exc)})
-                return
-            self._json(201, {"draft": draft})
-            return
-        unsupported_fields = set(body) - {"destination", "arm_job", "pick_request"}
-        if unsupported_fields:
-            self._json(
-                400,
-                {
-                    "error": "Unsupported task fields: "
-                    + ", ".join(sorted(unsupported_fields))
-                },
-            )
-            return
-        destination = body.get("destination")
-        arm_job = body.get("arm_job")
-        if not isinstance(destination, str) or not isinstance(arm_job, str):
-            self._json(400, {"error": "destination and arm_job must be strings"})
-            return
-        destination, arm_job = destination.strip(), arm_job.strip()
-        if not destination or len(destination) > 40:
-            self._json(400, {"error": "destination must contain 1 to 40 characters"})
-            return
-        if not arm_job or len(arm_job) > 120:
-            self._json(400, {"error": "arm_job must contain 1 to 120 characters"})
-            return
-        try:
-            pick_request = validate_pick_request(body.get("pick_request"))
-        except ValueError as exc:
-            self._json(400, {"error": str(exc)})
-            return
-        task = self.app.task_store.create_task(destination, arm_job, pick_request)
-        self._json(201, {"task": task})
+
+def front_camera_evidence(server: ControlStationServer, object_class: str) -> dict[str, Any]:
+    """정면 카메라가 물체를 칸 하나에서만 볼 때 그 관측 기록 (작업 흐름 팔 단계의 SR-13 근거).
+
+    수동 "정면 캠으로 칸 찾기"(POST /api/arm/commands/from-camera)와 같은 판정을 쓴다."""
+    camera_id = os.environ.get("CONTROL_STATION_PICK_EVIDENCE_CAMERA", "shelf_camera").strip() or "shelf_camera"
+    snapshot = next((camera for camera in server.camera_manager.snapshots() if camera.id == camera_id), None)
+    if snapshot is None:
+        raise SlotSelectionError("CAMERA_NOT_FOUND", f"정면 카메라 {camera_id!r}가 설정되지 않았습니다")
+    return select_slot_for_class(server.shelf_slot_zones.annotate(snapshot.to_dict()), object_class)
 
 
 def main() -> None:
+    """관제 서버 실행"""
     mode = os.environ.get("CONTROL_STATION_MODE", "mock").strip().lower()
     provider = make_status_provider(mode)
     task_store = TaskStore()
-    host = "127.0.0.1"
+    # Default stays local. Set e.g. 0.0.0.0 only on a trusted LAN so an arm worker on another
+    # machine can reach the API; there is no authentication.
+    host = os.environ.get("CONTROL_STATION_HOST", "127.0.0.1").strip() or "127.0.0.1"
     port = int(os.environ.get("CONTROL_STATION_PORT", "8000"))
     handler = partial(ControlStationHandler, directory=str(WEB_DIR))
     server = ControlStationServer((host, port), handler)
     server.mode = mode
     server.robot_provider = provider
-    server.arm_supervisor = ArmTeleopSupervisor(
-        disabled_reason=None
-    )
+    server.arm_supervisor = ArmTeleopSupervisor(disabled_reason=None)
+    # One-shot LeRobot policy client started from the control station (POST /api/arm/policy/start).
     server.policy_run_supervisor = PolicyRunSupervisor()
     server.arm_control_lock = threading.RLock()
     head_detector_configured = any(
@@ -1583,6 +167,17 @@ def main() -> None:
             "CONTROL_STATION_HEAD_YOLO_WEIGHTS",
             "CONTROL_STATION_HEAD_YOLO_WORLD_PROMPTS",
         )
+    )
+    # The C++ parking node (cpp/parking_vision_ros) judges Pinky's parking; the control station has no judgment of
+    # its own. Setting a spot gates VERIFY_ARRIVAL on a fresh check from the node and follows its live state.
+    parking_spot_id = os.environ.get("CONTROL_STATION_PARKING_SPOT", "").strip() or None
+    server.parking_spot_id = parking_spot_id
+    if os.environ.get("CONTROL_STATION_PARKING_SOURCE", "ros").strip().lower() not in {"", "ros"}:
+        raise RuntimeError("CONTROL_STATION_PARKING_SOURCE는 ros만 지원합니다 (관제 안의 Python 주차 판정은 제거됨).")
+    server.parking_source = "ros" if parking_spot_id else None
+    # The feed the parking panel streams: the Head Camera shows the ceiling view, taken from the driver topic.
+    server.parking_camera_id = os.environ.get("CONTROL_STATION_PARKING_CAMERA", "").strip() or (
+        "head_camera" if parking_spot_id else None
     )
     front_camera_configured = any(
         os.environ.get(name, "").strip()
@@ -1593,7 +188,14 @@ def main() -> None:
             "CONTROL_STATION_FRONT_YOLO_WORLD_PROMPTS",
         )
     )
-    if not (server.arm_supervisor.enabled or head_detector_configured or front_camera_configured):
+    if not (
+        server.arm_supervisor.enabled
+        or head_detector_configured
+        or front_camera_configured
+        or server.parking_camera_id
+        or os.environ.get("CONTROL_STATION_SHELF_CAMERA", "").strip()
+        or os.environ.get("CONTROL_STATION_HEAD_CAMERA", "").strip().startswith("ros:")
+    ):
         server.camera_manager = UnconfiguredArmCameraStreamManager()
     else:
         server.camera_manager = OpenCVArmCameraStreamManager(
@@ -1601,11 +203,111 @@ def main() -> None:
             policy_active=lambda: bool(server.policy_run_supervisor.snapshot()["process_alive"]),
         )
     server.task_store = task_store
-    server.task_orchestrator = MockTaskOrchestrator(task_store, mode=mode)
-    draft_dir = os.environ.get(
-        "CONTROL_STATION_COORDINATE_DRAFT_DIR", ".control-station/coordinate-target-drafts"
+    try:
+        slot_map, slot_map_error = load_shelf_slot_map(), None
+    except ShelfSlotMapError as exc:
+        # Other commands still work; only pick_slot_id commands are refused.
+        slot_map, slot_map_error = None, str(exc)
+        print(f"칸 정의를 불러오지 못했습니다: {exc}", flush=True)
+    try:
+        act_policies, act_policies_error = load_act_policies(), None
+    except ActPolicyError as exc:
+        # Every other command still works; only PICK_WITH_POLICY is refused.
+        act_policies, act_policies_error = None, str(exc)
+        print(f"정책 정의를 불러오지 못했습니다: {exc}", flush=True)
+    server.arm_commands = ArmCommandStore(
+        task_store.session_factory, slot_map=slot_map, slot_map_error=slot_map_error, act_policies=act_policies
     )
-    server.coordinate_target_drafts = CoordinateTargetDraftStore(draft_dir)
+    server.act_policies_error = act_policies_error
+    # Which arm serves which shelf (left shelf -> left arm); orders need it to plan the arm for each object.
+    try:
+        server.arms, server.arms_error = load_arms(), None
+        unknown = server.arms.arm_ids - ARM_ROBOT_IDS
+        if unknown:
+            raise ArmConfigError(f"알 수 없는 팔 ID: {sorted(unknown)}")
+    except ArmConfigError as exc:
+        server.arms, server.arms_error = None, str(exc)
+        print(f"팔 설정을 불러오지 못했습니다: {exc}", flush=True)
+    # Cameras the LeRobot policy opens itself; closed by the control station while a policy command runs.
+    server.policy_camera_devices = [
+        device
+        for device in (
+            os.environ.get("CONTROL_STATION_ACT_OVERHEAD_CAMERA", "").strip(),
+            os.environ.get("CONTROL_STATION_JOINT_CAMERA", "").strip(),
+        )
+        if device
+    ]
+    server.policy_camera_lock = threading.Lock()
+    server.policy_cameras_lent = False
+    server.shelf_slot_zones = ShelfSlotZones(slot_map)
+    server.parking_check = None
+    server.parking_tracker = None
+    if parking_spot_id:
+        raw_domain = os.environ.get("CONTROL_STATION_MOBILE_DOMAIN", os.environ.get("ROS_DOMAIN_ID"))
+        if raw_domain is None:
+            raise RuntimeError(
+                "CONTROL_STATION_PARKING_SPOT에는 주차 판정 노드의 ROS domain ID"
+                "(CONTROL_STATION_MOBILE_DOMAIN 또는 ROS_DOMAIN_ID)를 지정해야 합니다."
+            )
+        parking_node = RosParkingSource(int(raw_domain), parking_spot_id, server.parking_camera_id)
+        server.parking_check = parking_node.check
+        # Display-only live state of the same spot; VERIFY_ARRIVAL still decides only from a fresh check.
+        server.parking_tracker = parking_node
+    arrival_check = partial(server.parking_check, parking_spot_id) if parking_spot_id else None
+    # Mock mode only: VERIFY_LOAD then records a simulated count instead of a plain mock success.
+    load_check = mock_load_observer_from_env() if mode == "mock" else None
+    # Opt-in: EXECUTE_ARM_TASK queues a real PICK_WITH_POLICY arm command (CONTROL_STATION_TASK_REAL_ARM=1).
+    real_arm = os.environ.get("CONTROL_STATION_TASK_REAL_ARM", "").strip() == "1"
+    # Orders run against the simulated station until the camera counters and the Pinky fleet client are connected;
+    # every observation it makes says simulated.
+    server.mock_world = MockWorld.from_env()
+    world = server.mock_world
+    # Pinky arrival for orders: the real ceiling-camera judgment when a parking spot is configured (one registered
+    # spot, the loading spot between the two arms), else the mock. CONTROL_STATION_ORDER_PARKING=mock forces the mock.
+    order_parking = world.parking
+    if server.parking_check is not None and os.environ.get("CONTROL_STATION_ORDER_PARKING", "").strip() != "mock":
+        def order_parking(pinky_id: str) -> dict[str, Any]:
+            return server.parking_check(parking_spot_id)
+        print(f"주문 흐름의 핑키 도착 판정: 실제 주차 판정 ({parking_spot_id})", flush=True)
+    # Pinky mission phases and the dock_complete / received signals: the Pinky team's fleet dashboard when its URL
+    # is set (e.g. http://<pinky PC>:8765), else the mock world, which also sends the mock Pinky off for each order.
+    fleet_url = os.environ.get("CONTROL_STATION_PINKY_FLEET_URL", "").strip()
+    fleet_status, fleet_confirm, dispatch = world.fleet_status, world.fleet_confirm, world.dispatch
+    if fleet_url:
+        fleet = PinkyFleetClient(fleet_url)
+        fleet_status, fleet_confirm, dispatch = fleet.fleet_status, fleet.fleet_confirm, None
+        print(f"주문 흐름의 핑키 신호: 핑키 관제 {fleet_url}", flush=True)
+    # Counting for the stock check and the per-object transfer check: the cameras' YOLO detections when
+    # CONTROL_STATION_ORDER_COUNTS=camera (shelf cams with slot zones, the top cam inside the Pinky tray), else the
+    # mock world. With camera counts but mock picks, a person has to move each object during the pick step.
+    shelf_stock, pinky_load = world.shelf_stock, world.pinky_load
+    if os.environ.get("CONTROL_STATION_ORDER_COUNTS", "").strip() == "camera":
+        shelf_stock = ShelfStockCounter(server.camera_manager.snapshots, server.shelf_slot_zones, slot_map, server.arms)
+        load_counter = load_counter_from_env(server.camera_manager.snapshots, Path(__file__).resolve().parents[2],
+                                             parking_spot_id)
+        pinky_load = load_counter
+        print(f"주문 흐름의 개수 세기: 카메라 YOLO (핑키 쟁반 {load_counter.camera_id} {load_counter.region_or_none()})",
+              flush=True)
+    server.order_devices = OrderDevices(
+        shelf_stock, pinky_load, fleet_status, fleet_confirm, order_parking, world.pick, dispatch,
+    )
+    try:
+        arrival_timeout_s = float(os.environ.get("CONTROL_STATION_ARRIVAL_TIMEOUT_S", "600"))
+    except ValueError:
+        arrival_timeout_s = 600.0
+    server.order_flow = OrderFlow(
+        server.arms, act_policies, server.order_devices,
+        dwell_s=float(os.environ.get("CONTROL_STATION_ORDER_STEP_DWELL_S", "0.8") or 0.8),
+        arrival_timeout_s=arrival_timeout_s,
+    )
+    server.task_orchestrator = MockTaskOrchestrator(
+        task_store, mode=mode, arrival_check=arrival_check, load_check=load_check,
+        arm_commands=server.arm_commands if real_arm else None,
+        target_evidence=partial(front_camera_evidence, server) if real_arm else None,
+        order_flow=server.order_flow,
+    )
+    if real_arm:
+        print("작업 흐름의 팔 단계가 실제 팔 명령(PICK_WITH_POLICY)을 보냅니다", flush=True)
     mode_label = {"mock": "모의", "ros2": "ROS 2"}[mode]
     print(f"관제 서버 ({mode_label} 모드): http://{host}:{port}", flush=True)
     try:
@@ -1614,6 +316,8 @@ def main() -> None:
         print("\nControl station stopped.", flush=True)
     finally:
         server.server_close()
+        if server.parking_tracker is not None:
+            server.parking_tracker.close()
         server.camera_manager.close()
         server.arm_supervisor.close()
         server.policy_run_supervisor.close()
