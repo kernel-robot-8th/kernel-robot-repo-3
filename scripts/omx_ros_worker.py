@@ -78,7 +78,7 @@ class OmxActionServer(Node):
         if request.valid_until.sec == 0 and request.valid_until.nanosec == 0:
             return Outcome("REJECTED", self.motion.simulated, "VALID_UNTIL_MISSING"), None
         valid_until = datetime.fromtimestamp(request.valid_until.sec + request.valid_until.nanosec / 1e9, timezone.utc)
-        offset = None if math.isnan(request.lateral_offset_m) else request.lateral_offset_m
+        # lateral_offset_m is ignored: shoulder-pan correction from camera coordinates was dropped (2026-11-11).
 
         def progress(present: dict[str, int], max_error: int) -> None:
             feedback = MoveToSlot.Feedback()
@@ -91,10 +91,10 @@ class OmxActionServer(Node):
         try:
             with self.motion.follower():
                 try:
-                    goal, correction = self.motion.plan(request.slot_id, request.slot_map_version, offset, valid_until)
+                    goal = self.motion.plan(request.slot_id, request.slot_map_version, valid_until)
                 except Rejected as rejected:
                     return Outcome("REJECTED", self.motion.simulated, rejected.reason_code, rejected.message), None
-                return self.motion.move(goal, lambda: goal_handle.is_cancel_requested, progress), correction
+                return self.motion.move(goal, lambda: goal_handle.is_cancel_requested, progress), None
         except (ConnectionError, OSError, RuntimeError) as error:
             # The port may be in use by the policy or teleoperation; nothing was sent to the motors.
             return Outcome("REJECTED", self.motion.simulated, "FOLLOWER_PORT_UNAVAILABLE", str(error)[:300]), None

@@ -7,13 +7,10 @@ from importlib.metadata import version as package_version
 import math
 import os
 import re
-import tempfile
 import threading
 import time
-import uuid
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Callable, Protocol
 
 from control_station.models import (
@@ -25,9 +22,7 @@ from control_station.models import (
 
 
 PIXEL_TRANSFORM_ID = "opencv-v4l2-capture-no-app-geometry-v1"
-MAX_OBSERVATION_IMAGE_BYTES = 64 * 1024 * 1024
 COLOR_HINT_ALGORITHM_VERSION = "hsv-inner-box-thresholds-v1"
-YOLO_WORLD_REQUEST_PROMPT_POLICY_VERSION = "yolo-world-request-class-one-shot-v1"
 
 
 def _sha256_file(path: str) -> str:
@@ -105,15 +100,7 @@ def _estimate_color_hint(image, bbox_xyxy):  # type: ignore[no-untyped-def]
 class CameraStreamManager(Protocol):
     def snapshots(self) -> list[CameraSnapshot]: ...
 
-    def detect_for_prompt(self, camera: CameraSnapshot, prompt: str) -> CameraSnapshot: ...
-
     def frame_for(self, camera_id: str) -> bytes | None: ...
-
-    def save_observation_frame(
-        self, camera_id: str, frame_sequence: int, frame_sha256: str, task_id: str
-    ) -> dict[str, object]: ...
-
-    def delete_observation_frame(self, relative_path: str) -> None: ...
 
     def close(self) -> None: ...
 
@@ -127,7 +114,6 @@ class _CameraFeed:
     frame_width: int | None = None
     frame_height: int | None = None
     frame_sha256: str | None = None
-    raw_frames: dict[int, tuple[str, bytes, int, int, str, float]] = field(default_factory=dict)
     connection_state: CameraConnectionState = CameraConnectionState.UNKNOWN
     stream_state: CameraStreamState = CameraStreamState.UNKNOWN
     last_frame_at: str | None = None
@@ -288,35 +274,6 @@ class _YoloDetector:
             _, detections = self._predict(image, render=False)
             return detections
 
-    def detect_for_prompt(self, image, prompt: str) -> list[dict[str, object]]:  # type: ignore[no-untyped-def]
-        if self.detector_model_type != "YOLO_WORLD_OPEN_VOCAB" or not self.prompts:
-            raise RuntimeError("요청별 prompt는 YOLO-World detector에서만 지원합니다")
-        if (
-            not isinstance(prompt, str)
-            or not prompt.strip()
-            or len(prompt.strip()) > 80
-            or any(ord(character) < 32 or ord(character) == 127 for character in prompt)
-        ):
-            raise ValueError("요청 prompt는 제어 문자가 없는 1–80자 문자열이어야 합니다")
-        if self.state != "ready" or self._model is None:
-            raise RuntimeError("YOLO-World detector가 준비되지 않았습니다")
-
-        normalized_prompt = prompt.strip()
-        with self._inference_lock:
-            if self.state != "ready" or self._model is None:
-                raise RuntimeError("YOLO-World detector is no longer ready")
-            try:
-                self._model.set_classes([normalized_prompt])
-                _, detections = self._predict(image, render=False)
-                return detections
-            finally:
-                try:
-                    self._model.set_classes(self.prompts)
-                except Exception as exc:
-                    self.state = "error"
-                    self.error_message = f"YOLO-World 기본 prompt 복원 실패: {exc}"
-                    raise RuntimeError(self.error_message) from exc
-
 
 class UnconfiguredArmCameraStreamManager:
     """Report camera slots without opening any physical device."""
@@ -339,29 +296,10 @@ class UnconfiguredArmCameraStreamManager:
                 stream_state=CameraStreamState.UNKNOWN,
                 error_message="팔 카메라 스트림을 사용하려면 --arm 모드로 실행하세요",
             ),
-            CameraSnapshot(
-                id="front_camera",
-                robot_id="arm-01",
-                position="FRONT",
-                connection_state=CameraConnectionState.UNKNOWN,
-                stream_state=CameraStreamState.UNKNOWN,
-                error_message="Front Camera 장치 경로 미설정 (CONTROL_STATION_FRONT_CAMERA)",
-            ),
         ]
 
     def frame_for(self, camera_id: str) -> bytes | None:
         return None
-
-    def detect_for_prompt(self, camera: CameraSnapshot, prompt: str) -> CameraSnapshot:
-        raise RuntimeError("camera streams and detectors are not configured")
-
-    def save_observation_frame(
-        self, camera_id: str, frame_sequence: int, frame_sha256: str, task_id: str
-    ) -> dict[str, object]:
-        raise ValueError("camera stream manager has no captured frame to save")
-
-    def delete_observation_frame(self, relative_path: str) -> None:
-        return
 
     def close(self) -> None:
         return
@@ -808,10 +746,8 @@ class OpenCVArmCameraStreamManager:
                 self._closed.wait(2)
 
     def _publish_frame(self, feed: _CameraFeed, image, captured_at: str, captured_monotonic: float, cv2) -> None:  # type: ignore[no-untyped-def]
-        """Run YOLO on one BGR frame and make it the feed's latest JPEG and raw frame."""
-        raw_height, raw_width = image.shape[:2]
-        raw_pixels = image.tobytes(order="C")
-        frame_sha256 = hashlib.sha256(raw_pixels).hexdigest()
+        """Run YOLO on one BGR frame and make it the feed's latest JPEG."""
+        frame_sha256 = hashlib.sha256(image.tobytes(order="C")).hexdigest()
         detections: list[dict[str, object]] = []
         detector = feed.detector
         if detector is not None and detector.state == "ready":
@@ -829,16 +765,6 @@ class OpenCVArmCameraStreamManager:
             feed.frame_width = int(frame_width)
             feed.frame_height = int(frame_height)
             feed.frame_sha256 = frame_sha256
-            feed.raw_frames[frame_sequence] = (
-                frame_sha256,
-                raw_pixels,
-                int(raw_width),
-                int(raw_height),
-                captured_at,
-                captured_monotonic,
-            )
-            while len(feed.raw_frames) > 5:
-                del feed.raw_frames[min(feed.raw_frames)]
             for detection in detections:
                 detection.update(
                     {
@@ -900,6 +826,8 @@ class OpenCVArmCameraStreamManager:
     def snapshots(self) -> list[CameraSnapshot]:
         result = []
         for feed in self._feeds.values():
+            if feed.camera_id == "front_camera" and not feed.device:
+                continue  # not configured on this PC: not shown (set CONTROL_STATION_FRONT_CAMERA to use it)
             with feed.lock:
                 configured = feed.device is not None
                 freshness = FrameFreshness.UNKNOWN
@@ -977,183 +905,6 @@ class OpenCVArmCameraStreamManager:
             return None
         with feed.lock:
             return feed.frame
-
-    def detect_for_prompt(self, camera: CameraSnapshot, prompt: str) -> CameraSnapshot:
-        camera_id = camera.id
-        feed = self._feeds.get(camera_id)
-        if feed is None:
-            raise ValueError("camera stream not found")
-        detector = feed.detector
-        if detector is None or detector.detector_model_type != "YOLO_WORLD_OPEN_VOCAB":
-            raise RuntimeError("camera has no YOLO-World detector")
-        try:
-            import numpy as np
-        except ImportError as exc:
-            raise RuntimeError("NumPy is required for request-prompt inference") from exc
-
-        if (
-            isinstance(camera.frame_sequence, bool)
-            or not isinstance(camera.frame_sequence, int)
-            or camera.frame_sequence <= 0
-            or not isinstance(camera.frame_sha256, str)
-        ):
-            raise ValueError("requested observation has no frame sequence/hash")
-        with feed.lock:
-            captured = feed.raw_frames.get(camera.frame_sequence)
-            if captured is None or captured[0] != camera.frame_sha256:
-                raise RuntimeError("requested observation frame is no longer retained")
-            (
-                frame_sha256,
-                raw_pixels,
-                frame_width,
-                frame_height,
-                captured_at,
-                captured_monotonic,
-            ) = captured
-        if (
-            frame_sha256 != camera.frame_sha256
-            or captured_at != camera.last_frame_at
-            or frame_width != camera.frame_width
-            or frame_height != camera.frame_height
-        ):
-            raise RuntimeError("requested observation frame provenance changed")
-        image = np.frombuffer(raw_pixels, dtype=np.uint8).reshape(
-            (frame_height, frame_width, 3)
-        ).copy()
-        detections = detector.detect_for_prompt(image, prompt)
-        frame_freshness = (
-            FrameFreshness.FRESH
-            if time.monotonic() - captured_monotonic <= 2
-            else FrameFreshness.STALE
-        )
-        for detection in detections:
-            detection.update(
-                {
-                    "camera_id": camera_id,
-                    "captured_at": captured_at,
-                    "frame_sequence": camera.frame_sequence,
-                    "frame_sha256": frame_sha256,
-                    "pixel_transform_id": camera.pixel_transform_id or PIXEL_TRANSFORM_ID,
-                }
-            )
-        return replace(
-            camera,
-            connection_state=camera.connection_state,
-            stream_state=camera.stream_state,
-            frame_freshness=frame_freshness,
-            last_frame_at=captured_at,
-            frame_sequence=camera.frame_sequence,
-            frame_width=frame_width,
-            frame_height=frame_height,
-            frame_sha256=frame_sha256,
-            pixel_transform_id=camera.pixel_transform_id or PIXEL_TRANSFORM_ID,
-            detector_state=detector.state,
-            detector_classes=[prompt.strip()],
-            detections=detections,
-        )
-
-    def save_observation_frame(
-        self, camera_id: str, frame_sequence: int, frame_sha256: str, task_id: str
-    ) -> dict[str, object]:
-        if not re.fullmatch(r"TASK-[A-F0-9]{8}", task_id):
-            raise ValueError("task_id has an unsupported format")
-        feed = self._feeds.get(camera_id)
-        if feed is None:
-            raise ValueError("camera stream not found")
-        with feed.lock:
-            captured = feed.raw_frames.get(frame_sequence)
-            if captured is None or captured[0] != frame_sha256:
-                raise ValueError("requested observation frame is no longer available or does not match")
-            _, raw_pixels, width, height, _, _ = captured
-
-        try:
-            import cv2
-            import numpy as np
-        except ImportError as exc:
-            raise RuntimeError("OpenCV and NumPy are required to save an observation image") from exc
-        image = np.frombuffer(raw_pixels, dtype=np.uint8).reshape((height, width, 3))
-        try:
-            encoded, png = cv2.imencode(".png", image)
-        except cv2.error as exc:
-            raise RuntimeError(f"OpenCV could not encode the observation image: {exc}") from exc
-        if not encoded:
-            raise RuntimeError("OpenCV could not encode the observation image")
-        image_bytes = png.tobytes()
-        if len(image_bytes) > MAX_OBSERVATION_IMAGE_BYTES:
-            raise ValueError("encoded observation image exceeds the 64 MiB limit")
-        image_sha256 = hashlib.sha256(image_bytes).hexdigest()
-
-        repository_root = Path(__file__).resolve().parents[2]
-        control_directory = repository_root / ".control-station"
-        artifact_root = control_directory / "observations"
-        if control_directory.is_symlink() or artifact_root.is_symlink():
-            raise ValueError("observation artifact directories cannot be symbolic links")
-        artifact_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if artifact_root.resolve(strict=True) != artifact_root:
-            raise ValueError("observation artifact directory cannot use symbolic-link path components")
-        task_directory = artifact_root / task_id
-        task_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if task_directory.is_symlink() or task_directory.resolve(strict=True) != task_directory:
-            raise ValueError("task observation directory cannot use symbolic links")
-        filename = f"frame-{frame_sequence}-{uuid.uuid4().hex}.png"
-        destination = task_directory / filename
-        temporary_path: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="wb", dir=task_directory, prefix=".frame-", suffix=".tmp", delete=False
-            ) as temporary_file:
-                temporary_path = Path(temporary_file.name)
-                temporary_file.write(image_bytes)
-            os.replace(temporary_path, destination)
-        finally:
-            if temporary_path is not None and temporary_path.exists():
-                temporary_path.unlink()
-
-        return {
-            "path": str(destination.relative_to(repository_root)),
-            "media_type": "image/png",
-            "file_sha256": image_sha256,
-            "source_frame_sha256": frame_sha256,
-            "pixel_format": "BGR8",
-            "width": width,
-            "height": height,
-        }
-
-    def delete_observation_frame(self, relative_path: str) -> None:
-        path_parts = relative_path.split("/") if isinstance(relative_path, str) else []
-        if (
-            len(path_parts) != 4
-            or path_parts[0] != ".control-station"
-            or path_parts[1] != "observations"
-            or not re.fullmatch(r"TASK-[A-F0-9]{8}", path_parts[2])
-            or not re.fullmatch(r"frame-[0-9]+-[0-9a-f]{32}\.png", path_parts[3])
-        ):
-            raise ValueError("observation artifact path has an unsupported format")
-        try:
-            repository_root = Path(__file__).resolve().parents[2]
-            control_directory = repository_root / ".control-station"
-            artifact_root = control_directory / "observations"
-            task_directory = artifact_root / path_parts[2]
-            candidate = task_directory / path_parts[3]
-            if any(
-                path.is_symlink()
-                for path in (control_directory, artifact_root, task_directory, candidate)
-            ):
-                raise ValueError("observation artifact path cannot use symbolic links")
-            resolved_root = artifact_root.resolve(strict=True)
-            resolved_task = task_directory.resolve(strict=True)
-            resolved_candidate = candidate.resolve(strict=False)
-        except (OSError, RuntimeError) as exc:
-            raise ValueError("observation artifact path cannot be resolved safely") from exc
-        if (
-            resolved_root != artifact_root
-            or resolved_task != task_directory
-            or resolved_task.parent != resolved_root
-            or resolved_candidate != candidate
-            or candidate.suffix != ".png"
-        ):
-            raise ValueError("observation artifact path is outside the managed image directory")
-        candidate.unlink(missing_ok=True)
 
     def sequence_for(self, camera_id: str) -> int:
         feed = self._feeds.get(camera_id)

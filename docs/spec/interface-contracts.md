@@ -114,18 +114,14 @@ HTTP 서버 생존, 카메라 프레임 수신, Nav2 action server 발견, LeRob
 
 ## 5. 좌표 계약
 
-좌표값만으로 명령을 만들지 않습니다. 좌표에는 최소한 frame과 단위를 명시해야 합니다.
+OMX에는 좌표를 보내지 않습니다(2026-11-11 결정). 팔은 기록한 관절 자세(칸, home)와 물체별 학습 정책으로만 움직이며, 카메라 좌표는 표시와 근거 기록에만 씁니다.
 
 | 데이터 | 좌표계·단위 | 결정 상태 |
 |---|---|---|
 | 카메라 검출 위치 | 이미지 `(u, v)` / `pixel`, 카메라 ID와 프레임 시각 동반 | 픽셀 표현은 개념상 정함; 해상도·원점·crop/resize 보정은 카메라별 확인 필요 |
-| OMX 집기 목표 | OMX 베이스 frame 기준 XYZ, 단위 m ([OMX 명령 HTTP 인터페이스](../implementation/arm-command-api.md)의 `target`) | 전달 형식은 정함. frame 이름(모의 워커 기본 `omx_link0`), 축 방향, 원점, 허용 작업 범위는 OMX 장치로 확인해야 함 |
+| OMX 집기 목표 | 좌표 없음. 칸 ID(`pick_slot_id`) 또는 물체 이름으로 고른 학습 정책 ([OMX 명령 HTTP 인터페이스](../implementation/arm-command-api.md)의 `target`) | 정함 |
 | Pinky 목적지 | Nav2가 요구하는 map frame과 pose 단위 | **미확정**: map/frame, yaw 표현, waypoint/action schema 조사 필요 |
-| 카메라→OMX 변환 | 카메라 calibration과 OMX 기준 frame 사이 변환 | 현재 MVP 범위 밖; 변환 오차·허용값은 실험 후 합의 필요 |
 
-추후 좌표 명령에는 `source_camera_id`, `captured_at`, 원본 해상도, source/target `frame_id`, 단위와 calibration 버전을 연결해야 합니다. 정확한 필드명은 공급자 인터페이스를 확인한 뒤 고정합니다. frame·단위·calibration이 없거나 작업 범위를 벗어난 좌표는 집기 명령으로 보내지 않습니다.
-
-현재 오프라인 `project_observation_to_shelf_plane.py`는 명시된 observation event candidate의 detection bbox 하단 중앙을, calibration correspondence 범위 안에서 고정 선반 평면의 2D `DRAFT_ONLY`로 투영합니다. 후보를 CLI index로 지정하면 기본 2초의 frame age 제한(최대 60초까지 명시 조정)을 적용합니다. 운영자 `TARGET_SELECTED` event를 참조하면 존재하는 `step_id`가 pending `SELECT_TARGET`를 가리키는지 확인하고 task/frame/request/candidate snapshot과 저장 PNG file/pixel hash를 검증한 뒤, 캡처 당시 fresh였던 정확한 스냅샷을 경과 시간 제한 없이 오프라인 투영하고 review-only freshness policy 및 나이를 결과에 기록합니다. task는 두 경우 모두 `PENDING`이어야 합니다. event ID가 task 이력에 유일하게 존재해야 하며 존재하는 `step_id`는 pending `DETECT_TARGETS`와 일치해야 합니다(과거 null link는 허용). event 안의 `pick_request`는 task에 저장된 명세와 일치해야 합니다. 선택 후보의 event/camera/frame/`pixel_transform_id` 출처와 plane schema v4에 기록된 대응점 입력 및 각 source image의 SHA-256도 교차 확인합니다. transform ID는 앱 내부 geometry 경로만 식별합니다. 이 anchor는 실제 물체 지지점을 보증하지 않는 proxy임을 결과에 기록하고 calibration fit/validation 지표와 provenance를 함께 보존합니다. 잔차의 자동 합격 기준은 없습니다. 색상/선반 조건이 있으면 미적용 조건으로 남기며, 평면 `(x,y)`는 OMX base/tool pose의 `(x,y,z)`가 아니고 작업 명령으로 직접 사용할 수 없습니다.
 
 ### 작업 생성과 대상 명세 (현재 API)
 
@@ -133,7 +129,7 @@ HTTP 서버 생존, 카메라 프레임 수신, Nav2 action server 발견, LeRob
 
 ### 카메라 관측 결과 (현재 API)
 
-schema v2/v3의 observation object는 `camera_connection_state`와 `camera_stream_state`에 관측 당시 카메라 연결/스트림 enum을 보존합니다. `GET /api/cameras/{camera_id}/target-observation` 응답과 `TARGET_OBSERVED` task event의 중첩 observation에 모두 포함되며, 판정 status만으로 원래 장치 상태를 추정할 필요가 없습니다.
+schema v2/v3의 observation object는 `camera_connection_state`와 `camera_stream_state`에 관측 당시 카메라 연결/스트림 enum을 보존합니다. `GET /api/cameras/{camera_id}/target-observation` 응답의 중첩 observation에 모두 포함되며, 판정 status만으로 원래 장치 상태를 추정할 필요가 없습니다.
 
 
 색상 힌트는 bbox 중앙 60% crop에 OpenCV HSV를 적용합니다. black은 `V<=45`, white는 `S<=45 and V>=200`; red/yellow/green/blue는 각각 `S>=65`, `V>=50`이며 H 범위는 red `<=10 or >=170`, yellow `16–37`, green `38–85`, blue `90–130`입니다. 가장 많은 지원 색상이 crop 전체 픽셀의 20% 미만이면 `LOW_COLOR_COVERAGE`, 1·2위 차가 5% 미만이면 `MIXED_COLOR`, 그 외에만 `ESTIMATED`를 반환합니다. `pixel_fraction`은 그 색상의 픽셀 수를 crop 전체 픽셀 수로 나눈 값입니다.
@@ -143,20 +139,6 @@ schema v2/v3의 observation object는 `camera_connection_state`와 `camera_strea
 
 
 
-
-관측, 후보 선택, projection-draft API는 저장된 task의 `pick_request`도 현재 계약으로 다시 확인합니다. 관측에 대상 명세가 없으면 `PICK_REQUEST_MISSING`, 값이 잘못됐거나 비정규 형식이면 `PICK_REQUEST_INVALID`를 HTTP 409로 반환하고 검토 event를 기록하지 않습니다. 선택과 projection 경로의 누락/잘못된 명세도 `PICK_REQUEST_INVALID`로 거부합니다.
-
-`GET /api/tasks/{task_id}/observations/{event_id}/image`는 task 이력에서 해당 event ID가 유일한 `TARGET_OBSERVED`이며 저장된 PNG metadata의 원본 frame hash·픽셀 형식·크기가 event 관측과 일치할 때만 image를 제공합니다. path는 `.control-station/observations/{task_id}/{filename}.png` 형태와 실제 task 전용 디렉터리 경계를 확인하고, 64 MiB 상한 및 symlink 거부 뒤 전달 전에 PNG 파일 SHA-256을 검증합니다. 파일이 없거나 경로·메타데이터·hash 검증에 실패하면 image를 반환하지 않습니다.
-
-`POST /api/tasks/{task_id}/target-selection`은 `{"observation_event_id":"EVT-...","candidate_index":0}`를 받아 대기 task의 유일한 `TARGET_OBSERVED` event에서 해당 후보를 사람이 선택했다는 `TARGET_SELECTED` 감사 이벤트를 기록합니다. source observation은 schema v2 또는 v3, `FRESH`, `SINGLE_CANDIDATE` 또는 `AMBIGUOUS`, `OBSERVATION_ONLY`여야 하고, event에 `step_id`가 있으면 pending `DETECT_TARGETS`를 가리켜야 합니다(과거 `null` 링크는 허용). task에 저장된 `pick_request` 및 candidate의 camera/frame/hash/transform 출처와 일치해야 합니다. 새 선택 기록에는 같은 event에 연결된 원본 PNG가 필요하며 artifact 경로와 파일 SHA-256을 검증합니다. `candidate_index`는 0-based입니다. 선택 이벤트는 pending `SELECT_TARGET` step의 `step_id`, 관측 ID, 후보 snapshot, 요청 조건, 색상/선반 hint 평가를 보존하고 `source: operator_review`, `selection_scope: HUMAN_REVIEW_ONLY`, `task_state_changed: false`, `arm_command_sent: false`를 표시합니다. 새 기록은 `201`, 이미 저장된 동일 요청의 재전송은 기존 ID를 돌려주는 `200`과 `already_recorded: true`를 반환합니다. 재전송은 동일한 관측 ID와 후보 index, 저장된 provenance를 모두 만족해야 하며 이미 기록된 경우 source PNG를 다시 읽을 필요가 없습니다. 중복 확인과 새 이벤트 추가는 저장 트랜잭션 안에서 수행해 동시 동일 요청도 같은 이벤트 ID로 수렴시킵니다. 작업이 `PENDING`이 아니거나 후보 provenance가 맞지 않으면 거부합니다. 이 엔드포인트는 후보를 다시 인식하거나 결과를 검증·승인하지 않고, task/step 상태 또는 downstream 실행 선택을 변경하지 않습니다.
-
-`POST /api/tasks/{task_id}/target-observation`과 `POST /api/tasks/{task_id}/target-selection`이 반환하는 오류 JSON은 `error_code`, 사람이 읽을 수 있는 `message`, 하위 호환용 `error`를 포함합니다. 검증·상태·출처 오류는 안정된 코드로 구분하며 웹 화면은 코드를 메시지와 함께 표시합니다. 이는 task 관련 POST 두 경로에만 적용된 현재 구현 범위이고 GET 관측 API를 포함한 전체 API의 공통 오류 envelope를 뜻하지 않습니다.
-
-`POST /api/tasks/{task_id}/projection-draft`는 `{"artifact_path":".control-station/camera-calibrations/...json","artifact_sha256":"..."}`를 받습니다. 이 API는 임의 파일 경로 대신 저장소의 관리 calibration 디렉터리 바로 아래 JSON만 읽고, 1 MB 크기 제한·SHA-256·초안 schema v2·`DRAFT_ONLY`/2D 전용 플래그·pending task·고유 pending `DETECT_TARGETS`/`ESTIMATE_TARGET_POSE` 단계·관측/선택 event ID와 step 링크·candidate snapshot·camera/frame/transform·보정 ID·미적용 요청 조건을 다시 확인합니다. 초안에 연결된 plane/intrinsic calibration artifact도 같은 디렉터리의 상대 경로와 SHA-256으로 다시 읽어 camera, frame size, pixel transform, calibration ID 교차 일치를 확인하며, 초안의 표본 수·RMS·checkerboard·source-image 요약도 원본 calibration JSON과 대조합니다. 이 비교는 파일 간 불일치 검사이지 calibration 품질 합격 판정이 아닙니다. 과거 event에서 `step_id: null`인 provenance는 해당 artifact도 null을 그대로 보존한 경우에만 허용합니다. 검증되면 `TARGET_PLANE_PROJECTION_RECORDED`를 pending `ESTIMATE_TARGET_POSE`에 연결해 기록하고 event ID를 돌려줍니다. 같은 draft ID와 artifact hash의 재요청은 기존 event를 반환하며, 같은 ID에 다른 hash를 제출하면 거부합니다. 이 이벤트는 선반 기준 2D `(x,y)` 검토 자료만 보존하며 `z`, camera-to-robot transform, IK, 작업영역/충돌 검사 또는 파지 목표를 뜻하지 않습니다. `task_state_changed: false`, `arm_command_sent: false`, `usable_for_robot_control: false`이며 task/step 상태, 명령, 선택 결과를 바꾸지 않습니다. offline CLI의 `--record-review-event`가 기본 꺼짐이며 localhost에만 이 요청을 보냅니다.
-
-`GET /api/tasks/{task_id}/projection-drafts/{event_id}/artifact`는 해당 task에 유일하게 존재하는 `TARGET_PLANE_PROJECTION_RECORDED` event를 찾아 저장된 상대 경로와 SHA-256으로 artifact를 다시 읽습니다. draft ID/task ID/`DRAFT_ONLY` 상태 및 review-only event 플래그까지 일치해야 JSON을 반환하며, 파일이 바뀌었거나 없어졌으면 거부합니다. task 단계가 이후 진행되어도 과거 review artifact의 hash 검증 열람은 가능합니다. 이 조회는 task나 로봇 상태를 변경하지 않습니다.
-
-`POST /api/tasks/{task_id}/projection-draft` 오류 응답은 `error_code`, 사람이 읽을 수 있는 `message`, 하위 호환용 `error`를 포함합니다. 요청 형식, task/step 상태 충돌, 초안 provenance 검증 거부를 구분하며, projection review 화면이 없는 현재는 API/CLI 호출자에게 이 코드를 제공합니다.
 
 관제의 JSON POST body parser는 object 내 중복 key를 거부하고 HTTP 400을 반환합니다. 요청 값이 parser 선택 순서에 따라 달라지지 않도록 하는 입력 계약이며, task/event 저장이나 장치 동작을 시작하지 않습니다.
 
@@ -259,7 +241,7 @@ Pinky가 멈춘 뒤 천장 카메라로 "등록된 주차 위치와 얼마나 �
 - [ ] 한 주문을 여러 운송 작업으로 나누는 조건과 `order_id`-`task_id` 관계
 - [ ] Pinky Nav2 action 계약과 map frame
 - [ ] OMX 작업 명령, READY, 파지·적재 완료와 오류 신호 (전달 방식과 이벤트는 [HTTP 인터페이스](../implementation/arm-command-api.md)로 초안 구현; `reason_code` 목록·READY 신호·실물 워커는 미정)
-- [ ] 카메라→OMX 좌표 frame·단위·축·calibration 및 검증 허용 오차
+- [ ] 적재 완료 신호 토픽 이름·메시지 형식을 핑키 팀과 합의
 - [ ] 장치 이벤트 ID·sequence·시각 제공 여부와 heartbeat 주기
 - [ ] timeout/stale 기준과 운영자의 보류·재개 절차
 - [ ] 주차 정렬 `MISALIGNED`·판정 불가 때 운영자 처리 절차(재주행 요청 방식, 재판정 시점). `ARRIVED`를 팔 단계 조건에 넣는 것은 2026-11-02에 결정

@@ -32,23 +32,16 @@ from control_station.models import StringEnum
 from control_station.shelf_slot_map import ShelfSlotMap
 
 
-ARM_ROBOT_IDS = frozenset({"arm-01"})
+# arm-01 is the left arm (left shelf), arm-02 the right arm (right shelf); config/arms.json maps them to shelves.
+ARM_ROBOT_IDS = frozenset({"arm-01", "arm-02"})
 # MOVE_TO_SLOT moves the arm to the pose taught for a slot without grasping; used to check motion first.
-# RETURN_HOME moves it back to the worker's recorded "home" pose; it names no object, slot, position or place.
-# MOVE_TO_POSITION brings the arm's tool point to one XYZ position (the worker solves the joints); no grasping.
+# RETURN_HOME moves it back to the worker's recorded "home" pose; it names no object, slot or place.
 # PICK_WITH_POLICY runs the LeRobot ACT policy trained for the named object (config/omx-act-policies.json). The
 # policy finds the object in its own camera images; a camera-observed slot, if any, is evidence, not an input.
-# PICK_AT_POSITION picks the object whose centre is at target.position (arm frame, from the camera) with a planned
-# grasp, no learned policy, and puts it at the worker's taught place pose.
-OPERATIONS = frozenset(
-    {"PICK_AND_PLACE", "MOVE_TO_SLOT", "RETURN_HOME", "MOVE_TO_POSITION", "PICK_WITH_POLICY", "PICK_AT_POSITION"}
-)
+# No operation takes coordinates: the team dropped camera-to-arm coordinate targeting (2026-11-11).
+OPERATIONS = frozenset({"MOVE_TO_SLOT", "RETURN_HOME", "PICK_WITH_POLICY"})
 # Operations whose SUCCEEDED means "measured joints reached the planned pose" rather than grasp and place.
-POSE_OPERATIONS = frozenset({"MOVE_TO_SLOT", "RETURN_HOME", "MOVE_TO_POSITION"})
-# Operations that only move the arm and so name no place to put an object.
-MOVE_ONLY_WITHOUT_PLACE = frozenset({"RETURN_HOME", "MOVE_TO_POSITION"})
-# Wrist pitch at the target: level (FRONT_HORIZONTAL) or 45 degrees down (PITCH_DOWN_45, hovering above an object).
-APPROACHES = frozenset({"FRONT_HORIZONTAL", "PITCH_DOWN_45"})
+POSE_OPERATIONS = frozenset({"MOVE_TO_SLOT", "RETURN_HOME"})
 SOURCE_KINDS = frozenset({"OPERATOR_INPUT"})
 # Phase names follow the control station's pick-and-place step types so progress can map onto steps.
 PHASES = frozenset(
@@ -63,11 +56,8 @@ PHASES = frozenset(
         "VERIFY_PLACEMENT",
     }
 )
-# Input sanity bound that catches millimetres typed as metres; it is not a workspace check.
-MAX_ABS_POSITION_M = 1.0
 MAX_WAIT_S = 30.0
 
-_FRAME_ID = re.compile(r"^[A-Za-z0-9_./-]{1,80}$")
 _SLOT_ID = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
 _TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 _REASON_CODE = re.compile(r"^[A-Z0-9_]{1,60}$")
@@ -177,27 +167,10 @@ def _matching(value: object, field: str, pattern: re.Pattern[str]) -> str:
     return value
 
 
-def _xyz(value: object, field: str, *, minimum: float, maximum: float) -> dict[str, float]:
-    if not isinstance(value, Mapping) or set(value) != {"x", "y", "z"}:
-        raise ArmCommandError(f"{field} must be an object with exactly x, y, and z")
-    result: dict[str, float] = {}
-    for axis in ("x", "y", "z"):
-        number = value[axis]
-        if isinstance(number, bool) or not isinstance(number, (int, float)):
-            raise ArmCommandError(f"{field}.{axis} must be a number")
-        number = float(number)
-        if not math.isfinite(number) or not minimum <= number <= maximum:
-            raise ArmCommandError(f"{field}.{axis} must be a finite number from {minimum} to {maximum}")
-        result[axis] = number
-    return result
-
-
 def _slot_target(target: Mapping[str, object], slot_map: ShelfSlotMap | None) -> dict[str, Any]:
-    """A slot target names a shelf slot; the worker replays its own pose for it, so no XYZ is sent."""
+    """A slot target names a shelf slot; the worker replays its own taught pose for it."""
     if slot_map is None:
         raise ArmCommandError("칸 정의 파일(config/shelf-slots.json)이 없어 pick_slot_id를 쓸 수 없습니다")
-    if any(target.get(field) is not None for field in ("frame_id", "unit", "position", "uncertainty_m")):
-        raise ArmCommandError("pick_slot_id와 좌표(frame_id, unit, position, uncertainty_m)는 함께 보낼 수 없습니다")
     slot = slot_map.active_slots.get(target.get("pick_slot_id"))  # type: ignore[arg-type]
     if slot is None:
         raise ArmCommandError("pick_slot_id must be one of: " + ", ".join(sorted(slot_map.active_slots)))
@@ -205,35 +178,11 @@ def _slot_target(target: Mapping[str, object], slot_map: ShelfSlotMap | None) ->
         "pick_slot_id": slot["slot_id"],
         "slot_label": slot["label"],
         "slot_map_version": slot_map.version,
-        "frame_id": None,
-        "unit": None,
-        "position": None,
-        "uncertainty_m": None,
-    }
-
-
-def _position_target(target: Mapping[str, object]) -> dict[str, Any]:
-    if target.get("unit") != "m":
-        raise ArmCommandError("target.unit must be 'm'")
-    return {
-        "pick_slot_id": None,
-        "slot_label": None,
-        "slot_map_version": None,
-        "frame_id": _matching(target.get("frame_id"), "target.frame_id", _FRAME_ID),
-        "unit": "m",
-        "position": _xyz(
-            target.get("position"), "target.position", minimum=-MAX_ABS_POSITION_M, maximum=MAX_ABS_POSITION_M
-        ),
-        "uncertainty_m": (
-            _xyz(target["uncertainty_m"], "target.uncertainty_m", minimum=0.0, maximum=MAX_ABS_POSITION_M)
-            if target.get("uncertainty_m") is not None
-            else None
-        ),
     }
 
 
 def _policy_target(
-    target: Mapping[str, object], slot_map: ShelfSlotMap | None, policies: ActPolicyRegistry | None
+    target: Mapping[str, object], slot_map: ShelfSlotMap | None, policies: ActPolicyRegistry | None, robot_id: str
 ) -> dict[str, Any]:
     """The policy is chosen by object name; an optional slot is where a camera saw the object (evidence only)."""
     if policies is None:
@@ -241,19 +190,22 @@ def _policy_target(
     if set(target) - {"object_class", "pick_slot_id"}:
         raise ArmCommandError("PICK_WITH_POLICY target takes only object_class and an optional pick_slot_id")
     name = _text(target.get("object_class"), "target.object_class", 80)
-    policy = policies.resolve(name)  # type: ignore[arg-type]
+    policy = policies.resolve(name, robot_id)  # type: ignore[arg-type]
     if policy is None:
-        known = ", ".join(f"{item['label']}({item['object_class']})" for item in policies.policies.values())
-        raise ArmCommandError(f"{name}에 학습된 정책이 없습니다. 가능한 물체: {known}")
+        known = ", ".join(
+            f"{item['label']}({item['object_class']})"
+            for item in policies.policies.values()
+            if item["arm_id"] in (None, robot_id)
+        )
+        raise ArmCommandError(f"{robot_id}에는 {name}에 학습된 정책이 없습니다. 가능한 물체: {known}")
     slot = (
         _slot_target(target, slot_map)
         if target.get("pick_slot_id") is not None
-        else dict.fromkeys(("pick_slot_id", "slot_label", "slot_map_version", "frame_id", "unit", "position", "uncertainty_m"))
+        else dict.fromkeys(("pick_slot_id", "slot_label", "slot_map_version"))
     )
     return {
         "object_class": policy["object_class"],
         **slot,
-        "approach": None,
         "policy": {
             "policy_id": policy["policy_id"],
             "label": policy["label"],
@@ -270,8 +222,8 @@ def validate_command_request(
 ) -> tuple[str, str, int, dict[str, Any]]:
     """Return (robot_id, operation, valid_for_s, frozen request) or raise ArmCommandError.
 
-    The target is either one shelf slot (`pick_slot_id`) or one XYZ position with its frame and unit;
-    RETURN_HOME has neither, and PICK_WITH_POLICY names an object with a trained policy.
+    MOVE_TO_SLOT names one shelf slot (`pick_slot_id`), RETURN_HOME names nothing, and PICK_WITH_POLICY names
+    an object with a trained policy.
     """
     allowed = {"robot_id", "operation", "valid_for_s", "target", "place", "source"}
     if set(payload) - allowed:
@@ -289,10 +241,7 @@ def validate_command_request(
     if operation == "RETURN_HOME":
         if payload.get("target") not in (None, {}) or payload.get("place") is not None:
             raise ArmCommandError("RETURN_HOME takes no target or place; the worker uses its recorded home pose")
-        home_target = dict.fromkeys(
-            ("object_class", "pick_slot_id", "slot_label", "slot_map_version", "frame_id", "unit", "position",
-             "uncertainty_m", "approach")
-        )
+        home_target = dict.fromkeys(("object_class", "pick_slot_id", "slot_label", "slot_map_version"))
         return str(robot_id), str(operation), valid_for_s, {"target": home_target, "place": None, "source": source}
 
     target = payload.get("target")
@@ -303,41 +252,24 @@ def validate_command_request(
         if not isinstance(place, Mapping) or set(place) != {"slot_id"}:
             raise ArmCommandError("place must be an object with exactly slot_id")
         request = {
-            "target": _policy_target(target, slot_map, policies),
+            "target": _policy_target(target, slot_map, policies, str(robot_id)),
             "place": {"slot_id": _matching(place.get("slot_id"), "place.slot_id", _SLOT_ID)},
             "source": source,
         }
         return str(robot_id), str(operation), valid_for_s, request
-    target_fields = {"object_class", "pick_slot_id", "frame_id", "unit", "position", "uncertainty_m", "approach"}
+    target_fields = {"object_class", "pick_slot_id"}
     if not isinstance(target, Mapping) or set(target) - target_fields:
         raise ArmCommandError("target must be an object with " + ", ".join(sorted(target_fields)))
-    if operation == "MOVE_TO_SLOT" and target.get("pick_slot_id") is None:
+    if target.get("pick_slot_id") is None:
         raise ArmCommandError("MOVE_TO_SLOT needs target.pick_slot_id")
-    if operation in {"MOVE_TO_POSITION", "PICK_AT_POSITION"} and target.get("pick_slot_id") is not None:
-        raise ArmCommandError(f"{operation} needs target.position, not a slot")
     frozen_target: dict[str, Any] = {
-        "object_class": _text(
-            target.get("object_class"), "target.object_class", 80, required=operation == "PICK_AND_PLACE"
-        ),
-        **(
-            _slot_target(target, slot_map)
-            if target.get("pick_slot_id") is not None
-            else _position_target(target)
-        ),
-        "approach": target.get("approach", "FRONT_HORIZONTAL"),
+        "object_class": _text(target.get("object_class"), "target.object_class", 80, required=False),
+        **_slot_target(target, slot_map),
     }
-    if frozen_target["approach"] not in APPROACHES:
-        raise ArmCommandError("target.approach must be one of: " + ", ".join(sorted(APPROACHES)))
-
     place = payload.get("place")
-    if operation in MOVE_ONLY_WITHOUT_PLACE:
-        if place is not None:
-            raise ArmCommandError(f"{operation} takes no place")
-        frozen_place = None
-    elif not isinstance(place, Mapping) or set(place) != {"slot_id"}:
+    if not isinstance(place, Mapping) or set(place) != {"slot_id"}:
         raise ArmCommandError("place must be an object with exactly slot_id")
-    else:
-        frozen_place = {"slot_id": _matching(place.get("slot_id"), "place.slot_id", _SLOT_ID)}
+    frozen_place = {"slot_id": _matching(place.get("slot_id"), "place.slot_id", _SLOT_ID)}
     request = {"target": frozen_target, "place": frozen_place, "source": source}
     return str(robot_id), str(operation), valid_for_s, request
 
@@ -532,13 +464,10 @@ class ArmCommandStore:
         clients can only send `source.kind: OPERATOR_INPUT`, so camera provenance cannot be posted directly."""
         robot_id, operation, valid_for_s, request = validate_command_request(payload, self.slot_map, self.act_policies)
         if camera_source is not None:
-            # A slot target must be the slot the camera saw; a position target was computed from that observation.
+            # A slot target must be the slot the camera saw.
             if request["target"]["pick_slot_id"] is not None and camera_source.get("slot_id") != request["target"]["pick_slot_id"]:
                 raise ArmCommandError("camera evidence is for a different slot than the command target")
             request["source"] = {"kind": "CAMERA", **camera_source}
-            # Where in the slot the camera saw the object; the arm side decides whether to correct for it.
-            request["target"]["lateral_offset_m"] = camera_source.get("lateral_offset_m")
-            request["target"]["object_position_shelf_m"] = camera_source.get("position_shelf_m")
         now = _now()
         with self._lock:
             with self._sessions.begin() as session:

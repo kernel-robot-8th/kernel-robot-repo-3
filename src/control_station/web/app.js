@@ -11,9 +11,6 @@ const policyRunDetail = document.querySelector('#policyRunDetail');
 const policyRunStart = document.querySelector('#policyRunStart');
 const policyRunStop = document.querySelector('#policyRunStop');
 const policyProfile = document.querySelector('#policyProfile');
-const coordinateTargetForm = document.querySelector('#coordinateTargetForm');
-const coordinateTargetMessage = document.querySelector('#coordinateTargetMessage');
-const coordinateTargetResult = document.querySelector('#coordinateTargetResult');
 const targetObservationForm = document.querySelector('#targetObservationForm');
 const detectorClassOptions = document.querySelector('#detectorClassOptions');
 const taskForm = document.querySelector('#taskForm');
@@ -52,10 +49,8 @@ let targetObservationClass = '';
 let targetObservationColor = '';
 let targetObservationShelfLevel = '';
 let targetObservationRequest = 0;
-let taskObservationRequest = 0;
-let lastTaskObservation = { key: '', message: '' };
 
-const viewNames = { overview: '현황', manual: '수동 조작', tasks: '작업 이력', api: 'API' };
+const viewNames = { flow: '주문 진행', overview: '현황', manual: '수동 조작', tasks: '작업 이력', api: 'API' };
 const controlModeLabels = {
   mock: '모의',
   ros2: 'ROS 2 상태 관측',
@@ -487,39 +482,6 @@ async function sendPolicyRunAction(action) {
 policyRunStart.addEventListener('click', () => sendPolicyRunAction('start'));
 policyRunStop.addEventListener('click', () => sendPolicyRunAction('stop'));
 
-coordinateTargetForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const button = coordinateTargetForm.querySelector('button');
-  const formData = new FormData(coordinateTargetForm);
-  button.disabled = true;
-  coordinateTargetMessage.textContent = '';
-  coordinateTargetResult.hidden = true;
-  try {
-    const response = await fetch('/api/arm/coordinate-target-drafts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        frame_id: formData.get('frame_id'),
-        unit: formData.get('unit'),
-        position: {
-          x: Number(formData.get('x')),
-          y: Number(formData.get('y')),
-          z: Number(formData.get('z')),
-        },
-      }),
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || '좌표 초안을 저장하지 못했습니다.');
-    coordinateTargetMessage.textContent = `미실행 초안 저장 완료 · ${result.draft.file}`;
-    coordinateTargetResult.textContent = JSON.stringify(result.draft, null, 2);
-    coordinateTargetResult.hidden = false;
-  } catch (error) {
-    coordinateTargetMessage.textContent = error.message;
-  } finally {
-    button.disabled = false;
-  }
-});
-
 const armCommandForm = document.querySelector('#armCommandForm');
 const armCommandMessage = document.querySelector('#armCommandMessage');
 const armCommandRows = document.querySelector('#armCommandRows');
@@ -559,10 +521,8 @@ function renderArmCommands(commands) {
     let where = target.policy ? '카메라 위치 근거 없음' : 'home 자세';
     if (target.pick_slot_id) {
       where = `칸 ${escapeHtml(target.slot_label || target.pick_slot_id)} (${escapeHtml(target.pick_slot_id)})${camera}`;
-    } else if (target.position) {
-      where = `${escapeHtml(target.frame_id)} (${[target.position.x, target.position.y, target.position.z].map((value) => value.toFixed(3)).join(', ')}) m`;
     }
-    const what = { MOVE_TO_SLOT: '칸 앞으로 이동', RETURN_HOME: '원상복귀', MOVE_TO_POSITION: '좌표로 이동', PICK_AT_POSITION: `보고 집기: ${escapeHtml(target.object_class || '')}` }[command.operation]
+    const what = { MOVE_TO_SLOT: '칸 앞으로 이동', RETURN_HOME: '원상복귀' }[command.operation]
       || (target.policy
         ? `학습 정책 집기: ${escapeHtml(target.policy.label)}<small>${escapeHtml(target.policy.model)}</small>`
         : `${escapeHtml(target.object_class)} → ${escapeHtml(command.place.slot_id)}`);
@@ -631,10 +591,10 @@ async function postArmCommand(url, body) {
 const cameraCommandForm = document.querySelector('#cameraCommandForm');
 const policyButtons = document.querySelector('#policyButtons');
 
-document.querySelector('#cameraSlotCommand').addEventListener('click', async (event) => {
+cameraCommandForm.addEventListener('submit', async (event) => {
   // The server picks the slot from the front camera; it refuses unless the object is in exactly one slot.
-  if (!cameraCommandForm.reportValidity()) return;
-  const button = event.currentTarget;
+  event.preventDefault();
+  const button = document.querySelector('#cameraSlotCommand');
   const objectClass = cameraCommandForm.elements.object_class.value.trim();
   button.disabled = true;
   armCommandMessage.textContent = '';
@@ -651,61 +611,6 @@ document.querySelector('#cameraSlotCommand').addEventListener('click', async (ev
     }
     const found = result.selection;
     armCommandMessage.textContent = `${found.class_name} ${Math.round(found.confidence * 100)}% → ${found.slot_label} · ${result.command.command_id} 등록, 워커가 가져갈 때까지 대기`;
-  } catch (error) {
-    armCommandMessage.textContent = error.message;
-  } finally {
-    button.disabled = false;
-    await refreshArmCommands();
-  }
-});
-
-cameraCommandForm.addEventListener('submit', async (event) => {
-  // Enter and the first button: the server converts the camera's shelf position into arm coordinates and queues
-  // MOVE_TO_POSITION above the object.
-  event.preventDefault();
-  const button = document.querySelector('#cameraHoverCommand');
-  button.disabled = true;
-  armCommandMessage.textContent = '';
-  try {
-    const response = await fetch('/api/arm/commands/from-camera', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ object_class: cameraCommandForm.elements.object_class.value.trim(), operation: 'MOVE_TO_POSITION' }),
-    });
-    const result = await response.json();
-    if (!response.ok) {
-      const detail = result.details ? ` (${JSON.stringify(result.details)})` : '';
-      throw new Error(`${apiErrorMessage(result, '물체 위치로 명령을 만들지 못했습니다.')}${detail}`);
-    }
-    const object = result.hover.object_arm_m;
-    armCommandMessage.textContent = `${result.selection.class_name} ${Math.round(result.selection.confidence * 100)}% → 팔 좌표 (${(object.x * 100).toFixed(1)}, ${(object.y * 100).toFixed(1)}) cm 위로 · ${result.command.command_id} 등록, 워커가 가져갈 때까지 대기`;
-  } catch (error) {
-    armCommandMessage.textContent = error.message;
-  } finally {
-    button.disabled = false;
-    await refreshArmCommands();
-  }
-});
-
-document.querySelector('#cameraPickCommand').addEventListener('click', async (event) => {
-  // Look and pick: the server converts the camera position into the object's centre in arm coordinates.
-  if (!cameraCommandForm.reportValidity()) return;
-  const button = event.currentTarget;
-  button.disabled = true;
-  armCommandMessage.textContent = '';
-  try {
-    const response = await fetch('/api/arm/commands/from-camera', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ object_class: cameraCommandForm.elements.object_class.value.trim(), operation: 'PICK_AT_POSITION' }),
-    });
-    const result = await response.json();
-    if (!response.ok) {
-      const detail = result.details ? ` (${JSON.stringify(result.details)})` : '';
-      throw new Error(`${apiErrorMessage(result, '보고 집기 명령을 만들지 못했습니다.')}${detail}`);
-    }
-    const p = result.command.target.position;
-    armCommandMessage.textContent = `${result.selection.class_name} ${Math.round(result.selection.confidence * 100)}% → 팔 좌표 (${(p.x * 100).toFixed(1)}, ${(p.y * 100).toFixed(1)}, ${(p.z * 100).toFixed(1)}) cm에서 보고 집기 · ${result.command.command_id} 등록`;
   } catch (error) {
     armCommandMessage.textContent = error.message;
   } finally {
@@ -780,28 +685,94 @@ async function loadPolicyButtons() {
 }
 loadPolicyButtons();
 
-const armCommandSlot = document.querySelector('#armCommandSlot');
-const armCommandPositionInputs = ['frame_id', 'x', 'y', 'z'].map((name) => armCommandForm.elements[name]);
+// ---- 주문 (여러 물체·수량, 핑키 배정) ----
+const orderForm = document.querySelector('#orderForm');
+const orderItems = document.querySelector('#orderItems');
+const orderMessage = document.querySelector('#orderMessage');
+const pinkyNames = { 10: 'P0', 11: 'P1', 12: 'P2' };
+let orderPolicies = [];
 
-const armCommandOperation = document.querySelector('#armCommandOperation');
-
-function updateArmCommandMode() {
-  // A slot command carries no coordinates; the worker replays the pose it taught for that slot.
-  // Moving to a slot needs a slot; picking also needs to say what object it is.
-  // Moving to a position takes coordinates only and no place to put an object.
-  const moveOnly = armCommandOperation.value === 'MOVE_TO_SLOT';
-  const toPosition = armCommandOperation.value === 'MOVE_TO_POSITION';
-  armCommandSlot.querySelector('option[value=""]').disabled = moveOnly;
-  if (moveOnly && !armCommandSlot.value && armCommandSlot.options.length > 1) armCommandSlot.selectedIndex = 1;
-  if (toPosition) armCommandSlot.value = '';
-  armCommandSlot.disabled = toPosition;
-  armCommandForm.elements.slot_id.disabled = toPosition;
-  armCommandForm.elements.object_class.required = armCommandOperation.value === 'PICK_AND_PLACE';
-  const slotMode = Boolean(armCommandSlot.value);
-  armCommandPositionInputs.forEach((input) => { input.disabled = slotMode; });
+function objectLabel(objectClass) {
+  return orderPolicies.find((policy) => policy.object_class === objectClass)?.label || objectClass;
 }
 
-armCommandOperation.addEventListener('change', updateArmCommandMode);
+function orderSummary(items) {
+  return (items || []).map((item) => `${objectLabel(item.object_class)} ${item.quantity}`).join(' · ');
+}
+
+function pinkyBadge(pinkyId) {
+  return pinkyId ? `<span class="pinky-badge pinky-${escapeHtml(pinkyId)}">${escapeHtml(pinkyNames[pinkyId] || pinkyId)}</span>` : '';
+}
+
+function addOrderRow(objectClass = '', quantity = 1) {
+  const row = document.createElement('div');
+  row.className = 'order-item';
+  const objects = [...new Map(orderPolicies.map((policy) => [policy.object_class, policy.label])).entries()];
+  row.innerHTML = `
+    <label>물체<select name="object_class" required>${objects.map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)} (${escapeHtml(value)})</option>`).join('')}</select></label>
+    <label>수량<input name="quantity" type="number" min="1" max="5" step="1" required value="${Number(quantity) || 1}"></label>
+    <button type="button" class="secondary" data-remove-order-item>삭제</button>`;
+  if (objectClass) row.querySelector('select').value = objectClass;
+  row.querySelector('[data-remove-order-item]').addEventListener('click', () => {
+    row.remove();
+    if (!orderItems.children.length) addOrderRow();
+  });
+  orderItems.append(row);
+}
+
+function setOrderRows(items) {
+  orderItems.replaceChildren();
+  (items.length ? items : [{ object_class: '', quantity: 1 }]).forEach((item) => addOrderRow(item.object_class, item.quantity));
+}
+
+async function loadOrderPolicies() {
+  try {
+    const response = await fetch('/api/arm/policies', { cache: 'no-store' });
+    const result = await response.json();
+    if (!response.ok) throw new Error(apiErrorMessage(result, '정책 목록을 불러오지 못했습니다'));
+    orderPolicies = result.policies;
+    setOrderRows([]);
+  } catch (error) {
+    orderMessage.textContent = `주문할 물체 목록을 불러오지 못했습니다: ${error.message}`;
+  }
+}
+loadOrderPolicies();
+
+document.querySelector('#orderAddItem').addEventListener('click', () => addOrderRow());
+
+orderForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = orderForm.querySelector('button[type="submit"]');
+  const items = [...orderItems.querySelectorAll('.order-item')].map((row) => ({
+    object_class: row.querySelector('select').value,
+    quantity: Number(row.querySelector('input').value),
+  }));
+  const pinkyId = orderForm.elements.pinky_id.value;
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order_items: items, ...(pinkyId ? { pinky_id: pinkyId } : {}) }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(apiErrorMessage(result, '주문을 등록하지 못했습니다.'));
+    selectedTaskId = result.task.id;
+    const startNow = orderForm.elements.start_now.checked;
+    setOrderRows([]);
+    orderForm.elements.pinky_id.value = '';
+    orderMessage.textContent = `${result.task.id} 등록 · ${orderSummary(result.task.order_items)} · 핑키 ${pinkyNames[result.task.pinky_id] || result.task.pinky_id} 배정.`;
+    if (startNow) await orderControl(result.task.id, 'start');
+    await Promise.all([refreshTasks(), refreshFlow()]);
+  } catch (error) {
+    orderMessage.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+// The worker replays the joint pose it taught for the chosen slot; no coordinates are sent.
+const armCommandSlot = document.querySelector('#armCommandSlot');
 
 async function loadShelfSlots() {
   try {
@@ -814,34 +785,23 @@ async function loadShelfSlots() {
       option.textContent = slot.label;
       armCommandSlot.append(option);
     });
-    updateArmCommandMode();
   } catch (error) {
     armCommandSlot.disabled = true;
     armCommandSlot.title = error.message;
   }
 }
 
-armCommandSlot.addEventListener('change', updateArmCommandMode);
-
 armCommandForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const button = armCommandForm.querySelector('button');
   const formData = new FormData(armCommandForm);
   button.disabled = true;
-  const slotId = armCommandSlot.value;
   const command = await postArmCommand('/api/arm/commands', {
     robot_id: 'arm-01',
-    operation: armCommandOperation.value,
+    operation: 'MOVE_TO_SLOT',
     valid_for_s: Number(formData.get('valid_for_s')),
-    target: slotId
-      ? { object_class: String(formData.get('object_class') || '').trim() || null, pick_slot_id: slotId }
-      : {
-        object_class: String(formData.get('object_class') || '').trim() || null,
-        frame_id: formData.get('frame_id'),
-        unit: 'm',
-        position: { x: Number(formData.get('x')), y: Number(formData.get('y')), z: Number(formData.get('z')) },
-      },
-    ...(armCommandOperation.value === 'MOVE_TO_POSITION' ? {} : { place: { slot_id: formData.get('slot_id') } }),
+    target: { object_class: String(formData.get('object_class') || '').trim() || null, pick_slot_id: armCommandSlot.value },
+    place: { slot_id: formData.get('slot_id') },
     source: { kind: 'OPERATOR_INPUT' },
   });
   if (command) armCommandMessage.textContent = `${command.command_id} 등록 · 워커가 가져갈 때까지 대기`;
@@ -849,7 +809,7 @@ armCommandForm.addEventListener('submit', async (event) => {
 });
 
 document.querySelector('#armReturnHome').addEventListener('click', async (event) => {
-  // No slot, coordinate or place: the worker moves the arm back to the home pose it recorded.
+  // No slot or place: the worker moves the arm back to the home pose it recorded.
   const button = event.currentTarget;
   button.disabled = true;
   const command = await postArmCommand('/api/arm/commands', {
@@ -871,13 +831,6 @@ const stepLabels = {
   VALIDATE_ROBOTS: '로봇 상태 확인', NAVIGATE_TO_DESTINATION: '목적지로 이동',
   VERIFY_ARRIVAL: '도착 확인', EXECUTE_ARM_TASK: '팔 작업',
   VERIFY_ARM_RESULT: '팔 작업 결과 확인', VERIFY_LOAD: '적재 확인', FINALIZE_TASK: '작업 마무리',
-  VALIDATE_REQUEST: '요청 조건 확인', DETECT_TARGETS: '대상 후보 관측',
-  SELECT_TARGET: '대상 선택', ESTIMATE_TARGET_POSE: '대상 위치 추정',
-  VALIDATE_GRASP: '파지 가능성 확인', APPROACH_TARGET: '대상 접근',
-  REFINE_TARGET: '손목 카메라 재관측', GRASP_TARGET: '대상 파지',
-  VERIFY_GRASP: '파지 확인', LIFT_TARGET: '대상 들어 올리기',
-  MOVE_TO_DESTINATION: '목적지 이동', PLACE_TARGET: '대상 놓기',
-  VERIFY_PLACEMENT: '놓기 확인',
 };
 const executionLabels = {
   COMMAND_SENT: '명령 기록', ACCEPTED: '접수됨', RUNNING: '실행 중',
@@ -899,7 +852,6 @@ const taskEventLabels = {
   MOCK_SCENARIO_FAILURE: '모의 실패 시나리오 발생',
   MOCK_EXECUTION_FAILED: '모의 실행 오류',
   MOCK_TASK_COMPLETED: '모의 작업 완료',
-  TARGET_PLANE_PROJECTION_RECORDED: '선반 평면 좌표 초안 기록',
   ARRIVAL_NOT_CONFIRMED: '도착 미확인 · 팔 단계 시작 안 함',
   LOAD_NOT_CONFIRMED: '적재 미확인 · 출발하지 않음',
   TARGET_CONFIRMED: '정면 카메라 물체 확인',
@@ -1291,7 +1243,7 @@ function renderTasks(tasks) {
   if (!tasks.some((task) => task.id === selectedTaskId)) selectedTaskId = tasks[0].id;
   taskList.innerHTML = tasks.map((task) => `
     <button type="button" class="task-item${task.id === selectedTaskId ? ' selected' : ''}" data-task-id="${escapeHtml(task.id)}">
-      <span><strong>${escapeHtml(task.destination)}</strong><small>${escapeHtml(task.id)}</small></span>
+      <span><strong>${task.order_items ? `${pinkyBadge(task.pinky_id)} ${escapeHtml(orderSummary(task.order_items))}` : escapeHtml(task.destination)}</strong><small>${escapeHtml(task.id)}</small></span>
       <span class="task-status">${escapeHtml(taskStatusLabels[task.status] || task.status)}</span>
     </button>`).join('');
   taskList.querySelectorAll('[data-task-id]').forEach((button) => {
@@ -1309,11 +1261,6 @@ function renderTaskDetail(task) {
   const targetSummary = pickRequest
     ? [pickRequest.category, pickRequest.color, pickRequest.shelf_level ? `${pickRequest.shelf_level}층` : null].filter(Boolean).join(' · ')
     : '미지정';
-  const observationKey = `${task.id}:${pickRequest?.category || ''}`;
-  const observationMessage = lastTaskObservation.key === observationKey
-    ? lastTaskObservation.message
-    : '아직 관측하지 않았습니다.';
-  const canRecordObservation = task.status === 'PENDING';
   const canStart = task.status === 'PENDING' && controlMode === 'mock';
   const canCancel = ['VALIDATING', 'RUNNING'].includes(task.status)
     && controlMode === 'mock'
@@ -1335,11 +1282,11 @@ function renderTaskDetail(task) {
   taskDetail.innerHTML = `
     <header class="task-detail-head"><div><h3>${escapeHtml(task.destination)}</h3><small>${escapeHtml(task.id)}</small></div><span class="task-status">${escapeHtml(taskStatusLabels[task.status] || task.status)}</span></header>
     ${task.error ? `<p class="task-error">${escapeHtml([task.error.code, task.error.message].filter(Boolean).join(' · '))}</p>` : ''}
-    <p class="task-arm-job">흐름: ${task.workflow === 'PICK_AND_PLACE' ? 'Pick & Place' : '이동·팔 작업'}</p>
-    <p class="task-arm-job">팔 작업: ${escapeHtml(task.arm_job)}</p>
-    <p class="task-arm-job">대상 요청: ${escapeHtml(targetSummary)} · 저장된 명세이며 아직 인식/집기에는 연결되지 않음</p>
+    ${task.order_items
+      ? `<p class="task-arm-job">주문: ${escapeHtml(orderSummary(task.order_items))} · 배정 핑키 ${pinkyBadge(task.pinky_id)}</p>`
+      : `<p class="task-arm-job">팔 작업: ${escapeHtml(task.arm_job)}</p>
+    <p class="task-arm-job">대상: ${escapeHtml(targetSummary)}${pickRequest?.category ? ' · 팔 단계는 이 물체의 학습 정책을 고릅니다' : ''}</p>`}
     ${ownershipNote}
-    ${pickRequest?.category ? `<div class="task-observation"><button type="button" class="secondary" data-task-observe${canRecordObservation ? '' : ' disabled'}>카메라에서 대상 관측</button><label class="observation-image-option"><input type="checkbox" data-save-observation-frame> 원본 RGB 프레임 PNG도 저장</label><p class="note">Head Camera 선반 탐색 관측의 선택 기록 버튼은 원본 PNG가 저장되고 hash가 확인된 경우에만 나타납니다. 선택은 snapshot에 대한 감사 정보이며 task/step 진행이나 팔 명령을 바꾸지 않습니다.</p>${canRecordObservation ? '' : '<p class="note">관측·선택 이벤트는 대기 작업에서만 기록할 수 있습니다.</p>'}<p class="note" data-task-observation-result>${escapeHtml(observationMessage)}</p></div>` : ''}
     <div class="task-actions">${action}<span class="note">${modeNote}</span></div>
     <h4>단계</h4>
     <ol class="step-list">${steps.map((step) => {
@@ -1349,19 +1296,8 @@ function renderTaskDetail(task) {
     }).join('')}</ol>
     <h4>이벤트</h4>
     <ol class="event-list">${events.map((event) => {
-      const projection = event.event_type === 'TARGET_PLANE_PROJECTION_RECORDED' ? event.payload : null;
-      const observation = event.event_type === 'TARGET_OBSERVED' ? event.payload?.observation : null;
       const parking = event.event_type === 'PARKING_OBSERVED' ? event.payload?.observation : null;
-      const selection = event.event_type === 'TARGET_SELECTED' ? event.payload : null;
-      const candidateCount = observation?.candidate_count == null ? '후보 수 미확정' : `후보 ${observation.candidate_count}개`;
-      const candidateHints = observation?.candidates?.map(formatDetectionCandidate).join('; ');
-      const colorEvaluation = formatColorEvaluation(observation?.color_evaluation);
-      const shelfEvaluation = formatShelfLevelEvaluation(observation?.shelf_level_evaluation);
-      const requestPrompt = observation?.detector_provenance?.prompt_scope === 'REQUEST_CLASS_ONE_SHOT'
-        ? ` · 요청 prompt ${observation.detector_provenance.requested_prompt || observation.target_class}`
-        : '';
       const eventName = event.payload?.event || event.event_type;
-      const selectionCandidate = selection?.candidate;
       const linkedStep = steps.find((step) => step.id === event.step_id);
       const stepContext = linkedStep
         ? ` · 연결 단계 ${stepLabels[linkedStep.step_type] || linkedStep.step_type}`
@@ -1370,12 +1306,6 @@ function renderTaskDetail(task) {
         ? formatParkingObservation(parking)
         : event.event_type === 'LOAD_OBSERVED'
         ? formatLoadObservation(event.payload || {})
-        : projection
-        ? `2D 선반 평면 좌표 초안 · ${projection.plane_frame?.frame_id || 'frame 미지정'} · x=${Number(projection.plane_xy?.x).toFixed(3)}, y=${Number(projection.plane_xy?.y).toFixed(3)} ${projection.plane_frame?.unit || ''} · bbox 하단 중앙 proxy · 후보 #${Number(projection.candidate_index) + 1} · 로봇 목표로 사용 불가`
-        : observation
-        ? `대상 관측 · ${event.payload?.pick_request?.category || observation.target_class} · ${observation.camera_id} · ${observation.status}${requestPrompt} · ${candidateCount}${colorEvaluation ? ` · ${colorEvaluation}` : ''}${shelfEvaluation ? ` · ${shelfEvaluation}` : ''} · frame ${observation.frame_sequence}${candidateHints ? ` · ${candidateHints}` : ''}`
-        : selection
-          ? `운영자 후보 선택 기록 · ${selectionCandidate?.class_name || '대상'} #${Number(selection.candidate_index) + 1} · 관측 ${selection.observation_event_id} · frame ${selection.frame_sequence}`
           : eventName === 'PROGRESS' && event.payload?.arm_state
             ? `OMX ${event.payload.arm_command_id} · ${executionLabels[event.payload.arm_state] || event.payload.arm_state}`
           : eventName === 'PROGRESS'
@@ -1387,133 +1317,13 @@ function renderTaskDetail(task) {
             : (taskEventLabels[eventName] || eventName);
       const source = event.payload?.source;
       const robotId = event.payload?.robot_id;
-      const imageLink = event.event_type === 'TARGET_OBSERVED' && event.payload?.frame_artifact?.path
-        ? `<a href="/api/tasks/${encodeURIComponent(task.id)}/observations/${encodeURIComponent(event.id)}/image" target="_blank" rel="noopener">프레임 보기</a>`
-        : '';
-      const projectionArtifactLink = projection
-        ? `<a href="/api/tasks/${encodeURIComponent(task.id)}/projection-drafts/${encodeURIComponent(event.id)}/artifact" target="_blank" rel="noopener">2D 초안 JSON 보기</a>`
-        : '';
-      const selectionControls = canRecordObservation
-        && linkedStep?.step_type === 'DETECT_TARGETS'
-        && event.payload?.frame_artifact?.path
-        && observation?.candidates?.length
-        ? `<div class="candidate-selection-controls">${observation.candidates.map((candidate, index) => `<button type="button" class="secondary" data-candidate-selection data-observation-event-id="${escapeHtml(event.id)}" data-candidate-index="${index}">후보 #${index + 1} 선택 기록</button>`).join('')}</div>`
-        : '';
-      return `<li><time>${escapeHtml(event.received_at)}</time><span>${escapeHtml(detail)}${stepContext}${source ? ` · ${escapeHtml(source)}` : ''}${robotId ? ` · ${escapeHtml(robotId)}` : ''}</span>${imageLink}${projectionArtifactLink}${selectionControls}</li>`;
+      return `<li><time>${escapeHtml(event.received_at)}</time><span>${escapeHtml(detail)}${stepContext}${source ? ` · ${escapeHtml(source)}` : ''}${robotId ? ` · ${escapeHtml(robotId)}` : ''}</span></li>`;
     }).join('') || '<li class="empty-history">기록된 이벤트가 없습니다.</li>'}</ol>`;
   taskDetail.querySelector('[data-task-action]')?.addEventListener('click', async (event) => {
     const button = event.currentTarget;
     button.disabled = true;
     await sendTaskAction(task.id, button.dataset.taskAction);
   });
-  taskDetail.querySelector('[data-task-observe]')?.addEventListener('click', async (event) => {
-    const button = event.currentTarget;
-    button.disabled = true;
-    await observeTaskTarget(task.id, pickRequest, button);
-  });
-  taskDetail.querySelectorAll('[data-candidate-selection]').forEach((button) => {
-    button.addEventListener('click', async (event) => {
-      const selected = event.currentTarget;
-      selected.disabled = true;
-      await recordTargetSelection(
-        task.id,
-        selected.dataset.observationEventId,
-        Number(selected.dataset.candidateIndex),
-      );
-    });
-  });
-}
-
-async function recordTargetSelection(taskId, observationEventId, candidateIndex) {
-  taskMessage.textContent = '관측 snapshot의 후보 선택을 감사 기록에 남깁니다…';
-  try {
-    const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/target-selection`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ observation_event_id: observationEventId, candidate_index: candidateIndex }),
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(apiErrorMessage(result, '후보 선택을 기록하지 못했습니다.'));
-    const recordedMessage = result.already_recorded
-      ? `기존 선택 기록 ${result.selection_event_id} 재사용`
-      : `선택 기록 ${result.selection_event_id}`;
-    taskMessage.textContent = `후보 #${candidateIndex + 1} ${recordedMessage} (관측 ${observationEventId}). 작업 상태와 로봇 명령은 변경되지 않았습니다.`;
-  } catch (error) {
-    taskMessage.textContent = `후보 선택 기록 오류: ${error.message}`;
-  } finally {
-    await refreshTasks();
-  }
-}
-
-async function observeTaskTarget(taskId, pickRequest, button) {
-  const category = pickRequest.category;
-  const saveFrame = taskDetail.querySelector('[data-save-observation-frame]')?.checked === true;
-  const requestId = ++taskObservationRequest;
-  const observationKey = `${taskId}:${category}`;
-  const output = taskDetail.querySelector('[data-task-observation-result]');
-  if (output) output.textContent = `${category} · 카메라 관측 요청 중…`;
-  try {
-    const camerasResponse = await fetch('/api/cameras', { cache: 'no-store' });
-    const camerasResult = await camerasResponse.json();
-    if (!camerasResponse.ok) throw new Error(camerasResult.error || '카메라 목록을 불러오지 못했습니다.');
-    const observations = [];
-    let recordedCount = 0;
-    // The shelf camera is display only; only these positions map to a Pick & Place observation step.
-    for (const camera of (camerasResult.cameras || []).filter((item) => ['HEAD', 'JOINT'].includes(item.position))) {
-      const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/target-observation`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ camera_id: camera.id, save_frame: saveFrame }),
-      });
-      const result = await response.json();
-      if (!response.ok) {
-        observations.push(`${camera.position || camera.id}: 기록 실패 (${apiErrorMessage(result, response.status)})`);
-        continue;
-      }
-      recordedCount += 1;
-      const observation = result.observation;
-      const labels = {
-        DETECTOR_NOT_CONFIGURED: '검출기 미설정', DETECTOR_LOADING: '검출기 준비 중',
-        DETECTOR_ERROR: '검출기 오류', DETECTOR_NOT_READY: '검출기 사용 불가',
-        DETECTOR_INFERENCE_ERROR: '고정 카메라 추론 오류',
-        DETECTOR_NOT_RUN: '이 프레임 추론 안 함',
-        REQUEST_PROMPT_INFERENCE_ERROR: '요청 대상 prompt 추론 오류',
-        CLASS_UNKNOWN: '모델에 없는 클래스', PIXEL_TRANSFORM_UNKNOWN: '픽셀 변환 출처 미확인',
-        CAMERA_DISCONNECTED: '카메라 연결 끊김', CAMERA_STREAM_UNAVAILABLE: '카메라 스트림 오류',
-        FRAME_PROVENANCE_UNKNOWN: '프레임 fingerprint 미확인', FRAME_STALE: '프레임 지연',
-        FRAME_UNAVAILABLE: '최신 프레임 없음', TARGET_NOT_FOUND: '후보 없음',
-        SINGLE_CANDIDATE: '단일 후보', AMBIGUOUS: '복수 후보 · 모호',
-      };
-      const position = camera.position || camera.id;
-      const candidates = (observation.candidates || []).map(formatDetectionCandidate).join(', ');
-      const colorEvaluation = formatColorEvaluation(observation.color_evaluation);
-      const shelfEvaluation = formatShelfLevelEvaluation(observation.shelf_level_evaluation);
-      const requestPrompt = observation.detector_provenance?.prompt_scope === 'REQUEST_CLASS_ONE_SHOT'
-        ? ` · 요청 prompt ${observation.detector_provenance.requested_prompt || observation.target_class}`
-        : '';
-      const savedImage = result.frame_artifact?.path;
-      observations.push(`${position}: ${labels[observation.status] || observation.status}${requestPrompt}${observation.candidate_count == null ? '' : ` · ${observation.candidate_count}개`}${colorEvaluation ? ` · ${colorEvaluation}` : ''}${shelfEvaluation ? ` · ${shelfEvaluation}` : ''}${candidates ? ` · ${candidates}` : ''}${savedImage ? ` · 이미지 ${savedImage}` : ''}`);
-    }
-    if (!observations.length) observations.push('카메라 설정 없음');
-    if (requestId !== taskObservationRequest) return;
-    lastTaskObservation = {
-      key: observationKey,
-      message: `${observations.join(' / ')} · ${recordedCount ? `${recordedCount}개 task 관측 이벤트를 기록했습니다.` : '기록된 관측 이벤트가 없습니다.'} 위치 추정이나 집기 명령은 수행하지 않았습니다.`,
-    };
-  } catch (error) {
-    if (requestId === taskObservationRequest) {
-      lastTaskObservation = {
-        key: observationKey,
-        message: `관측 오류: ${error.message} · 로봇 명령은 전송하지 않았습니다.`,
-      };
-    }
-  } finally {
-    if (requestId === taskObservationRequest) {
-      const currentOutput = taskDetail.querySelector('[data-task-observation-result]');
-      if (currentOutput && selectedTaskId === taskId) currentOutput.textContent = lastTaskObservation.message;
-      button.disabled = false;
-    }
-  }
 }
 
 async function sendTaskAction(taskId, action) {
@@ -1565,13 +1375,16 @@ commandParseForm.addEventListener('submit', async (event) => {
     if (!response.ok) throw new Error(result.error || '명령 초안을 해석하지 못했습니다.');
     const draft = result.draft;
     const parsed = draft.parsed;
+    const order = result.order;
+    if (order?.order_items?.length) setOrderRows(order.order_items);
     taskForm.elements.target_category.value = parsed.pick_request?.category || '';
     taskForm.elements.target_color.value = parsed.pick_request?.color || '';
     taskForm.elements.shelf_level.value = parsed.pick_request?.shelf_level || '';
     taskForm.elements.destination.value = parsed.destination || '';
     taskForm.elements.arm_job.value = parsed.arm_job || '';
-    const warnings = [...draft.warnings, ...draft.missing_fields.map((field) => `필수 확인: ${field}`)];
-    commandParseMessage.textContent = `검토 필요 · ${warnings.length ? warnings.join(' · ') : '추출된 값을 확인한 뒤 작업 등록을 누르세요.'}`;
+    commandParseMessage.textContent = order?.order_items?.length
+      ? `주문 초안: ${orderSummary(order.order_items)}${order.warnings.length ? ` · ${order.warnings.join(' · ')}` : ''} · 확인한 뒤 주문 등록을 누르세요.`
+      : `주문 물체를 찾지 못했습니다${order?.warnings?.length ? ` · ${order.warnings.join(' · ')}` : ''}.`;
   } catch (error) {
     commandParseMessage.textContent = error.message;
   } finally {
@@ -1646,11 +1459,186 @@ async function refresh() {
   }
 }
 
+// ---- 주문 진행 화면 ----
+const flowAlerts = document.querySelector('#flowAlerts');
+const flowRobots = document.querySelector('#flowRobots');
+const flowOrders = document.querySelector('#flowOrders');
+const flowUpdated = document.querySelector('#flowUpdated');
+const flowStation = document.querySelector('#flowStation');
+const mockPanel = document.querySelector('#mockPanel');
+const mockStock = document.querySelector('#mockStock');
+const mockFaultKind = document.querySelector('#mockFaultKind');
+const mockMessage = document.querySelector('#mockMessage');
+const orderStatusLabels = {
+  PENDING: '시작 대기', VALIDATING: '진행 중', RUNNING: '진행 중', SUCCEEDED: '완료',
+  FAILED: '멈춤', CANCELING: '취소 중', CANCELED: '취소됨', NEEDS_INTERVENTION: '확인 필요',
+};
+const mockFaultLabels = {
+  STOCK_SHORT: '선반 재고 없음', PICK_FAILED: '집기 실패(선반에 남음)', ITEM_LOST: '분실(어디에도 없음)',
+  EXTRA_ON_PINKY: '핑키에 주문 외 물건', PINKY_MISALIGNED: '핑키 위치 이상', FLEET_REJECT: '핑키 신호 거부',
+};
+const shelfNames = { shelf_a: '왼쪽 선반', shelf_b: '오른쪽 선반' };
+
+function elapsed(fromIso, toIso) {
+  if (!fromIso) return '';
+  const seconds = Math.max(0, Math.round(((toIso ? new Date(toIso) : new Date()) - new Date(fromIso)) / 1000));
+  return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+function renderFlowAlerts(alerts) {
+  flowAlerts.innerHTML = alerts.map((alert) => `
+    <div class="alert-card ${alert.level}" role="alert">
+      <span class="alert-icon" aria-hidden="true">${alert.level === 'error' ? '⛔' : '⚠️'}</span>
+      <div><strong>${escapeHtml(alert.title || '확인 필요')}</strong>
+        <div>${escapeHtml(alert.message || '')}</div>
+        <small>${alert.pinky_name ? `핑키 ${escapeHtml(alert.pinky_name)} · ` : ''}${escapeHtml(alert.task_id)}${alert.code ? ` · ${escapeHtml(alert.code)}` : ''}</small></div>
+      ${alert.acknowledgeable ? `<button type="button" class="secondary" data-ack-alert="${escapeHtml(alert.task_id)}">확인</button>` : '<span></span>'}
+    </div>`).join('');
+  flowAlerts.querySelectorAll('[data-ack-alert]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      await fetch(`/api/flow/alerts/${encodeURIComponent(button.dataset.ackAlert)}/ack`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note: '화면에서 확인' }),
+      });
+      await refreshFlow();
+    });
+  });
+}
+
+function renderFlowRobots(view) {
+  const pinkies = view.pinkies.map((pinky) => `
+    <article class="robot-card pinky-${escapeHtml(pinky.pinky_id)}${pinky.reachable ? '' : ' unreachable'}${pinky.stopped_order_id ? ' stopped' : ''}">
+      <h3><span>핑키 ${escapeHtml(pinky.name)}</span><span>${pinky.order_id && pinky.order_id === view.station_owner ? '<span class="spot-tag">적재 자리</span> ' : ''}${pinky.simulated ? '<span class="sim-tag">모의</span>' : ''}</span></h3>
+      <div class="robot-state">${escapeHtml(pinky.reachable ? pinky.phase_label : '연결 안 됨')}</div>
+      <p>${escapeHtml(pinky.message || '')}</p>
+      <p>${pinky.order_id ? `주문 ${escapeHtml(pinky.order_id)}`
+        : pinky.stopped_order_id ? `<strong class="stopped-note">멈춘 주문 ${escapeHtml(pinky.stopped_order_id)} · 현장 확인 필요</strong>` : '배정된 진행 주문 없음'}</p>
+    </article>`);
+  const arms = view.arms.map((arm) => `
+    <article class="robot-card arm${arm.state === 'busy' ? ' busy' : ''}">
+      <h3><span>${escapeHtml(arm.label)}</span><small>${escapeHtml(arm.arm_id)}</small></h3>
+      <div class="robot-state">${arm.doing ? escapeHtml(arm.doing.text) : '대기'}</div>
+      <p>${escapeHtml(shelfNames[arm.shelf_id] || arm.shelf_id)} 담당</p>
+      <p>${arm.worker ? `워커 ${escapeHtml(arm.worker.worker_id)}` : '워커 접속 기록 없음'}</p>
+    </article>`);
+  flowRobots.innerHTML = [...pinkies, ...arms].join('') || '<p class="loading">로봇 설정 없음</p>';
+}
+
+function planChips(order) {
+  if (!order.plan) return '';
+  return `<div class="plan-chips">${order.plan.map((unit, index) => {
+    const state = index < order.loaded ? 'done'
+      : index === order.loaded && order.status === 'FAILED' && order.stages.find((stage) => stage.key === 'LOAD').state === 'failed' ? 'failed'
+        : index === order.loaded && order.active_step && ['PICK_ITEM', 'VERIFY_TRANSFER'].includes(order.active_step) ? 'doing' : '';
+    return `<span class="plan-chip ${state}">${escapeHtml(unit.arm_label)} · ${escapeHtml(unit.label)} #${unit.unit}</span>`;
+  }).join('<span aria-hidden="true">→</span>')}</div>`;
+}
+
+function renderFlowOrders(orders) {
+  if (!orders.length) {
+    flowOrders.innerHTML = '<p class="loading">아직 주문이 없습니다. 위에서 주문을 등록하세요.</p>';
+    return;
+  }
+  flowOrders.innerHTML = orders.map((order) => `
+    <article class="order-card pinky-${escapeHtml(order.pinky_id || '')}${order.status === 'FAILED' ? ' failed' : ''}">
+      <div class="order-head">
+        ${pinkyBadge(order.pinky_id)} <strong>${escapeHtml(orderSummary(order.order_items))}</strong>
+        <span class="status-chip ${escapeHtml(order.status)}">${escapeHtml(orderStatusLabels[order.status] || order.status)}</span>
+        ${order.simulated ? '<span class="sim-tag">모의</span>' : ''}
+        <span class="order-meta">${escapeHtml(order.id)}${order.started_at ? ` · ${elapsed(order.started_at, order.finished_at)}` : ''}</span>
+      </div>
+      <ol class="pipeline">${order.stages.map((stage) => `<li class="${stage.state}">${escapeHtml(stage.label)}</li>`).join('')}</ol>
+      <p class="order-now"><b>지금</b> ${escapeHtml(order.current)}</p>
+      ${planChips(order)}
+      <div class="order-actions-row">
+        ${order.status === 'PENDING' ? `<button type="button" data-order-action="start" data-order-id="${escapeHtml(order.id)}">주문 시작</button>
+          <button type="button" class="secondary" data-order-action="cancel" data-order-id="${escapeHtml(order.id)}">주문 취소</button>` : ''}
+        ${['RUNNING', 'VALIDATING'].includes(order.status) ? `<button type="button" class="secondary" data-order-action="cancel" data-order-id="${escapeHtml(order.id)}">멈추기</button>` : ''}
+        <button type="button" class="secondary" data-order-detail="${escapeHtml(order.id)}">단계·기록 보기</button>
+      </div>
+    </article>`).join('');
+  flowOrders.querySelectorAll('[data-order-action]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      await orderControl(button.dataset.orderId, button.dataset.orderAction);
+      await refreshFlow();
+    });
+  });
+  flowOrders.querySelectorAll('[data-order-detail]').forEach((button) => {
+    button.addEventListener('click', () => {
+      selectedTaskId = button.dataset.orderDetail;
+      document.querySelector('.nav-item[data-view="tasks"]').click();
+      refreshTasks();
+    });
+  });
+}
+
+function renderMockWorld(world, faultKinds) {
+  mockPanel.hidden = !world;
+  if (!world) return;
+  if (!mockFaultKind.options.length) {
+    mockFaultKind.innerHTML = faultKinds.map((kind) => `<option value="${escapeHtml(kind)}">${escapeHtml(mockFaultLabels[kind] || kind)}</option>`).join('');
+  }
+  const counts = (items) => Object.entries(items || {}).filter(([, count]) => count > 0).map(([name, count]) => `${escapeHtml(objectLabel(name))} ${count}`).join(', ') || '비어 있음';
+  mockStock.innerHTML = [
+    ...Object.entries(world.shelves).map(([shelf, items]) => `<div><strong>${escapeHtml(shelfNames[shelf] || shelf)}</strong><br>${counts(items)}</div>`),
+    ...Object.entries(world.pinky_loads).map(([pinky, items]) => `<div><strong>핑키 ${escapeHtml(pinkyNames[pinky] || pinky)} 위</strong><br>${counts(items)}</div>`),
+    `<div><strong>대기 중인 사고</strong><br>${world.pending_faults.map(escapeHtml).join(', ') || '없음'}</div>`,
+  ].join('');
+}
+
+async function orderControl(taskId, action) {
+  try {
+    const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/${action}`, { method: 'POST' });
+    const result = await response.json();
+    if (!response.ok) throw new Error(apiErrorMessage(result, `주문 ${action} 실패`));
+  } catch (error) {
+    orderMessage.textContent = error.message;
+  }
+}
+
+async function refreshFlow() {
+  try {
+    const response = await fetch('/api/flow', { cache: 'no-store' });
+    const view = await response.json();
+    if (!response.ok) throw new Error(apiErrorMessage(view, '진행 상황을 불러오지 못했습니다'));
+    renderFlowAlerts(view.alerts);
+    renderFlowRobots(view);
+    renderFlowOrders(view.orders);
+    renderMockWorld(view.mock_world, view.mock_fault_kinds);
+    flowStation.textContent = !view.station_owner ? '적재 자리 비어 있음'
+      : view.station_held_by_stopped ? `적재 자리 막힘 · 멈춘 주문 ${view.station_owner} (경보 확인 필요)` : `적재 자리 사용 중 · ${view.station_owner}`;
+    flowUpdated.textContent = `갱신 ${new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date())}`;
+  } catch (error) {
+    flowUpdated.textContent = `갱신 실패 · ${error.message}`;
+  }
+}
+
+document.querySelector('#mockFaultForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const response = await fetch('/api/mock-world', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'inject', fault: form.elements.fault.value, argument: form.elements.argument.value.trim() }),
+  });
+  const result = await response.json();
+  mockMessage.textContent = response.ok ? `${mockFaultLabels[form.elements.fault.value]} 대기 중 · 다음 해당 상황에서 한 번 일어납니다.` : apiErrorMessage(result, '사고를 넣지 못했습니다');
+  await refreshFlow();
+});
+
+document.querySelector('#mockRestock').addEventListener('click', async () => {
+  await fetch('/api/mock-world', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'restock' }) });
+  mockMessage.textContent = '선반 재고를 처음 상태로 채웠습니다.';
+  await refreshFlow();
+});
+
 refresh();
+refreshFlow();
 refreshTasks();
 refreshArmCommands();
 loadShelfSlots();
 window.setInterval(refresh, 3000);
+window.setInterval(refreshFlow, 1000);
 window.setInterval(refreshTasks, 1000);
 window.setInterval(refreshArmCommands, 1000);
 window.setInterval(pollParkingLive, 500);

@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
-from control_station.api import arm, cameras, observations, status, tasks
+from control_station.api import arm, cameras, flow, status, tasks
 
 if TYPE_CHECKING:
     from control_station.app import ControlStationHandler
@@ -49,9 +49,6 @@ GET_ROUTES: tuple[Route, ...] = (
     Route(_path("/api/robots"), status.get_robots),
     Route(_path("/api/cameras"), cameras.get_cameras),
     Route(_prefix_suffix("/api/cameras/", "/target-observation"), cameras.get_camera_target_observation),
-    Route(_prefix_suffix("/api/tasks/", "/image", contains="/observations/"), observations.get_observation_image),
-    Route(_prefix_suffix("/api/tasks/", "/artifact", contains="/projection-drafts/"),
-          observations.get_projection_artifact),
     Route(_path("/api/arm/status"), arm.get_status),
     Route(_path("/api/arm/commands"), arm.get_commands),
     Route(_path("/api/arm/shelf-slots"), arm.get_shelf_slots),
@@ -60,6 +57,7 @@ GET_ROUTES: tuple[Route, ...] = (
     Route(lambda route, parts: bool(_NEXT_COMMAND.fullmatch(route)), arm.get_next_command),
     Route(_prefix_suffix("/api/parking-spots/", "/live"), status.get_parking_live),
     Route(_prefix_suffix("/api/parking-spots/", "/check"), status.get_parking_check),
+    Route(_path("/api/flow"), flow.get_flow),
     Route(_path("/api/tasks"), tasks.get_tasks),
     Route(lambda route, parts: route.startswith("/api/tasks/"), tasks.get_task),
 )
@@ -67,15 +65,12 @@ GET_ROUTES: tuple[Route, ...] = (
 POST_ROUTES: tuple[Route, ...] = (
     Route(_task_action("start", "cancel"), tasks.post_task_control,
           "Cross-origin task-control request rejected", reads_body=False),
+    Route(lambda route, parts: len(parts) == 5 and parts[:3] == ["api", "flow", "alerts"] and parts[4] == "ack",
+          flow.post_alert_ack, "Cross-origin alert request rejected"),
+    Route(_path("/api/mock-world"), flow.post_mock_world, "Cross-origin mock-world request rejected"),
     Route(lambda route, parts: route in {"/api/arm/start", "/api/arm/stop", "/api/arm/policy/start", "/api/arm/policy/stop"},
           arm.post_teleop,
           "Cross-origin arm-control request rejected", cross_origin_error_code=False, reads_body=False),
-    Route(_task_action("target-observation"), observations.post_target_observation,
-          "Cross-origin task-observation request rejected"),
-    Route(_task_action("target-selection"), observations.post_target_selection,
-          "Cross-origin target-selection request rejected"),
-    Route(_task_action("projection-draft"), observations.post_projection_draft,
-          "Cross-origin projection-draft request rejected"),
     Route(_path("/api/tasks/parse-command"), tasks.post_parse_command,
           "Cross-origin command-preview request rejected", cross_origin_error_code=False),
     Route(_path("/api/arm/commands/from-camera"), arm.post_command_from_camera,
@@ -87,8 +82,6 @@ POST_ROUTES: tuple[Route, ...] = (
         arm.post_command,
         "Cross-origin arm-command request rejected",
     ),
-    Route(_path("/api/arm/coordinate-target-drafts"), arm.post_coordinate_draft,
-          "Cross-origin coordinate draft request rejected", cross_origin_error_code=False),
     Route(_path("/api/tasks"), tasks.post_task),
 )
 

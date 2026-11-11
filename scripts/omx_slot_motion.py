@@ -25,9 +25,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from omx_lateral_correction import TICKS_PER_TURN, load_base, pan_correction
-
-
 ARM_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll")
 # Gripper ticks from the team's recorded demonstrations (JJinJJin2/pick_and_place_v2, RANGE_0_100 on 0..4095):
 # larger is more open; the operator opened to about 58-60 (2,400-2,450 ticks) and commanded 46.8 (1,916 ticks) to
@@ -35,6 +32,7 @@ ARM_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wris
 GRIPPER_OPEN = 2450
 GRIPPER_CLOSED = 2010
 GRIPPER_SQUEEZE = 1916
+TICKS_PER_TURN = 4096
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PORT = "/dev/serial/by-id/usb-ROBOTIS_OpenRB-150_F58AE68650323952582E3120FF05260E-if00"
 
@@ -56,14 +54,6 @@ def add_motion_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-delta", type=int, default=1200, help="largest allowed joint change in ticks (4096 = 1 turn)")
     parser.add_argument("--tolerance", type=int, default=15, help="ticks within the goal that count as reached")
     parser.add_argument("--move-timeout", type=float, default=30.0)
-    parser.add_argument(
-        "--lateral-correction", action="store_true",
-        help="turn the shoulder toward the object's left-right position seen by the front camera (needs --base)",
-    )
-    parser.add_argument("--base", type=Path, default=REPOSITORY_ROOT / "config" / "omx-base.json",
-                        help="measured shoulder-pan pivot in the shelf frame and pan direction sign")
-    parser.add_argument("--max-lateral-degrees", type=float, default=10.0,
-                        help="largest shoulder-pan correction accepted from the camera")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="read the real motors, but write nothing to them")
     mode.add_argument("--fake-follower", action="store_true",
@@ -138,11 +128,9 @@ class SlotMotion:
         self.settings = settings
         raw = settings.slots.read_bytes()
         self.slot_map_version = hashlib.sha256(raw).hexdigest()
-        self.markers = {slot["slot_id"]: slot["marker_m"] for slot in json.loads(raw)["slots"]}
         self.poses = json.loads(settings.poses.read_text(encoding="utf-8"))
         if self.poses.get("slot_map_sha256") != self.slot_map_version:
             raise SystemExit(f"{settings.poses} belongs to a different slot map than {settings.slots}")
-        self.pan_base = load_base(settings.base) if settings.lateral_correction else None
         self.simulated = settings.dry_run or settings.fake_follower
         self.fake_bus: FakeFollowerBus | None = None
         if settings.fake_follower:
@@ -225,24 +213,15 @@ class SlotMotion:
             print(f"  정지 명령 실패: {error}", flush=True)
 
     # ---- the two steps a worker runs inside `follower()` ----
-    def plan(self, slot_id: str | None, slot_map_version: str | None, lateral_offset_m: float | None,
-             valid_until: datetime) -> tuple[dict[str, int], dict | None]:
-        """Goal ticks for the slot (and the shoulder-pan correction applied), or raise Rejected."""
+    def plan(self, slot_id: str | None, slot_map_version: str | None, valid_until: datetime) -> dict[str, int]:
+        """Goal ticks for the slot's taught pose, or raise Rejected."""
         if slot_map_version != self.slot_map_version:
             raise Rejected("SLOT_MAP_MISMATCH")
         pose = self.poses["poses"].get(slot_id)
         if pose is None:
             raise Rejected("POSE_NOT_RECORDED", f"no joint pose recorded for {slot_id}")
         goal = {name: int(pose["ticks"][name]) for name in ARM_JOINTS}
-        correction = None
-        if self.pan_base is not None and lateral_offset_m is not None:
-            ticks, degrees = pan_correction(self.pan_base, self.markers[slot_id], float(lateral_offset_m))
-            correction = {"lateral_offset_m": lateral_offset_m, "pan_degrees": round(degrees, 2), "pan_ticks": ticks}
-            print(f"  좌우 보정: 칸 중심에서 {lateral_offset_m * 100:+.1f} cm → 어깨 회전 {degrees:+.1f}° ({ticks:+d} ticks)", flush=True)
-            if abs(degrees) > self.settings.max_lateral_degrees:
-                raise Rejected("LATERAL_CORRECTION_TOO_LARGE", f"{degrees:+.1f} degrees")
-            goal["shoulder_pan"] += ticks
-        return self.check_goal(goal, valid_until), correction
+        return self.check_goal(goal, valid_until)
 
     def check_goal(self, goal: dict[str, int], valid_until: datetime) -> dict[str, int]:
         """The checks every joint goal passes before anything moves: not expired, no joint changes too much."""

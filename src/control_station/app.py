@@ -15,16 +15,17 @@ from control_station.api import routes
 from control_station.api.common import is_cross_origin, read_json_object
 from control_station.api.observations import evaluate_color_hints, target_observation
 from control_station.act_policies import ActPolicyError, load_act_policies
-from control_station.camera_to_arm import CameraToArmError, load_camera_to_arm
-from control_station.arm_commands import ArmCommandStore
+from control_station.arm_commands import ARM_ROBOT_IDS, ArmCommandStore
+from control_station.arms import ArmConfigError, load_arms
 from control_station.arm_supervisor import ArmTeleopSupervisor
 from control_station.policy_run_supervisor import PolicyRunSupervisor
 from control_station.camera_adapters import (
     OpenCVArmCameraStreamManager,
     UnconfiguredArmCameraStreamManager,
 )
-from control_station.coordinate_target_drafts import CoordinateTargetDraftStore
 from control_station.load_check import mock_load_observer_from_env
+from control_station.mock_world import MockWorld
+from control_station.order_flow import OrderDevices, OrderFlow
 from control_station.parking_ros import RosParkingSource
 from control_station.robot_adapters import make_status_provider
 from control_station.shelf_slot_map import ShelfSlotMapError, load_shelf_slot_map
@@ -203,7 +204,7 @@ def main() -> None:
     try:
         slot_map, slot_map_error = load_shelf_slot_map(), None
     except ShelfSlotMapError as exc:
-        # Position commands still work; only pick_slot_id commands are refused.
+        # Other commands still work; only pick_slot_id commands are refused.
         slot_map, slot_map_error = None, str(exc)
         print(f"칸 정의를 불러오지 못했습니다: {exc}", flush=True)
     try:
@@ -216,11 +217,15 @@ def main() -> None:
         task_store.session_factory, slot_map=slot_map, slot_map_error=slot_map_error, act_policies=act_policies
     )
     server.act_policies_error = act_policies_error
+    # Which arm serves which shelf (left shelf -> left arm); orders need it to plan the arm for each object.
     try:
-        server.camera_to_arm, server.camera_to_arm_error = load_camera_to_arm(), None
-    except CameraToArmError as exc:
-        server.camera_to_arm, server.camera_to_arm_error = None, str(exc)
-        print(f"카메라→팔 변환을 불러오지 못했습니다: {exc}", flush=True)
+        server.arms, server.arms_error = load_arms(), None
+        unknown = server.arms.arm_ids - ARM_ROBOT_IDS
+        if unknown:
+            raise ArmConfigError(f"알 수 없는 팔 ID: {sorted(unknown)}")
+    except ArmConfigError as exc:
+        server.arms, server.arms_error = None, str(exc)
+        print(f"팔 설정을 불러오지 못했습니다: {exc}", flush=True)
     # Cameras the LeRobot policy opens itself; closed by the control station while a policy command runs.
     server.policy_camera_devices = [
         device
@@ -251,17 +256,38 @@ def main() -> None:
     load_check = mock_load_observer_from_env() if mode == "mock" else None
     # Opt-in: EXECUTE_ARM_TASK queues a real PICK_WITH_POLICY arm command (CONTROL_STATION_TASK_REAL_ARM=1).
     real_arm = os.environ.get("CONTROL_STATION_TASK_REAL_ARM", "").strip() == "1"
+    # Orders run against the simulated station until the camera counters and the Pinky fleet client are connected;
+    # every observation it makes says simulated.
+    server.mock_world = MockWorld.from_env()
+    world = server.mock_world
+    # Pinky arrival for orders: the real ceiling-camera judgment when a parking spot is configured (one registered
+    # spot, the loading spot between the two arms), else the mock. CONTROL_STATION_ORDER_PARKING=mock forces the mock.
+    order_parking = world.parking
+    if server.parking_check is not None and os.environ.get("CONTROL_STATION_ORDER_PARKING", "").strip() != "mock":
+        def order_parking(pinky_id: str) -> dict[str, Any]:
+            return server.parking_check(parking_spot_id)
+        print(f"주문 흐름의 핑키 도착 판정: 실제 주차 판정 ({parking_spot_id})", flush=True)
+    server.order_devices = OrderDevices(
+        world.shelf_stock, world.pinky_load, world.fleet_status, world.fleet_confirm, order_parking, world.pick,
+        world.dispatch,
+    )
+    try:
+        arrival_timeout_s = float(os.environ.get("CONTROL_STATION_ARRIVAL_TIMEOUT_S", "600"))
+    except ValueError:
+        arrival_timeout_s = 600.0
+    server.order_flow = OrderFlow(
+        server.arms, act_policies, server.order_devices,
+        dwell_s=float(os.environ.get("CONTROL_STATION_ORDER_STEP_DWELL_S", "0.8") or 0.8),
+        arrival_timeout_s=arrival_timeout_s,
+    )
     server.task_orchestrator = MockTaskOrchestrator(
         task_store, mode=mode, arrival_check=arrival_check, load_check=load_check,
         arm_commands=server.arm_commands if real_arm else None,
         target_evidence=partial(front_camera_evidence, server) if real_arm else None,
+        order_flow=server.order_flow,
     )
     if real_arm:
         print("작업 흐름의 팔 단계가 실제 팔 명령(PICK_WITH_POLICY)을 보냅니다", flush=True)
-    draft_dir = os.environ.get(
-        "CONTROL_STATION_COORDINATE_DRAFT_DIR", ".control-station/coordinate-target-drafts"
-    )
-    server.coordinate_target_drafts = CoordinateTargetDraftStore(draft_dir)
     mode_label = {"mock": "모의", "ros2": "ROS 2"}[mode]
     print(f"관제 서버 ({mode_label} 모드): http://{host}:{port}", flush=True)
     try:

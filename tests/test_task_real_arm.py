@@ -16,7 +16,7 @@ from control_station.load_check import MockLoadObserver
 from control_station.shelf_slot_map import load_shelf_slot_map
 from control_station.shelf_slot_zones import SlotSelectionError
 from control_station.store import TaskStore
-from control_station.task_orchestrator import MockTaskOrchestrator, policy_for_arm_job
+from control_station.task_orchestrator import MockTaskOrchestrator, policy_for_arm_job, policy_for_task
 
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELED", "NEEDS_INTERVENTION"}
 
@@ -26,8 +26,7 @@ def seen_in_slot(object_class: str) -> dict[str, object]:
     return {
         "camera_id": "shelf_camera", "captured_at": "2026-11-11T00:00:00+00:00", "frame_sequence": 7,
         "frame_sha256": "0" * 64, "pixel_transform_id": "test", "class_name": object_class, "confidence": 0.8,
-        "bbox_xyxy_px": [1.0, 2.0, 3.0, 4.0], "anchor_px": [2.0, 4.0], "position_shelf_m": None,
-        "lateral_offset_m": None, "slot_id": "slot_b_2_1", "slot_label": "오른쪽 선반 아래 단 좌",
+        "bbox_xyxy_px": [1.0, 2.0, 3.0, 4.0], "anchor_px": [2.0, 4.0], "slot_id": "slot_b_2_1", "slot_label": "오른쪽 선반 아래 단 좌",
         "shelf_pose_id": "pose", "shelf_pose_sha256": "1" * 64, "detector_weights_sha256": "2" * 64,
     }
 
@@ -71,7 +70,8 @@ class RealArmTaskTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def run_task(
-        self, arm_job: str, final: dict[str, object] | None, load_check=None, evidence=seen_in_slot
+        self, arm_job: str, final: dict[str, object] | None, load_check=None, evidence=seen_in_slot,
+        pick_request: dict[str, object] | None = None,
     ) -> tuple[dict, list]:
         worker = None
         if final is not None:
@@ -83,7 +83,7 @@ class RealArmTaskTests(unittest.TestCase):
             self.store, load_check=load_check, arm_commands=self.arm, target_evidence=evidence
         )
         self.addCleanup(orchestrator.close)
-        task = self.store.create_task("Pinky 정차 위치", arm_job)
+        task = self.store.create_task("Pinky 정차 위치", arm_job, pick_request=pick_request)
         orchestrator.start(task["id"])
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
@@ -102,6 +102,29 @@ class RealArmTaskTests(unittest.TestCase):
         self.assertEqual(policy_for_arm_job(registry, "당근 집기")["policy_id"], "carrot_act_v2")
         self.assertEqual(policy_for_arm_job(registry, "물티슈 하나 올려줘")["policy_id"], "tissue_act_v1")
         self.assertIsNone(policy_for_arm_job(registry, "상자 적재"))
+
+    def test_ordered_object_chooses_the_policy_before_the_arm_job_text(self) -> None:
+        registry = load_act_policies()
+        self.assertEqual(policy_for_task(registry, {"pick_request": {"category": "carrot"}, "arm_job": "집기 후 B에 배치"})["policy_id"],
+                         "carrot_act_v2")
+        self.assertEqual(policy_for_task(registry, {"pick_request": {"category": "물티슈"}, "arm_job": "당근 집기"})["policy_id"],
+                         "tissue_act_v1")
+        self.assertEqual(policy_for_task(registry, {"pick_request": None, "arm_job": "당근 집기"})["policy_id"], "carrot_act_v2")
+        self.assertIsNone(policy_for_task(registry, {"pick_request": {"category": "box"}, "arm_job": "집기 후 B에 배치"}))
+
+    def test_parsed_order_runs_the_real_arm_step_for_its_object(self) -> None:
+        # The command parser writes an arm job without the object name; the order's category picks the policy.
+        final = {"event": "RESULT_UNKNOWN", "reason_code": "PLACE_NOT_VERIFIED", "pose_reached": True}
+        task, seen = self.run_task("집기 후 B에 배치", final, MockLoadObserver(1), pick_request={"category": "carrot"})
+        self.assertEqual([step["step_type"] for step in task["steps"]][3], "EXECUTE_ARM_TASK")
+        self.assertEqual(task["status"], "SUCCEEDED")
+        self.assertEqual(seen[0]["target"]["policy"]["policy_id"], "carrot_act_v2")
+
+    def test_order_without_a_trained_policy_fails_before_any_arm_command(self) -> None:
+        task, seen = self.run_task("집기 후 B에 배치", None, pick_request={"category": "box"})
+        self.assertEqual(task["status"], "FAILED")
+        self.assertEqual(self.step(task, "EXECUTE_ARM_TASK")["error"]["code"], "ARM_JOB_POLICY_NOT_FOUND")
+        self.assertEqual(self.arm.list_recent()["commands"], [])
 
     def test_arm_back_home_passes_and_leaves_placement_to_the_load_check(self) -> None:
         final = {"event": "RESULT_UNKNOWN", "reason_code": "PLACE_NOT_VERIFIED", "pose_reached": True}

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from control_station.api.common import validate_pick_request
-from control_station.command_parser import parse_pick_command
+from control_station.api.common import validate_order_items, validate_pick_request
+from control_station.command_parser import parse_order_text, parse_pick_command
+from control_station.store import PINKY_IDS, PinkyUnavailable
 from control_station.task_orchestrator import TaskExecutionConflict
 
 if TYPE_CHECKING:
@@ -32,10 +33,16 @@ def get_task(h: ControlStationHandler, route: str, parts: list[str], body: None)
 
 
 def post_task(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:
-    """작업 생성 (선택: 집기 조건)"""
-    unsupported_fields = set(body) - {"destination", "arm_job", "pick_request"}
+    """작업 생성: 주문(order_items, 선택 pinky_id) 또는 이전 형식(선택 pick_request)"""
+    unsupported_fields = set(body) - {"destination", "arm_job", "pick_request", "order_items", "pinky_id"}
     if unsupported_fields:
         h._json(400, {"error": "Unsupported task fields: " + ", ".join(sorted(unsupported_fields))})
+        return
+    if "order_items" in body:
+        _post_order(h, body)
+        return
+    if "pinky_id" in body:
+        h._json(400, {"error": "pinky_id is only accepted with order_items"})
         return
     destination = body.get("destination")
     arm_job = body.get("arm_job")
@@ -55,6 +62,41 @@ def post_task(h: ControlStationHandler, route: str, parts: list[str], body: dict
         h._json(400, {"error": str(exc)})
         return
     task = h.app.task_store.create_task(destination, arm_job, pick_request)
+    h._json(201, {"task": task})
+
+
+def _post_order(h: ControlStationHandler, body: dict[str, Any]) -> None:
+    """주문: 물체·수량을 검증하고 비어 있는 핑키(또는 지정한 핑키)를 배정"""
+    if body.get("pick_request") is not None:
+        h._json(400, {"error": "order_items and pick_request cannot be sent together"})
+        return
+    policies = h.app.arm_commands.act_policies
+    try:
+        order_items = validate_order_items(body.get("order_items"), policies)
+    except ValueError as exc:
+        h._json(400, {"error": str(exc)})
+        return
+    pinky_id = body.get("pinky_id")
+    if pinky_id is not None and pinky_id not in PINKY_IDS:
+        h._json(400, {"error": "pinky_id must be one of: " + ", ".join(PINKY_IDS)})
+        return
+    labels = {policy["object_class"]: policy["label"] for policy in policies.policies.values()}
+    summary = " · ".join(f"{labels.get(item['object_class'], item['object_class'])} {item['quantity']}" for item in order_items)
+    destination = body.get("destination", "핑키 적재 위치")
+    arm_job = body.get("arm_job", f"{summary} 적재")
+    if not isinstance(destination, str) or not destination.strip() or len(destination.strip()) > 40:
+        h._json(400, {"error": "destination must contain 1 to 40 characters"})
+        return
+    if not isinstance(arm_job, str) or not arm_job.strip() or len(arm_job.strip()) > 120:
+        h._json(400, {"error": "arm_job must contain 1 to 120 characters"})
+        return
+    try:
+        task = h.app.task_store.create_task(
+            destination.strip(), arm_job.strip(), order_items=order_items, pinky_id=pinky_id
+        )
+    except PinkyUnavailable as exc:
+        h._json_error(409, "PINKY_UNAVAILABLE", str(exc))
+        return
     h._json(201, {"task": task})
 
 
@@ -107,5 +149,9 @@ def post_parse_command(h: ControlStationHandler, route: str, parts: list[str], b
     )
     h._json(
         200,
-        {"draft": parse_pick_command(text, known_classes or None, allow_open_vocabulary=allow_open_vocabulary)},
+        {
+            "draft": parse_pick_command(text, known_classes or None, allow_open_vocabulary=allow_open_vocabulary),
+            # Order items from the trained-policy names (당근 1개랑 사과 2개); the form for a new order uses these.
+            "order": parse_order_text(text, h.app.arm_commands.act_policies),
+        },
     )

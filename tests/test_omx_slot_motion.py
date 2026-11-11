@@ -30,8 +30,8 @@ class SlotMotionTests(unittest.TestCase):
         self.motion = fake_motion()
         self.version = self.motion.slot_map_version
 
-    def plan(self, slot_id: str = "slot_a_2_1", **overrides: object) -> tuple[dict[str, int], dict | None]:
-        arguments = {"slot_map_version": self.version, "lateral_offset_m": None, "valid_until": soon(), **overrides}
+    def plan(self, slot_id: str = "slot_a_2_1", **overrides: object) -> dict[str, int]:
+        arguments = {"slot_map_version": self.version, "valid_until": soon(), **overrides}
         with self.motion.follower():
             return self.motion.plan(slot_id, **arguments)
 
@@ -48,13 +48,12 @@ class SlotMotionTests(unittest.TestCase):
             self.assertEqual(raised.exception.reason_code, reason)
         far = fake_motion("--max-delta", "100")
         with far.follower(), self.assertRaises(Rejected) as raised:
-            far.plan("slot_a_2_1", far.slot_map_version, None, soon())
+            far.plan("slot_a_2_1", far.slot_map_version, soon())
         self.assertEqual(raised.exception.reason_code, "TARGET_TOO_FAR")
         self.assertEqual(self.motion.fake_bus.sync_read("Present_Position", list(ARM_JOINTS)), start)
 
     def test_reaches_the_recorded_pose_and_reports_it_as_simulated(self) -> None:
-        goal, correction = self.plan()
-        self.assertIsNone(correction)
+        goal = self.plan()
         reports: list[dict[str, int]] = []
         with self.motion.follower():
             outcome = self.motion.move(goal, lambda: False, lambda present, _error: reports.append(present))
@@ -87,7 +86,7 @@ class SlotMotionTests(unittest.TestCase):
     def test_cancel_holds_the_arm_where_it_is(self) -> None:
         motion = fake_motion("--profile-velocity", "1")  # about 16 ticks/s: still far from the goal
         with motion.follower():
-            goal, _ = motion.plan("slot_a_2_1", motion.slot_map_version, None, soon())
+            goal = motion.plan("slot_a_2_1", motion.slot_map_version, soon())
             outcome = motion.move(goal, lambda: True)
         self.assertEqual(outcome.outcome, "CANCELED")
         self.assertFalse(outcome.pose_reached)
@@ -98,7 +97,7 @@ class SlotMotionTests(unittest.TestCase):
     def test_timeout_fails_without_claiming_the_pose(self) -> None:
         motion = fake_motion("--profile-velocity", "1", "--move-timeout", "0.2")
         with motion.follower():
-            goal, _ = motion.plan("slot_a_2_1", motion.slot_map_version, None, soon())
+            goal = motion.plan("slot_a_2_1", motion.slot_map_version, soon())
             outcome = motion.move(goal, lambda: False)
         self.assertEqual((outcome.outcome, outcome.reason_code, outcome.pose_reached), ("FAILED", "MOVE_TIMEOUT", False))
 
@@ -109,7 +108,7 @@ class SlotMotionTests(unittest.TestCase):
             raise ConnectionError("control station unreachable")
 
         with motion.follower():
-            goal, _ = motion.plan("slot_a_2_1", motion.slot_map_version, None, soon())
+            goal = motion.plan("slot_a_2_1", motion.slot_map_version, soon())
             outcome = motion.move(goal, broken)
         self.assertEqual((outcome.outcome, outcome.reason_code), ("RESULT_UNKNOWN", "CANCEL_CHECK_FAILED"))
 

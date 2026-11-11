@@ -52,6 +52,5 @@ python -m pip install -r requirements.txt
 - [목표 데이터 흐름](docs/spec/data-flow.md) — 목표 시스템 구성과 이벤트 흐름
 - [현재 구현 현황](docs/implementation/current-state.md) — 코드가 현재 제공하는 API와 한계
 - [ROS 2 인터페이스 조사](docs/implementation/ros2-inventory.md) — 정적 workspace 설정과 읽기 전용 runtime graph 관측
-- [에피소드 없는 Pick & Place 에픽](docs/epics/epic-07-episode-free-shelf-picking.md) — 단계별 범위와 갭
 - [개발 로드맵](docs/development-plan.md) — 에픽별 목적과 진행 순서
 - [원본 제어 흐름 요구사항](robot-control-flow.md)

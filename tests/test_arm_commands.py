@@ -23,15 +23,9 @@ from control_station.store import TaskStore
 def command_request(**overrides: object) -> dict[str, object]:
     request: dict[str, object] = {
         "robot_id": "arm-01",
-        "operation": "PICK_AND_PLACE",
+        "operation": "MOVE_TO_SLOT",
         "valid_for_s": 60,
-        "target": {
-            "object_class": "strawberry",
-            "frame_id": "omx_link0",
-            "unit": "m",
-            "position": {"x": 0.21, "y": -0.05, "z": 0.12},
-            "uncertainty_m": {"x": 0.01, "y": 0.03, "z": 0.01},
-        },
+        "target": {"object_class": "strawberry", "pick_slot_id": "slot_a_2_1"},
         "place": {"slot_id": "CART_1"},
         "source": {"kind": "OPERATOR_INPUT"},
     }
@@ -45,7 +39,7 @@ class ArmCommandStoreTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.task_store = TaskStore(str(Path(directory.name) / "tasks.sqlite3"))
         self.addCleanup(self.task_store.close)
-        self.store = ArmCommandStore(self.task_store.session_factory, ack_timeout_s=10)
+        self.store = ArmCommandStore(self.task_store.session_factory, slot_map=load_shelf_slot_map(), ack_timeout_s=10)
 
     def event(self, command: dict, event: str, event_id: str | None = None, **fields: object):
         body = {
@@ -67,22 +61,22 @@ class ArmCommandStoreTests(unittest.TestCase):
     def test_full_success_path_records_each_state(self) -> None:
         command = self.claimed()
         self.assertEqual(command["state"], "DISPATCHED")
-        self.assertEqual(command["target"]["frame_id"], "omx_link0")
+        self.assertEqual(command["target"]["pick_slot_id"], "slot_a_2_1")
         self.assertEqual(self.event(command, "ACCEPTED")[0]["state"], "ACCEPTED")
         self.assertEqual(self.event(command, "PROGRESS", phase="GRASP_TARGET")[0]["state"], "RUNNING")
-        final, applied = self.event(command, "SUCCEEDED", grasp_confirmed=True, place_confirmed=True)
+        final, applied = self.event(command, "SUCCEEDED", pose_reached=True)
         self.assertTrue(applied)
         self.assertEqual(final["state"], "SUCCEEDED")
         self.assertTrue(final["result"]["simulated"])
         events = [item["event_type"] for item in self.store.get(command["command_id"])["events"]]
         self.assertEqual(events, ["CREATED", "DISPATCHED", "ACCEPTED", "PROGRESS", "SUCCEEDED"])
 
-    def test_success_requires_grasp_and_place_confirmation(self) -> None:
+    def test_success_requires_a_reached_pose(self) -> None:
         command = self.claimed()
         self.event(command, "ACCEPTED")
         with self.assertRaises(ArmCommandError):
-            self.event(command, "SUCCEEDED", grasp_confirmed=True)
-        unknown, _ = self.event(command, "RESULT_UNKNOWN", reason_code="NO_GRASP_SENSOR")
+            self.event(command, "SUCCEEDED", grasp_confirmed=True, place_confirmed=True)
+        unknown, _ = self.event(command, "RESULT_UNKNOWN", reason_code="POSE_NOT_MEASURED")
         self.assertEqual(unknown["state"], "UNKNOWN")
         self.assertTrue(unknown["blocks_new_commands"])
 
@@ -94,12 +88,15 @@ class ArmCommandStoreTests(unittest.TestCase):
 
     def test_invalid_requests_are_rejected(self) -> None:
         for request in (
-            command_request(robot_id="arm-02"),
+            command_request(robot_id="arm-03"),
             command_request(valid_for_s=1),
-            command_request(target={**command_request()["target"], "unit": "mm"}),
-            command_request(
-                target={**command_request()["target"], "position": {"x": 210, "y": 0, "z": 0}}
+            command_request(target={**command_request()["target"], "pick_slot_id": "slot_z_9_9"}),
+            command_request(  # coordinates are no longer a command target
+                target={**command_request()["target"], "position": {"x": 0.2, "y": 0, "z": 0}}
             ),
+            command_request(operation="MOVE_TO_POSITION"),
+            command_request(operation="PICK_AT_POSITION"),
+            command_request(operation="PICK_AND_PLACE"),
             command_request(source={"kind": "CAMERA"}),
             {**command_request(), "extra": 1},
         ):
@@ -132,7 +129,7 @@ class ArmCommandStoreTests(unittest.TestCase):
         self.assertFalse(rejected["blocks_new_commands"])
 
     def test_missing_ack_becomes_unknown_and_late_accept_is_refused(self) -> None:
-        store = ArmCommandStore(self.task_store.session_factory, ack_timeout_s=0.05)
+        store = ArmCommandStore(self.task_store.session_factory, slot_map=load_shelf_slot_map(), ack_timeout_s=0.05)
         store.create(command_request())
         command = store.claim_next("arm-01", "w1", 0)
         time.sleep(0.1)
@@ -217,8 +214,8 @@ class ShelfSlotCommandTests(unittest.TestCase):
         self.assertEqual(target["pick_slot_id"], "slot_b_2_2")
         self.assertEqual(target["slot_label"], "오른쪽 선반 아래 단 우")
         self.assertEqual(target["slot_map_version"], self.slot_map.version)
-        self.assertIsNone(target["position"])
-        self.assertIsNone(target["frame_id"])
+        self.assertNotIn("position", target)
+        self.assertNotIn("frame_id", target)
 
     def test_unknown_inactive_or_mixed_slot_targets_are_rejected(self) -> None:
         for target in (
@@ -231,7 +228,7 @@ class ShelfSlotCommandTests(unittest.TestCase):
 
     def test_move_to_slot_needs_a_slot_and_succeeds_only_on_a_reached_pose(self) -> None:
         with self.assertRaisesRegex(ArmCommandError, "pick_slot_id"):
-            self.store.create(command_request(operation="MOVE_TO_SLOT"))
+            self.store.create(command_request(target={"object_class": "ball"}))
         command = self.store.create(
             command_request(operation="MOVE_TO_SLOT", target={"pick_slot_id": "slot_a_2_1"})
         )
@@ -267,26 +264,6 @@ class ShelfSlotCommandTests(unittest.TestCase):
         )
         self.assertEqual(done["state"], "SUCCEEDED")
 
-    def test_move_to_position_carries_only_a_position_and_succeeds_on_a_reached_pose(self) -> None:
-        position = {"frame_id": "omx_link0", "unit": "m", "position": {"x": 0.2, "y": 0.0, "z": 0.15}}
-        move = {"robot_id": "arm-01", "operation": "MOVE_TO_POSITION", "valid_for_s": 60, "source": {"kind": "OPERATOR_INPUT"}}
-        for bad in (
-            {"target": {"pick_slot_id": "slot_a_2_1"}},
-            {"target": position, "place": {"slot_id": "CART_1"}},
-            {"target": {**position, "unit": "mm"}},
-        ):
-            with self.subTest(bad=bad), self.assertRaises(ArmCommandError):
-                self.store.create({**move, **bad})
-        command = self.store.create({**move, "target": position})
-        self.assertIsNone(command["place"])
-        self.assertIsNone(command["target"]["pick_slot_id"])
-        self.assertEqual(command["target"]["position"], {"x": 0.2, "y": 0.0, "z": 0.15})
-        claimed = self.store.claim_next("arm-01", "w1", 0)
-        base = {"robot_id": "arm-01", "worker_id": "w1", "simulated": False}
-        self.store.apply_worker_event(claimed["command_id"], {**base, "event_id": "a", "event": "ACCEPTED"})
-        with self.assertRaisesRegex(ArmCommandError, "pose_reached"):
-            self.store.apply_worker_event(claimed["command_id"], {**base, "event_id": "s", "event": "SUCCEEDED"})
-
     def test_camera_evidence_is_stored_only_when_it_matches_the_target_slot(self) -> None:
         evidence = {"camera_id": "shelf_camera", "slot_id": "slot_b_2_1", "class_name": "ball", "confidence": 0.62}
         request = command_request(operation="MOVE_TO_SLOT", target={"object_class": "ball", "pick_slot_id": "slot_a_2_1"})
@@ -303,7 +280,8 @@ class ShelfSlotCommandTests(unittest.TestCase):
         store = ArmCommandStore(self.task_store.session_factory)
         with self.assertRaisesRegex(ArmCommandError, "칸 정의"):
             store.create(slot_request(pick_slot_id="slot_a_2_1"))
-        self.assertEqual(store.create(command_request())["target"]["pick_slot_id"], None)
+        home = {"robot_id": "arm-01", "operation": "RETURN_HOME", "valid_for_s": 60, "source": {"kind": "OPERATOR_INPUT"}}
+        self.assertIsNone(store.create(home)["target"]["pick_slot_id"])
 
     def test_slot_map_loader_rejects_duplicate_or_inactive_only_maps(self) -> None:
         document = json.loads(self.slot_map.path.read_text(encoding="utf-8"))
@@ -342,14 +320,14 @@ class PolicyCommandTests(unittest.TestCase):
         target = command["target"]
         self.assertEqual(target["object_class"], "carrot")
         self.assertEqual(target["pick_slot_id"], "slot_a_2_1")
-        self.assertIsNone(target["position"])
+        self.assertNotIn("position", target)
         self.assertEqual(
             target["policy"],
             {"policy_id": "carrot_act_v2", "label": "당근", "model": "JJinJJin2/omx_act_policy_v2",
              "registry_version": self.policies.version},
         )
 
-    def test_unknown_object_coordinates_or_missing_registry_are_rejected(self) -> None:
+    def test_unknown_object_extra_fields_or_missing_registry_are_rejected(self) -> None:
         with self.assertRaisesRegex(ArmCommandError, "학습된 정책이 없습니다"):
             self.store.create(self.request(object_class="banana"))
         with self.assertRaisesRegex(ArmCommandError, "only object_class"):

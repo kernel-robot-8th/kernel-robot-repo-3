@@ -5,13 +5,13 @@ It shows the worker side of the contract with the standard library only, so the 
 run inside the LeRobot environment on the OMX laptop:
 
 1. long-poll   GET  /api/arm/{robot_id}/commands/next?worker_id=...&wait_s=20
-2. check       frame, validity time, cancel flag -> REJECTED with a reason code, or
+2. check       slot map, validity time, cancel flag -> REJECTED with a reason code, or
 3. handshake   POST /api/arm/commands/{id}/events  {"event": "ACCEPTED"}  -> move ONLY on HTTP 200
 4. report      PROGRESS per phase (check cancel between phases), then one final event
 
-Every event sets "simulated": true here. A real worker replaces `execute_phase` with IK and
-LeRobot `send_action`, sets "simulated": false, and sends SUCCEEDED only when grasp and placement
-were actually confirmed (otherwise RESULT_UNKNOWN or FAILED).
+Every event sets "simulated": true here. A real worker (omx_lerobot_worker.py) replays taught joint poses or
+runs a trained ACT policy, sets "simulated": false, and sends SUCCEEDED only when its result was actually
+confirmed (otherwise RESULT_UNKNOWN or FAILED).
 """
 
 from __future__ import annotations
@@ -80,21 +80,20 @@ class Worker:
             pass  # a real worker replays its recorded "home" pose; there is no target to check
         elif command["operation"] == "PICK_WITH_POLICY":
             pass  # the policy finds the object itself; a camera-observed slot is evidence only
-        elif target.get("pick_slot_id") is not None:
+        elif command["operation"] == "MOVE_TO_SLOT":
             # A real worker looks up the joint pose it taught for this slot under this slot map version.
             if target["slot_map_version"] != self.slot_map_version:
                 return "SLOT_MAP_MISMATCH"
             if target["pick_slot_id"] not in self.known_slots:
                 return "SLOT_UNKNOWN"
-        elif target["frame_id"] != self.args.frame_id:
-            return "FRAME_UNSUPPORTED"
+        else:
+            return "NOT_IMPLEMENTED"
         if datetime.fromisoformat(command["valid_until"]) <= datetime.now(timezone.utc):
             return "EXPIRED"
-        # A real worker also runs IK here and rejects with IK_FAILED / OUT_OF_WORKSPACE.
         return None
 
     def execute_phase(self, command: dict, phase: str) -> None:
-        # Real worker: IK for command["target"]["position"] in its base frame, then LeRobot send_action.
+        # Real worker: replays the taught pose or runs the ACT policy.
         time.sleep(self.args.phase_delay)
 
     def handle(self, command: dict) -> None:
@@ -104,7 +103,7 @@ class Worker:
         elif target.get("pick_slot_id") is not None:
             where = f"칸 {target['pick_slot_id']} ({target['slot_label']})"
         else:
-            where = f"{target['frame_id']} {target['position']} m"
+            where = "정책이 스스로 찾음"
         place = f" -> {command['place']['slot_id']}" if command.get("place") else ""
         print(f"[{command['command_id']}] {command['operation']} {target['object_class'] or ''} @ {where}{place}", flush=True)
         if self.args.result == "silent":
@@ -122,14 +121,11 @@ class Worker:
                     return
                 self.execute_phase(command, phase)
                 command = self.send(command, "PROGRESS", phase=phase)
-            if self.args.result == "succeeded" and command["operation"] in ("PICK_WITH_POLICY", "PICK_AT_POSITION"):
+            if self.args.result == "succeeded" and command["operation"] == "PICK_WITH_POLICY":
                 # Like the real worker: back home, but grasp and placement are not observed.
                 self.send(command, "RESULT_UNKNOWN", reason_code="PLACE_NOT_VERIFIED", pose_reached=True)
             elif self.args.result == "succeeded":
-                if command["operation"] in ("MOVE_TO_SLOT", "RETURN_HOME", "MOVE_TO_POSITION"):
-                    self.send(command, "SUCCEEDED", pose_reached=True)
-                else:
-                    self.send(command, "SUCCEEDED", grasp_confirmed=True, place_confirmed=True)
+                self.send(command, "SUCCEEDED", pose_reached=True)
             elif self.args.result == "failed":
                 self.send(command, "FAILED", reason_code="MOCK_GRASP_FAILED")
             else:
@@ -164,7 +160,6 @@ def main() -> int:
     parser.add_argument("--server", default="http://127.0.0.1:8000")
     parser.add_argument("--robot-id", default="arm-01")
     parser.add_argument("--worker-id", default="mock-omx-worker")
-    parser.add_argument("--frame-id", default="omx_link0", help="the only target frame this worker accepts")
     parser.add_argument(
         "--slots",
         type=Path,

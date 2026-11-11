@@ -54,18 +54,7 @@ curl -sS http://127.0.0.1:8000/api/tasks/TASK-ID
 
 작업 상세에 “활성 상태지만 이 서버 프로세스에 실행 worker가 없습니다”가 표시되면 `/start`를 반복해 재실행하지 마세요. 해당 값은 현재 프로세스의 worker 소유만 보여 주며 다른 프로세스·장치 동작을 판단하지 않습니다. `.control-station/logs`의 해당 세션 로그와 저장된 task/step/event를 확인하고 운영 절차에 따라 처리합니다. 현재 UI에는 이런 활성 작업을 자동 복구·재생하는 기능이 없습니다.
 
-`pick_request`가 있는 대기 작업에서 관측 버튼을 누르면, 서버가 카메라별 최신 검출 상태를 `/api/tasks/{task_id}/target-observation`으로 기록합니다. 예를 들어 `{"camera_id":"head_camera","save_frame":false}` body는 그 작업의 category를 해당 카메라의 현재 프레임과 대조해 `TARGET_OBSERVED` 이벤트로 남깁니다. 색상 조건은 후보별 미보정 HSV hint 비교를, 선반 층 조건은 명시적으로 활성화된 `{camera_id}.json` ROI draft가 source와 일치할 때 detection `center_px`의 층 영역 비교를 이벤트에 기록합니다. 둘 다 검토용이며 후보를 필터링하거나 자동 선택하지 않습니다. task는 계속 `PENDING`이고 이벤트에는 픽셀 후보 및 `arm_command_sent: false`가 표시됩니다. 화면에서 **원본 RGB 프레임 PNG도 저장**을 선택하거나 API에서 `save_frame: true`를 보내면, 해당 frame sequence와 SHA-256이 최근 캡처 ring에 남아 있는 경우 원본 BGR 픽셀을 lossless PNG로 `.control-station/observations/{task_id}/`에 저장하고 artifact 경로·파일 hash를 이벤트에 기록합니다. 이미지는 기본적으로 저장하지 않습니다. 저장 요청이 늦어 원본 frame이 메모리 ring에서 빠졌거나 provenance가 맞지 않으면 이벤트를 기록하지 않고 오류를 반환합니다. 이 디렉터리는 Git에서 제외됩니다. 이벤트 이력의 **프레임 보기** 링크가 저장된 PNG를 SHA-256 검증 후 제공합니다. 이미지 파일은 실측값이 아니며 3D 위치나 파지 가능 여부는 계산하지 않습니다. 이 기록은 아래처럼 상세 조회로 확인할 수 있습니다.
-작업 이력에서 원본 PNG를 저장한 fresh `TARGET_OBSERVED` 이벤트의 후보마다 **선택 기록** 버튼을 눌러 운영자 선택을 남길 수 있습니다. 파일 경로와 SHA-256이 일치하지 않으면 API가 선택 기록을 거부합니다. API 형식은 아래와 같습니다.
-
-task 관측·선택 POST 오류 응답은 `error_code`, `message`, 호환용 `error`를 반환하며 화면에도 오류 코드가 표시됩니다. 카메라별 GET 관측과 이 문서의 다른 API는 아직 동일한 공통 오류 형식으로 보장되지 않습니다.
-
-```bash
-curl -sS -X POST http://127.0.0.1:8000/api/tasks/TASK-ID/target-selection \
-  -H 'Content-Type: application/json' \
-  -d '{"observation_event_id":"EVT-ID","candidate_index":0}'
-```
-
-후보 index는 0부터 시작합니다. 서버는 task가 `PENDING`이고 source observation/candidate provenance가 맞는 경우 `TARGET_SELECTED` event를 append하고 응답의 `selection_event_id`로 event ID를 돌려줍니다. 동일한 관측 event와 후보 index의 재요청은 기존 event ID와 `already_recorded: true`를 돌려주며 이 경우 PNG 파일을 다시 읽지 않습니다. 화면도 새 선택 기록인지 기존 기록 재사용인지와 source observation ID를 표시합니다. 이 ID는 저장된 스냅샷의 검토용 좌표 초안 CLI에서 `--selection-event-id`로 참조할 수 있습니다. 선택은 사람의 review 기록만 남기며 후보 품질을 확인하거나 task/step 상태, 자동 대상 선택, 위치 추정, 팔 명령에 연결되지 않습니다.
+작업의 팔 단계는 주문 물체(`pick_request.category`, 예: `carrot`·`당근`)로 학습 정책을 고릅니다. 정책이 없는 물체면 팔 명령을 만들지 않고 `ARM_JOB_POLICY_NOT_FOUND`로 멈춥니다.
 
 카메라 화면에서 별도로 확인하려면 클래스와 선택 색상 조건을 넣습니다. 이 GET 요청은 이력을 저장하지 않습니다.
 
@@ -75,14 +64,7 @@ curl -sS 'http://127.0.0.1:8000/api/cameras/head_camera/target-observation?class
 
 `shelf_level_evaluation.status`가 `CALIBRATION_NOT_CONFIGURED`이면 활성 영역 파일이 없다는 뜻입니다. 영역 파일이 있어도 camera/frame 출처가 다르면 층 일치 비교를 만들지 않습니다. 활성 영역 파일 구성은 [선반 영역 초안 절차](shelf-image-regions.md)를 참고하세요.
 
-```bash
-curl -sS -X POST http://127.0.0.1:8000/api/tasks/TASK-ID/target-observation \
-  -H 'Content-Type: application/json' \
-  -d '{"camera_id":"head_camera","save_frame":true}'
-curl -sS http://127.0.0.1:8000/api/tasks/TASK-ID
-```
-
-층별 영상 영역을 측정할 때는 저장된 event ID와 PNG를 확인한 뒤 [선반 영역 초안 절차](shelf-image-regions.md)의 입력 schema로 polygon을 기록하고 `scripts/calibrate_shelf_regions.py`를 실행합니다. editor의 `regions.json` schema v2는 원본 PNG file hash/해상도를 함께 저장하며 CLI는 task event 이미지와 원본 BGR frame hash를 대조합니다. CLI 산출물은 `DRAFT_ONLY`이며 자동 활성화되지 않습니다. 관측 UI/API에서 검토용 층 비교를 보려면 문서 절차에 따라 사람이 artifact를 검토한 뒤 활성 디렉터리에 `{camera_id}.json` 이름으로 명시 배치해야 합니다. 이 배치는 물리 측정의 승인이나 로봇 사용 허가가 아니며 결과는 후보 선택과 팔 제어에 쓰이지 않습니다.
+작업 관측 기록 기능을 2026-11-11에 지워서, 새 층 영역 초안의 입력인 저장 관측 PNG는 더 만들 수 없습니다. 이미 활성화한 영역 파일은 계속 읽습니다. 층별 영상 영역을 측정할 때는 저장된 event ID와 PNG를 확인한 뒤 [선반 영역 초안 절차](shelf-image-regions.md)의 입력 schema로 polygon을 기록하고 `scripts/calibrate_shelf_regions.py`를 실행합니다. editor의 `regions.json` schema v2는 원본 PNG file hash/해상도를 함께 저장하며 CLI는 task event 이미지와 원본 BGR frame hash를 대조합니다. CLI 산출물은 `DRAFT_ONLY`이며 자동 활성화되지 않습니다. 관측 UI/API에서 검토용 층 비교를 보려면 문서 절차에 따라 사람이 artifact를 검토한 뒤 활성 디렉터리에 `{camera_id}.json` 이름으로 명시 배치해야 합니다. 이 배치는 물리 측정의 승인이나 로봇 사용 허가가 아니며 결과는 후보 선택과 팔 제어에 쓰이지 않습니다.
 
 런처로 시작할 때마다 `.control-station/logs/session-<시각>-<프로세스ID>.log`에 관제 서버 출력과 HTTP 요청 로그를 저장하고, 터미널에도 함께 표시합니다. `--arm` 실행의 LeRobot 출력은 같은 세션 ID를 가진 `arm-<시각>-<프로세스ID>.log`에 따로 저장합니다. 이 폴더는 Git에서 제외됩니다.
 

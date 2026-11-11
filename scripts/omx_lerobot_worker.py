@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """OMX arm worker for the real follower: moves it to the joint pose taught for a slot (MOVE_TO_SLOT), back to
-its recorded "home" pose (RETURN_HOME), or brings the tool point to an XYZ position in omx_link0 with the wrist
-level (MOVE_TO_POSITION, closed-form IK in omx_kinematics.py; the tick-to-angle mapping is not yet measured).
+its recorded "home" pose (RETURN_HOME), or runs the trained ACT policy for an object (PICK_WITH_POLICY).
 
 Runs in the LeRobot environment with serial access:
 
@@ -20,14 +19,13 @@ The motion itself and its safety checks live in omx_slot_motion.py, shared with 
 PICK_WITH_POLICY runs the LeRobot ACT policy trained for the named object (omx_act_policy_run.py) through the
 policy server on this PC, stops it once the arm is back at rest, then aligns it to the recorded home pose. Whether
 the object was grasped and placed is not checked, so the outcome is RESULT_UNKNOWN / PLACE_NOT_VERIFIED.
-PICK_AND_PLACE commands are rejected (NOT_IMPLEMENTED).
+Any other operation is rejected (NOT_IMPLEMENTED).
 This does not replace the hardware power cut.
 """
 
 from __future__ import annotations
 
 import argparse
-import math
 import os
 import time
 from dataclasses import asdict
@@ -38,13 +36,9 @@ from mock_omx_worker import Refused, Worker, request_json
 from omx_act_policy_run import (
     DEFAULT_POLICIES, RestWatcher, check_policy_server, load_policies, policy_cameras, run_policy, wait_devices_free,
 )
-from omx_pick_at_position import STOP_AFTER, PickAtPosition
-from omx_kinematics import FRAME_ID, Unreachable, inverse, radians_to_ticks, tick_to_radians
 from omx_slot_motion import ARM_JOINTS, Outcome, Rejected, SlotMotion, add_motion_arguments
 
 DEFAULT_GRIPPER_CAMERA = "/dev/v4l/by-id/usb-Innomaker_Innomaker-U20CAM-720P_SN0001-video-index0"
-# Wrist pitch (degrees below horizontal) per MOVE_TO_POSITION approach; same table as control_station.camera_to_arm.
-APPROACH_PITCH_DEG = {"FRONT_HORIZONTAL": 0.0, "PITCH_DOWN_45": 45.0}
 
 
 class LeRobotOmxWorker(Worker):
@@ -54,7 +48,6 @@ class LeRobotOmxWorker(Worker):
         super().__init__(args)
         self.motion = SlotMotion(args)
         self.goal: dict[str, int] = {}
-        self.correction: dict | None = None
         self.policy_version, self.policies = load_policies(args.policies)
         self.camera_devices = {"OVERHEAD": args.overhead_camera, "GRIPPER": args.gripper_camera}
         print(self.motion.describe(), flush=True)
@@ -64,42 +57,16 @@ class LeRobotOmxWorker(Worker):
     # ---- worker hooks ----
     def check(self, command: dict) -> str | None:
         target = command["target"]
-        if command["operation"] == "MOVE_TO_POSITION":
-            return self.check_position(command)
         if command["operation"] not in ("MOVE_TO_SLOT", "RETURN_HOME"):
             return "NOT_IMPLEMENTED"
         # RETURN_HOME replays this worker's own "home" pose, which belongs to the slot map it was loaded with.
         home = command["operation"] == "RETURN_HOME"
         try:
-            self.goal, self.correction = self.motion.plan(
+            self.goal = self.motion.plan(
                 "home" if home else target.get("pick_slot_id"),
                 self.motion.slot_map_version if home else target.get("slot_map_version"),
-                None if home else target.get("lateral_offset_m"),
                 datetime.fromisoformat(command["valid_until"]),
             )
-        except Rejected as rejected:
-            return rejected.reason_code
-        return None
-
-    def check_position(self, command: dict) -> str | None:
-        """IK for the tool point with the wrist level (FRONT_HORIZONTAL) or 45 degrees down (PITCH_DOWN_45, hovering
-        above an object); wrist roll stays where it is."""
-        target = command["target"]
-        if target.get("frame_id") != FRAME_ID:
-            return "FRAME_UNSUPPORTED"
-        pitch_deg = APPROACH_PITCH_DEG.get(target.get("approach"))
-        if pitch_deg is None:
-            return "APPROACH_UNSUPPORTED"
-        position = target["position"]
-        now = tick_to_radians(self.motion.present())
-        try:
-            angles = inverse((position["x"], position["y"], position["z"]), math.radians(pitch_deg), now["wrist_roll"], seed=now)
-        except Unreachable as error:
-            print(f"  IK 실패: {error}", flush=True)
-            return error.reason_code
-        self.correction = None
-        try:
-            self.goal = self.motion.check_goal(radians_to_ticks(angles), datetime.fromisoformat(command["valid_until"]))
         except Rejected as rejected:
             return rejected.reason_code
         return None
@@ -223,8 +190,8 @@ class LeRobotOmxWorker(Worker):
         time.sleep(0.5)  # let the servos finish the last goal the policy wrote
         try:
             with self.motion.follower():
-                goal, _ = self.motion.plan("home", self.motion.slot_map_version, None,
-                                           datetime.now(timezone.utc) + timedelta(seconds=60))
+                goal = self.motion.plan("home", self.motion.slot_map_version,
+                                        datetime.now(timezone.utc) + timedelta(seconds=60))
                 now = self.motion.present()
                 away = max(abs(goal[name] - now[name]) for name in ARM_JOINTS)
                 if away > 2 * self.args.policy_rest_ticks:
@@ -258,61 +225,12 @@ class LeRobotOmxWorker(Worker):
         except Refused:
             pass
 
-    # ---- PICK_AT_POSITION (look and pick, no learned policy) ----
-    def cancel_checker(self, command_id: str):
-        next_check = time.monotonic() + 1.0
-
-        def cancel_requested() -> bool:
-            nonlocal next_check
-            if time.monotonic() < next_check:
-                return False
-            next_check = time.monotonic() + 1.0
-            status, body = request_json("GET", f"{self.base}/api/arm/commands/{command_id}", timeout=5)
-            return status == 200 and body["command"]["cancel_requested"]
-
-        return cancel_requested
-
-    def handle_pick(self, command: dict) -> None:
-        target = command["target"]
-        print(f"[{command['command_id']}] PICK_AT_POSITION {target.get('object_class')} @ {target.get('position')} m"
-              f" (멈춤: {self.args.pick_stop_after} 뒤)", flush=True)
-        picker = PickAtPosition(self.motion, self.args.pick_stop_after, self.args.max_delta)
-        accepted = False
-        try:
-            with self.motion.follower():
-                try:
-                    reason, plan = picker.check(command)
-                    if reason:
-                        self.send(command, "REJECTED", reason_code=reason)
-                        return
-                    command = self.send(command, "ACCEPTED")  # only an HTTP 200 here allows motion
-                    accepted = True
-                    picker.run(plan, lambda event, result=None, **fields: self.send(command, event, result, **fields),
-                               self.cancel_checker(command["command_id"]))
-                except Refused as refused:
-                    self.motion.hold_here()
-                    print(f"  중단: 관제가 거부함 ({refused}). 더 진행하지 않습니다.", flush=True)
-        except (ConnectionError, OSError, RuntimeError) as error:
-            print(f"  팔 통신 오류: {error}", flush=True)
-            try:
-                if accepted:  # the arm may have moved; a person has to look
-                    self.send(command, "RESULT_UNKNOWN", reason_code="MOTOR_COMM_ERROR", message=str(error)[:300])
-                else:
-                    self.send(command, "REJECTED", reason_code="FOLLOWER_PORT_UNAVAILABLE", message=str(error)[:300])
-            except Refused:
-                pass
-
     def handle(self, command: dict) -> None:
         if command["operation"] == "PICK_WITH_POLICY":
             self.handle_policy(command)
             return
-        if command["operation"] == "PICK_AT_POSITION":
-            self.handle_pick(command)
-            return
         target = command["target"]
-        if command["operation"] == "MOVE_TO_POSITION":
-            where = f"{target.get('frame_id')} {target.get('position')} m"
-        elif command["operation"] == "RETURN_HOME":
+        if command["operation"] == "RETURN_HOME":
             where = "home"
         else:
             where = f"{target.get('pick_slot_id')} ({target.get('slot_label')})"
@@ -350,8 +268,7 @@ class LeRobotOmxWorker(Worker):
             return status == 200 and body["command"]["cancel_requested"]
 
         result = self.motion.move(goal, cancel_requested)
-        details = {"goal_ticks": goal, "final_ticks": result.final_ticks, "max_error_ticks": result.max_error_ticks,
-                   "lateral_correction": self.correction}
+        details = {"goal_ticks": goal, "final_ticks": result.final_ticks, "max_error_ticks": result.max_error_ticks}
         if result.outcome == "SUCCEEDED":
             self.send(command, "SUCCEEDED", result, pose_reached=True, details=details)
         elif result.outcome == "CANCELED":
@@ -393,13 +310,10 @@ def main() -> int:
     policy.add_argument("--policy-max-step-ticks", type=int, default=None,
                         help="limit each policy goal to present ± this many ticks per 1/30 s step (default: none, "
                              "40 with --policy-any-start)")
-    parser.add_argument("--pick-stop-after", choices=STOP_AFTER, default="place",
-                        help="PICK_AT_POSITION: stop holding the object after this step (first tests: lift)")
     parser.add_argument("--release-torque", action="store_true", help="turn arm torque off and exit (hold the arm first)")
     args = parser.parse_args()
     if args.policy_any_start and args.policy_max_step_ticks is None:
         args.policy_max_step_ticks = 40  # about 1,200 ticks/s at 30 Hz; the first actions from an unseen pose may jump
-    args.frame_id = "omx_link0"
     args.result = "succeeded"
     args.phase_delay = 0.0
 

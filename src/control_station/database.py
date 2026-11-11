@@ -22,6 +22,9 @@ class TaskRecord(Base):
     destination: Mapped[str] = mapped_column(String, nullable=False)
     arm_job: Mapped[str] = mapped_column(String, nullable=False)
     pick_request: Mapped[dict[str, object] | None] = mapped_column("pick_request_json", JSON)
+    # [{"object_class", "quantity"}]; None for tasks made before orders carried several items.
+    order_items: Mapped[list[dict[str, object]] | None] = mapped_column("order_items_json", JSON)
+    pinky_id: Mapped[str | None] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
     started_at: Mapped[str | None] = mapped_column(String)
@@ -61,6 +64,8 @@ class TaskStepRecord(Base):
     result: Mapped[dict[str, object] | None] = mapped_column("result_json", JSON)
     error_code: Mapped[str | None] = mapped_column(String)
     error_message: Mapped[str | None] = mapped_column(String)
+    # Order steps only: the object unit and planned arm this step handles.
+    detail: Mapped[dict[str, object] | None] = mapped_column("detail_json", JSON)
 
     task: Mapped[TaskRecord] = relationship(back_populates="steps")
 

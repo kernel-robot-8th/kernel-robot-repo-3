@@ -727,7 +727,7 @@ Joint Camera: CONNECTED / STREAMING
 
 ## 14. Codex를 통한 개발 진행 지침
 
-이 저장소에는 기존 Python 관제시스템과 ROS 2/Gazebo workspace가 있다. 새 프로젝트를 만들거나 기존 기능을 대체하는 것을 전제로 하지 않는다. 에픽 순서와 현재 상태는 [개발 로드맵](docs/development-plan.md), 확인된 구현은 [현재 구현 현황](docs/implementation/current-state.md), Pick & Place의 세부 단계는 [에픽 7](docs/epics/epic-07-episode-free-shelf-picking.md)을 따른다.
+이 저장소에는 기존 Python 관제시스템과 ROS 2/Gazebo workspace가 있다. 새 프로젝트를 만들거나 기존 기능을 대체하는 것을 전제로 하지 않는다. 에픽 순서와 현재 상태는 [개발 로드맵](docs/development-plan.md), 확인된 구현은 [현재 구현 현황](docs/implementation/current-state.md)을 따른다. 좌표 기반 팔 제어(카메라→팔 좌표, IK)는 2026-11-11에 계획에서 뺐다.
 
 ### Phase 1. 기존 시스템과 인터페이스 기준선
 

@@ -8,6 +8,8 @@ and without it the step fails before any arm command exists. The worker cannot s
 and placed, so its best outcome is "back home, placement not verified"; VERIFY_ARM_RESULT records that the
 decision is left to VERIFY_LOAD, and the arm command stays UNKNOWN for the operator unless a non-mock load
 observation confirmed the load.
+
+An order (a task with order_items) runs its own steps through order_flow.OrderFlow instead.
 """
 
 from __future__ import annotations
@@ -21,11 +23,11 @@ from typing import Any, Callable
 from control_station.arm_commands import IN_FLIGHT, ArmCommandConflict, ArmCommandError, ArmCommandStore
 from control_station.load_check import EXPECTED_LOAD_COUNT, LOAD_ERROR_CODES, LoadObserver, judge_load
 from control_station.models import StepStatus, TaskStatus
+from control_station.order_flow import ORDER_STEP_TYPES, OrderFlow, OrderFlowError, StepContext
 from control_station.shelf_slot_zones import SlotSelectionError
 from control_station.store import (
     DEFAULT_TASK_STEPS,
     InvalidStateTransition,
-    PICK_AND_PLACE_STEPS,
     ROBOT_ID_BY_KIND,
     StateTransitionConflict,
     TaskNotFoundError,
@@ -86,6 +88,18 @@ def policy_for_arm_job(registry: Any, arm_job: str) -> dict[str, Any] | None:
     return None
 
 
+def policy_for_task(registry: Any, task: dict[str, Any]) -> dict[str, Any] | None:
+    """The policy for the ordered object: pick_request.category first ("carrot" or "당근"), then the arm job text."""
+    if registry is None:
+        return None
+    category = (task.get("pick_request") or {}).get("category")
+    if isinstance(category, str) and category.strip():
+        policy = registry.resolve(category.strip())
+        if policy is not None:
+            return policy
+    return policy_for_arm_job(registry, str(task.get("arm_job") or ""))
+
+
 class TaskExecutionConflict(RuntimeError):
     def __init__(
         self,
@@ -110,8 +124,11 @@ class MockTaskOrchestrator:
         load_check: LoadObserver | None = None,
         arm_commands: ArmCommandStore | None = None,
         target_evidence: TargetEvidence | None = None,
+        order_flow: OrderFlow | None = None,
     ) -> None:
         self.task_store = task_store
+        # Runs the steps of orders (tasks with order_items); None refuses to start an order.
+        self.order_flow = order_flow
         self.mode = mode
         # When set, EXECUTE_ARM_TASK sends a real PICK_WITH_POLICY arm command instead of a mock success.
         self.arm_commands = arm_commands
@@ -141,7 +158,7 @@ class MockTaskOrchestrator:
         raw = os.environ.get("CONTROL_STATION_MOCK_FAIL_STEP", "").strip()
         if not raw:
             return None
-        valid_steps = {step_type for step_type, _ in DEFAULT_TASK_STEPS + PICK_AND_PLACE_STEPS}
+        valid_steps = {step_type for step_type, _ in DEFAULT_TASK_STEPS} | ORDER_STEP_TYPES
         if raw not in valid_steps:
             raise ValueError(
                 "CONTROL_STATION_MOCK_FAIL_STEP must match a configured task step type"
@@ -384,6 +401,10 @@ class MockTaskOrchestrator:
                 self._threads.pop(task_id, None)
                 self._cancel_events.pop(task_id, None)
                 self._arm_results.pop(task_id, None)
+            if self.order_flow is not None:
+                final = self.task_store.get_task(task_id) or {}
+                stopped = final.get("status") == TaskStatus.FAILED.value and final.get("pinky_id")
+                self.order_flow.release(task_id, stopped_pinky=final.get("pinky_id") if stopped else None)
 
     def _run_step(
         self,
@@ -438,6 +459,8 @@ class MockTaskOrchestrator:
                 expected_status=StepStatus.ACCEPTED,
                 event_payload={**base, "event": "EXECUTION_STARTED"},
             )
+        if task.get("order_items") and step.get("step_type") in ORDER_STEP_TYPES:
+            return self._run_order_step(task_id, step_id, command_id, base, expected_task_status, cancel_event)
         if real_arm and step.get("step_type") == "EXECUTE_ARM_TASK":
             arm_result = self._execute_arm_policy(task_id, step_id, command_id, base, cancel_event)
             if arm_result is None:
@@ -499,6 +522,46 @@ class MockTaskOrchestrator:
         )
         return True
 
+    def _run_order_step(
+        self,
+        task_id: str,
+        step_id: str,
+        command_id: str,
+        base: dict[str, Any],
+        expected_task_status: TaskStatus,
+        cancel_event: threading.Event,
+    ) -> bool:
+        if self.order_flow is None:
+            raise OrderFlowError("ORDER_FLOW_NOT_CONFIGURED", "주문 흐름이 설정되지 않아 주문을 진행할 수 없습니다")
+        # Re-read: PLAN_ARM_SEQUENCE fills in the arm of later steps after the task started.
+        task = self.task_store.get_task(task_id) or {}
+        step = next(item for item in task["steps"] if item["id"] == step_id)
+        source = {"VERIFY_TRANSFER": "cameras", "VERIFY_LOAD_TOTAL": "cameras", "CHECK_SHELF_STOCK": "shelf_camera",
+                  "WAIT_PINKY_ARRIVAL": "pinky_fleet", "CONFIRM_DOCKING": "pinky_fleet",
+                  "NOTIFY_PINKY_RECEIVED": "pinky_fleet", "PICK_ITEM": "arm"}.get(step["step_type"], "control_station")
+
+        def record(event_type: str, payload: dict[str, Any]) -> None:
+            try:
+                self.task_store.record_step_event(
+                    task_id, step_id, command_id, event_type,
+                    {**base, "source": source, "event": event_type, **payload},
+                    expected_task_status=expected_task_status,
+                )
+            except StateTransitionConflict:
+                pass  # canceled meanwhile; the cancel path records the outcome
+
+        def set_plan(target_step_id: str, robot_id: str | None, detail: dict[str, Any]) -> None:
+            self.task_store.set_step_plan(task_id, target_step_id, robot_id, detail)
+
+        result = self.order_flow.run_step(StepContext(task, step, cancel_event, record, set_plan))
+        if result is None:
+            return False
+        self.task_store.transition_step(
+            task_id, step_id, StepStatus.SUCCEEDED, expected_status=StepStatus.RUNNING,
+            result_payload=result, event_payload={**base, "source": source, "event": "ORDER_STEP_COMPLETED"},
+        )
+        return True
+
     def _execute_arm_policy(
         self,
         task_id: str,
@@ -507,13 +570,14 @@ class MockTaskOrchestrator:
         base: dict[str, Any],
         cancel_event: threading.Event,
     ) -> dict[str, Any] | None:
-        """Queue PICK_WITH_POLICY for the task's arm job and wait for the worker. None means canceled."""
+        """Queue PICK_WITH_POLICY for the ordered object and wait for the worker. None means canceled."""
         assert self.arm_commands is not None
         task = self.task_store.get_task(task_id) or {}
-        policy = policy_for_arm_job(self.arm_commands.act_policies, str(task.get("arm_job") or ""))
+        policy = policy_for_task(self.arm_commands.act_policies, task)
         if policy is None:
+            ordered = (task.get("pick_request") or {}).get("category") or task.get("arm_job")
             raise ArmTaskNotConfirmed(
-                "ARM_JOB_POLICY_NOT_FOUND", f"팔 작업 '{task.get('arm_job')}'에 맞는 학습 정책이 없습니다",
+                "ARM_JOB_POLICY_NOT_FOUND", f"주문 물체 '{ordered}'에 맞는 학습 정책이 없습니다",
                 source="control_station",
             )
         # SR-13: the object must be seen in exactly one slot by the front camera before the arm is asked to pick.
@@ -801,6 +865,8 @@ class MockTaskOrchestrator:
             source, error_code, event_name = error.source, error.error_code, "LOAD_NOT_CONFIRMED"
         elif isinstance(error, ArmTaskNotConfirmed):
             source, error_code, event_name = error.source, error.error_code, "ARM_TASK_NOT_CONFIRMED"
+        elif isinstance(error, OrderFlowError):
+            source, error_code, event_name = error.source, error.error_code, "ORDER_STOPPED"
         elif isinstance(error, MockScenarioFailure):
             error_code = event_name = "MOCK_SCENARIO_FAILURE"
         else:

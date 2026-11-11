@@ -208,7 +208,6 @@ NEEDS_INTERVENTION → CANCELED | FAILED | RUNNING
 | `GET` | `/api/health` | 서버 가동 및 실행 모드 조회 |
 | `GET` | `/api/robots` | 각 로봇의 연결·준비·실행 상태 조회 |
 | `GET` | `/api/cameras` | 카메라마다 연결·스트림·프레임 상태 조회 |
-| `POST` | `/api/tasks/{task_id}/target-observation` | 대기 중 작업에 현재 카메라 후보 판정 이벤트 저장; task/step 상태 및 로봇 명령에는 영향 없음 |
 | `POST` | `/api/tasks/parse-command` | 자연어 작업 명령의 제한 문법 초안 해석; DB·task 상태 및 로봇 명령에는 영향 없음 |
 | `POST` | `/api/tasks` | 입력 검증 후 `PENDING` 작업·표준 단계·`TASK_CREATED` 이벤트 생성; 성공은 `201 Created`; 명령은 보내지 않음 |
 | `GET` | `/api/tasks` | 작업 요약 목록 조회 |

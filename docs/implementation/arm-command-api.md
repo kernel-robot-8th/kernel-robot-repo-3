@@ -1,8 +1,8 @@
 # OMX 명령 HTTP 인터페이스
 
-관제가 OMX 목표 좌표를 넘기고, OMX 쪽 워커가 그것을 가져가 실행한 뒤 결과를 알려 주는 HTTP 계약입니다. 관제와 OMX가 한 노트북에 있든 서버와 노트북으로 나뉘든 같은 API를 씁니다. 관제는 팔을 직접 움직이지 않습니다. 팔을 움직이는 것은 OMX 쪽 워커(LeRobot)입니다.
+관제가 OMX 명령(칸 자세, 원상복귀, 학습 정책)을 넘기고, OMX 쪽 워커가 그것을 가져가 실행한 뒤 결과를 알려 주는 HTTP 계약입니다. 관제와 OMX가 한 노트북에 있든 서버와 노트북으로 나뉘든 같은 API를 씁니다. 관제는 팔을 직접 움직이지 않습니다. 팔을 움직이는 것은 OMX 쪽 워커(LeRobot)입니다.
 
-현재 구현 범위: 명령 큐·상태 기록 API, 관제 화면의 **OMX 명령** 섹션(수동 조작 탭), 팔을 움직이지 않는 [모의 워커](../../scripts/mock_omx_worker.py). 작업 흐름(작업 이력의 단계)과는 아직 연결하지 않았고, 목표는 운영자가 직접 고릅니다(`source.kind: OPERATOR_INPUT`). 목표는 **선반 칸 하나**(`pick_slot_id`) 또는 **XYZ 좌표 하나** 중 하나입니다. 카메라 관측으로 칸·좌표를 정하는 경로와 실물 OMX 워커는 아직 없습니다.
+현재 구현 범위: 명령 큐·상태 기록 API, 관제 화면의 **OMX 명령** 섹션(수동 조작 탭), 팔을 움직이지 않는 [모의 워커](../../scripts/mock_omx_worker.py). 작업 흐름(작업 이력의 단계)과는 아직 연결하지 않았고, 목표는 운영자가 직접 고릅니다(`source.kind: OPERATOR_INPUT`). 좌표(XYZ) 목표는 쓰지 않습니다(2026-11-11 결정). 실물 워커와 작업 흐름 연결은 아래 절에 있습니다.
 
 ## 왜 HTTP인가
 
@@ -18,9 +18,9 @@ sequenceDiagram
     participant API as 관제 API
     participant W as OMX 워커 (LeRobot)
     W->>API: GET /api/arm/arm-01/commands/next (long-poll, 최대 30초 대기)
-    Op->>API: POST /api/arm/commands (좌표 1건)
+    Op->>API: POST /api/arm/commands (명령 1건)
     API-->>W: 200 명령 (상태 DISPATCHED)
-    W->>W: 좌표계·유효 시간·IK 확인
+    W->>W: 칸 정의 버전·유효 시간·기록 자세 확인
     alt 실행 불가
         W->>API: REJECTED + reason_code
     else 실행 가능
@@ -37,14 +37,14 @@ sequenceDiagram
 
 ## 명령 (관제 → 워커)
 
-워커가 `GET /api/arm/{robot_id}/commands/next`로 받는 `command` 객체입니다. 좌표는 명령을 만든 시점에 고정되며, 실행 중에 바뀌지 않습니다.
+워커가 `GET /api/arm/{robot_id}/commands/next`로 받는 `command` 객체입니다. 대상은 명령을 만든 시점에 고정되며, 실행 중에 바뀌지 않습니다. 명령 종류는 `MOVE_TO_SLOT`(칸 자세 재생), `RETURN_HOME`(home 자세), `PICK_WITH_POLICY`(물체별 학습 정책) 세 가지입니다. 좌표(XYZ) 명령은 2026-11-11에 없앴습니다.
 
 ```json
 {
   "schema_version": 1,
   "command_id": "CMD-E7792665603A",
   "robot_id": "arm-01",
-  "operation": "PICK_AND_PLACE",
+  "operation": "MOVE_TO_SLOT",
   "state": "DISPATCHED",
   "created_at": "2026-11-02T13:14:44.120000+00:00",
   "valid_until": "2026-11-02T13:15:44.120000+00:00",
@@ -52,27 +52,22 @@ sequenceDiagram
   "cancel_requested": false,
   "target": {
     "object_class": "strawberry",
-    "frame_id": "omx_link0",
-    "unit": "m",
-    "position": {"x": 0.21, "y": -0.05, "z": 0.12},
-    "uncertainty_m": {"x": 0.01, "y": 0.03, "z": 0.01},
-    "approach": "FRONT_HORIZONTAL"
+    "pick_slot_id": "slot_a_2_1",
+    "slot_label": "왼쪽 선반 아래 단 좌",
+    "slot_map_version": "<config/shelf-slots.json의 SHA-256>"
   },
   "place": {"slot_id": "CART_1"},
   "source": {"kind": "OPERATOR_INPUT", "note": null}
 }
 ```
 
-예시 숫자는 형식 설명용이며 측정값이 아닙니다. 그 밖에 상태 확인용 필드(`dispatched_at`, `accepted_at`, `finished_at`, `last_event_at`, `reason_code`, `result` 등)가 함께 옵니다.
+그 밖에 상태 확인용 필드(`dispatched_at`, `accepted_at`, `finished_at`, `last_event_at`, `reason_code`, `result` 등)가 함께 옵니다.
 
 | 필드 | 의미 | 워커가 할 일 |
 |---|---|---|
-| `target.pick_slot_id` | 집을 선반 칸([칸 정의](#선반-칸-정의)의 사용 칸 6개 중 하나). 칸 명령이면 `frame_id`·`unit`·`position`·`uncertainty_m`은 `null`입니다 | 그 칸에 기록해 둔 관절 자세를 재생. 모르는 칸이면 `REJECTED` / `SLOT_UNKNOWN` |
+| `target.pick_slot_id` | 선반 칸([칸 정의](#선반-칸-정의)의 사용 칸 6개 중 하나). `PICK_WITH_POLICY`에서는 정면 카메라가 물체를 본 칸(근거)이며 없을 수 있습니다 | 그 칸에 기록해 둔 관절 자세를 재생. 모르는 칸이면 `REJECTED` / `SLOT_UNKNOWN` |
 | `target.slot_label`, `slot_map_version` | 칸 이름(예: "왼쪽 선반 아래 단 좌")과 명령을 만들 때 쓴 칸 정의 파일의 SHA-256 | 자기 칸 정의와 버전이 다르면 `REJECTED` / `SLOT_MAP_MISMATCH` |
-| `target.frame_id` | 좌표 명령의 기준 프레임 이름. 관제는 이름만 전달하고 실제 프레임인지 확인하지 않습니다 | 자기 베이스 프레임(모의 워커 기본값 `omx_link0`)과 다르면 `REJECTED` / `FRAME_UNSUPPORTED` |
-| `target.unit` / `position` | 항상 m. 관제는 ±1 m를 넘는 값만 막습니다(mm를 m로 잘못 쓴 경우 방지). 작업 범위 검사가 아닙니다 | 작업 범위·IK 실패면 `REJECTED` (`OUT_OF_WORKSPACE`, `IK_FAILED` 등) |
-| `target.uncertainty_m` | 축별 신뢰 범위(선택). 정면 카메라는 깊이 축 오차가 큽니다 | 큰 축은 손목 카메라 재확인(`REFINE_TARGET`)으로 보정 |
-| `target.approach` | 접근 방향. 현재 `FRONT_HORIZONTAL`만 정의 | OMX 팀이 다른 방식이 필요하면 값을 추가합니다 |
+| `target.policy` | `PICK_WITH_POLICY`만: 정책 ID·모델·정책 정의 파일 버전 | 자기 정책 정의와 다르면 `REJECTED` / `POLICY_REGISTRY_MISMATCH` |
 | `valid_until` | 이 시각 이후에는 실행하지 않음 | 지났으면 `REJECTED` / `EXPIRED` |
 | `cancel_requested` | 운영자가 취소를 요청함 | 단계 사이에 확인하고 멈춘 뒤 `CANCELED` |
 
@@ -173,7 +168,7 @@ sequenceDiagram
   --lower-deck-shift -0.035 --adjustment-note "2026-11-03 자 실측: …"
 ```
 
-파일 내용이 바뀌면 버전(SHA-256)도 바뀝니다. 관제는 시작할 때 한 번 읽으므로(`CONTROL_STATION_SHELF_SLOTS`로 경로 변경 가능) 다시 시작해야 하고, OMX 워커의 칸별 자세도 새 버전 기준으로 다시 확인해야 합니다. 그 전까지 워커는 버전이 다른 명령을 `SLOT_MAP_MISMATCH`로 거부합니다. 파일을 읽지 못하면 관제는 좌표 명령만 받습니다.
+파일 내용이 바뀌면 버전(SHA-256)도 바뀝니다. 관제는 시작할 때 한 번 읽으므로(`CONTROL_STATION_SHELF_SLOTS`로 경로 변경 가능) 다시 시작해야 하고, OMX 워커의 칸별 자세도 새 버전 기준으로 다시 확인해야 합니다. 그 전까지 워커는 버전이 다른 명령을 `SLOT_MAP_MISMATCH`로 거부합니다. 파일을 읽지 못하면 관제는 칸 명령을 거부합니다(원상복귀와 학습 정책 명령은 받습니다).
 
 ## 실행해 보기
 
@@ -185,7 +180,7 @@ sequenceDiagram
 .venv/bin/python scripts/mock_omx_worker.py --server http://127.0.0.1:8000
 ```
 
-관제 화면 **수동 조작 → OMX 명령**에서 좌표를 넣고 **명령 보내기**를 누르면, 모의 워커가 받아 단계별 진행을 보고하고 "성공 · 모의"로 끝납니다. 다른 경로는 `--result failed|unknown|reject|silent`로 확인합니다. `silent`는 명령만 가져가고 `ACCEPTED`를 보내지 않으므로 10초 뒤 `UNKNOWN`이 됩니다. 좌표계를 `omx_link0`가 아닌 값으로 보내면 `FRAME_UNSUPPORTED`로 거부됩니다.
+관제 화면 **수동 조작 → OMX 명령**에서 칸을 고르고 **칸 앞으로 이동**을 누르면, 모의 워커가 받아 단계별 진행을 보고하고 "성공 · 모의"로 끝납니다. 다른 경로는 `--result failed|unknown|reject|silent`로 확인합니다. `silent`는 명령만 가져가고 `ACCEPTED`를 보내지 않으므로 10초 뒤 `UNKNOWN`이 됩니다.
 
 **OMX가 다른 PC에 있을 때:** 관제는 기본적으로 `127.0.0.1`에만 열립니다. 같은 네트워크의 노트북에서 접속하려면 `CONTROL_STATION_HOST=0.0.0.0`으로 실행하고, 워커는 `--server http://<관제 PC IP>:8000`을 씁니다. **인증이 없으므로** 믿을 수 있는 로컬 네트워크에서만 사용합니다. 관제 화면을 볼 수 있는 사람은 누구나 명령을 보낼 수 있습니다.
 
@@ -202,13 +197,8 @@ sequenceDiagram
    ```
 
 2. **워커 실행** ([omx_lerobot_worker.py](../../scripts/omx_lerobot_worker.py)): `sg dialout -c "~/lerobot-venv/bin/python scripts/omx_lerobot_worker.py --server http://127.0.0.1:8000"`. 모터에 쓰지 않고 흐름만 보려면 `--dry-run`(실물 모터를 읽기만 함, 결과는 `RESULT_UNKNOWN`/`DRY_RUN_NO_MOTION`), 팔이 연결돼 있지 않으면 `--fake-follower`(이 프로세스 안의 가짜 모터가 프로파일 속도로 움직임, 모든 이벤트 `simulated: true`). 이동 로직과 안전장치는 ROS 2 워커와 함께 [omx_slot_motion.py](../../scripts/omx_slot_motion.py)에 있습니다.
-3. **관제에서 명령**: **수동 조작 → OMX 명령**에서 명령 종류 "칸 앞으로 이동", 칸 선택, **명령 보내기**.
-4. **좌표로 이동** (`MOVE_TO_POSITION`): 명령 종류 "좌표로 이동"에 좌표계 `omx_link0`와 X/Y/Z(m)를 넣습니다. 놓을 곳은 없습니다(`place: null`). 워커는 [omx_kinematics.py](../../scripts/omx_kinematics.py)의 계산식 IK로 **그리퍼 턱 부착점**(link6 원점, 실제 손가락 끝보다 안쪽)을 그 점에 두고 **손목을 수평**(`approach: FRONT_HORIZONTAL`)으로 맞추는 관절값을 구합니다. 손목 회전은 현재 값을 유지하고, 두 팔꿈치 해 중 현재 자세에 가까운 쪽을 고릅니다. 그다음은 칸 이동과 같은 검사(만료, 관절 변화량 한계)와 이동 절차를 거칩니다.
-   - `omx_link0`: ROBOTIS OMX 모델의 받침 좌표계입니다. 원점은 팔 받침 바닥에서 어깨 회전축보다 1.125 cm 뒤이고, 앞(어깨 회전 틱 2048 방향) +x, 팔 기준 왼쪽 +y, 위 +z입니다. 링크 길이와 축은 [omx.xml](../../simulation/mujoco_omx/robotis_omx/omx.xml)에서 가져왔고 MuJoCo는 쓰지 않습니다.
-   - 거부: 다른 좌표계 `FRAME_UNSUPPORTED`, 닿지 않음 `OUT_OF_REACH`, 모델 관절 범위 밖 `JOINT_LIMIT`, 다른 접근 방식 `APPROACH_UNSUPPORTED`.
-   - **틱↔각도 변환은 가설입니다**: 각도 = (틱 − 2048) × 2π/4096, 모든 관절 같은 부호(ROBOTIS 관례, Drive_Mode 0). 기록한 두 칸 자세에서 좌우 방향은 맞아 보이지만 길이·높이는 실측하지 않았습니다. 정면 카메라 좌표(선반 기준)를 이 좌표계로 바꾸는 연결도 아직 없습니다.
-   - 2026-11-04 확인: 계산식 IK가 정기구학을 거꾸로 정확히 풀어 기록 자세 틱을 그대로 돌려줌(테스트). 임시 관제에서 가짜 팔 워커로 `(0.20, 0, 0.15)` `SUCCEEDED`, `(0.60, 0, 0.10)` `OUT_OF_REACH`, `shelf_front` 좌표계 `FRAME_UNSUPPORTED`. 실물 팔 `--dry-run`으로 같은 좌표의 계획을 확인했습니다(최대 변화 173틱). 실물 이동은 아직 하지 않았습니다.
-5. **원상복귀** (`RETURN_HOME`): 같은 섹션의 **원상복귀** 버튼. 명령에는 칸·좌표·놓을 곳이 없고(`target` 필드 모두 `null`, `place: null`), 워커가 자기 자세 파일의 `home`으로 갑니다. 안전장치와 성공 조건(`pose_reached: true`)은 칸 이동과 같습니다. `home`이 기록되지 않았으면 `POSE_NOT_RECORDED`로 거부합니다. API: `POST /api/arm/commands` body `{"robot_id": "arm-01", "operation": "RETURN_HOME", "valid_for_s": 60, "source": {"kind": "OPERATOR_INPUT"}}`. 2026-11-04 확인: 임시 관제에서 모의 워커와 `--fake-follower` 워커로 `SUCCEEDED`를 확인했습니다. 같은 날 관제 화면에서 실물 팔 원상복귀(`CMD-35E067AE79B9`, `--profile-velocity 5 --max-delta 1500`, 어깨 들기 1289틱 이동)가 `SUCCEEDED`였고 도착 오차는 최대 13틱이었습니다.
+3. **관제에서 명령**: **수동 조작 → OMX 명령**에서 칸을 고르고 **칸 앞으로 이동**.
+4. **원상복귀** (`RETURN_HOME`): 같은 섹션의 **원상복귀** 버튼. 명령에는 칸·놓을 곳이 없고(`target` 필드 모두 `null`, `place: null`), 워커가 자기 자세 파일의 `home`으로 갑니다. 안전장치와 성공 조건(`pose_reached: true`)은 칸 이동과 같습니다. `home`이 기록되지 않았으면 `POSE_NOT_RECORDED`로 거부합니다. API: `POST /api/arm/commands` body `{"robot_id": "arm-01", "operation": "RETURN_HOME", "valid_for_s": 60, "source": {"kind": "OPERATOR_INPUT"}}`. 2026-11-04 확인: 임시 관제에서 모의 워커와 `--fake-follower` 워커로 `SUCCEEDED`를 확인했습니다. 같은 날 관제 화면에서 실물 팔 원상복귀(`CMD-35E067AE79B9`, `--profile-velocity 5 --max-delta 1500`, 어깨 들기 1289틱 이동)가 `SUCCEEDED`였고 도착 오차는 최대 13틱이었습니다.
 
 워커의 동작과 안전장치:
 - LeRobot의 `OMXFollower` 대신 LeRobot Dynamixel 버스를 직접 씁니다. `OMXFollower.connect()`는 모터 설정을 다시 쓰고, 목표 위치를 맞추지 않은 채 토크를 켜기 때문입니다.
@@ -219,26 +209,6 @@ sequenceDiagram
 - 이동 후와 워커 종료 후에도 토크를 켜 둡니다(팔이 떨어지지 않게). 손으로 다시 옮기려면 팔을 받친 채 `--release-torque`로 토크를 끕니다.
 - 다른 프로그램(학습 정책, 텔레오퍼레이션)이 포트를 쓰고 있으면 모터에 아무것도 보내지 않고 `REJECTED`/`FOLLOWER_PORT_UNAVAILABLE`로 거부합니다.
 - 2026-11-03 확인: `--dry-run`으로 관제 명령 → 검사 → 수락 → 쓰기 순서(목표=현재 → 속도 → 토크 → 목표)와, 명령 전후에 포트를 놓는 것까지 확인했습니다. 같은 날 현장 감독 하에 관제에서 `MOVE_TO_SLOT`(`slot_a_2_1`)을 보내 실물 팔로워가 쉬는 자세에서 기록 자세까지 움직였습니다. 가장 큰 이동은 어깨 들기 978틱(약 86°)이었고, 도착 오차는 최대 10틱(약 0.9°)으로 `SUCCEEDED`였습니다(`CMD-804B25BCB2B0`). 기록하지 않은 칸(`slot_a_2_2`) 명령은 움직이지 않고 `POSE_NOT_RECORDED`로 거부됐습니다. 경로 중 충돌 검사는 없으며, 나머지 칸 자세는 아직 기록하지 않았습니다.
-
-### 좌우 보정 (선택, `--lateral-correction`)
-
-칸 자세는 칸 중심을 향해 기록합니다. 물건이 칸 안에서 좌우로 치우쳐 있으면, 정면 카메라가 본 좌우 위치만큼 **어깨 회전 관절만** 돌려 보정할 수 있습니다. 나머지 관절과 깊이·높이는 기록 자세 그대로이고, 마지막 위치는 학습 정책이 맞춥니다.
-
-- 관제: "정면 캠으로 칸 찾아 이동"으로 만든 명령에 `target.lateral_offset_m`(칸 중심선에서 왼쪽 +, 오른쪽 −, m)과 `target.object_position_shelf_m`이 들어갑니다. 검출 바닥점을 그 칸의 바닥판 높이 평면에 투영해 구합니다. 2026-11-03 보정으로 알려진 모서리 4개를 다시 투영해 보니 좌우 오차는 0–6 mm, 깊이 오차는 최대 1.5 cm였습니다. 그래서 깊이는 쓰지 않습니다. 이 계산에는 렌즈 보정값이 들어간 위치 보정 결과(`intrinsics` 포함, 2026-11-03 `8cd8caff`)가 필요하고, 그 전 결과로는 좌표가 `null`입니다.
-- 워커: 어깨 회전축에서 칸 중심을 보는 방향과, 같은 깊이에서 좌우로 `lateral_offset_m` 떨어진 점을 보는 방향의 각도 차이만큼 `shoulder_pan`을 더합니다(`scripts/omx_lateral_correction.py`). `--max-lateral-degrees`(기본 10°)를 넘으면 `LATERAL_CORRECTION_TOO_LARGE`로 거부합니다. 결과 `details.lateral_correction`에 보정량이 남습니다.
-- 필요한 현장 측정 `config/omx-base.json`: 선반 담당 OMX의 어깨 회전축 위치(선반 기준, m)와 회전 방향 부호입니다. 값이 없거나 부호가 확인되지 않으면 워커가 시작하지 않습니다.
-
-  ```json
-  {
-    "schema_version": 1,
-    "pan_pivot_shelf_m": {"x": -0.20, "y": 0.30},
-    "pan_sign": 1,
-    "note": "x는 선반 앞면에서 안쪽이 +(OMX가 앞에 있으면 음수), y는 두 선반 이음새에서 정면 기준 왼쪽이 +. pan_sign 1 = 모터 값이 늘면 위에서 볼 때 반시계(왼쪽)로 회전"
-  }
-  ```
-
-  숫자는 형식 예시이며 측정값이 아닙니다. `pan_sign`은 실물에서 작은 보정으로 방향을 먼저 확인하고 정합니다.
-- 2026-11-04 상태: 계산과 투영은 테스트로만 확인했습니다. OMX 회전축 위치는 아직 재지 않았고 실물 시험도 하지 않았습니다.
 
 ## 학습 정책으로 집기 (`PICK_WITH_POLICY`)
 
@@ -262,7 +232,7 @@ sequenceDiagram
 ```
 
 - 정책 정의: [config/omx-act-policies.json](../../config/omx-act-policies.json). 물체 이름(YOLO 클래스, 한글 이름, 별칭) → 모델(Hugging Face repo), 정책 입력 `front`/`wrist`에 넣을 카메라 역할(`OVERHEAD` 선반을 위에서 봄, `GRIPPER` 그리퍼), 최대 실행 시간. 관제와 워커가 같은 파일을 읽고, 명령에는 파일의 SHA-256(`target.policy.registry_version`)이 고정됩니다. 다르면 워커가 `POLICY_REGISTRY_MISMATCH`로 거부합니다.
-- 명령: `target`은 `object_class`(필수)와 선택적 `pick_slot_id`만 받습니다. 좌표는 받지 않습니다. 관제가 `target.object_class`를 검출기 클래스 이름으로 바꾸고 `target.policy`(`policy_id`, `label`, `model`, `registry_version`)를 붙입니다. 정책이 없는 물체는 400입니다. `place`는 다른 집기 명령과 같이 필요합니다(화면에서는 `CART_1`).
+- 명령: `target`은 `object_class`(필수)와 선택적 `pick_slot_id`만 받습니다. 관제가 `target.object_class`를 검출기 클래스 이름으로 바꾸고 `target.policy`(`policy_id`, `label`, `model`, `registry_version`)를 붙입니다. 정책이 없는 물체는 400입니다. `place`는 다른 집기 명령과 같이 필요합니다(화면에서는 `CART_1`).
 - 워커 검사(거부 사유): 가짜·dry-run 팔(`POLICY_NEEDS_REAL_ARM`), 정책 파일 버전·정책 ID(`POLICY_REGISTRY_MISMATCH`, `POLICY_UNKNOWN`), home 미기록(`POSE_NOT_RECORDED`), 만료(`EXPIRED`), 카메라 장치 없음(`CAMERA_UNAVAILABLE`), 다른 프로그램이 카메라 사용 중(`CAMERA_BUSY`), 정책 서버 응답 없음(`POLICY_SERVER_UNAVAILABLE`), 현재 자세가 home에서 400틱 넘게 떨어짐(`NOT_AT_REST`, 정책은 쉬는 자세에서 시작하도록 학습됨).
 - 카메라 넘겨주기: V4L2 카메라는 한 프로그램만 열 수 있습니다. 관제가 정책 카메라(`CONTROL_STATION_ACT_OVERHEAD_CAMERA`, `CONTROL_STATION_JOINT_CAMERA`와 같은 장치)를 화면에 띄우고 있으면, 워커가 정책 명령을 가져가는 순간(`DISPATCHED`) 그 카메라를 닫고 명령이 끝나면(`DISPATCHED`·`ACCEPTED`·`RUNNING`이 아니게 되면) 다시 엽니다. 그동안 화면에는 "학습 정책 실행 중"이 표시됩니다. 워커는 카메라를 열기 전에 다른 프로세스가 장치를 열고 있지 않은지 최대 5초 기다리고, 그래도 열려 있으면 `CAMERA_BUSY`로 거부합니다. 2026-11-07 임시 관제에서 실제 헤드캠(허브 4.4)으로 확인: 명령을 가져가는 응답(0.04초) 안에 닫히고, 명령이 끝난 뒤 다시 `STREAMING`.
 - 실행: ACCEPTED 뒤 서보 속도 프로파일을 0(학습 때와 같은 전원 기본값)으로 되돌리고, LeRobot `RobotClient`를 워커 프로세스 안에서 돌립니다. LeRobot이 연결하면서 모터 설정을 쓰느라 토크가 잠깐 꺼집니다. 정지할 때는 토크를 유지합니다(`disable_torque_on_disconnect=False`).
@@ -286,9 +256,9 @@ sequenceDiagram
 
 같은 칸 이동을 ROS 2 action으로 받는 워커입니다. 관제(또는 `ros2 action send_goal`)가 action 클라이언트, [omx_ros_worker.py](../../scripts/omx_ros_worker.py)가 action 서버입니다. 이동 로직과 안전장치는 HTTP 워커와 같은 [omx_slot_motion.py](../../scripts/omx_slot_motion.py)를 씁니다. 메시지 정의는 [cpp/omx_interfaces/action/MoveToSlot.action](../../cpp/omx_interfaces/action/MoveToSlot.action)입니다.
 
-- 목표: `command_id`, `slot_id`, `slot_map_version`(칸 정의 SHA-256), `object_position`(`geometry_msgs/PointStamped`, `shelf_front`, `frame_id`가 비면 없음), `lateral_offset_m`(NaN이면 없음), `valid_until`(필수, 0이면 `VALID_UNTIL_MISSING`).
+- 목표: `command_id`, `slot_id`, `slot_map_version`(칸 정의 SHA-256), `object_position`(`geometry_msgs/PointStamped`, `shelf_front`, `frame_id`가 비면 없음), `lateral_offset_m`(2026-11-11부터 무시), `valid_until`(필수, 0이면 `VALID_UNTIL_MISSING`).
 - 진행: `phase: MOVING`, 관절 이름, 현재 관절값, 목표와의 최대 오차. 첫 진행은 목표 위치를 쓰기 **직전**에 보냅니다. 따라서 첫 진행이 오기 전에는 팔이 움직이지 않습니다.
-- 결과: `outcome`(`SUCCEEDED`/`FAILED`/`RESULT_UNKNOWN`/`CANCELED`/`REJECTED`), `pose_reached`, `reason_code`, `message`, 최종 관절값, 최대 오차, `pan_correction_degrees`(NaN이면 보정 안 함), `simulated`.
+- 결과: `outcome`(`SUCCEEDED`/`FAILED`/`RESULT_UNKNOWN`/`CANCELED`/`REJECTED`), `pose_reached`, `reason_code`, `message`, 최종 관절값, 최대 오차, `pan_correction_degrees`(항상 NaN, 좌우 보정 제거), `simulated`.
 - ROS 상태: `SUCCEEDED`만 succeeded, 취소는 canceled, 나머지(검사 거부 포함)는 aborted입니다. 판단은 `outcome`과 `pose_reached`로 합니다.
 - 한 번에 목표 하나만 받습니다. 이동 중에 온 목표는 ROS 단계에서 받지 않습니다(`Goal was rejected`). 결과가 불명확해도 워커가 다시 시도하지 않습니다.
 
@@ -313,8 +283,8 @@ ros2 action send_goal --feedback /omx/move_to_slot omx_interfaces/action/MoveToS
 
 [mock_omx_worker.py](../../scripts/mock_omx_worker.py)가 틀입니다. 표준 라이브러리만 쓰므로 LeRobot 가상환경에서 그대로 실행됩니다.
 
-1. `check()`에서 좌표계, `valid_until`, 작업 범위, IK 해 존재 여부를 확인하고 문제가 있으면 `REJECTED`를 보냅니다.
-2. `execute_phase()`에 IK와 LeRobot `send_action`(관절 목표)을 넣습니다. LeRobot OMX는 관절 목표만 받으므로 XYZ→관절 변환(IK)이 워커 쪽에 필요합니다.
+1. `check()`에서 칸 정의 버전, `valid_until`, 기록 자세 유무를 확인하고 문제가 있으면 `REJECTED`를 보냅니다.
+2. `execute_phase()`에 기록 자세 재생이나 학습 정책 실행을 넣습니다. 실물 구현은 [omx_lerobot_worker.py](../../scripts/omx_lerobot_worker.py)입니다.
 3. 모든 이벤트에 `simulated: false`를 보냅니다.
 4. 파지와 적재를 모두 확인한 경우에만 `SUCCEEDED`, 확인 수단이 없으면 `RESULT_UNKNOWN`을 보냅니다.
 5. 이벤트 POST가 200이 아니면(특히 `ACCEPTED`) 그 명령을 더 진행하지 않습니다.
@@ -322,9 +292,8 @@ ros2 action send_goal --feedback /omx/move_to_slot omx_interfaces/action/MoveToS
 
 ## 남은 일
 
-- 실물 선반 치수·배치 확인, OMX 베이스의 선반 기준 위치 측정(칸 좌표 → OMX 좌표)
 - 작업 흐름 실물 시험: 실제 도착 확인(`CONTROL_STATION_PARKING_SPOT`)·정면 카메라 검출 상태에서 `EXECUTE_ARM_TASK` → 실물 워커 → 적재 확인까지
 - 정면 카메라 검출 신뢰도 하한(현재 검출기 기본 0.25) 팀 합의
 - 실행 중 결과 제한 시간과 그때의 처리
-- `reason_code` 목록과 `approach` 값을 OMX 팀과 확정
+- `reason_code` 목록을 OMX 팀과 확정
 - 원격 배포 시 인증

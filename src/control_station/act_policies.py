@@ -3,6 +3,9 @@
 An ACT policy takes only camera images and joint positions; it cannot be told where the object is. The control
 station therefore uses the object name to choose a policy and keeps the camera-observed slot as evidence only.
 The arm worker loads the same file and refuses a command whose registry version (SHA-256) differs from its own.
+
+A policy is trained on one arm, so it may name that arm (`arm_id`, optional). The same object can then have one
+policy per arm; a policy without `arm_id` is used on any arm.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ CAMERA_ROLES = frozenset({"OVERHEAD", "GRIPPER"})
 POLICY_INPUTS = frozenset({"front", "wrist"})
 _POLICY_ID = re.compile(r"^[a-z0-9_]{1,40}$")
 _MODEL = re.compile(r"^[A-Za-z0-9_.-]{1,96}/[A-Za-z0-9_.-]{1,96}$")
+_ARM_ID = re.compile(r"^arm-[0-9]{2}$")
 
 
 class ActPolicyError(ValueError):
@@ -33,18 +37,27 @@ class ActPolicyRegistry:
     version: str
     policies: dict[str, dict[str, Any]] = field(repr=False)
 
-    def resolve(self, name: str) -> dict[str, Any] | None:
-        """The policy whose object class, label or alias equals `name` (case-insensitive), or None."""
+    def matches(self, name: str) -> list[dict[str, Any]]:
+        """Every policy whose object class, label or alias equals `name` (case-insensitive)."""
         wanted = name.strip().casefold()
-        for policy in self.policies.values():
-            names = {policy["object_class"], policy["label"], *policy["aliases"]}
-            if wanted in {item.casefold() for item in names}:
-                return policy
-        return None
+        return [
+            policy
+            for policy in self.policies.values()
+            if wanted in {item.casefold() for item in (policy["object_class"], policy["label"], *policy["aliases"])}
+        ]
+
+    def resolve(self, name: str, arm_id: str | None = None) -> dict[str, Any] | None:
+        """The policy for `name`; with `arm_id`, the one trained on that arm, else one usable on any arm."""
+        found = self.matches(name)
+        if arm_id is not None:
+            return next((policy for policy in found if policy["arm_id"] == arm_id), None) or next(
+                (policy for policy in found if policy["arm_id"] is None), None
+            )
+        return next((policy for policy in found if policy["arm_id"] is None), None) or (found[0] if found else None)
 
     def summary(self) -> list[dict[str, Any]]:
         return [
-            {key: policy[key] for key in ("policy_id", "object_class", "label", "aliases", "model", "max_run_s")}
+            {key: policy[key] for key in ("policy_id", "object_class", "label", "aliases", "model", "max_run_s", "arm_id")}
             for policy in self.policies.values()
         ]
 
@@ -82,6 +95,9 @@ def _policy(raw: object) -> dict[str, Any]:
     cameras = raw.get("cameras")
     if not isinstance(cameras, dict) or set(cameras) != POLICY_INPUTS or set(cameras.values()) != CAMERA_ROLES:
         raise ActPolicyError(f"{policy_id!r}.cameras must map front and wrist to OVERHEAD and GRIPPER, one each")
+    arm_id = raw.get("arm_id")
+    if arm_id is not None and (not isinstance(arm_id, str) or not _ARM_ID.fullmatch(arm_id)):
+        raise ActPolicyError(f"{policy_id!r}.arm_id must look like arm-01 when given")
     max_run_s = raw.get("max_run_s")
     if isinstance(max_run_s, bool) or not isinstance(max_run_s, int) or not 5 <= max_run_s <= 300:
         raise ActPolicyError(f"{policy_id!r}.max_run_s must be an integer from 5 to 300")
@@ -95,6 +111,7 @@ def _policy(raw: object) -> dict[str, Any]:
         "task": _text(raw, "task", 200),
         "cameras": dict(cameras),
         "max_run_s": max_run_s,
+        "arm_id": arm_id,
     }
 
 
@@ -117,14 +134,16 @@ def load_act_policies(path: str | Path | None = None) -> ActPolicyRegistry:
     if not isinstance(document.get("policies"), list) or not document["policies"]:
         raise ActPolicyError("policies must be a non-empty list")
     policies: dict[str, dict[str, Any]] = {}
-    names: dict[str, str] = {}
+    # name -> [(policy_id, arm_id)]: a name may repeat only across policies pinned to different arms.
+    names: dict[str, list[tuple[str, str | None]]] = {}
     for raw_policy in document["policies"]:
         policy = _policy(raw_policy)
         if policy["policy_id"] in policies:
             raise ActPolicyError(f"duplicate policy_id: {policy['policy_id']}")
         for name in {policy["object_class"], policy["label"], *policy["aliases"]}:
-            folded = name.casefold()
-            if names.setdefault(folded, policy["policy_id"]) != policy["policy_id"]:
-                raise ActPolicyError(f"name {name!r} belongs to two policies")
+            owners = names.setdefault(name.casefold(), [])
+            if any(arm is None or policy["arm_id"] is None or arm == policy["arm_id"] for _, arm in owners):
+                raise ActPolicyError(f"name {name!r} belongs to two policies for the same arm")
+            owners.append((policy["policy_id"], policy["arm_id"]))
         policies[policy["policy_id"]] = policy
     return ActPolicyRegistry(policy_path, hashlib.sha256(raw).hexdigest(), policies)

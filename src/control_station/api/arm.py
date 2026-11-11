@@ -1,4 +1,4 @@
-"""팔 텔레오퍼레이션, OMX 명령 큐, 선반 칸, 좌표 초안"""
+"""팔 텔레오퍼레이션, OMX 명령 큐, 선반 칸"""
 
 from __future__ import annotations
 
@@ -6,8 +6,6 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlsplit
 
 from control_station.arm_commands import ArmCommandConflict, ArmCommandError, ArmCommandNotFound
-from control_station.camera_to_arm import CameraToArmError
-from control_station.coordinate_target_drafts import CoordinateDraftError
 from control_station.shelf_slot_zones import SlotSelectionError, select_slot_for_class
 
 if TYPE_CHECKING:
@@ -175,8 +173,7 @@ def post_command(h: ControlStationHandler, route: str, parts: list[str], body: d
 def post_command_from_camera(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:
     """정면 카메라가 물건을 찾은 칸으로 OMX 명령 등록 (한 칸에만 보일 때만)
 
-    operation MOVE_TO_SLOT(기본)은 그 칸 자세로 이동, PICK_WITH_POLICY는 그 물체용 학습 정책 실행,
-    MOVE_TO_POSITION은 카메라가 잰 물체 위치를 팔 좌표로 바꿔 물체 바로 위(손목 45° 아래)로 이동.
+    operation MOVE_TO_SLOT(기본)은 그 칸 자세로 이동, PICK_WITH_POLICY는 그 물체용 학습 정책 실행.
     정책은 위치를 입력으로 받지 않으므로, 정책 명령에서 칸은 물체가 실제로 있다는 근거로만 남는다."""
     allowed = {"object_class", "camera_id", "valid_for_s", "operation"}
     object_class = body.get("object_class")
@@ -185,24 +182,19 @@ def post_command_from_camera(h: ControlStationHandler, route: str, parts: list[s
         set(body) - allowed
         or not isinstance(object_class, str)
         or not object_class.strip()
-        or operation not in {"MOVE_TO_SLOT", "PICK_WITH_POLICY", "MOVE_TO_POSITION", "PICK_AT_POSITION"}
+        or operation not in {"MOVE_TO_SLOT", "PICK_WITH_POLICY"}
     ):
         h._json_error(
             400,
             "ARM_COMMAND_INVALID",
             "body needs object_class and may have camera_id, valid_for_s, "
-            "operation (MOVE_TO_SLOT, PICK_WITH_POLICY, MOVE_TO_POSITION or PICK_AT_POSITION)",
+            "operation (MOVE_TO_SLOT or PICK_WITH_POLICY)",
         )
         return
     class_name = object_class.strip()
     policies = h.app.arm_commands.act_policies
     if operation != "PICK_WITH_POLICY" and policies is not None and policies.resolve(class_name):
         class_name = policies.resolve(class_name)["object_class"]  # 당근 -> carrot for the other operations too
-    camera_to_arm = getattr(h.app, "camera_to_arm", None)
-    if operation in {"MOVE_TO_POSITION", "PICK_AT_POSITION"} and camera_to_arm is None:
-        h._json_error(409, "CAMERA_TO_ARM_NOT_CONFIGURED",
-                      getattr(h.app, "camera_to_arm_error", None) or "카메라→팔 변환(CONTROL_STATION_CAMERA_TO_ARM)이 없습니다")
-        return
     if operation == "PICK_WITH_POLICY":
         policies = h.app.arm_commands.act_policies
         if policies is None:
@@ -219,7 +211,6 @@ def post_command_from_camera(h: ControlStationHandler, route: str, parts: list[s
     if snapshot is None:
         h._json_error(404, "CAMERA_NOT_FOUND", f"camera {camera_id!r} is not configured")
         return
-    hover = None
     try:
         selection = select_slot_for_class(h.app.shelf_slot_zones.annotate(snapshot.to_dict()), class_name)
         request: dict[str, Any] = {
@@ -230,24 +221,7 @@ def post_command_from_camera(h: ControlStationHandler, route: str, parts: list[s
             "place": {"slot_id": "CART_1"},
             "source": {"kind": "OPERATOR_INPUT"},  # replaced by the camera evidence below
         }
-        if operation in {"MOVE_TO_POSITION", "PICK_AT_POSITION"}:
-            if not selection.get("position_shelf_m"):
-                h._json_error(409, "OBJECT_POSITION_UNKNOWN", "정면 카메라가 물체의 선반 위치를 계산하지 못했습니다",
-                              details={"slot_id": selection.get("slot_id")})
-                return
-            hover = camera_to_arm.hover_target(selection["position_shelf_m"])
-            arm_target = (
-                camera_to_arm.object_center_target(selection["position_shelf_m"])
-                if operation == "PICK_AT_POSITION" else hover
-            )
-            request["target"] = {"object_class": class_name,
-                                 **{key: arm_target[key] for key in ("frame_id", "unit", "position", "approach")}}
-            if operation == "MOVE_TO_POSITION":
-                del request["place"]  # PICK_AT_POSITION keeps place CART_1 (Pinky)
         command = h.app.arm_commands.create(request, camera_source=selection)
-    except CameraToArmError as exc:
-        h._json_error(409, "CAMERA_TO_ARM_FAILED", str(exc))
-        return
     except SlotSelectionError as exc:
         h._json_error(409, exc.error_code, str(exc), details=exc.details)
         return
@@ -257,14 +231,5 @@ def post_command_from_camera(h: ControlStationHandler, route: str, parts: list[s
     except ArmCommandConflict as exc:
         h._json_error(409, exc.error_code, str(exc), command=exc.command)
         return
-    h._json(201, {"command": command, "selection": selection, "hover": hover})
+    h._json(201, {"command": command, "selection": selection})
 
-
-def post_coordinate_draft(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:
-    """좌표 목표 초안 저장"""
-    try:
-        draft = h.app.coordinate_target_drafts.create(body)
-    except CoordinateDraftError as exc:
-        h._json(400, {"error": str(exc)})
-        return
-    h._json(201, {"draft": draft})

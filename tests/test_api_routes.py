@@ -6,11 +6,9 @@ port with fake robot, camera and parking sources; nothing here opens a device or
 
 from __future__ import annotations
 
-import hashlib
 import http.client
 import json
 import os
-import shutil
 import tempfile
 import threading
 import time
@@ -23,7 +21,6 @@ from control_station.app import WEB_DIR, ControlStationHandler, ControlStationSe
 from control_station.arm_commands import ArmCommandStore
 from control_station.arm_supervisor import ArmTeleopSupervisor
 from control_station.policy_run_supervisor import PolicyRunSupervisor
-from control_station.coordinate_target_drafts import CoordinateTargetDraftStore
 from control_station.models import CameraConnectionState, CameraSnapshot, CameraStreamState, FrameFreshness
 from control_station.parking_ros import ParkingObservationError
 from control_station.shelf_slot_map import load_shelf_slot_map
@@ -31,7 +28,6 @@ from control_station.shelf_slot_zones import ShelfSlotZones
 from control_station.store import TaskStore
 from control_station.task_orchestrator import MockTaskOrchestrator
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 FRAME_SHA = "a" * 64
 CAPTURED_AT = "2026-11-03T12:00:00.000+00:00"
 PIXEL_TRANSFORM = "opencv-v4l2-capture-no-app-geometry-v1"
@@ -85,11 +81,10 @@ class FakeProvider:
 
 
 class FakeCameraManager:
-    """Snapshots, a JPEG stream and observation frames saved where app.py verifies them."""
+    """Snapshots and a JPEG stream."""
 
     def __init__(self, cameras: list[CameraSnapshot]) -> None:
         self.cameras = cameras
-        self.saved: list[Path] = []
 
     def snapshots(self) -> list[CameraSnapshot]:
         return list(self.cameras)
@@ -99,26 +94,6 @@ class FakeCameraManager:
 
     def sequence_for(self, camera_id: str) -> int:
         return 1
-
-    def save_observation_frame(self, camera_id: str, frame_sequence: int, frame_sha256: str, task_id: str):  # type: ignore[no-untyped-def]
-        directory = REPOSITORY_ROOT / ".control-station" / "observations" / task_id
-        directory.mkdir(parents=True, exist_ok=True)
-        image = b"\x89PNG\r\n\x1a\n" + task_id.encode() + str(frame_sequence).encode()
-        path = directory / f"{camera_id}-{frame_sequence}.png"
-        path.write_bytes(image)
-        self.saved.append(directory)
-        return {
-            "path": str(path.relative_to(REPOSITORY_ROOT)),
-            "media_type": "image/png",
-            "file_sha256": hashlib.sha256(image).hexdigest(),
-            "source_frame_sha256": frame_sha256,
-            "pixel_format": "BGR8",
-            "width": 640,
-            "height": 480,
-        }
-
-    def delete_observation_frame(self, relative_path: str) -> None:
-        (REPOSITORY_ROOT / relative_path).unlink(missing_ok=True)
 
     def close(self) -> None:
         pass
@@ -156,7 +131,6 @@ class ApiTestCase(unittest.TestCase):
         self.addCleanup(self.task_store.close)
         server = ControlStationServer(("127.0.0.1", 0), partial(ControlStationHandler, directory=str(WEB_DIR)))
         self.cameras = FakeCameraManager([head_camera()])
-        self.addCleanup(self._remove_saved_frames)
         self.fake_parking = FakeParking()
         slot_map = load_shelf_slot_map()
         server.mode = "mock"
@@ -175,16 +149,11 @@ class ApiTestCase(unittest.TestCase):
         server.parking_tracker = self.fake_parking if self.parking else None
         server.task_orchestrator = MockTaskOrchestrator(self.task_store)
         self.addCleanup(server.task_orchestrator.close)
-        server.coordinate_target_drafts = CoordinateTargetDraftStore(self.directory / "drafts")
         self.server = server
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
-
-    def _remove_saved_frames(self) -> None:
-        for directory in set(self.cameras.saved):
-            shutil.rmtree(directory, ignore_errors=True)
 
     def request(
         self,
@@ -283,27 +252,6 @@ class ReadRouteTests(ApiTestCase):
         for path in ("/api/tasks/TASK-00000000", "/api/tasks/", f"/api/tasks/{task_id}/extra"):
             with self.subTest(path=path):
                 self.assertEqual(self.get(path), (404, error("Task not found")))
-
-    def test_observation_image_not_found(self) -> None:
-        task_id = self.create_task()
-        for path in (
-            f"/api/tasks/{task_id}/observations/EVT-000000000000/image",
-            f"/api/tasks/{task_id}/observations/bad/image",
-            "/api/tasks/TASK-00000000/observations/EVT-000000000000/image",
-            f"/api/tasks/{task_id}/x/observations/EVT-000000000000/image",
-        ):
-            with self.subTest(path=path):
-                self.assertEqual(self.get(path), (404, error("Observation image not found")))
-
-    def test_projection_artifact_not_found(self) -> None:
-        task_id = self.create_task()
-        for path in (
-            f"/api/tasks/{task_id}/projection-drafts/EVT-000000000000/artifact",
-            f"/api/tasks/{task_id}/projection-drafts/bad/artifact",
-            "/api/tasks/TASK-00000000/projection-drafts/EVT-000000000000/artifact",
-        ):
-            with self.subTest(path=path):
-                self.assertEqual(self.get(path), (404, error("Projection draft artifact not found")))
 
     def test_arm_read_routes(self) -> None:
         status, body = self.get("/api/arm/status")
@@ -448,103 +396,6 @@ class ArmRouteTests(ApiTestCase):
                          (404, error("Arm command not found", "ARM_COMMAND_NOT_FOUND")))
         self.assertEqual(self.post("/api/arm/commands/CMD-404/clear-unknown", {"a": 1}),
                          (400, error("clear-unknown takes exactly note", "ARM_COMMAND_INVALID")))
-
-    def test_coordinate_target_drafts(self) -> None:
-        self.assertEqual(self.post("/api/arm/coordinate-target-drafts", {"frame_id": "base"}),
-                         (400, error("request must contain exactly frame_id, unit, and position")))
-        status, body = self.post("/api/arm/coordinate-target-drafts",
-                                 {"frame_id": "omx_link0", "unit": "mm", "position": {"x": 1, "y": 2, "z": 3}})
-        self.assertEqual(status, 201)
-        self.assertEqual(body["draft"]["position"], {"x": 1.0, "y": 2.0, "z": 3.0})  # type: ignore[index]
-        self.assertEqual(self.post("/api/arm/coordinate-target-drafts", {"a": 1}, origin="http://evil.example"),
-                         (403, error("Cross-origin coordinate draft request rejected")))
-
-
-class ObservationFlowTests(ApiTestCase):
-    """Target observation -> saved frame image -> operator selection, and their rejections."""
-
-    def test_observation_request_errors(self) -> None:
-        plain = self.create_task()
-        pick = self.create_task({"category": "strawberry", "color": "red"})
-        cases = [
-            (pick, {"camera_id": "head_camera", "x": 1}, 400,
-             error("Only camera_id and optional save_frame are accepted", "INVALID_TARGET_OBSERVATION_REQUEST")),
-            (pick, {"camera_id": " "}, 400, error("task_id and camera_id are required", "INVALID_TARGET_OBSERVATION_REQUEST")),
-            (pick, {"camera_id": "head_camera", "save_frame": 1}, 400,
-             error("save_frame must be a boolean", "INVALID_TARGET_OBSERVATION_REQUEST")),
-            ("TASK-00000000", {"camera_id": "head_camera"}, 404, error("Task not found", "TASK_NOT_FOUND")),
-            (plain, {"camera_id": "head_camera"}, 409, error("Task has no structured pick request", "PICK_REQUEST_MISSING")),
-            (pick, {"camera_id": "nope"}, 404, error("Camera not found", "CAMERA_NOT_FOUND")),
-        ]
-        for task_id, body, status, expected in cases:
-            with self.subTest(body=body):
-                self.assertEqual(self.post(f"/api/tasks/{task_id}/target-observation", body), (status, expected))
-        self.assertEqual(self.post(f"/api/tasks/{pick}/target-observation", {"camera_id": "head_camera"},
-                                   origin="http://evil.example"),
-                         (403, error("Cross-origin task-observation request rejected", "CROSS_ORIGIN_REQUEST_REJECTED")))
-
-    def test_observe_save_view_and_select(self) -> None:
-        task_id = self.create_task({"category": "strawberry", "color": "red"})
-        status, body = self.post(f"/api/tasks/{task_id}/target-observation", {"camera_id": "head_camera", "save_frame": True})
-        self.assertEqual(status, 201, body)
-        observation = body["observation"]  # type: ignore[index]
-        self.assertEqual((observation["status"], observation["candidate_count"]), ("AMBIGUOUS", 2))
-        self.assertEqual(observation["color_evaluation"]["candidate_indices"], [0])
-        artifact = body["frame_artifact"]  # type: ignore[index]
-        event = next(e for e in body["task"]["events"] if e["event_type"] == "TARGET_OBSERVED")  # type: ignore[index]
-
-        status, image, headers = self.request("GET", f"/api/tasks/{task_id}/observations/{event['id']}/image")
-        self.assertEqual(status, 200)
-        self.assertEqual(headers["content-type"], "image/png")
-        self.assertEqual(hashlib.sha256(image).hexdigest(), artifact["file_sha256"])  # type: ignore[arg-type]
-
-        selection_path = f"/api/tasks/{task_id}/target-selection"
-        self.assertEqual(self.post(selection_path, {"observation_event_id": event["id"], "candidate_index": -1}),
-                         (400, error("observation_event_id and a non-negative candidate_index are required",
-                                     "INVALID_TARGET_SELECTION_REQUEST")))
-        self.assertEqual(self.post(selection_path, {"observation_event_id": "EVT-000000000000", "candidate_index": 0}),
-                         (404, error("Target observation event not found", "OBSERVATION_EVENT_NOT_FOUND")))
-        self.assertEqual(self.post(selection_path, {"observation_event_id": event["id"], "candidate_index": 5}),
-                         (409, error("Candidate index is outside the recorded observation", "CANDIDATE_INDEX_OUT_OF_RANGE")))
-        status, body = self.post(selection_path, {"observation_event_id": event["id"], "candidate_index": 0})
-        self.assertEqual(status, 201, body)
-        self.assertIs(body["already_recorded"], False)  # type: ignore[index]
-        self.assertEqual(body["selection"]["candidate_index"], 0)  # type: ignore[index]
-        self.assertEqual(body["selection"]["selection_scope"], "HUMAN_REVIEW_ONLY")  # type: ignore[index]
-        status, again = self.post(selection_path, {"observation_event_id": event["id"], "candidate_index": 0})
-        self.assertEqual((status, again["already_recorded"], again["selection_event_id"]),  # type: ignore[index]
-                         (200, True, body["selection_event_id"]))  # type: ignore[index]
-
-    def test_selection_needs_a_saved_frame(self) -> None:
-        task_id = self.create_task({"category": "strawberry"})
-        status, body = self.post(f"/api/tasks/{task_id}/target-observation", {"camera_id": "head_camera"})
-        self.assertEqual(status, 201)
-        self.assertIsNone(body["frame_artifact"])  # type: ignore[index]
-        event = next(e for e in body["task"]["events"] if e["event_type"] == "TARGET_OBSERVED")  # type: ignore[index]
-        self.assertEqual(self.post(f"/api/tasks/{task_id}/target-selection", {"observation_event_id": event["id"], "candidate_index": 0}),
-                         (409, error("A saved, hash-verified source frame is required for operator selection",
-                                     "SOURCE_FRAME_REQUIRED")))
-        self.assertEqual(self.get(f"/api/tasks/{task_id}/observations/{event['id']}/image"),
-                         (404, error("Observation image not found")))
-
-    def test_selection_and_projection_request_errors(self) -> None:
-        plain = self.create_task()
-        pick = self.create_task({"category": "strawberry"})
-        self.assertEqual(self.post(f"/api/tasks/{plain}/target-selection", {"observation_event_id": "EVT-000000000000", "candidate_index": 0}),
-                         (409, error("Task has no structured pick request", "PICK_REQUEST_MISSING")))
-        self.assertEqual(self.post("/api/tasks/TASK-00000000/target-selection", {"observation_event_id": "EVT-000000000000", "candidate_index": 0}),
-                         (404, error("Task not found", "TASK_NOT_FOUND")))
-        self.assertEqual(self.post(f"/api/tasks/{pick}/target-selection", {"a": 1}, origin="http://evil.example"),
-                         (403, error("Cross-origin target-selection request rejected", "CROSS_ORIGIN_REQUEST_REJECTED")))
-        projection = f"/api/tasks/{pick}/projection-draft"
-        self.assertEqual(self.post(projection, {"artifact_path": "x"}),
-                         (400, error("artifact_path and artifact_sha256 are required", "INVALID_PROJECTION_DRAFT_REQUEST")))
-        self.assertEqual(self.post("/api/tasks/TASK-00000000/projection-draft", {"artifact_path": "x", "artifact_sha256": "y"}),
-                         (404, error("Task not found", "TASK_NOT_FOUND")))
-        status, body = self.post(projection, {"artifact_path": "x", "artifact_sha256": "y"})
-        self.assertEqual((status, body["error_code"]), (409, "PROJECTION_DRAFT_REJECTED"))  # type: ignore[index]
-        self.assertEqual(self.post(projection, {"a": 1}, origin="http://evil.example"),
-                         (403, error("Cross-origin projection-draft request rejected", "CROSS_ORIGIN_REQUEST_REJECTED")))
 
 
 if __name__ == "__main__":
