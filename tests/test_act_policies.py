@@ -31,7 +31,7 @@ class ActPolicyRegistryTests(unittest.TestCase):
     def test_worker_and_control_station_see_the_same_registry_version(self) -> None:
         version, policies = load_policies(DEFAULT_POLICIES)
         self.assertEqual(version, load_act_policies().version)
-        self.assertEqual(sorted(policies), ["carrot_act_v2", "tissue_act_v1"])
+        self.assertEqual(sorted(policies), ["apple_act_20261109", "carrot_act_v2", "tissue_act_v1"])
 
     def test_bad_registries_are_refused(self) -> None:
         good = json.loads(DEFAULT_POLICIES.read_text(encoding="utf-8"))

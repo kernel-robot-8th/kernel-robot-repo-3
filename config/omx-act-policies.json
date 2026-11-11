@@ -6,12 +6,18 @@
       "policy_id": "carrot_act_v2",
       "object_class": "carrot",
       "label": "당근",
-      "aliases": ["당근", "carrot"],
+      "aliases": [
+        "당근",
+        "carrot"
+      ],
       "model": "JJinJJin2/omx_act_policy_v2",
       "policy_type": "act",
       "task": "Pick up Doll",
       "dataset": "JJinJJin2/pick_and_place_v2",
-      "cameras": {"front": "OVERHEAD", "wrist": "GRIPPER"},
+      "cameras": {
+        "front": "OVERHEAD",
+        "wrist": "GRIPPER"
+      },
       "max_run_s": 45,
       "notes": "에피소드 20개 모두 당근. task 문장은 녹화 때 붙인 이름일 뿐이며 ACT는 쓰지 않음. 에피소드가 쉬는 자세 근처에서 시작하고 끝남."
     },
@@ -19,14 +25,40 @@
       "policy_id": "tissue_act_v1",
       "object_class": "tissue",
       "label": "물티슈",
-      "aliases": ["물티슈", "티슈", "tissue"],
+      "aliases": [
+        "물티슈",
+        "티슈",
+        "tissue"
+      ],
       "model": "JJinJJin2/omx_act_policy",
       "policy_type": "act",
       "task": "Pick up Doll",
       "dataset": "JJinJJin2/pick_and_place",
-      "cameras": {"front": "GRIPPER", "wrist": "OVERHEAD"},
+      "cameras": {
+        "front": "GRIPPER",
+        "wrist": "OVERHEAD"
+      },
       "max_run_s": 45,
       "notes": "에피소드 20개 모두 물티슈. 녹화 때 카메라 이름이 뒤바뀌어 front에 그리퍼 카메라, wrist에 위에서 본 카메라가 들어감. 실물 실행은 아직 하지 않음."
+    },
+    {
+      "policy_id": "apple_act_20261109",
+      "object_class": "apple",
+      "label": "사과",
+      "aliases": [
+        "사과",
+        "apple"
+      ],
+      "model": "neverlish/omx_act_record-apple-20261109-1",
+      "policy_type": "act",
+      "task": "Pick up Doll",
+      "dataset": "neverlish/record-apple-20261109-1",
+      "cameras": {
+        "front": "GRIPPER",
+        "wrist": "OVERHEAD"
+      },
+      "max_run_s": 40,
+      "notes": "에피소드 20개(약 15초), 쉬는 자세에서 시작. 녹화 때 카메라 이름이 뒤바뀌어 front에 그리퍼 카메라(분홍 손가락, F58AE686 팔), wrist에 위에서 본 카메라가 들어감. 2026-11-11 영상으로 확인. 실물 실행은 아직 안 함."
     }
   ]
 }

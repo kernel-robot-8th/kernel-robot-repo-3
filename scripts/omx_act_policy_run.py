@@ -119,16 +119,23 @@ def wait_devices_free(paths: list[str], timeout_s: float = 5.0) -> list[str]:
         time.sleep(0.2)
 
 
-def check_policy_server(address: str, timeout_s: float = 2.0) -> str | None:
-    """None when the policy server answers, else a short error. Nothing is sent to the arm."""
+def check_policy_server(address: str, timeout_s: float = 2.0, ready_timeout_s: float = 5.0) -> str | None:
+    """None when the policy server answers its Ready call, else a short error. Nothing is sent to the arm.
+
+    An open port is not enough: a server left with streams of an earlier client accepted connections but never
+    answered Ready (2026-11-11), and RobotClient.start() waits for Ready without a time limit."""
     import grpc
+    from lerobot.transport import services_pb2, services_pb2_grpc
 
     channel = grpc.insecure_channel(address)
     try:
         grpc.channel_ready_future(channel).result(timeout=timeout_s)
+        services_pb2_grpc.AsyncInferenceStub(channel).Ready(services_pb2.Empty(), timeout=ready_timeout_s)
         return None
     except grpc.FutureTimeoutError:
         return f"no policy server at {address}"
+    except grpc.RpcError as error:
+        return f"policy server at {address} did not answer Ready: {error.code().name}"
     finally:
         channel.close()
 
@@ -144,6 +151,7 @@ def run_policy(
     cancel_requested: Callable[[], bool],
     started: Callable[[], None] | None = None,
     max_step_ticks: int | None = None,
+    policy_device: str = "cuda",
 ) -> PolicyRunResult:
     """Run the policy until the watcher, the time limit or a cancel stops it. Torque stays on afterwards.
 
@@ -189,7 +197,7 @@ def run_policy(
         actions_per_chunk=100,
         task=policy["task"],
         server_address=server_address,
-        policy_device="cuda",
+        policy_device=policy_device,
         chunk_size_threshold=0.7,
         fps=30,
         aggregate_fn_name="weighted_average",

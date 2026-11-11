@@ -188,6 +188,7 @@ class LeRobotOmxWorker(Worker):
                 max_run_s=policy["max_run_s"], cancel_requested=cancel_requested,
                 started=lambda: self.send(command, "PROGRESS", phase="APPROACH_TARGET"),
                 max_step_ticks=settings.policy_max_step_ticks,
+                policy_device=settings.policy_device,
             )
         except Refused as refused:
             print(f"  관제가 진행 보고를 거부함 ({refused}). 정책은 멈췄고 팔은 그 자리에서 토크를 유지합니다.", flush=True)
@@ -385,6 +386,8 @@ def main() -> int:
     policy.add_argument("--policy-depart-ticks", type=int, default=300, help="a joint this far from home = policy started moving")
     policy.add_argument("--policy-rest-ticks", type=int, default=150, help="all joints this close to home = back at rest")
     policy.add_argument("--policy-settle-s", type=float, default=1.5, help="seconds at rest before stopping the policy")
+    policy.add_argument("--policy-device", default="cuda",
+                        help="where the policy server runs the model (cpu while another job fills the GPU)")
     policy.add_argument("--policy-any-start", action="store_true",
                         help="EXPERIMENT: also start the policy away from rest (e.g. after MOVE_TO_SLOT); needs a step limit")
     policy.add_argument("--policy-max-step-ticks", type=int, default=None,
