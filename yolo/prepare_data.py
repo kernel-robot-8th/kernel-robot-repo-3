@@ -5,6 +5,7 @@ import shutil  # 원본을 유지하면서 파일을 복사하는 도구를 가�
 
 parser = argparse.ArgumentParser()  # 실행 옵션을 준비한다.
 parser.add_argument('--camera-copies', type=int, default=1)  # 카메라 학습 사진을 몇 번 넣을지 정한다. 수가 적어 비중을 키운다.
+parser.add_argument('--only', nargs='+')  # 이 폴더 이름만 데이터셋에 넣는다. 예: --only cam_front_frames cam_top_frames
 args = parser.parse_args()  # 옵션을 읽는다.
 camera_folders = ('cam_front_frames', 'cam_top_frames')  # 실제 카메라로 찍은 폴더다.
 root =Path(__file__).resolve().parents[1]  # 프로젝트의 최상위 폴더를 찾는다.
@@ -30,9 +31,14 @@ sources = [  # 원본 폴더와 정답 클래스 번호를 연결한다.
     ('yolo/cam_focus_frames', None),  # crop_focus.py로 카메라 사진에서 당근·고추 주변을 잘라 만든 사진이다.
 ]  # 폴더별로 학습과 검증을 따로 나눈다. None은 여러 클래스가 섞인 폴더다.
 class_ids = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'}  # 라벨에 허용하는 클래스 번호다. 아래 data.yaml의 names와 같게 둔다.
+unknown = set(args.only or []) - {Path(folder_path).name for folder_path, _ in sources}  # 오타 확인이다.
+if unknown:  # 없는 폴더를 고르면 빈 데이터셋이 되므로 멈춘다.
+    raise SystemExit(f'sources에 없는 폴더입니다: {", ".join(sorted(unknown))}')
 pairs = []  # 검증을 통과한 사진과 라벨을 모은다.
 for folder_path, class_id in sources:  # 원본 폴더를 하나씩 확인한다.
     folder_name = Path(folder_path).name  # 복사할 파일 이름 앞에 붙일 폴더 이름이다.
+    if args.only and folder_name not in args.only:  # 고른 폴더만 쓴다. 나머지 복사본은 아래 정리에서 지워진다.
+        continue
     images = sorted((root / folder_path).glob('*.jpg'))  # 사진을 정렬한다.
     if folder_name in ('total_frames', *camera_folders):  # 단계별로 라벨링하므로 라벨이 있는 사진만 쓴다.
         images = [path for path in images if path.with_suffix('.txt').is_file()]
