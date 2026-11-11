@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -62,6 +63,27 @@ class SlotMotionTests(unittest.TestCase):
         self.assertLessEqual(outcome.max_error_ticks, 15)
         self.assertNotEqual(reports[0], goal)  # the first report comes before the goal is written
 
+    def test_synced_move_brings_every_joint_in_together(self) -> None:
+        motion = fake_motion("--profile-velocity", "60")
+        with motion.follower():
+            start = motion.present()
+            goal = {name: start[name] + offset for name, offset in zip(ARM_JOINTS, (30, 425, -797, 651, -486))}
+            velocity, _ = motion.synced_profiles(start, goal)
+            self.assertEqual(velocity["elbow_flex"], 60)  # the longest travel keeps the full speed
+            self.assertLess(velocity["shoulder_pan"], 5)
+            arrivals: dict[str, float] = {}
+            began = time.monotonic()
+
+            def watch(present: dict[str, int], _error: int) -> None:
+                for name in ARM_JOINTS:
+                    if name not in arrivals and abs(goal[name] - present[name]) <= 15:
+                        arrivals[name] = time.monotonic() - began
+
+            outcome = motion.move(goal, lambda: False, watch, sync=True)
+        self.assertEqual(outcome.outcome, "SUCCEEDED")
+        moving = [arrivals[name] for name in ARM_JOINTS if name != "shoulder_pan"]
+        self.assertLess(max(moving) - min(moving), 0.35 * max(moving))
+
     def test_cancel_holds_the_arm_where_it_is(self) -> None:
         motion = fake_motion("--profile-velocity", "1")  # about 16 ticks/s: still far from the goal
         with motion.follower():
@@ -70,7 +92,8 @@ class SlotMotionTests(unittest.TestCase):
         self.assertEqual(outcome.outcome, "CANCELED")
         self.assertFalse(outcome.pose_reached)
         self.assertGreater(outcome.max_error_ticks, 15)
-        self.assertEqual(motion.fake_bus.goal, {name: float(value) for name, value in outcome.final_ticks.items()})
+        arm_goal = {name: motion.fake_bus.goal[name] for name in ARM_JOINTS}  # the fake bus also has the gripper
+        self.assertEqual(arm_goal, {name: float(value) for name, value in outcome.final_ticks.items()})
 
     def test_timeout_fails_without_claiming_the_pose(self) -> None:
         motion = fake_motion("--profile-velocity", "1", "--move-timeout", "0.2")

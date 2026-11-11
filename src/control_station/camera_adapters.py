@@ -146,6 +146,11 @@ class _CameraFeed:
     detections: list[dict[str, object]] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
     thread: threading.Thread | None = None
+    # Set while another program (the arm worker running a LeRobot policy) needs this V4L2 device: the capture
+    # loop closes the device, sets `handed_over`, and reopens it once `lent` is cleared.
+    lent: threading.Event = field(default_factory=threading.Event)
+    handed_over: threading.Event = field(default_factory=threading.Event)
+    lent_reason: str = ""
 
 
 class _YoloDetector:
@@ -547,6 +552,28 @@ class OpenCVArmCameraStreamManager:
                         feed.error_message = f"카메라 worker 시작 실패: {exc}"
                     feed.thread = None
 
+    def lend_devices(self, devices: list[str], reason: str, timeout_s: float = 3.0) -> list[str]:
+        """Close the V4L2 feeds that open any of `devices` so another program can open them. Returns the ids of
+        the feeds that were closed in time; a feed still open after `timeout_s` is left lent and not listed."""
+        wanted = {os.path.realpath(device) for device in devices if device and not device.startswith(ROS_SOURCE_PREFIX)}
+        feeds = [
+            feed for feed in self._feeds.values()
+            if feed.thread is not None and feed.device and not feed.device.startswith(ROS_SOURCE_PREFIX)
+            and os.path.realpath(feed.device) in wanted
+        ]
+        for feed in feeds:
+            feed.lent_reason = reason
+            feed.lent.set()
+        deadline = time.monotonic() + timeout_s
+        return [feed.camera_id for feed in feeds if feed.handed_over.wait(max(0.0, deadline - time.monotonic()))]
+
+    def take_back_devices(self) -> list[str]:
+        """Reopen every lent feed."""
+        lent = [feed for feed in self._feeds.values() if feed.lent.is_set()]
+        for feed in lent:
+            feed.lent.clear()
+        return [feed.camera_id for feed in lent]
+
     @staticmethod
     def _release_capture(capture) -> str | None:  # type: ignore[no-untyped-def]
         try:
@@ -576,6 +603,17 @@ class OpenCVArmCameraStreamManager:
             device = feed.device
             if not device:
                 return
+            if feed.lent.is_set():
+                # The device is closed here; wait until it is given back.
+                with feed.lock:
+                    feed.connection_state = CameraConnectionState.DISCONNECTED
+                    feed.stream_state = CameraStreamState.STOPPED
+                    feed.error_message = feed.lent_reason
+                feed.handed_over.set()
+                while feed.lent.is_set() and not self._closed.is_set():
+                    self._closed.wait(0.2)
+                feed.handed_over.clear()
+                continue
             resolved_device = os.path.realpath(device)
             video_match = re.fullmatch(r"/dev/video(\d+)", resolved_device)
             if not os.path.exists(resolved_device):
@@ -639,7 +677,7 @@ class OpenCVArmCameraStreamManager:
             failed_reads = 0
             capture_failure: str | None = None
             try:
-                while not self._closed.is_set():
+                while not self._closed.is_set() and not feed.lent.is_set():
                     ok, image = capture.read()
                     if not ok:
                         failed_reads += 1
@@ -665,6 +703,8 @@ class OpenCVArmCameraStreamManager:
             finally:
                 release_error = self._release_capture(capture)
                 capture_failure = capture_failure or release_error
+            if feed.lent.is_set():
+                continue  # closed on purpose; the top of the loop reports it and waits
             if not self._closed.is_set():
                 with feed.lock:
                     feed.connection_state = CameraConnectionState.DISCONNECTED

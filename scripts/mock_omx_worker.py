@@ -78,6 +78,8 @@ class Worker:
         target = command["target"]
         if command["operation"] == "RETURN_HOME":
             pass  # a real worker replays its recorded "home" pose; there is no target to check
+        elif command["operation"] == "PICK_WITH_POLICY":
+            pass  # the policy finds the object itself; a camera-observed slot is evidence only
         elif target.get("pick_slot_id") is not None:
             # A real worker looks up the joint pose it taught for this slot under this slot map version.
             if target["slot_map_version"] != self.slot_map_version:
@@ -120,7 +122,10 @@ class Worker:
                     return
                 self.execute_phase(command, phase)
                 command = self.send(command, "PROGRESS", phase=phase)
-            if self.args.result == "succeeded":
+            if self.args.result == "succeeded" and command["operation"] in ("PICK_WITH_POLICY", "PICK_AT_POSITION"):
+                # Like the real worker: back home, but grasp and placement are not observed.
+                self.send(command, "RESULT_UNKNOWN", reason_code="PLACE_NOT_VERIFIED", pose_reached=True)
+            elif self.args.result == "succeeded":
                 if command["operation"] in ("MOVE_TO_SLOT", "RETURN_HOME", "MOVE_TO_POSITION"):
                     self.send(command, "SUCCEEDED", pose_reached=True)
                 else:

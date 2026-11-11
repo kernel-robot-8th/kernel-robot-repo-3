@@ -536,14 +536,16 @@ function renderArmCommands(commands) {
     const camera = command.source?.kind === 'CAMERA'
       ? ` · 정면 캠 ${escapeHtml(command.source.class_name)} ${Math.round(command.source.confidence * 100)}%`
       : '';
-    let where = 'home 자세';
+    let where = target.policy ? '카메라 위치 근거 없음' : 'home 자세';
     if (target.pick_slot_id) {
       where = `칸 ${escapeHtml(target.slot_label || target.pick_slot_id)} (${escapeHtml(target.pick_slot_id)})${camera}`;
     } else if (target.position) {
       where = `${escapeHtml(target.frame_id)} (${[target.position.x, target.position.y, target.position.z].map((value) => value.toFixed(3)).join(', ')}) m`;
     }
-    const what = { MOVE_TO_SLOT: '칸 앞으로 이동', RETURN_HOME: '원상복귀', MOVE_TO_POSITION: '좌표로 이동' }[command.operation]
-      || `${escapeHtml(target.object_class)} → ${escapeHtml(command.place.slot_id)}`;
+    const what = { MOVE_TO_SLOT: '칸 앞으로 이동', RETURN_HOME: '원상복귀', MOVE_TO_POSITION: '좌표로 이동', PICK_AT_POSITION: `보고 집기: ${escapeHtml(target.object_class || '')}` }[command.operation]
+      || (target.policy
+        ? `학습 정책 집기: ${escapeHtml(target.policy.label)}<small>${escapeHtml(target.policy.model)}</small>`
+        : `${escapeHtml(target.object_class)} → ${escapeHtml(command.place.slot_id)}`);
     const simulated = command.result && command.result.simulated ? '<span class="simulated">모의</span>' : '';
     const reason = command.reason_code ? `<small>${escapeHtml(command.reason_code)}</small>` : '';
     const cleared = command.operator_cleared_at ? `<small>현장 확인 ${escapeHtml(formatClock(command.operator_cleared_at))}</small>` : '';
@@ -607,11 +609,12 @@ async function postArmCommand(url, body) {
 }
 
 const cameraCommandForm = document.querySelector('#cameraCommandForm');
+const policyButtons = document.querySelector('#policyButtons');
 
-cameraCommandForm.addEventListener('submit', async (event) => {
+document.querySelector('#cameraSlotCommand').addEventListener('click', async (event) => {
   // The server picks the slot from the front camera; it refuses unless the object is in exactly one slot.
-  event.preventDefault();
-  const button = cameraCommandForm.querySelector('button');
+  if (!cameraCommandForm.reportValidity()) return;
+  const button = event.currentTarget;
   const objectClass = cameraCommandForm.elements.object_class.value.trim();
   button.disabled = true;
   armCommandMessage.textContent = '';
@@ -635,6 +638,127 @@ cameraCommandForm.addEventListener('submit', async (event) => {
     await refreshArmCommands();
   }
 });
+
+cameraCommandForm.addEventListener('submit', async (event) => {
+  // Enter and the first button: the server converts the camera's shelf position into arm coordinates and queues
+  // MOVE_TO_POSITION above the object.
+  event.preventDefault();
+  const button = document.querySelector('#cameraHoverCommand');
+  button.disabled = true;
+  armCommandMessage.textContent = '';
+  try {
+    const response = await fetch('/api/arm/commands/from-camera', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ object_class: cameraCommandForm.elements.object_class.value.trim(), operation: 'MOVE_TO_POSITION' }),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      const detail = result.details ? ` (${JSON.stringify(result.details)})` : '';
+      throw new Error(`${apiErrorMessage(result, '물체 위치로 명령을 만들지 못했습니다.')}${detail}`);
+    }
+    const object = result.hover.object_arm_m;
+    armCommandMessage.textContent = `${result.selection.class_name} ${Math.round(result.selection.confidence * 100)}% → 팔 좌표 (${(object.x * 100).toFixed(1)}, ${(object.y * 100).toFixed(1)}) cm 위로 · ${result.command.command_id} 등록, 워커가 가져갈 때까지 대기`;
+  } catch (error) {
+    armCommandMessage.textContent = error.message;
+  } finally {
+    button.disabled = false;
+    await refreshArmCommands();
+  }
+});
+
+document.querySelector('#cameraPickCommand').addEventListener('click', async (event) => {
+  // Look and pick: the server converts the camera position into the object's centre in arm coordinates.
+  if (!cameraCommandForm.reportValidity()) return;
+  const button = event.currentTarget;
+  button.disabled = true;
+  armCommandMessage.textContent = '';
+  try {
+    const response = await fetch('/api/arm/commands/from-camera', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ object_class: cameraCommandForm.elements.object_class.value.trim(), operation: 'PICK_AT_POSITION' }),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      const detail = result.details ? ` (${JSON.stringify(result.details)})` : '';
+      throw new Error(`${apiErrorMessage(result, '보고 집기 명령을 만들지 못했습니다.')}${detail}`);
+    }
+    const p = result.command.target.position;
+    armCommandMessage.textContent = `${result.selection.class_name} ${Math.round(result.selection.confidence * 100)}% → 팔 좌표 (${(p.x * 100).toFixed(1)}, ${(p.y * 100).toFixed(1)}, ${(p.z * 100).toFixed(1)}) cm에서 보고 집기 · ${result.command.command_id} 등록`;
+  } catch (error) {
+    armCommandMessage.textContent = error.message;
+  } finally {
+    button.disabled = false;
+    await refreshArmCommands();
+  }
+});
+
+// Front-camera refusals after which the operator may still run the policy; the policy finds the object itself.
+const cameraCheckErrors = new Set([
+  'CAMERA_NOT_FOUND', 'CAMERA_NOT_FRESH', 'DETECTOR_NOT_READY', 'SLOT_ZONES_NOT_READY',
+  'TARGET_NOT_FOUND', 'TARGET_AMBIGUOUS', 'TARGET_MULTIPLE',
+]);
+
+async function pickWithPolicy(policy) {
+  // 1) Ask the server to confirm the object in the front camera (the slot becomes evidence in the command).
+  // 2) If the camera cannot confirm it, the operator may send the command without camera evidence.
+  const buttons = policyButtons.querySelectorAll('button');
+  buttons.forEach((button) => { button.disabled = true; });
+  armCommandMessage.textContent = `${policy.label}: 정면 캠에서 확인 중`;
+  try {
+    const response = await fetch('/api/arm/commands/from-camera', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ object_class: policy.object_class, operation: 'PICK_WITH_POLICY' }),
+    });
+    const result = await response.json();
+    if (response.ok) {
+      const found = result.selection;
+      armCommandMessage.textContent = `${policy.label} 집기 등록 (${result.command.command_id}) · 정면 캠 ${Math.round(found.confidence * 100)}% @ ${found.slot_label} · 워커가 가져갈 때까지 대기`;
+      return;
+    }
+    const reason = apiErrorMessage(result, '정면 캠 확인 실패');
+    if (!cameraCheckErrors.has(result.error_code)
+      || !window.confirm(`${reason}\n\n정면 캠 확인 없이 ${policy.label} 집기 정책을 실행할까요? 팔이 움직입니다.`)) {
+      armCommandMessage.textContent = reason;
+      return;
+    }
+    const command = await postArmCommand('/api/arm/commands', {
+      robot_id: 'arm-01',
+      operation: 'PICK_WITH_POLICY',
+      valid_for_s: 60,
+      target: { object_class: policy.object_class },
+      place: { slot_id: 'CART_1' },
+      source: { kind: 'OPERATOR_INPUT', note: `정면 캠 확인 없이 실행 (${result.error_code})` },
+    });
+    if (command) armCommandMessage.textContent = `${policy.label} 집기 등록 (${command.command_id}) · 정면 캠 확인 없음 · 워커가 가져갈 때까지 대기`;
+  } catch (error) {
+    armCommandMessage.textContent = error.message;
+  } finally {
+    buttons.forEach((button) => { button.disabled = false; });
+    await refreshArmCommands();
+  }
+}
+
+async function loadPolicyButtons() {
+  try {
+    const response = await fetch('/api/arm/policies', { cache: 'no-store' });
+    const result = await response.json();
+    if (!response.ok) throw new Error(apiErrorMessage(result, '정책 목록을 불러오지 못했습니다'));
+    policyButtons.replaceChildren(...result.policies.map((policy) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = `${policy.label} 집기`;
+      button.title = `${policy.model} (${policy.object_class})`;
+      button.addEventListener('click', () => pickWithPolicy(policy));
+      return button;
+    }));
+  } catch (error) {
+    policyButtons.innerHTML = `<span class="note">${escapeHtml(error.message)}</span>`;
+  }
+}
+loadPolicyButtons();
 
 const armCommandSlot = document.querySelector('#armCommandSlot');
 const armCommandPositionInputs = ['frame_id', 'x', 'y', 'z'].map((name) => armCommandForm.elements[name]);
@@ -739,6 +863,7 @@ const executionLabels = {
   COMMAND_SENT: '명령 기록', ACCEPTED: '접수됨', RUNNING: '실행 중',
   SUCCEEDED: '성공', FAILED: '실패', TIMED_OUT: '시간 초과',
   CANCELED: '취소됨', UNKNOWN: '결과 불명', PENDING: '대기',
+  QUEUED: '워커 대기열', DISPATCHED: '워커가 가져감', REJECTED: '워커 거부', EXPIRED: '만료',
 };
 const stepOutcomeLabels = {
   SIMULATED_SUCCESS: '모의 완료',
@@ -747,6 +872,8 @@ const stepOutcomeLabels = {
   NOT_EXECUTED_AFTER_FAILURE: '실패 뒤 미실행',
   PARKING_ARRIVED: '주차 판정 도착',
   LOAD_CONFIRMED: '적재 수량 확인',
+  ARM_HOME_PLACEMENT_NOT_VERIFIED: '팔 home 복귀 · 적재 미확인',
+  ARM_HOME_PLACEMENT_LEFT_TO_VERIFY_LOAD: '적재 판단은 적재 확인 단계로',
 };
 const taskEventLabels = {
   MOCK_SCENARIO_FAILURE: '모의 실패 시나리오 발생',
@@ -755,6 +882,11 @@ const taskEventLabels = {
   TARGET_PLANE_PROJECTION_RECORDED: '선반 평면 좌표 초안 기록',
   ARRIVAL_NOT_CONFIRMED: '도착 미확인 · 팔 단계 시작 안 함',
   LOAD_NOT_CONFIRMED: '적재 미확인 · 출발하지 않음',
+  TARGET_CONFIRMED: '정면 카메라 물체 확인',
+  ARM_COMMAND_CREATED: 'OMX 명령 등록',
+  ARM_COMMAND_FINISHED: 'OMX 명령 종료',
+  ARM_RESULT_RECORDED: '팔 결과 기록',
+  ARM_TASK_NOT_CONFIRMED: '팔 단계 미확인 · 다음 단계 진행 안 함',
 };
 const loadStatusLabels = {
   LOADED: '다 실림',
@@ -1238,8 +1370,14 @@ function renderTaskDetail(task) {
         ? `대상 관측 · ${event.payload?.pick_request?.category || observation.target_class} · ${observation.camera_id} · ${observation.status}${requestPrompt} · ${candidateCount}${colorEvaluation ? ` · ${colorEvaluation}` : ''}${shelfEvaluation ? ` · ${shelfEvaluation}` : ''}${depthRegionText} · frame ${observation.frame_sequence}${sourceStamp}${candidateHints ? ` · ${candidateHints}` : ''}`
         : selection
           ? `운영자 후보 선택 기록 · ${selectionCandidate?.class_name || '대상'} #${Number(selection.candidate_index) + 1} · 관측 ${selection.observation_event_id} · frame ${selection.frame_sequence}`
+          : eventName === 'PROGRESS' && event.payload?.arm_state
+            ? `OMX ${event.payload.arm_command_id} · ${executionLabels[event.payload.arm_state] || event.payload.arm_state}`
           : eventName === 'PROGRESS'
             ? `${event.payload?.source === 'mock' ? '모의 ' : ''}진행률 ${Number(event.payload?.progress) || 0}% · ${event.payload?.message || '진행 이벤트'}`
+          : eventName === 'TARGET_CONFIRMED'
+            ? `${taskEventLabels[eventName]} · ${event.payload?.message || ''} · 신뢰도 ${event.payload?.confidence ?? '-'}`
+          : eventName === 'ARM_COMMAND_CREATED'
+            ? `${taskEventLabels[eventName]} · ${event.payload?.arm_command_id} · 정책 ${event.payload?.policy_id}${event.payload?.slot_id ? ` · 칸 ${event.payload.slot_id}` : ''}`
             : (taskEventLabels[eventName] || eventName);
       const source = event.payload?.source;
       const robotId = event.payload?.robot_id;

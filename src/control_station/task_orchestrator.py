@@ -1,14 +1,27 @@
-"""Mock-only task execution on top of the persisted task/step state machine."""
+"""Task execution on top of the persisted task/step state machine.
+
+Every step is simulated (`source: mock`) except, when enabled with CONTROL_STATION_TASK_REAL_ARM=1,
+EXECUTE_ARM_TASK: it queues one PICK_WITH_POLICY arm command for the policy named by the task's arm job
+(e.g. "당근 집기") and waits for the arm worker's result. The command is made only when the front camera sees
+the object in exactly one shelf slot (SR-13); that observation is stored with the command as its CAMERA source,
+and without it the step fails before any arm command exists. The worker cannot see whether the object was grasped
+and placed, so its best outcome is "back home, placement not verified"; VERIFY_ARM_RESULT records that the
+decision is left to VERIFY_LOAD, and the arm command stays UNKNOWN for the operator unless a non-mock load
+observation confirmed the load.
+"""
 
 from __future__ import annotations
 
 import os
 import threading
+import time
 import uuid
 from typing import Any, Callable
 
+from control_station.arm_commands import IN_FLIGHT, ArmCommandConflict, ArmCommandError, ArmCommandStore
 from control_station.load_check import EXPECTED_LOAD_COUNT, LOAD_ERROR_CODES, LoadObserver, judge_load
 from control_station.models import StepStatus, TaskStatus
+from control_station.shelf_slot_zones import SlotSelectionError
 from control_station.store import (
     DEFAULT_TASK_STEPS,
     InvalidStateTransition,
@@ -27,6 +40,9 @@ class MockScenarioFailure(RuntimeError):
 # Returns one parking observation (interface-contracts "Pinky 주차 정렬 관측"); raises with
 # an error_code attribute when the observation could not start.
 ArrivalCheck = Callable[[], dict[str, Any]]
+# Front-camera evidence for one object class: the selection record of shelf_slot_zones.select_slot_for_class.
+# Raises SlotSelectionError (error_code, details) when the camera does not single out one slot.
+TargetEvidence = Callable[[str], dict[str, Any]]
 
 
 class ArrivalNotConfirmed(RuntimeError):
@@ -44,6 +60,30 @@ class LoadNotConfirmed(RuntimeError):
         super().__init__(message)
         self.error_code = error_code
         self.source = source
+
+
+class ArmTaskNotConfirmed(RuntimeError):
+    """The arm command for EXECUTE_ARM_TASK could not be sent or did not end back home."""
+
+    def __init__(self, error_code: str, message: str, source: str = "arm_worker") -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        # Which side could not confirm: the front camera (no command made) or the arm worker / control station.
+        self.source = source
+
+
+def policy_for_arm_job(registry: Any, arm_job: str) -> dict[str, Any] | None:
+    """The trained policy whose object name appears in the arm job text ("당근 집기" -> carrot policy)."""
+    if registry is None:
+        return None
+    exact = registry.resolve(arm_job)
+    if exact is not None:
+        return exact
+    text = arm_job.casefold()
+    for policy in registry.policies.values():
+        if any(name.casefold() in text for name in {policy["object_class"], policy["label"], *policy["aliases"]}):
+            return policy
+    return None
 
 
 class TaskExecutionConflict(RuntimeError):
@@ -68,9 +108,16 @@ class MockTaskOrchestrator:
         mode: str = "mock",
         arrival_check: ArrivalCheck | None = None,
         load_check: LoadObserver | None = None,
+        arm_commands: ArmCommandStore | None = None,
+        target_evidence: TargetEvidence | None = None,
     ) -> None:
         self.task_store = task_store
         self.mode = mode
+        # When set, EXECUTE_ARM_TASK sends a real PICK_WITH_POLICY arm command instead of a mock success.
+        self.arm_commands = arm_commands
+        # Required for that real arm command: no front-camera evidence, no command (SR-13).
+        self.target_evidence = target_evidence
+        self._arm_results: dict[str, dict[str, Any]] = {}
         # When set, VERIFY_ARRIVAL succeeds only on an ARRIVED parking observation.
         self.arrival_check = arrival_check
         # When set, VERIFY_LOAD succeeds only when the observed count on the cart equals the expected count.
@@ -336,6 +383,7 @@ class MockTaskOrchestrator:
             with self._lock:
                 self._threads.pop(task_id, None)
                 self._cancel_events.pop(task_id, None)
+                self._arm_results.pop(task_id, None)
 
     def _run_step(
         self,
@@ -350,8 +398,9 @@ class MockTaskOrchestrator:
             else TaskStatus.RUNNING
         )
         command_id = f"CMD-{uuid.uuid4().hex[:12].upper()}"
+        real_arm = self.arm_commands is not None and step.get("step_type") in {"EXECUTE_ARM_TASK", "VERIFY_ARM_RESULT"}
         base = {
-            "source": "mock",
+            "source": "arm_worker" if real_arm else "mock",
             "robot_id": self._mock_robot_id(step),
             "task_id": task_id,
             "step_id": step_id,
@@ -389,6 +438,29 @@ class MockTaskOrchestrator:
                 expected_status=StepStatus.ACCEPTED,
                 event_payload={**base, "event": "EXECUTION_STARTED"},
             )
+        if real_arm and step.get("step_type") == "EXECUTE_ARM_TASK":
+            arm_result = self._execute_arm_policy(task_id, step_id, command_id, base, cancel_event)
+            if arm_result is None:
+                return False
+            self._arm_results[task_id] = arm_result
+            self.task_store.transition_step(
+                task_id, step_id, StepStatus.SUCCEEDED, expected_status=StepStatus.RUNNING,
+                result_payload=arm_result, event_payload={**base, "event": "ARM_COMMAND_FINISHED"},
+            )
+            return True
+        if real_arm and step.get("step_type") == "VERIFY_ARM_RESULT":
+            arm_result = self._arm_results.get(task_id) or {}
+            self.task_store.transition_step(
+                task_id, step_id, StepStatus.SUCCEEDED, expected_status=StepStatus.RUNNING,
+                result_payload={
+                    "source": "control_station",
+                    "outcome": "ARM_HOME_PLACEMENT_LEFT_TO_VERIFY_LOAD",
+                    "arm_command_id": arm_result.get("arm_command_id"),
+                    "message": "팔은 home으로 돌아왔다고 보고했지만 집기·적재는 확인하지 않았습니다. 적재 확인 단계가 판단합니다.",
+                },
+                event_payload={**base, "event": "ARM_RESULT_RECORDED"},
+            )
+            return True
         progress_delay = self.step_delay / 2
         if cancel_event.wait(progress_delay):
             return False
@@ -416,6 +488,7 @@ class MockTaskOrchestrator:
             result_payload = self._verify_arrival(task_id, step_id, command_id, base)
         if step.get("step_type") == "VERIFY_LOAD" and self.load_check is not None:
             result_payload = self._verify_load(task_id, step_id, command_id, base)
+            self._close_arm_command_after_load(task_id, result_payload)
         self.task_store.transition_step(
             task_id,
             step_id,
@@ -425,6 +498,126 @@ class MockTaskOrchestrator:
             event_payload={**base, "event": "MOCK_STEP_COMPLETED"},
         )
         return True
+
+    def _execute_arm_policy(
+        self,
+        task_id: str,
+        step_id: str,
+        command_id: str,
+        base: dict[str, Any],
+        cancel_event: threading.Event,
+    ) -> dict[str, Any] | None:
+        """Queue PICK_WITH_POLICY for the task's arm job and wait for the worker. None means canceled."""
+        assert self.arm_commands is not None
+        task = self.task_store.get_task(task_id) or {}
+        policy = policy_for_arm_job(self.arm_commands.act_policies, str(task.get("arm_job") or ""))
+        if policy is None:
+            raise ArmTaskNotConfirmed(
+                "ARM_JOB_POLICY_NOT_FOUND", f"팔 작업 '{task.get('arm_job')}'에 맞는 학습 정책이 없습니다",
+                source="control_station",
+            )
+        # SR-13: the object must be seen in exactly one slot by the front camera before the arm is asked to pick.
+        if self.target_evidence is None:
+            raise ArmTaskNotConfirmed(
+                "TARGET_EVIDENCE_NOT_CONFIGURED", "정면 카메라 확인 경로가 없어 팔 명령을 만들지 않았습니다",
+                source="control_station",
+            )
+        try:
+            evidence = self.target_evidence(policy["object_class"])
+        except SlotSelectionError as exc:
+            raise ArmTaskNotConfirmed(
+                exc.error_code, f"{exc} — 팔 명령을 만들지 않았습니다", source="front_camera"
+            ) from exc
+        self.task_store.record_step_event(
+            task_id, step_id, command_id, "TARGET_CONFIRMED",
+            {**base, "event": "TARGET_CONFIRMED", "camera_id": evidence.get("camera_id"),
+             "object_class": evidence.get("class_name"), "slot_id": evidence.get("slot_id"),
+             "confidence": evidence.get("confidence"), "captured_at": evidence.get("captured_at"),
+             "message": f"정면 카메라: {evidence.get('class_name')} → {evidence.get('slot_label')}"},
+            expected_task_status=TaskStatus.RUNNING,
+        )
+        try:
+            arm_command = self.arm_commands.create(
+                {
+                    "robot_id": base.get("robot_id") or "arm-01",
+                    "operation": "PICK_WITH_POLICY",
+                    "valid_for_s": 60,
+                    "target": {"object_class": policy["object_class"], "pick_slot_id": evidence.get("slot_id")},
+                    "place": {"slot_id": "CART_1"},
+                    "source": {"kind": "OPERATOR_INPUT"},  # replaced by the camera evidence
+                },
+                camera_source=evidence,
+            )
+        except (ArmCommandError, ArmCommandConflict) as exc:
+            raise ArmTaskNotConfirmed(
+                getattr(exc, "error_code", "ARM_COMMAND_INVALID"), str(exc), source="control_station"
+            ) from exc
+        arm_id = arm_command["command_id"]
+        self.task_store.record_step_event(
+            task_id, step_id, command_id, "ARM_COMMAND_CREATED",
+            {**base, "event": "ARM_COMMAND_CREATED", "arm_command_id": arm_id, "policy_id": policy["policy_id"],
+             "slot_id": evidence.get("slot_id")},
+            expected_task_status=TaskStatus.RUNNING,
+        )
+        # Waiting longer than the policy run plus the queue, ACK and home move means the result is unclear.
+        deadline = time.monotonic() + policy["max_run_s"] + 180
+        last_state, cancel_sent = None, False
+        while True:
+            current = self.arm_commands.get(arm_id)
+            state = current["state"]
+            if state != last_state and not cancel_event.is_set():
+                last_state = state
+                try:
+                    self.task_store.record_step_event(
+                        task_id, step_id, command_id, "PROGRESS",
+                        {**base, "event": "PROGRESS", "arm_command_id": arm_id, "arm_state": state,
+                         "message": f"팔 명령 {arm_id}: {state}"},
+                        expected_task_status=TaskStatus.RUNNING,
+                    )
+                except StateTransitionConflict:
+                    pass
+            if state != "QUEUED" and state not in {s.value for s in IN_FLIGHT}:
+                break
+            if cancel_event.is_set() and not cancel_sent:
+                try:
+                    self.arm_commands.cancel(arm_id)  # the worker stops the arm where it is
+                except ArmCommandConflict:
+                    pass
+                cancel_sent = True
+            if time.monotonic() > deadline:
+                raise ArmTaskNotConfirmed(
+                    "ARM_RESULT_TIMEOUT", f"팔 명령 {arm_id}의 결과가 오지 않았습니다. 팔을 현장에서 확인하세요."
+                )
+            time.sleep(0.5)
+        if cancel_sent:
+            return None
+        result = current.get("result") or {}
+        if state == "UNKNOWN" and current.get("reason_code") == "PLACE_NOT_VERIFIED" and result.get("pose_reached") is True:
+            return {
+                "source": "arm_worker",
+                "outcome": "ARM_HOME_PLACEMENT_NOT_VERIFIED",
+                "arm_command_id": arm_id,
+                "policy_id": policy["policy_id"],
+                "simulated": result.get("simulated"),
+            }
+        raise ArmTaskNotConfirmed(
+            current.get("reason_code") or state,
+            f"팔 명령 {arm_id}이(가) {state}({current.get('reason_code')})로 끝났습니다. {result.get('message') or ''}".strip(),
+        )
+
+    def _close_arm_command_after_load(self, task_id: str, load_result: dict[str, Any]) -> None:
+        """A real (non-mock) load confirmation is the evidence the arm worker lacked; record it on the arm command
+        so the next command is allowed. A mock load count leaves the command UNKNOWN for the operator."""
+        arm_result = self._arm_results.pop(task_id, None)
+        if self.arm_commands is None or not arm_result or load_result.get("source") == "mock":
+            return
+        try:
+            self.arm_commands.clear_unknown(
+                arm_result["arm_command_id"],
+                f"작업 {task_id} 적재 확인({load_result.get('source')}): 관측 {load_result.get('observed_count')}개",
+            )
+        except (ArmCommandConflict, ArmCommandError):
+            pass
 
     def _verify_arrival(
         self,
@@ -606,6 +799,8 @@ class MockTaskOrchestrator:
             source, error_code, event_name = "parking_check", error.error_code, "ARRIVAL_NOT_CONFIRMED"
         elif isinstance(error, LoadNotConfirmed):
             source, error_code, event_name = error.source, error.error_code, "LOAD_NOT_CONFIRMED"
+        elif isinstance(error, ArmTaskNotConfirmed):
+            source, error_code, event_name = error.source, error.error_code, "ARM_TASK_NOT_CONFIRMED"
         elif isinstance(error, MockScenarioFailure):
             error_code = event_name = "MOCK_SCENARIO_FAILURE"
         else:

@@ -129,17 +129,20 @@ LeRobot이 설치된 Python 환경에서 follower의 현재 관절 raw 값, torq
 
 ## ACT 집기 정책 실물 시험
 
-팀이 LeRobot으로 학습한 ACT 정책(카메라 영상과 관절 값을 보고 관절 목표를 내는 모방학습 모델, YOLO 아님)을 LeRobot 비동기 추론으로 실물 OMX에서 돌리고, 끝난 뒤 OMX 워커로 원상복귀하는 시험 절차입니다. 관제 작업 흐름과는 아직 연결하지 않았습니다. 도우미는 [omx_act_policy_test.sh](../../scripts/omx_act_policy_test.sh)입니다.
+팀이 LeRobot으로 학습한 ACT 정책(카메라 영상과 관절 값을 보고 관절 목표를 내는 모방학습 모델, YOLO 아님)을 LeRobot 비동기 추론으로 실물 OMX에서 돌리는 절차입니다. 정책은 물체마다 하나씩이며 [config/omx-act-policies.json](../../config/omx-act-policies.json)에 물체 이름과 대응시킵니다. 관제 화면에서 실행하는 방법(`PICK_WITH_POLICY`, [HTTP 인터페이스](arm-command-api.md#학습-정책으로-집기-pick_with_policy))과 관제 없이 수동으로 돌리는 방법이 있습니다. 도우미는 [omx_act_policy_test.sh](../../scripts/omx_act_policy_test.sh)입니다.
 
 ```bash
-set -a; source .control-station/control-station.env; set +a   # 두 터미널 모두
-scripts/omx_act_policy_test.sh server            # 터미널 1: 정책 서버 (GPU, 모터 연결 없음)
-scripts/omx_act_policy_test.sh client [모델]     # 터미널 2: 팔이 움직임. 놓기가 끝나면 Ctrl+C
-scripts/omx_act_policy_test.sh worker            # 터미널 2: OMX 워커 → 관제 화면 원상복귀
+set -a; source .control-station/control-station.env; set +a   # 모든 터미널
+scripts/omx_act_policy_test.sh server            # 터미널 1: 정책 서버 (GPU, 모터 연결 없음). 두 방법 모두 필요
+# 관제에서: 관제 서버를 켜고 (헤드캠이 정책 카메라와 같으면 정책 명령이 도는 동안만 관제가 헤드캠을 닫음)
+scripts/omx_act_policy_test.sh worker            # 터미널 2: OMX 워커 → 관제 화면 수동 조작 탭 "당근 집기"/"물티슈 집기"
+# 관제 없이:
+scripts/omx_act_policy_test.sh client [물체]     # 터미널 2: 팔이 움직임(기본 당근). 놓기가 끝나면 Ctrl+C
+scripts/omx_act_policy_test.sh worker            # 그다음 관제 화면 원상복귀
 ```
 
 - 준비: LeRobot 가상환경에 `grpcio==1.73.1`, `matplotlib`이 필요합니다(2026-11-07 이 PC에 설치, 기존 패키지 변경 없음). 계정 `dialout` 권한이 없으면 도우미가 `sg dialout`으로 실행합니다.
-- 장치는 환경 변수로 지정합니다: `CONTROL_STATION_ACT_FRONT_CAMERA`(필수, 학습 때의 front 카메라), `CONTROL_STATION_JOINT_CAMERA`(wrist), `CONTROL_STATION_FOLLOWER_PORT`, `CONTROL_STATION_OMX_POSES`(워커 자세 파일). 카메라 번호(`/dev/videoN`)는 꽂을 때마다 바뀌므로 by-id/by-path를 씁니다. 같은 모델의 카메라라도 **학습 때와 같은 위치·시점**의 카메라를 front로 줘야 합니다. 다른 PC의 명령에 있는 장치 번호를 그대로 쓰지 않습니다.
+- 장치는 환경 변수로 지정합니다: `CONTROL_STATION_ACT_OVERHEAD_CAMERA`(필수, 선반을 위에서 보는 카메라), `CONTROL_STATION_JOINT_CAMERA`(그리퍼 카메라), `CONTROL_STATION_FOLLOWER_PORT`, `CONTROL_STATION_OMX_POSES`(워커 자세 파일). 정책 입력 `front`/`wrist`에 어느 카메라를 넣을지는 정책 파일의 `cameras`가 정합니다(물티슈 정책은 녹화 때 이름이 뒤바뀌어 front에 그리퍼 카메라를 넣음). 카메라 번호(`/dev/videoN`)는 꽂을 때마다 바뀌므로 by-id/by-path를 씁니다. 같은 모델의 카메라라도 **학습 때와 같은 위치·시점**의 카메라를 줘야 합니다. 다른 PC의 명령에 있는 장치 번호를 그대로 쓰지 않습니다.
 - 정책에는 완료 신호가 없습니다. robot_client는 Ctrl+C를 누를 때까지 계속 동작하므로, 사람이 놓기가 끝난 것을 보고 멈춥니다.
 - LeRobot 기본값은 종료할 때 토크를 끄는 것(`disable_torque_on_disconnect=True`)이라 팔이 떨어집니다. 도우미는 `false`를 줘서 마지막 자세를 유지합니다. 연결할 때는 LeRobot이 모터 설정을 쓰느라 토크가 잠깐 꺼지므로 쉬는 자세에서 시작합니다. 시작 전에 `Goal_Position`이 현재 위치와 같은지 읽어 두면 토크가 켜질 때 팔이 튀지 않는지 알 수 있습니다.
 - 팔 포트는 배타적으로 열리지 않습니다(Dynamixel SDK가 pyserial exclusive를 쓰지 않음). 정책과 워커가 동시에 떠 있으면 둘 다 모터에 쓸 수 있으므로, 도우미는 다른 팔 프로세스가 있으면 시작하지 않습니다. 워커는 정책을 끈 뒤에 켭니다.
@@ -164,6 +167,10 @@ CONTROL_STATION_PARKING_CAMERA=head_camera CONTROL_STATION_PARKING_SPOT=pinky_do
 선반 카메라는 `shelf_camera`(`SHELF`) 카드로 영상과 연결 상태를 보여 줍니다. `CONTROL_STATION_SHELF_YOLO_WEIGHTS`(또는 `CONTROL_STATION_SHELF_YOLO_WORLD_PROMPTS`)를 주면 Head Camera와 같은 방식으로 YOLO 검출을 표시합니다. `_CONF`, `_DEVICE` 설정도 `CONTROL_STATION_SHELF_YOLO_` 접두어로 같습니다. 작업 관측 단계에는 연결하지 않습니다.
 
 2026-11-07 기준 두 카메라 모두 팀 기준 모델을 씁니다. `feat/yolo-object-detection` 브랜치의 `2413f4c` "10클래스 YOLO26n 모델 best11.pt"(`yolo/models/best11.pt`, SHA-256 `c6850be0…`)입니다. 모델 파일은 Git에서 제외되는 `.control-station/models/best11_2413f4c.pt`에 두고, `CONTROL_STATION_HEAD_YOLO_WEIGHTS`와 `CONTROL_STATION_SHELF_YOLO_WEIGHTS`에 같은 경로를 지정합니다. `scripts/check_setup.sh --vision`이 이 파일을 준비합니다. 이전 기준 모델은 `e252f4e`의 3클래스 모델(`strawberry_car_ball_r2_e252f4e.pt`)이었습니다.
+
+2026-11-07 이 PC에서는 best11에 현장 사진을 더해 이어서 학습한 `.control-station/models/best11_carrot_tissue_20261107.pt`(SHA-256 `bf5c4f17…`, Git 제외)를 두 카메라에 씁니다. best11은 그날 장면에서 당근과 물티슈를 하나도 검출하지 못했습니다. 헤드캠(허브 4.4, 선반을 위에서 봄)과 선반 정면 캠에서 [capture_frames.py](../../yolo/capture_frames.py)로 원본 프레임을 1.5초마다 3분간 찍었고(카메라마다 119장, 운영자가 당근·물티슈를 옮김), 당근(주황 몸통+초록 잎)과 물티슈(채도 낮은 흰 포장)를 색으로 자동 라벨한 뒤 겹쳐 그린 사진을 보고 확인했습니다. 손이 들어간 9개 시점은 손이 물티슈로 잡히는 등 라벨이 틀려 뺐고, 다른 물체는 best11 예측(conf 0.4, 공 110개)을 라벨로 넣었으며, 다른 클래스를 잊지 않도록 기존 헤드캠 데이터(`yolo/dataset_head_20261026`)를 섞었습니다. [train_finetune.py](../../yolo/train_finetune.py)로 앞쪽 10층을 고정하고 낮은 학습률(AdamW 0.002)로 40 epoch 학습했습니다(RTX 5080 약 1분). 시간상 마지막 20% 장면(카메라마다 22장)에서 conf 0.25 검출률은 헤드캠 당근 21/22·물티슈 22/22, 선반 정면 캠 당근 13/22(팔 받침 옆 작은 당근)·물티슈 22/22·공 22/22로, best11은 당근·물티슈 모두 0이었습니다. 데이터가 그날 한 장면뿐이라 다른 배치·조명에서는 확인하지 않았고, 원래 학습 사진이 없어 pumpkin·apple·potato 등 나머지 클래스가 나빠졌는지는 확인하지 못했습니다. 데이터셋은 `yolo/dataset_carrot_20261107/`(Git 제외, 라벨 스크립트 `color_label.py` 포함)에 있습니다.
+
+같은 날 정면 캠이 카메라 쪽을 향해 세워 둔 당근(잎이 안 보임)을 신뢰도 0.03에서도 못 찾아, 당근 방향을 바꿔 가며 2분(1초 간격) 더 찍고 이어서 학습한 `.control-station/models/best11_carrot_tissue_20261107b.pt`로 바꿨습니다. 정면 캠 라벨은 잎 없이 주황 몸통(H≤7)만으로 잡도록 넓혔고(`yolo/dataset_carrot_20261107b/color_label.py`), 손이 들어간 10개 시점은 뺐으며, 1차 데이터셋 전체를 함께 넣어 30 epoch 학습했습니다. 2차 촬영 마지막 20% 장면에서 정면 캠 당근 22/22·물티슈 22/22(이전 모델 0/22·0/22), 상단 캠 당근·물티슈 22/22였고, 1차 장면과 예전 헤드캠 데이터 결과는 이전 모델과 같았습니다. 못 찾던 장면에서는 당근 0.81로 찾았지만, 같은 장면에서 없는 물티슈를 0.34로 잘못 검출했습니다.
 
 클래스는 strawberry, car, ball, pumpkin, apple, carrot, fruits(열매 송이), potato, watermelon, tissue(물티슈) 10종입니다. 2026-11-07에 천장 카메라 프레임 한 장으로 확인했을 때, best11은 위에서 본 Pinky 본체를 `car`(0.93)로 잘못 검출했고, 선반에 놓인 과일·장난감 10여 개는 하나도 검출하지 못했습니다(이전 모델은 2~3개를 낮은 신뢰도로 검출했고 일부는 틀림). 위에서 내려다본 사진으로 학습했는지는 확인하지 않았습니다. 천장 카메라 검출은 지금 표시용으로만 보고, 적재 개수 판단에 쓰지 않습니다. 선반 카메라는 이때 사람이 시야를 가려서 비교하지 못했습니다. 관제 가상환경에 `requirements-vision.txt`를 설치하면 ultralytics가 `opencv-python`을 함께 설치해 `cv2`가 OpenCV 5.0으로 바뀝니다. 이 저장소는 `opencv-python-headless<5`를 쓰므로, 설치 뒤 `opencv-python`을 지우고 `opencv-python-headless`를 다시 설치했습니다. 2026-11-02에 이전 모델로 이 PC(RTX 5080, PyTorch 2.15 CUDA 13.2)에서 두 카메라 모두 YOLO를 켠 채 29.7 fps를 유지했습니다. best11의 프레임당 추론 시간은 같은 GPU에서 약 7 ms로 이전 모델(7~10 ms)과 비슷했고, 관제에 올린 상태의 fps는 아직 재지 않았습니다. 그때 Head는 strawberry·ball을 검출했고, 선반 카메라는 이 시점에 검출이 없었습니다(모델이 선반 정면 시점으로 학습됐는지 미확인). 다른 카메라와 같은 장치로 지정하면 선반 카메라만 열지 않고 오류를 표시합니다. 2026-11-02에 천장·선반 카메라를 함께 열어 두 카드 모두 640×480, 29.7 fps로 수신되는 것을 확인했습니다. Joint Camera(손목 카메라)는 별도 장치이며 `--arm` 모드에서만 엽니다.
 

@@ -136,6 +136,8 @@ sequenceDiagram
 | POST | `/api/arm/commands` | 관제 화면 | 명령 등록. body: `robot_id`, `operation`, `valid_for_s`(5–600), `target`, `place`, `source` |
 | GET | `/api/arm/commands` | 관제 화면 | 최근 20건, 워커 접속 상태, ACK 제한 시간 |
 | GET | `/api/arm/shelf-slots` | 둘 다 | 관제가 불러온 칸 정의 파일 내용과 버전(SHA-256). 파일이 없으면 404 `SHELF_SLOTS_NOT_CONFIGURED` |
+| GET | `/api/arm/policies` | 관제 화면 | 물체별 학습 정책 목록과 정책 파일 버전(SHA-256). 파일이 없으면 404 `ACT_POLICIES_NOT_CONFIGURED` |
+| POST | `/api/arm/commands/from-camera` | 관제 화면 | body `{"object_class": "당근", "operation": "PICK_WITH_POLICY"}`(operation 생략 시 `MOVE_TO_SLOT`). 정면 카메라에서 한 칸에만 보일 때 명령 등록. 정책 없는 물체는 409 `POLICY_NOT_FOUND` |
 | GET | `/api/arm/commands/{command_id}` | 둘 다 | 명령과 전체 이벤트 이력 |
 | POST | `/api/arm/commands/{command_id}/cancel` | 관제 화면 | body `{}`. `QUEUED`면 바로 취소, 실행 중이면 취소 요청 표시 |
 | POST | `/api/arm/commands/{command_id}/clear-unknown` | 관제 화면 | body `{"note": "..."}`. `UNKNOWN` 현장 확인 기록 |
@@ -238,6 +240,48 @@ sequenceDiagram
   숫자는 형식 예시이며 측정값이 아닙니다. `pan_sign`은 실물에서 작은 보정으로 방향을 먼저 확인하고 정합니다.
 - 2026-11-04 상태: 계산과 투영은 테스트로만 확인했습니다. OMX 회전축 위치는 아직 재지 않았고 실물 시험도 하지 않았습니다.
 
+## 학습 정책으로 집기 (`PICK_WITH_POLICY`)
+
+운영자가 관제 화면 **수동 조작** 탭의 물체별 버튼(**당근 집기**, **물티슈 집기**. 정책 파일에서 자동으로 만듦)을 누르면, 그 물체만 집도록 학습한 LeRobot ACT 정책을 OMX 워커가 실행합니다. 정면 카메라에서 물체를 확인하지 못하면(카메라 미설정, 미검출, 여러 칸 등) 이유를 보여 주고, 운영자가 확인하면 칸 근거 없이(`source.note`에 이유 기록) 명령을 만듭니다. **ACT 정책은 위치를 입력으로 받지 않습니다.** 카메라 영상과 관절 값만 보고 학습한 물체를 스스로 찾습니다. 그래서 관제는 물체 이름으로 **정책을 고르고**, 정면 카메라가 본 칸은 물체가 있다는 근거로만 명령에 남깁니다.
+
+```mermaid
+sequenceDiagram
+    participant Op as 운영자 (관제 화면)
+    participant API as 관제 API
+    participant W as OMX 워커
+    participant P as 정책 서버 (LeRobot)
+    Op->>API: from-camera {object_class: "당근", operation: PICK_WITH_POLICY}
+    API->>API: 당근 → carrot → 정책 carrot_act_v2, 정면 카메라에서 carrot이 한 칸에만 보이는지
+    API-->>Op: 201 명령 (칸은 근거)
+    W->>API: 명령 가져감 → 검사 → ACCEPTED (200일 때만 진행)
+    W->>P: RobotClient로 정책 실행 (카메라 2대 + 관절)
+    W->>API: PROGRESS APPROACH_TARGET, 이후 1초마다 취소 확인
+    W->>W: 팔이 home을 벗어났다가 돌아와 1.5초 머물면 정책 정지 (토크 유지)
+    W->>W: home 자세로 정렬 (칸 이동과 같은 안전장치)
+    W->>API: RESULT_UNKNOWN / PLACE_NOT_VERIFIED, pose_reached true
+```
+
+- 정책 정의: [config/omx-act-policies.json](../../config/omx-act-policies.json). 물체 이름(YOLO 클래스, 한글 이름, 별칭) → 모델(Hugging Face repo), 정책 입력 `front`/`wrist`에 넣을 카메라 역할(`OVERHEAD` 선반을 위에서 봄, `GRIPPER` 그리퍼), 최대 실행 시간. 관제와 워커가 같은 파일을 읽고, 명령에는 파일의 SHA-256(`target.policy.registry_version`)이 고정됩니다. 다르면 워커가 `POLICY_REGISTRY_MISMATCH`로 거부합니다.
+- 명령: `target`은 `object_class`(필수)와 선택적 `pick_slot_id`만 받습니다. 좌표는 받지 않습니다. 관제가 `target.object_class`를 검출기 클래스 이름으로 바꾸고 `target.policy`(`policy_id`, `label`, `model`, `registry_version`)를 붙입니다. 정책이 없는 물체는 400입니다. `place`는 다른 집기 명령과 같이 필요합니다(화면에서는 `CART_1`).
+- 워커 검사(거부 사유): 가짜·dry-run 팔(`POLICY_NEEDS_REAL_ARM`), 정책 파일 버전·정책 ID(`POLICY_REGISTRY_MISMATCH`, `POLICY_UNKNOWN`), home 미기록(`POSE_NOT_RECORDED`), 만료(`EXPIRED`), 카메라 장치 없음(`CAMERA_UNAVAILABLE`), 다른 프로그램이 카메라 사용 중(`CAMERA_BUSY`), 정책 서버 응답 없음(`POLICY_SERVER_UNAVAILABLE`), 현재 자세가 home에서 400틱 넘게 떨어짐(`NOT_AT_REST`, 정책은 쉬는 자세에서 시작하도록 학습됨).
+- 카메라 넘겨주기: V4L2 카메라는 한 프로그램만 열 수 있습니다. 관제가 정책 카메라(`CONTROL_STATION_ACT_OVERHEAD_CAMERA`, `CONTROL_STATION_JOINT_CAMERA`와 같은 장치)를 화면에 띄우고 있으면, 워커가 정책 명령을 가져가는 순간(`DISPATCHED`) 그 카메라를 닫고 명령이 끝나면(`DISPATCHED`·`ACCEPTED`·`RUNNING`이 아니게 되면) 다시 엽니다. 그동안 화면에는 "학습 정책 실행 중"이 표시됩니다. 워커는 카메라를 열기 전에 다른 프로세스가 장치를 열고 있지 않은지 최대 5초 기다리고, 그래도 열려 있으면 `CAMERA_BUSY`로 거부합니다. 2026-11-07 임시 관제에서 실제 헤드캠(허브 4.4)으로 확인: 명령을 가져가는 응답(0.04초) 안에 닫히고, 명령이 끝난 뒤 다시 `STREAMING`.
+- 실행: ACCEPTED 뒤 서보 속도 프로파일을 0(학습 때와 같은 전원 기본값)으로 되돌리고, LeRobot `RobotClient`를 워커 프로세스 안에서 돌립니다. LeRobot이 연결하면서 모터 설정을 쓰느라 토크가 잠깐 꺼집니다. 정지할 때는 토크를 유지합니다(`disable_torque_on_disconnect=False`).
+- 멈추는 조건: 정책에는 완료 신호가 없어서, 워커가 정책이 쓴 관절 목표를 보고 정합니다. 어느 관절이든 home에서 300틱 넘게 벗어난 뒤 다섯 관절이 모두 150틱 안으로 돌아와 1.5초 머물면 `RETURNED_TO_REST`입니다(값은 워커 옵션 `--policy-depart-ticks`, `--policy-rest-ticks`, `--policy-settle-s`). 학습 에피소드가 쉬는 자세에서 끝나도록 녹화돼 있어서 이 조건을 씁니다.
+- 결과:
+
+| 정책 정지 이유 | 그 뒤 동작 | 보고 |
+|---|---|---|
+| 쉬는 자세로 돌아옴 | 실제 관절이 home에서 300틱 안이면 home으로 정렬 | `RESULT_UNKNOWN` / `PLACE_NOT_VERIFIED`, `pose_reached: true`. 300틱 넘으면 움직이지 않고 `FAILED` / `REST_NOT_CONFIRMED` |
+| 최대 시간 안에 움직이지 않음 | 없음 (쉬는 자세) | `FAILED` / `POLICY_DID_NOT_MOVE` |
+| 최대 시간 초과, 쉬는 자세 아님 | **자동 복귀 안 함.** 그 자리에서 토크 유지 | `FAILED` / `POLICY_TIMEOUT_NOT_AT_REST` |
+| 운영자 취소 | 그 자리에서 토크 유지 | `CANCELED` |
+| 통신·카메라·모터 오류 | 그 자리 | `RESULT_UNKNOWN` / `POLICY_RUN_ERROR` |
+
+  쉬는 자세로 돌아온 것은 집기·적재 성공을 뜻하지 않습니다. 그래서 `SUCCEEDED`를 보내지 않고(관제도 `grasp_confirmed`·`place_confirmed` 없이는 받지 않음), 운영자가 현장을 보고 **현장 확인 완료**로 닫습니다. 시간 초과 때 자동 복귀하지 않는 것은 물건을 든 채나 선반 근처에서 관절 공간으로 크게 움직이지 않기 위해서입니다. 이때는 현장 확인 뒤 원상복귀 버튼을 씁니다.
+- 실행 방법: [ACT 집기 정책 실물 시험](runbook.md#act-집기-정책-실물-시험)의 `server`와 `worker`.
+- 작업 흐름 연결(선택, `CONTROL_STATION_TASK_REAL_ARM=1`): 이동·팔 작업(`TRANSPORT_AND_ARM`)의 `EXECUTE_ARM_TASK`가 작업의 팔 작업 문구에 들어 있는 물체 이름(예: "당근 집기")으로 정책을 고릅니다. 명령을 만들기 전에 **정면 카메라(`CONTROL_STATION_PICK_EVIDENCE_CAMERA`, 기본 `shelf_camera`)가 그 물체를 칸 하나에서만 보고 있어야** 합니다(SR-13, 수동 "정면 캠으로 칸 찾기"와 같은 판정). 보이면 작업 이력에 `TARGET_CONFIRMED`(칸·신뢰도·촬영 시각)를 남기고 그 관측을 `source.kind: CAMERA`·`target.pick_slot_id`로 붙여 `PICK_WITH_POLICY`를 만듭니다. 못 보면(`CAMERA_NOT_FOUND`, `CAMERA_NOT_FRESH`, `TARGET_NOT_FOUND`, `TARGET_AMBIGUOUS`, `TARGET_MULTIPLE` 등) **팔 명령을 만들지 않고** 그 코드로 작업이 실패하며 실패 원천은 `front_camera`로 기록됩니다. 수동 조작 탭의 "확인 없이 실행"과 달리 작업 흐름에는 우회가 없습니다. 명령이 만들어지면 워커가 가져가 실행하고, 결과를 기다립니다(0.5초마다 조회, 정책 최대 시간+180초 넘으면 `ARM_RESULT_TIMEOUT`). `RESULT_UNKNOWN`/`PLACE_NOT_VERIFIED`+`pose_reached`면 단계 성공(`ARM_HOME_PLACEMENT_NOT_VERIFIED`), 그 밖의 결과는 그 사유 코드로 작업 실패입니다. `VERIFY_ARM_RESULT`는 판단을 `VERIFY_LOAD`로 넘긴다고 기록합니다. 실제(모의가 아닌) 적재 관측이 확인되면 팔 명령에 현장 확인을 기록하고, 모의 적재 관측이면 팔 명령을 `UNKNOWN`으로 남겨 운영자가 닫습니다. 작업을 취소하면 팔 명령도 취소합니다. 나머지 단계(주행·도착 확인 등)는 기존과 같습니다. 2026-11-07 가짜 워커로 성공·정책 시간 초과·정책 없는 작업 문구를 단위 테스트했고, 실물로는 아직 실행하지 않았습니다. 2026-11-11 정면 카메라 확인을 추가해 단위 테스트(카메라 근거가 명령 source로 전달, 미검출·확인 경로 없음이면 팔 명령 0건)와, 카메라 없는 임시 관제+모의 워커로 HTTP 작업 실행(`CAMERA_NOT_FOUND`, 원천 `front_camera`, 팔 명령 0건)을 확인했습니다. 관제 화면 작업 이력에는 정면 카메라 확인, OMX 명령 등록(명령 ID·정책·칸), OMX 명령 상태(워커 대기열→워커가 가져감→접수→실행 중→결과)가 표시됩니다. **실제 정면 카메라가 물체를 본 상태에서 작업 흐름으로 실물 팔을 움직이는 시험은 아직 하지 않았습니다.**
+- 2026-11-07 확인: 단위 테스트(정책 선택, 명령 고정값, 성공 조건, 정지 판정, 물체별 카메라 대응), 임시 관제(카메라 없음)에서 "당근" 명령 등록 → 모의 워커 `RESULT_UNKNOWN`/`PLACE_NOT_VERIFIED`, 가짜 팔 워커 `POLICY_NEEDS_REAL_ARM` 거부, 실물 팔 포트에서 정책 서버 주소를 틀리게 줘 `POLICY_SERVER_UNAVAILABLE` 거부(팔 읽기만). **관제에서 실물 정책 실행, 정면 카메라의 당근 검출, 정지 판정과 home 정렬은 아직 실물로 시험하지 않았습니다.**
+
 ## ROS 2 action 워커 (`/omx/move_to_slot`)
 
 같은 칸 이동을 ROS 2 action으로 받는 워커입니다. 관제(또는 `ros2 action send_goal`)가 action 클라이언트, [omx_ros_worker.py](../../scripts/omx_ros_worker.py)가 action 서버입니다. 이동 로직과 안전장치는 HTTP 워커와 같은 [omx_slot_motion.py](../../scripts/omx_slot_motion.py)를 씁니다. 메시지 정의는 [cpp/omx_interfaces/action/MoveToSlot.action](../../cpp/omx_interfaces/action/MoveToSlot.action)입니다.
@@ -278,9 +322,9 @@ ros2 action send_goal --feedback /omx/move_to_slot omx_interfaces/action/MoveToS
 
 ## 남은 일
 
-- 정면 카메라 관측으로 칸을 판정해 명령 만들기 (`source.kind: CAMERA`, 카메라 ID·프레임 hash·칸 영역 버전 포함)
 - 실물 선반 치수·배치 확인, OMX 베이스의 선반 기준 위치 측정(칸 좌표 → OMX 좌표)
-- 작업 흐름 연결: 도착 확인(`VERIFY_ARRIVAL`) 통과 뒤 명령 생성, `PROGRESS`를 단계 상태로 반영
+- 작업 흐름 실물 시험: 실제 도착 확인(`CONTROL_STATION_PARKING_SPOT`)·정면 카메라 검출 상태에서 `EXECUTE_ARM_TASK` → 실물 워커 → 적재 확인까지
+- 정면 카메라 검출 신뢰도 하한(현재 검출기 기본 0.25) 팀 합의
 - 실행 중 결과 제한 시간과 그때의 처리
 - `reason_code` 목록과 `approach` 값을 OMX 팀과 확정
 - 원격 배포 시 인증

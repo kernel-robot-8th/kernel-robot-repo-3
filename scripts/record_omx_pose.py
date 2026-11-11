@@ -58,6 +58,33 @@ def check_calibration(bus: DynamixelMotorsBus) -> None:
             raise ValueError(f"{register} is not the factory value {expected}: {wrong}")
 
 
+def capture_held_pose(bus: DynamixelMotorsBus, seconds: float) -> dict[str, int] | None:
+    """Longest stretch (at least 1 s) where no joint moved more than 6 ticks, away from where the arm started."""
+    import time
+
+    samples = []
+    end = time.monotonic() + seconds
+    print(f"{seconds:g}초 동안 읽습니다. 팔을 자세에 놓고 2초 이상 붙잡고 계세요.", flush=True)
+    while time.monotonic() < end:
+        samples.append(bus.sync_read("Present_Position", normalize=False, num_retry=3))
+        time.sleep(0.2)
+    start = samples[0]
+    best: tuple[int, int] | None = None
+    i = 0
+    while i < len(samples):
+        j = i
+        while j + 1 < len(samples) and all(abs(samples[j + 1][k] - samples[i][k]) <= 6 for k in samples[i]):
+            j += 1
+        away = max(abs(samples[i][k] - start[k]) for k in start if k != "gripper")
+        if j - i >= 5 and away > 100 and (best is None or j - i > best[1] - best[0]):
+            best = (i, j)
+        i = j + 1
+    if best is None:
+        return None
+    print(f"{best[0] * 0.2:.1f}~{best[1] * 0.2:.1f}초 사이에 멈춰 있던 자세를 씁니다.", flush=True)
+    return samples[(best[0] + best[1]) // 2]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("name", help="'home' or an active slot ID such as slot_a_2_1")
@@ -65,12 +92,19 @@ def main() -> int:
     parser.add_argument("--slots", type=Path, default=REPOSITORY_ROOT / "config" / "shelf-slots.json")
     parser.add_argument("--output", type=Path, default=REPOSITORY_ROOT / "config" / "omx-slot-poses.json")
     parser.add_argument("--replace", action="store_true", help="overwrite an existing pose with this name")
+    parser.add_argument(
+        "--capture-s", type=float, default=0.0,
+        help="read for this many seconds and keep the longest still stretch away from the starting pose "
+             "(for a torque-off arm held by hand, which falls back when released)",
+    )
     args = parser.parse_args()
 
     slot_raw = args.slots.read_bytes()
     active = {slot["slot_id"] for slot in json.loads(slot_raw)["slots"] if slot["active"]}
-    if args.name != "home" and args.name not in active:
-        print(f"error: name must be 'home' or one of {sorted(active)}", file=sys.stderr)
+    # "place_*" poses are where the arm puts an object down (for example place_pinky above the cart);
+    # "pick_*" poses are taught pick poses (for example pick_apple_above, pick_apple_grasp).
+    if args.name != "home" and not args.name.startswith(("place_", "pick_")) and args.name not in active:
+        print(f"error: name must be 'home', place_<where>, pick_<what> or one of {sorted(active)}", file=sys.stderr)
         return 1
     slot_map_sha = hashlib.sha256(slot_raw).hexdigest()
     document = json.loads(args.output.read_text(encoding="utf-8")) if args.output.exists() else {
@@ -98,6 +132,11 @@ def main() -> int:
         check_calibration(bus)
         ticks = bus.sync_read("Present_Position", normalize=False, num_retry=3)
         torque = bus.sync_read("Torque_Enable", normalize=False, num_retry=3)
+        if args.capture_s > 0:
+            ticks = capture_held_pose(bus, args.capture_s)
+            if ticks is None:
+                print("error: no pose was held still away from the starting pose; nothing recorded", file=sys.stderr)
+                return 1
     finally:
         bus.disconnect(disable_torque=False)
 

@@ -29,6 +29,12 @@ from omx_lateral_correction import TICKS_PER_TURN, load_base, pan_correction
 
 
 ARM_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll")
+# Gripper ticks from the team's recorded demonstrations (JJinJJin2/pick_and_place_v2, RANGE_0_100 on 0..4095):
+# larger is more open; the operator opened to about 58-60 (2,400-2,450 ticks) and commanded 46.8 (1,916 ticks) to
+# squeeze; 49 (about 2,010 ticks) is the rest/closed reading.
+GRIPPER_OPEN = 2450
+GRIPPER_CLOSED = 2010
+GRIPPER_SQUEEZE = 1916
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PORT = "/dev/serial/by-id/usb-ROBOTIS_OpenRB-150_F58AE68650323952582E3120FF05260E-if00"
 
@@ -91,15 +97,17 @@ class FakeFollowerBus:
     def __init__(self, start: dict[str, int]) -> None:
         self.positions = {name: float(value) for name, value in start.items()}
         self.goal = dict(self.positions)
-        self.velocity = 10
+        # per joint, like the servos' Profile_Velocity; the gripper is never given a profile here (fast, like power-on 0)
+        self.velocity = {name: 100 if name == "gripper" else 10 for name in self.positions}
         self.last = time.monotonic()
         self.is_connected = True
 
     def _advance(self) -> None:
         now = time.monotonic()
-        step = self.velocity * 0.229 / 60 * TICKS_PER_TURN * (now - self.last)
+        elapsed = now - self.last
         self.last = now
         for name, goal in self.goal.items():
+            step = self.velocity[name] * 0.229 / 60 * TICKS_PER_TURN * elapsed
             here = self.positions[name]
             self.positions[name] = goal if abs(goal - here) <= step else here + math.copysign(step, goal - here)
 
@@ -119,7 +127,7 @@ class FakeFollowerBus:
         if register == "Goal_Position":
             self.goal.update({name: float(value) for name, value in values.items()})
         elif register == "Profile_Velocity":
-            self.velocity = min(values.values())
+            self.velocity.update(values)
 
     def disconnect(self, disable_torque: bool = False) -> None:
         pass  # keeps its state, like the real arm keeps its pose between commands
@@ -141,7 +149,9 @@ class SlotMotion:
             # Start away from the recorded poses so a fake move takes a few seconds.
             first = next(iter(self.poses["poses"].values()))["ticks"]
             start = self.poses["poses"].get("home", {}).get("ticks") or {name: first[name] - 200 for name in ARM_JOINTS}
-            self.fake_bus = FakeFollowerBus({name: int(start[name]) for name in ARM_JOINTS})
+            self.fake_bus = FakeFollowerBus(
+                {**{name: int(start[name]) for name in ARM_JOINTS}, "gripper": int(start.get("gripper", GRIPPER_CLOSED))}
+            )
         elif self.poses.get("follower_board") != board_serial(settings.port):
             raise SystemExit(f"{settings.poses} was recorded on board {self.poses.get('follower_board')}, not {settings.port}")
         # The port is opened only while handling a command, so the LeRobot policy that grasps next can open the
@@ -184,6 +194,29 @@ class SlotMotion:
             return
         self.bus.sync_write(register, values, normalize=False, num_retry=3)
 
+    def gripper_to(self, goal: int, timeout_s: float = 3.0) -> int:
+        """Open or close the gripper and return the tick where it stopped. The follower's gripper runs in
+        current-based position mode, so closing on an object stops at the object instead of crushing it.
+        Torque is turned on with the goal first set to the present position, so enabling it cannot jump."""
+        def read() -> int:
+            return int(self.bus.sync_read("Present_Position", ["gripper"], normalize=False, num_retry=3)["gripper"])
+
+        now = read()
+        self.write("Goal_Position", {"gripper": now})
+        self.write("Torque_Enable", {"gripper": 1})
+        self.write("Goal_Position", {"gripper": int(goal)})
+        if self.settings.dry_run:
+            return now
+        deadline, last, still = time.monotonic() + timeout_s, None, 0
+        while time.monotonic() < deadline:
+            time.sleep(0.1)
+            now = read()
+            still = still + 1 if last is not None and abs(now - last) <= 2 else 0
+            if still >= 3:  # stopped: at the goal, or blocked by the object
+                break
+            last = now
+        return now
+
     def hold_here(self) -> None:
         """Stop where the arm is now; the goal becomes the present position."""
         try:
@@ -222,16 +255,33 @@ class SlotMotion:
             raise Rejected("TARGET_TOO_FAR", f"largest joint change {max(deltas.values())} ticks")
         return goal
 
+    def synced_profiles(self, start: dict[str, int], goal: dict[str, int]) -> tuple[dict[str, int], dict[str, int]]:
+        """Per-joint profile velocity and acceleration scaled by each joint's travel, so all joints start and arrive
+        together and the tool moves close to the straight joint-space line. With one shared profile the joints that
+        travel less finish first and the tool can swing far off the line (10 cm measured for a taught pick)."""
+        travel = {name: abs(goal[name] - start[name]) for name in ARM_JOINTS}
+        longest = max(travel.values()) or 1
+        velocity = {name: max(1, round(self.settings.profile_velocity * travel[name] / longest)) for name in ARM_JOINTS}
+        acceleration = {name: max(1, round(self.settings.profile_acceleration * travel[name] / longest)) for name in ARM_JOINTS}
+        return velocity, acceleration
+
     def move(self, goal: dict[str, int], cancel_requested: Callable[[], bool],
-             progress: Callable[[dict[str, int], int], None] | None = None) -> Outcome:
+             progress: Callable[[dict[str, int], int], None] | None = None, *, sync: bool = False) -> Outcome:
         """Move to `goal` and report how it ended. `progress(present, max_error)` is first called just before the
-        goal is written (nothing has moved yet), then about every 0.1 s while moving."""
+        goal is written (nothing has moved yet), then about every 0.1 s while moving. `sync` scales each joint's
+        profile so all joints arrive together (see synced_profiles)."""
         settings = self.settings
         now: dict[str, int] = {}
         try:
-            self.write("Goal_Position", self.present())  # align before torque so enabling it cannot jump
-            self.write("Profile_Acceleration", {name: settings.profile_acceleration for name in ARM_JOINTS})
-            self.write("Profile_Velocity", {name: settings.profile_velocity for name in ARM_JOINTS})
+            start = self.present()
+            self.write("Goal_Position", start)  # align before torque so enabling it cannot jump
+            if sync:
+                velocity, acceleration = self.synced_profiles(start, goal)
+            else:
+                velocity = {name: settings.profile_velocity for name in ARM_JOINTS}
+                acceleration = {name: settings.profile_acceleration for name in ARM_JOINTS}
+            self.write("Profile_Acceleration", acceleration)
+            self.write("Profile_Velocity", velocity)
             self.write("Torque_Enable", {name: 1 for name in ARM_JOINTS})
             now = self.present()
             if progress:

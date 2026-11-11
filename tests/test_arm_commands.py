@@ -12,6 +12,8 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from control_station import arm_commands
+from control_station.act_policies import load_act_policies
+from control_station.api import arm as arm_api
 from control_station.app import ControlStationHandler, ControlStationServer, WEB_DIR
 from control_station.arm_commands import ArmCommandConflict, ArmCommandError, ArmCommandStore
 from control_station.shelf_slot_map import ShelfSlotMapError, load_shelf_slot_map
@@ -314,6 +316,104 @@ class ShelfSlotCommandTests(unittest.TestCase):
                 load_shelf_slot_map(path)
 
 
+class PolicyCommandTests(unittest.TestCase):
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.task_store = TaskStore(str(Path(directory.name) / "tasks.sqlite3"))
+        self.addCleanup(self.task_store.close)
+        self.policies = load_act_policies()  # the committed config/omx-act-policies.json
+        self.store = ArmCommandStore(
+            self.task_store.session_factory, slot_map=load_shelf_slot_map(), act_policies=self.policies
+        )
+
+    def request(self, **target: object) -> dict[str, object]:
+        return {
+            "robot_id": "arm-01",
+            "operation": "PICK_WITH_POLICY",
+            "valid_for_s": 60,
+            "target": target,
+            "place": {"slot_id": "CART_1"},
+            "source": {"kind": "OPERATOR_INPUT"},
+        }
+
+    def test_korean_name_chooses_the_policy_and_freezes_its_model_and_registry_version(self) -> None:
+        command = self.store.create(self.request(object_class="당근", pick_slot_id="slot_a_2_1"))
+        target = command["target"]
+        self.assertEqual(target["object_class"], "carrot")
+        self.assertEqual(target["pick_slot_id"], "slot_a_2_1")
+        self.assertIsNone(target["position"])
+        self.assertEqual(
+            target["policy"],
+            {"policy_id": "carrot_act_v2", "label": "당근", "model": "JJinJJin2/omx_act_policy_v2",
+             "registry_version": self.policies.version},
+        )
+
+    def test_unknown_object_coordinates_or_missing_registry_are_rejected(self) -> None:
+        with self.assertRaisesRegex(ArmCommandError, "학습된 정책이 없습니다"):
+            self.store.create(self.request(object_class="banana"))
+        with self.assertRaisesRegex(ArmCommandError, "only object_class"):
+            self.store.create(self.request(object_class="carrot", frame_id="omx_link0"))
+        without = ArmCommandStore(self.task_store.session_factory)
+        with self.assertRaisesRegex(ArmCommandError, "omx-act-policies"):
+            without.create(self.request(object_class="carrot"))
+
+    def test_home_after_the_policy_is_not_success_without_grasp_and_place(self) -> None:
+        command = self.store.create(self.request(object_class="물티슈"))
+        self.assertEqual(command["target"]["policy"]["policy_id"], "tissue_act_v1")
+        self.assertIsNone(command["target"]["pick_slot_id"])
+        claimed = self.store.claim_next("arm-01", "w1", 0)
+        base = {"robot_id": "arm-01", "worker_id": "w1", "simulated": False}
+        self.store.apply_worker_event(claimed["command_id"], {**base, "event_id": "a", "event": "ACCEPTED"})
+        with self.assertRaisesRegex(ArmCommandError, "grasp_confirmed"):
+            self.store.apply_worker_event(
+                claimed["command_id"], {**base, "event_id": "s", "event": "SUCCEEDED", "pose_reached": True}
+            )
+        done, _ = self.store.apply_worker_event(
+            claimed["command_id"],
+            {**base, "event_id": "u", "event": "RESULT_UNKNOWN", "reason_code": "PLACE_NOT_VERIFIED", "pose_reached": True},
+        )
+        self.assertEqual((done["state"], done["reason_code"]), ("UNKNOWN", "PLACE_NOT_VERIFIED"))
+
+
+class PolicyCameraHandoverTests(PolicyCommandTests):
+    """The control station closes the policy's cameras only while a PICK_WITH_POLICY command is with the worker."""
+
+    def app(self) -> object:
+        manager = mock.Mock()
+        manager.lend_devices.return_value = ["head_camera"]
+        return mock.Mock(
+            arm_commands=self.store,
+            camera_manager=manager,
+            policy_camera_devices=["/dev/overhead"],
+            policy_camera_lock=threading.Lock(),
+            policy_cameras_lent=False,
+        )
+
+    def test_cameras_close_on_dispatch_and_reopen_when_the_command_ends(self) -> None:
+        app = self.app()
+        self.store.create(self.request(object_class="당근"))
+        arm_api.sync_policy_cameras(app)  # queued only: the worker has not taken it
+        app.camera_manager.lend_devices.assert_not_called()
+        claimed = self.store.claim_next("arm-01", "w1", 0)
+        arm_api.sync_policy_cameras(app)
+        arm_api.sync_policy_cameras(app)  # repeated polls do not lend twice
+        app.camera_manager.lend_devices.assert_called_once()
+        self.assertEqual(app.camera_manager.lend_devices.call_args.args[0], ["/dev/overhead"])
+        base = {"robot_id": "arm-01", "worker_id": "w1", "simulated": False}
+        self.store.apply_worker_event(claimed["command_id"], {**base, "event_id": "r", "event": "REJECTED", "reason_code": "X"})
+        arm_api.sync_policy_cameras(app)
+        app.camera_manager.take_back_devices.assert_called_once()
+        self.assertFalse(app.policy_cameras_lent)
+
+    def test_other_commands_never_close_cameras(self) -> None:
+        app = self.app()
+        self.store.create(command_request(operation="MOVE_TO_SLOT", target={"pick_slot_id": "slot_a_2_1"}))
+        self.store.claim_next("arm-01", "w1", 0)
+        arm_api.sync_policy_cameras(app)
+        app.camera_manager.lend_devices.assert_not_called()
+
+
 class ArmCommandHttpTests(unittest.TestCase):
     def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory()
@@ -324,6 +424,7 @@ class ArmCommandHttpTests(unittest.TestCase):
             ("127.0.0.1", 0), partial(ControlStationHandler, directory=str(WEB_DIR))
         )
         server.arm_commands = ArmCommandStore(task_store.session_factory, slot_map=load_shelf_slot_map())
+        self.server = server
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(server.server_close)
@@ -368,6 +469,20 @@ class ArmCommandHttpTests(unittest.TestCase):
         self.assertEqual(len(active), 6)
         status, created = self.call("POST", "/api/arm/commands", slot_request(pick_slot_id="slot_a_1_1"))
         self.assertEqual((status, created["command"]["target"]["slot_map_version"]), (201, body["slot_map_version"]))
+
+    def test_policy_list_and_camera_policy_command_without_a_policy(self) -> None:
+        status, body = self.call("GET", "/api/arm/policies")
+        self.assertEqual((status, body["error_code"]), (404, "ACT_POLICIES_NOT_CONFIGURED"))
+        self.server.arm_commands.act_policies = load_act_policies()
+        status, body = self.call("GET", "/api/arm/policies")
+        self.assertEqual(status, 200)
+        self.assertEqual([policy["label"] for policy in body["policies"]], ["당근", "물티슈"])
+        status, body = self.call(
+            "POST", "/api/arm/commands/from-camera", {"object_class": "banana", "operation": "PICK_WITH_POLICY"}
+        )
+        self.assertEqual((status, body["error_code"]), (409, "POLICY_NOT_FOUND"))
+        status, body = self.call("POST", "/api/arm/commands/from-camera", {"object_class": "carrot", "operation": "GRAB"})
+        self.assertEqual((status, body["error_code"]), (400, "ARM_COMMAND_INVALID"))
 
     def test_cross_origin_browser_request_is_rejected(self) -> None:
         status, body = self.call(

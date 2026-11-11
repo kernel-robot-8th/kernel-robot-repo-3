@@ -55,6 +55,7 @@ GET_ROUTES: tuple[Route, ...] = (
     Route(_path("/api/arm/status"), arm.get_status),
     Route(_path("/api/arm/commands"), arm.get_commands),
     Route(_path("/api/arm/shelf-slots"), arm.get_shelf_slots),
+    Route(_path("/api/arm/policies"), arm.get_policies),
     Route(lambda route, parts: route.startswith("/api/arm/commands/"), arm.get_command),
     Route(lambda route, parts: bool(_NEXT_COMMAND.fullmatch(route)), arm.get_next_command),
     Route(_prefix_suffix("/api/parking-spots/", "/live"), status.get_parking_live),

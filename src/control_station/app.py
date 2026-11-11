@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -13,6 +14,8 @@ from urllib.parse import urlsplit
 from control_station.api import routes
 from control_station.api.common import is_cross_origin, read_json_object
 from control_station.api.observations import evaluate_color_hints, target_observation
+from control_station.act_policies import ActPolicyError, load_act_policies
+from control_station.camera_to_arm import CameraToArmError, load_camera_to_arm
 from control_station.arm_commands import ArmCommandStore
 from control_station.arm_supervisor import ArmTeleopSupervisor
 from control_station.camera_adapters import (
@@ -25,7 +28,7 @@ from control_station.load_check import mock_load_observer_from_env
 from control_station.parking_ros import RosParkingSource
 from control_station.robot_adapters import make_status_provider
 from control_station.shelf_slot_map import ShelfSlotMapError, load_shelf_slot_map
-from control_station.shelf_slot_zones import ShelfSlotZones
+from control_station.shelf_slot_zones import ShelfSlotZones, SlotSelectionError, select_slot_for_class
 from control_station.store import TaskStore
 from control_station.task_orchestrator import MockTaskOrchestrator
 
@@ -127,6 +130,17 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
         entry.handle(self, route, parts, body)
 
 
+def front_camera_evidence(server: ControlStationServer, object_class: str) -> dict[str, Any]:
+    """정면 카메라가 물체를 칸 하나에서만 볼 때 그 관측 기록 (작업 흐름 팔 단계의 SR-13 근거).
+
+    수동 "정면 캠으로 칸 찾기"(POST /api/arm/commands/from-camera)와 같은 판정을 쓴다."""
+    camera_id = os.environ.get("CONTROL_STATION_PICK_EVIDENCE_CAMERA", "shelf_camera").strip() or "shelf_camera"
+    snapshot = next((camera for camera in server.camera_manager.snapshots() if camera.id == camera_id), None)
+    if snapshot is None:
+        raise SlotSelectionError("CAMERA_NOT_FOUND", f"정면 카메라 {camera_id!r}가 설정되지 않았습니다")
+    return select_slot_for_class(server.shelf_slot_zones.annotate(snapshot.to_dict()), object_class)
+
+
 def main() -> None:
     """관제 서버 실행"""
     mode = os.environ.get("CONTROL_STATION_MODE", "mock").strip().lower()
@@ -189,9 +203,32 @@ def main() -> None:
         # Position commands still work; only pick_slot_id commands are refused.
         slot_map, slot_map_error = None, str(exc)
         print(f"칸 정의를 불러오지 못했습니다: {exc}", flush=True)
+    try:
+        act_policies, act_policies_error = load_act_policies(), None
+    except ActPolicyError as exc:
+        # Every other command still works; only PICK_WITH_POLICY is refused.
+        act_policies, act_policies_error = None, str(exc)
+        print(f"정책 정의를 불러오지 못했습니다: {exc}", flush=True)
     server.arm_commands = ArmCommandStore(
-        task_store.session_factory, slot_map=slot_map, slot_map_error=slot_map_error
+        task_store.session_factory, slot_map=slot_map, slot_map_error=slot_map_error, act_policies=act_policies
     )
+    server.act_policies_error = act_policies_error
+    try:
+        server.camera_to_arm, server.camera_to_arm_error = load_camera_to_arm(), None
+    except CameraToArmError as exc:
+        server.camera_to_arm, server.camera_to_arm_error = None, str(exc)
+        print(f"카메라→팔 변환을 불러오지 못했습니다: {exc}", flush=True)
+    # Cameras the LeRobot policy opens itself; closed by the control station while a policy command runs.
+    server.policy_camera_devices = [
+        device
+        for device in (
+            os.environ.get("CONTROL_STATION_ACT_OVERHEAD_CAMERA", "").strip(),
+            os.environ.get("CONTROL_STATION_JOINT_CAMERA", "").strip(),
+        )
+        if device
+    ]
+    server.policy_camera_lock = threading.Lock()
+    server.policy_cameras_lent = False
     server.shelf_slot_zones = ShelfSlotZones(slot_map)
     server.parking_check = None
     server.parking_tracker = None
@@ -209,9 +246,15 @@ def main() -> None:
     arrival_check = partial(server.parking_check, parking_spot_id) if parking_spot_id else None
     # Mock mode only: VERIFY_LOAD then records a simulated count instead of a plain mock success.
     load_check = mock_load_observer_from_env() if mode == "mock" else None
+    # Opt-in: EXECUTE_ARM_TASK queues a real PICK_WITH_POLICY arm command (CONTROL_STATION_TASK_REAL_ARM=1).
+    real_arm = os.environ.get("CONTROL_STATION_TASK_REAL_ARM", "").strip() == "1"
     server.task_orchestrator = MockTaskOrchestrator(
-        task_store, mode=mode, arrival_check=arrival_check, load_check=load_check
+        task_store, mode=mode, arrival_check=arrival_check, load_check=load_check,
+        arm_commands=server.arm_commands if real_arm else None,
+        target_evidence=partial(front_camera_evidence, server) if real_arm else None,
     )
+    if real_arm:
+        print("작업 흐름의 팔 단계가 실제 팔 명령(PICK_WITH_POLICY)을 보냅니다", flush=True)
     draft_dir = os.environ.get(
         "CONTROL_STATION_COORDINATE_DRAFT_DIR", ".control-station/coordinate-target-drafts"
     )

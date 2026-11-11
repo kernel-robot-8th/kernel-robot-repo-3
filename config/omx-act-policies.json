@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "notes": "물체 이름(YOLO 클래스) → 그 물체만 집도록 학습한 LeRobot ACT 정책. ACT는 위치나 문장을 입력으로 받지 않고, 카메라 영상과 관절 값만 봄. cameras는 정책 입력 이름(front/wrist)에 실제로 넣을 카메라 역할(OVERHEAD: 선반을 위에서 본 카메라, GRIPPER: 그리퍼 카메라). 2026-11-07 데이터셋 영상으로 확인.",
+  "policies": [
+    {
+      "policy_id": "carrot_act_v2",
+      "object_class": "carrot",
+      "label": "당근",
+      "aliases": ["당근", "carrot"],
+      "model": "JJinJJin2/omx_act_policy_v2",
+      "policy_type": "act",
+      "task": "Pick up Doll",
+      "dataset": "JJinJJin2/pick_and_place_v2",
+      "cameras": {"front": "OVERHEAD", "wrist": "GRIPPER"},
+      "max_run_s": 45,
+      "notes": "에피소드 20개 모두 당근. task 문장은 녹화 때 붙인 이름일 뿐이며 ACT는 쓰지 않음. 에피소드가 쉬는 자세 근처에서 시작하고 끝남."
+    },
+    {
+      "policy_id": "tissue_act_v1",
+      "object_class": "tissue",
+      "label": "물티슈",
+      "aliases": ["물티슈", "티슈", "tissue"],
+      "model": "JJinJJin2/omx_act_policy",
+      "policy_type": "act",
+      "task": "Pick up Doll",
+      "dataset": "JJinJJin2/pick_and_place",
+      "cameras": {"front": "GRIPPER", "wrist": "OVERHEAD"},
+      "max_run_s": 45,
+      "notes": "에피소드 20개 모두 물티슈. 녹화 때 카메라 이름이 뒤바뀌어 front에 그리퍼 카메라, wrist에 위에서 본 카메라가 들어감. 실물 실행은 아직 하지 않음."
+    }
+  ]
+}
