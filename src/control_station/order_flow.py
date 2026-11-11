@@ -27,7 +27,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from control_station.mock_world import PinkyFleetError
+from control_station.pinky_fleet import PinkyFleetError
 from control_station.store import PINKY_NAMES
 
 ORDER_STEP_TYPES = frozenset({
@@ -318,7 +318,11 @@ class OrderFlow:
         while time.monotonic() < deadline:
             if ctx.cancel_event.is_set():
                 return None
-            status = self.devices.fleet_status(pinky)
+            try:
+                status = self.devices.fleet_status(pinky)
+            except (PinkyFleetError, OSError):
+                ctx.cancel_event.wait(self.poll_s)  # a missed poll; the deadline below still applies
+                continue
             if status["phase"] == "docked_manual":
                 self._tokens[ctx.task["id"]] = status.get("mission_token")
                 ctx.record("PINKY_STATUS", {"pinky_id": pinky, "phase": status["phase"], "message": status.get("message"),

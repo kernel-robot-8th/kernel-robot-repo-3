@@ -26,6 +26,7 @@ from control_station.camera_adapters import (
 from control_station.load_check import mock_load_observer_from_env
 from control_station.mock_world import MockWorld
 from control_station.order_flow import OrderDevices, OrderFlow
+from control_station.pinky_fleet import PinkyFleetClient
 from control_station.parking_ros import RosParkingSource
 from control_station.robot_adapters import make_status_provider
 from control_station.shelf_slot_map import ShelfSlotMapError, load_shelf_slot_map
@@ -267,9 +268,16 @@ def main() -> None:
         def order_parking(pinky_id: str) -> dict[str, Any]:
             return server.parking_check(parking_spot_id)
         print(f"주문 흐름의 핑키 도착 판정: 실제 주차 판정 ({parking_spot_id})", flush=True)
+    # Pinky mission phases and the dock_complete / received signals: the Pinky team's fleet dashboard when its URL
+    # is set (e.g. http://<pinky PC>:8765), else the mock world, which also sends the mock Pinky off for each order.
+    fleet_url = os.environ.get("CONTROL_STATION_PINKY_FLEET_URL", "").strip()
+    fleet_status, fleet_confirm, dispatch = world.fleet_status, world.fleet_confirm, world.dispatch
+    if fleet_url:
+        fleet = PinkyFleetClient(fleet_url)
+        fleet_status, fleet_confirm, dispatch = fleet.fleet_status, fleet.fleet_confirm, None
+        print(f"주문 흐름의 핑키 신호: 핑키 관제 {fleet_url}", flush=True)
     server.order_devices = OrderDevices(
-        world.shelf_stock, world.pinky_load, world.fleet_status, world.fleet_confirm, order_parking, world.pick,
-        world.dispatch,
+        world.shelf_stock, world.pinky_load, fleet_status, fleet_confirm, order_parking, world.pick, dispatch,
     )
     try:
         arrival_timeout_s = float(os.environ.get("CONTROL_STATION_ARRIVAL_TIMEOUT_S", "600"))

@@ -25,17 +25,11 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from control_station.pinky_fleet import PinkyFleetError
+
 FAULT_KINDS = frozenset({"STOCK_SHORT", "PICK_FAILED", "ITEM_LOST", "EXTRA_ON_PINKY", "PINKY_MISALIGNED", "FLEET_REJECT"})
 DEFAULT_STOCK = "shelf_a:carrot=3,tissue=2,apple=1;shelf_b:apple=3,carrot=1,tissue=1"
 PINKY_HOMES = {"10": "주차장 P0", "11": "주차장 P1", "12": "주차장 P2"}
-
-
-class PinkyFleetError(RuntimeError):
-    """The Pinky fleet dashboard refused a signal or could not be reached."""
-
-    def __init__(self, error_code: str, message: str) -> None:
-        super().__init__(message)
-        self.error_code = error_code
 
 
 def _now() -> str:

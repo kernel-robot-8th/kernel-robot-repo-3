@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from control_station.flow_view import PINKY_NAMES, build_flow_view
-from control_station.mock_world import FAULT_KINDS, PinkyFleetError
+from control_station.mock_world import FAULT_KINDS
+from control_station.pinky_fleet import PinkyFleetError
 from control_station.store import TaskNotFoundError
 
 if TYPE_CHECKING:
