@@ -1,0 +1,264 @@
+{
+  "schema_version": 2,
+  "calibration_id": "c5d9d0e9-ef0b-4dcd-b06e-3c899d3f1120",
+  "created_at": "2026-10-31T09:04:15.776+00:00",
+  "status": "DRAFT_ONLY",
+  "calibration_scope": "CAMERA_INTRINSICS_ONLY",
+  "usable_for_robot_control": false,
+  "arm_command_sent": false,
+  "camera_id": "ceiling_camera",
+  "pixel_transform_id": "opencv-v4l2-capture-no-app-geometry-v1",
+  "opencv_version": "4.6.0",
+  "image_size_px": {
+    "width": 640,
+    "height": 480
+  },
+  "checkerboard": {
+    "inner_corner_columns": 8,
+    "inner_corner_rows": 6,
+    "square_size": 25.0,
+    "unit": "mm"
+  },
+  "camera_matrix": [
+    [
+      986.693621597002,
+      0.0,
+      181.98123363508938
+    ],
+    [
+      0.0,
+      984.9949359784878,
+      222.52141467532547
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "distortion_coefficients": [
+    -0.3872779362919176,
+    0.057123939922959825,
+    0.006167998202138935,
+    0.0024473891545564804,
+    0.07045797329929054
+  ],
+  "rms_reprojection_error_px": 0.16943905518155927,
+  "calibrated_view_count": 35,
+  "per_image_reprojection_errors": [
+    {
+      "file": "ceiling_camera_001.png",
+      "sha256": "6b924242ce70d5f34578b8b64ec79c0b56dcdb9a1c6ab24f09017ef4fa43d791",
+      "reprojection_error_px": 0.15116061054274565
+    },
+    {
+      "file": "ceiling_camera_002.png",
+      "sha256": "2ce1afb036b74dd4cfd11869b154d97e318bbe81556c501e44e29a5a67738033",
+      "reprojection_error_px": 0.40632728867182205
+    },
+    {
+      "file": "ceiling_camera_003.png",
+      "sha256": "7fabf61678a5dff33c3dbeab478b6d2b55a0597cf2779d6b31614a836ba1966a",
+      "reprojection_error_px": 0.1469909845833111
+    },
+    {
+      "file": "ceiling_camera_004.png",
+      "sha256": "c318a16b84f44a9b6c5316fb4295416e5191905e046e46c59f7e599d18d9e0d8",
+      "reprojection_error_px": 0.13204317366817608
+    },
+    {
+      "file": "ceiling_camera_005.png",
+      "sha256": "5a87e5dbfce04810050b3f490d02d5feeaee9afad8a89979b41ad1f7a30b6952",
+      "reprojection_error_px": 0.13022692244675435
+    },
+    {
+      "file": "ceiling_camera_006.png",
+      "sha256": "78fe3478254b0a8a258d5e571cfb623b5d2a43a3866f28b749a8f3ec2554f309",
+      "reprojection_error_px": 0.11660874491554123
+    },
+    {
+      "file": "ceiling_camera_007.png",
+      "sha256": "8b6a55c196d1313f94d9102f10b669457750b65c58675685d1aa218e3c550690",
+      "reprojection_error_px": 0.09289345784568619
+    },
+    {
+      "file": "ceiling_camera_008.png",
+      "sha256": "0ed1be1d9a10c017e7ce1816a1b10b0d26da417d4f5b410ef0aee6e19bef5068",
+      "reprojection_error_px": 0.10696150753427333
+    },
+    {
+      "file": "ceiling_camera_009.png",
+      "sha256": "a8748103d69aaed139433f587336d14dd9b08a29552f292b1fef53c380f7158b",
+      "reprojection_error_px": 0.09390750845411525
+    },
+    {
+      "file": "ceiling_camera_010.png",
+      "sha256": "b98240a6ff856f3bcd2ca4406a0a8e0927fe8256b32e8270359ac5f81f17a97e",
+      "reprojection_error_px": 0.4863951550620794
+    },
+    {
+      "file": "ceiling_camera_011.png",
+      "sha256": "be0bb2116535bd8c69b2e7445763b865a1156aed16f7d68cad2b9a3ee3c4ab80",
+      "reprojection_error_px": 0.1623907896745295
+    },
+    {
+      "file": "ceiling_camera_012.png",
+      "sha256": "fa5a7967686882b4c8e70b336d1d6f864baec4779e10e59e0052c3c4a435dd2b",
+      "reprojection_error_px": 0.152751517238339
+    },
+    {
+      "file": "ceiling_camera_013.png",
+      "sha256": "6f3159026304a37882f19f69c0faf6f3ece120fe0ec7c47fc36f0f28450c0cb6",
+      "reprojection_error_px": 0.11466253838863032
+    },
+    {
+      "file": "ceiling_camera_014.png",
+      "sha256": "14eb0398fa4c5c34169a040682774674e7f44c191827eb3232148712b61d558e",
+      "reprojection_error_px": 0.09911157553719559
+    },
+    {
+      "file": "ceiling_camera_015.png",
+      "sha256": "60a0790ee8e385a83f32cf0858111d4bb71f6b4f270b14ce8fb0f65bbac2f9ad",
+      "reprojection_error_px": 0.09819360661787727
+    },
+    {
+      "file": "ceiling_camera_016.png",
+      "sha256": "057f553d7a75c211331faf1bff8c05596ef9234d8ed106def289cf74904d7518",
+      "reprojection_error_px": 0.11097137498945067
+    },
+    {
+      "file": "ceiling_camera_017.png",
+      "sha256": "29731d1e8bb7686e474bffadc1f93d8f9dbb1d9e964f4d737d95277a97029bb6",
+      "reprojection_error_px": 0.10984427778504866
+    },
+    {
+      "file": "ceiling_camera_018.png",
+      "sha256": "5361810bb9a719f01c52a09966bf83986ce112db1f27355b676b06c67a2971ef",
+      "reprojection_error_px": 0.11931723867686897
+    },
+    {
+      "file": "ceiling_camera_019.png",
+      "sha256": "977cd824861802b37e7f8d72f8d32be4ad4bf236130fbfa7f600bbda5bf3204a",
+      "reprojection_error_px": 0.10571193043064961
+    },
+    {
+      "file": "ceiling_camera_020.png",
+      "sha256": "7f990d1bd3930538aeb3f46f8e25d83c9ada13daef3e442fd83f16d7987aab1e",
+      "reprojection_error_px": 0.10747888381697976
+    },
+    {
+      "file": "ceiling_camera_021.png",
+      "sha256": "90ef5d92034a092bb92582c0cb09040bc3d15c89dd20cbbf501fa28d621ffc55",
+      "reprojection_error_px": 0.16368554108972402
+    },
+    {
+      "file": "ceiling_camera_022.png",
+      "sha256": "236114033d2dbaf80852ec9d4bee8b788d8011b88549c27efea0d75ec61776fa",
+      "reprojection_error_px": 0.11873945733647864
+    },
+    {
+      "file": "ceiling_camera_023.png",
+      "sha256": "15c994c0a07c410794506e1c6c9deb358a1169aab5de1913b8c4e1715f9a8e2e",
+      "reprojection_error_px": 0.30060987319601795
+    },
+    {
+      "file": "ceiling_camera_024.png",
+      "sha256": "d38ae8928f35e2384ee5f4efc697195108dd612d9e4c7ae57773301041facf0c",
+      "reprojection_error_px": 0.10608194225765652
+    },
+    {
+      "file": "ceiling_camera_025.png",
+      "sha256": "188f670aa4d3a2bdd87d1149f46eec34f1f54835089839fcd9d98f04b356ec96",
+      "reprojection_error_px": 0.15752301004151079
+    },
+    {
+      "file": "ceiling_camera_026.png",
+      "sha256": "beffea954dabacf47c39e3510365d9ef0d8ae024f4eff3963ffaa7de519eda3a",
+      "reprojection_error_px": 0.1081064882044794
+    },
+    {
+      "file": "ceiling_camera_027.png",
+      "sha256": "0a349a5cd0644844a4428f65d6659f26832ca13f33452bb0f4eefb98ebd31fcb",
+      "reprojection_error_px": 0.11020810658913946
+    },
+    {
+      "file": "ceiling_camera_028.png",
+      "sha256": "dc17b4cc3b285cdbb8bf86c479c818c09f4376701a635e062776de00c7c105b7",
+      "reprojection_error_px": 0.1489331335884743
+    },
+    {
+      "file": "ceiling_camera_029.png",
+      "sha256": "bec84448e0c74732f22e53f05503897508032161ec529da56468d5b8d8fa7f8f",
+      "reprojection_error_px": 0.1409043049811631
+    },
+    {
+      "file": "ceiling_camera_030.png",
+      "sha256": "00cea42673bd9cfbbe15dbd10bc79b07dc07714a3276350160d84290f50dacaf",
+      "reprojection_error_px": 0.10831270657834706
+    },
+    {
+      "file": "ceiling_camera_031.png",
+      "sha256": "88170cfd929d603e5520c80ace8bb9a90d59e385429c9813f680f73bbd980225",
+      "reprojection_error_px": 0.14680872745319481
+    },
+    {
+      "file": "ceiling_camera_032.png",
+      "sha256": "1f8d55d532b08ca2a1a3861728d284d1db155dc55f58f0df2247a4d4693d4fe4",
+      "reprojection_error_px": 0.10951041728478729
+    },
+    {
+      "file": "ceiling_camera_033.png",
+      "sha256": "805c24cbfb2856875a63ace86cc3324f0da7153c68016abf25b52adde35f10a4",
+      "reprojection_error_px": 0.16430181114598613
+    },
+    {
+      "file": "ceiling_camera_034.png",
+      "sha256": "25284e42eb22df24f5feeffdb5bfe3e90b09564b3be198e60ac77ee531943017",
+      "reprojection_error_px": 0.14001944071789557
+    },
+    {
+      "file": "ceiling_camera_035.png",
+      "sha256": "315a23a6058012a91411465edc02bcbea46e6c0dd695cc8fb5ee3d1adcd3aa0a",
+      "reprojection_error_px": 0.11439638817221061
+    }
+  ],
+  "source_images": [
+    "ceiling_camera_001.png",
+    "ceiling_camera_002.png",
+    "ceiling_camera_003.png",
+    "ceiling_camera_004.png",
+    "ceiling_camera_005.png",
+    "ceiling_camera_006.png",
+    "ceiling_camera_007.png",
+    "ceiling_camera_008.png",
+    "ceiling_camera_009.png",
+    "ceiling_camera_010.png",
+    "ceiling_camera_011.png",
+    "ceiling_camera_012.png",
+    "ceiling_camera_013.png",
+    "ceiling_camera_014.png",
+    "ceiling_camera_015.png",
+    "ceiling_camera_016.png",
+    "ceiling_camera_017.png",
+    "ceiling_camera_018.png",
+    "ceiling_camera_019.png",
+    "ceiling_camera_020.png",
+    "ceiling_camera_021.png",
+    "ceiling_camera_022.png",
+    "ceiling_camera_023.png",
+    "ceiling_camera_024.png",
+    "ceiling_camera_025.png",
+    "ceiling_camera_026.png",
+    "ceiling_camera_027.png",
+    "ceiling_camera_028.png",
+    "ceiling_camera_029.png",
+    "ceiling_camera_030.png",
+    "ceiling_camera_031.png",
+    "ceiling_camera_032.png",
+    "ceiling_camera_033.png",
+    "ceiling_camera_034.png",
+    "ceiling_camera_035.png"
+  ],
+  "rejected_images": [],
+  "review_required": true
+}

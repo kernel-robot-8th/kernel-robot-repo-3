@@ -213,7 +213,9 @@ CONTROL_STATION_PARKING_CAMERA=head_camera CONTROL_STATION_PARKING_SPOT=pinky_do
 
 선반 카메라는 `shelf_camera`(`SHELF`) 카드로 영상과 연결 상태를 보여 줍니다. `CONTROL_STATION_SHELF_YOLO_WEIGHTS`(또는 `CONTROL_STATION_SHELF_YOLO_WORLD_PROMPTS`)를 주면 Head Camera와 같은 방식으로 YOLO 검출을 표시합니다. `_CONF`, `_DEVICE` 설정도 `CONTROL_STATION_SHELF_YOLO_` 접두어로 같습니다. 작업 관측 단계에는 연결하지 않습니다.
 
-2026-11-07 기준 두 카메라 모두 팀 기준 모델을 씁니다. `feat/yolo-object-detection` 브랜치의 `2413f4c` "10클래스 YOLO26n 모델 best11.pt"(`yolo/models/best11.pt`, SHA-256 `c6850be0…`)입니다. 모델 파일은 Git에서 제외되는 `.control-station/models/best11_2413f4c.pt`에 두고, `CONTROL_STATION_HEAD_YOLO_WEIGHTS`와 `CONTROL_STATION_SHELF_YOLO_WEIGHTS`에 같은 경로를 지정합니다. `scripts/check_setup.sh --vision`이 이 파일을 준비합니다. 이전 기준 모델은 `e252f4e`의 3클래스 모델(`strawberry_car_ball_r2_e252f4e.pt`)이었습니다.
+2026-11-11부터 두 카메라 모두 인웅님 모델 best19(12클래스)를 씁니다. `feat/yolo-object-detection` 브랜치 `b3fcbbe`의 `yolo/models/best19.pt`이고, `scripts/check_setup.sh --vision`이 `.control-station/models/best19_b3fcbbe.pt`로 받아 둡니다.
+
+2026-11-07 기준 두 카메라 모두 팀 기준 모델을 썼습니다. `feat/yolo-object-detection` 브랜치의 `2413f4c` "10클래스 YOLO26n 모델 best11.pt"(`yolo/models/best11.pt`, SHA-256 `c6850be0…`)입니다. 모델 파일은 Git에서 제외되는 `.control-station/models/best11_2413f4c.pt`에 두고, `CONTROL_STATION_HEAD_YOLO_WEIGHTS`와 `CONTROL_STATION_SHELF_YOLO_WEIGHTS`에 같은 경로를 지정합니다. 이전 기준 모델은 `e252f4e`의 3클래스 모델(`strawberry_car_ball_r2_e252f4e.pt`)이었습니다.
 
 2026-11-07 이 PC에서는 best11에 현장 사진을 더해 이어서 학습한 `.control-station/models/best11_carrot_tissue_20261107.pt`(SHA-256 `bf5c4f17…`, Git 제외)를 두 카메라에 씁니다. best11은 그날 장면에서 당근과 물티슈를 하나도 검출하지 못했습니다. 헤드캠(허브 4.4, 선반을 위에서 봄)과 선반 정면 캠에서 [capture_frames.py](../../yolo/capture_frames.py)로 원본 프레임을 1.5초마다 3분간 찍었고(카메라마다 119장, 운영자가 당근·물티슈를 옮김), 당근(주황 몸통+초록 잎)과 물티슈(채도 낮은 흰 포장)를 색으로 자동 라벨한 뒤 겹쳐 그린 사진을 보고 확인했습니다. 손이 들어간 9개 시점은 손이 물티슈로 잡히는 등 라벨이 틀려 뺐고, 다른 물체는 best11 예측(conf 0.4, 공 110개)을 라벨로 넣었으며, 다른 클래스를 잊지 않도록 기존 헤드캠 데이터(`yolo/dataset_head_20261026`)를 섞었습니다. [train_finetune.py](../../yolo/train_finetune.py)로 앞쪽 10층을 고정하고 낮은 학습률(AdamW 0.002)로 40 epoch 학습했습니다(RTX 5080 약 1분). 시간상 마지막 20% 장면(카메라마다 22장)에서 conf 0.25 검출률은 헤드캠 당근 21/22·물티슈 22/22, 선반 정면 캠 당근 13/22(팔 받침 옆 작은 당근)·물티슈 22/22·공 22/22로, best11은 당근·물티슈 모두 0이었습니다. 데이터가 그날 한 장면뿐이라 다른 배치·조명에서는 확인하지 않았고, 원래 학습 사진이 없어 pumpkin·apple·potato 등 나머지 클래스가 나빠졌는지는 확인하지 못했습니다. 데이터셋은 `yolo/dataset_carrot_20261107/`(Git 제외, 라벨 스크립트 `color_label.py` 포함)에 있습니다.
 
@@ -322,7 +324,7 @@ Pinky를 정답 위치에 세운 뒤 창에서 Space를 누르면 다음 순서�
 
 허용 오차 기본값은 30 mm / 5°이며 `--tolerance-mm`, `--tolerance-deg`로 바꿉니다. 등록 화면 왼쪽 가장자리에 세로 이음선이 보이면 영상이 밀린 상태이므로, 창을 닫고 다시 실행합니다(아래 "카메라 영상 밀림" 참고).
 
-결과는 `.control-station/parking-spots/<spot-id>.json`에 schema v2로 저장되며 Git에서 제외됩니다. 같은 이름의 파일이 있으면 덮어쓰지 않고 종료하므로, 다시 등록하려면 기존 파일을 직접 다른 곳으로 옮깁니다. 파일에는 다음이 기록됩니다.
+결과는 `.control-station/parking-spots/<spot-id>.json`에 schema v2로 저장되며, 다른 PC에서도 같은 판정을 하도록 Git에 올립니다(이전 등록을 옮겨 두는 `rejected/`는 제외). 같은 이름의 파일이 있으면 덮어쓰지 않고 종료하므로, 다시 등록하려면 기존 파일을 직접 다른 곳으로 옮깁니다. 파일에는 다음이 기록됩니다.
 
 - 기준 모서리 픽셀과 마커 평면 자세
 - 고정 마커 픽셀 위치와 시야 확인 방식(`view_check.mode`: `FIXED_MARKERS` 또는 `OFF`)
@@ -392,7 +394,7 @@ curl -s http://127.0.0.1:8000/api/parking-spots/pinky_dock_1/check
 - 응답은 `{"observation": {...}}`이며, 필드는 [주차 정렬 관측 계약 초안](../spec/interface-contracts.md#pinky-주차-정렬-관측-초안)을 따릅니다. 오류는 `error_code`/`message`/`error`로 반환합니다.
 - 이 API 호출은 판정 결과를 작업 이력에 남기지 않고, 로봇 명령도 만들지 않습니다.
 - 관제가 카메라를 열고 있는 동안에는 CLI로 같은 카메라를 열 수 없습니다.
-- 코드의 기본 카메라 경로(by-id)는 바꾸지 않았습니다. 실습 PC의 포트 설정(포트 4 천장, 포트 10 선반)과 YOLO 모델 경로는 PC마다 다르므로 Git에서 제외되는 `.control-station/control-station.env`에 두고 `set -a; source .control-station/control-station.env; set +a; ./run-control-station.sh`로 실행합니다. 이 설정으로 띄운 화면은 [관제 화면 캡처](../images/control-station-overview-2026-11-02.png)에 있습니다.
+- 코드의 기본 카메라 경로(by-id)는 바꾸지 않았습니다. 실습 PC의 포트 설정(포트 4 천장, 포트 10 선반)과 YOLO 모델 경로는 PC마다 다르므로 Git에서 제외되는 `.control-station/control-station.env`에 두고(`.control-station/control-station.env.example`을 복사해 고칩니다) `set -a; source .control-station/control-station.env; set +a; ./run-control-station.sh`로 실행합니다. 이 설정으로 띄운 화면은 [관제 화면 캡처](../images/control-station-overview-2026-11-02.png)에 있습니다.
 - 관제 가상환경의 `opencv-python-headless`와 CLI로 등록할 때 쓴 GUI OpenCV의 버전이 다르면 모서리 검출이 조금 달라집니다. 2026-11-02 같은 화면에서 OpenCV 4.6(등록)과 4.14(판정) 사이에 약 1 mm·0.2°·고정 마커 0.8 px 차이가 났습니다. 응답의 `opencv_version`과 `registration_opencv_version`으로 확인합니다.
 
 2026-11-02에 mock 모드, 임시 DB, 포트 8765로 관제를 띄워 실제 천장 카메라로 확인했습니다. `/api/cameras`의 `head_camera`는 640×480, 29.7 fps였습니다. 판정 API를 5회 호출했고 모두 약 0.5초 걸렸습니다. 결과는 모두 `ARRIVED`/`WITHIN`(앞 0.4 mm·왼쪽 1.5 mm·yaw 0.23° 이내)이었고, 15프레임 모두 요청 시각 이후 프레임이었으며, 호출 간 프레임 sequence는 겹치지 않았습니다. 없는 등록 ID는 404, 형식이 틀린 ID는 400으로 응답했습니다. 이때 밀림은 일어나지 않았습니다.

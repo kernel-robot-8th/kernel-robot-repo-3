@@ -1,0 +1,201 @@
+{
+  "schema_version": 2,
+  "calibration_id": "1bad5ff2-e5d1-499f-89f1-47e4b930e939",
+  "created_at": "2026-10-31T08:50:18.565+00:00",
+  "status": "DRAFT_ONLY",
+  "calibration_scope": "CAMERA_INTRINSICS_ONLY",
+  "usable_for_robot_control": false,
+  "arm_command_sent": false,
+  "camera_id": "shelf_camera",
+  "pixel_transform_id": "opencv-v4l2-capture-no-app-geometry-v1",
+  "opencv_version": "4.6.0",
+  "image_size_px": {
+    "width": 640,
+    "height": 480
+  },
+  "checkerboard": {
+    "inner_corner_columns": 8,
+    "inner_corner_rows": 6,
+    "square_size": 25.0,
+    "unit": "mm"
+  },
+  "camera_matrix": [
+    [
+      973.0397190460932,
+      0.0,
+      203.07332711725059
+    ],
+    [
+      0.0,
+      972.6080651307502,
+      276.97496359626473
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "distortion_coefficients": [
+    -0.3843169664684105,
+    0.06000632141099735,
+    -0.002668164401019913,
+    0.001648632696088101,
+    0.054695455841011806
+  ],
+  "rms_reprojection_error_px": 0.18822427589115015,
+  "calibrated_view_count": 23,
+  "per_image_reprojection_errors": [
+    {
+      "file": "shelf_camera_001.png",
+      "sha256": "ff59997d3b5be1ad9b3b01c50023727a271b33ba6b892ed5fb767e35149e3d2f",
+      "reprojection_error_px": 0.13926679138577572
+    },
+    {
+      "file": "shelf_camera_002.png",
+      "sha256": "706553a3a85e6324a07134c5e74b9c648f4c8bcb95c610e9105c954bb403fd41",
+      "reprojection_error_px": 0.11313883936175444
+    },
+    {
+      "file": "shelf_camera_003.png",
+      "sha256": "6c0de6575eb81c06dde47ab89d41c16322b6c2cfec2c08429b43227bf0091735",
+      "reprojection_error_px": 0.11221277558641249
+    },
+    {
+      "file": "shelf_camera_004.png",
+      "sha256": "b5d79b13dfdfdf4ea9702614fd5b2ff50167484a31d37a2bd991d9255c533295",
+      "reprojection_error_px": 0.4079046874921176
+    },
+    {
+      "file": "shelf_camera_005.png",
+      "sha256": "b4d2f2dc1ebcd23e0b83f8b52453c52c6cdd8ae0ce51a501b912a87e9ebfc173",
+      "reprojection_error_px": 0.21318562036745956
+    },
+    {
+      "file": "shelf_camera_006.png",
+      "sha256": "b0967e6cb99d4c9a51b78d35df48578317988f504e93a351cfaeeda6f198ffe2",
+      "reprojection_error_px": 0.11749684776396405
+    },
+    {
+      "file": "shelf_camera_007.png",
+      "sha256": "f70364e5f4002c46963b2d6ed176d395c12e7a8cff901efa9bd07debf234ca63",
+      "reprojection_error_px": 0.12153714151831314
+    },
+    {
+      "file": "shelf_camera_008.png",
+      "sha256": "23af3e5df2cbfb09095c4335bab8ba3b23efb89754f7e809782e3e246d58432b",
+      "reprojection_error_px": 0.10931202435310894
+    },
+    {
+      "file": "shelf_camera_009.png",
+      "sha256": "40aa2ab2d11508fb43e071d705b2ee80d57838a45630538b6a2db2f4d2b786f9",
+      "reprojection_error_px": 0.10382895855303523
+    },
+    {
+      "file": "shelf_camera_011.png",
+      "sha256": "dfcc436280e9cb5fa65467357759759bf8a28d8f3f814054547234189a25febb",
+      "reprojection_error_px": 0.08732104027404922
+    },
+    {
+      "file": "shelf_camera_012.png",
+      "sha256": "63509d665b2c507486e28a7c29346b7547182402f60fe182b128c0700649413d",
+      "reprojection_error_px": 0.08666278787083943
+    },
+    {
+      "file": "shelf_camera_013.png",
+      "sha256": "22bf488eca2875e3902eed1fb1f7ef79a3ed942da9c0203730488a454a02615b",
+      "reprojection_error_px": 0.10361672839278602
+    },
+    {
+      "file": "shelf_camera_014.png",
+      "sha256": "a7c386645893e5d42c918005cc4f72c2fb9c94cb2564af030b805e7bb4ae6c10",
+      "reprojection_error_px": 0.10818805824787245
+    },
+    {
+      "file": "shelf_camera_015.png",
+      "sha256": "6cad258e84ae394f35fb8d3d48e08277d3ce6711a47eb9ca39d0a71fc560d72a",
+      "reprojection_error_px": 0.17685763762046033
+    },
+    {
+      "file": "shelf_camera_016.png",
+      "sha256": "fc0da2da65da8c0045f0861917f6f05deb4db755fce8a8243976cea6dd710df1",
+      "reprojection_error_px": 0.09420507371080038
+    },
+    {
+      "file": "shelf_camera_017.png",
+      "sha256": "6cc6ab8cf02e9adb0502a18a87b0ab5d95b04a9c18263a9ac14f08658c423aa7",
+      "reprojection_error_px": 0.1574676498801999
+    },
+    {
+      "file": "shelf_camera_018.png",
+      "sha256": "687f979df84e6d50c5d3f65083c7538bdc0af9c1a138209a5bfcacf62140fbef",
+      "reprojection_error_px": 0.14955846839862633
+    },
+    {
+      "file": "shelf_camera_019.png",
+      "sha256": "99728fde7e12674fb2f7e620404ad8eadedd1fe39db74b7af8bd38500b4acb79",
+      "reprojection_error_px": 0.5356845044556433
+    },
+    {
+      "file": "shelf_camera_020.png",
+      "sha256": "57ee3ad6e42f71bdcf084a12a1bb75687e326be0982786dc5c68c97b8ed81dbd",
+      "reprojection_error_px": 0.1481499094840483
+    },
+    {
+      "file": "shelf_camera_021.png",
+      "sha256": "5e6903c0808339366e18789550ea718fd789efe737d2fde18b487470d2392517",
+      "reprojection_error_px": 0.13600469658294342
+    },
+    {
+      "file": "shelf_camera_022.png",
+      "sha256": "ecce856060e4e3c081ec59fb98526f21e1f3250575f8364a201354cce7c076e7",
+      "reprojection_error_px": 0.10647843358537892
+    },
+    {
+      "file": "shelf_camera_023.png",
+      "sha256": "d453b46f54bf5ab252df0f801a0888befb8ec673944608bb78378ac4a7b2ce02",
+      "reprojection_error_px": 0.1186357307970093
+    },
+    {
+      "file": "shelf_camera_025.png",
+      "sha256": "3896a6005fe92efa45f5e41142e8eb8502f55ed2014cb40fb1f8a7afec4d9f67",
+      "reprojection_error_px": 0.17092192327306702
+    }
+  ],
+  "source_images": [
+    "shelf_camera_001.png",
+    "shelf_camera_002.png",
+    "shelf_camera_003.png",
+    "shelf_camera_004.png",
+    "shelf_camera_005.png",
+    "shelf_camera_006.png",
+    "shelf_camera_007.png",
+    "shelf_camera_008.png",
+    "shelf_camera_009.png",
+    "shelf_camera_011.png",
+    "shelf_camera_012.png",
+    "shelf_camera_013.png",
+    "shelf_camera_014.png",
+    "shelf_camera_015.png",
+    "shelf_camera_016.png",
+    "shelf_camera_017.png",
+    "shelf_camera_018.png",
+    "shelf_camera_019.png",
+    "shelf_camera_020.png",
+    "shelf_camera_021.png",
+    "shelf_camera_022.png",
+    "shelf_camera_023.png",
+    "shelf_camera_025.png"
+  ],
+  "rejected_images": [
+    {
+      "file": "shelf_camera_010.png",
+      "reason": "체커보드 코너를 찾지 못함"
+    },
+    {
+      "file": "shelf_camera_024.png",
+      "reason": "체커보드 코너를 찾지 못함"
+    }
+  ],
+  "review_required": true
+}

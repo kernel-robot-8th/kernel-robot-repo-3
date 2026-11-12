@@ -1,0 +1,92 @@
+{
+  "schema_version": 2,
+  "spot_id": "pinky_dock_1",
+  "camera_id": "ceiling_camera",
+  "pixel_transform_id": "opencv-v4l2-capture-no-app-geometry-v1",
+  "image_size_px": {
+    "width": 640,
+    "height": 480
+  },
+  "intrinsic_calibration": {
+    "path": ".control-station/camera-calibrations/ceiling_camera.json",
+    "sha256": "7a3718bbfcbf962694945c9fdf724d91c4e28207eeec833218474580070165c6",
+    "calibration_id": "c5d9d0e9-ef0b-4dcd-b06e-3c899d3f1120"
+  },
+  "aruco_dictionary": "DICT_4X4_50",
+  "marker_id": 21,
+  "marker_side_mm": 70.0,
+  "marker_forward_axis": "-x",
+  "position_method": "corner rays intersected with the registered marker plane",
+  "opencv_version": "4.6.0",
+  "reference_pose_in_camera": {
+    "rotation": [
+      [
+        -0.03185851118752314,
+        -0.9980132081111416,
+        -0.054356891933054596
+      ],
+      [
+        -0.936854264935388,
+        0.048767630837034615,
+        -0.3463030529101879
+      ],
+      [
+        0.34826587765281886,
+        0.03989178635070159,
+        -0.9365465945933826
+      ]
+    ],
+    "translation_mm": [
+      403.01922070299184,
+      -58.28753781099139,
+      1493.3510974906146
+    ]
+  },
+  "reference_corners_px": [
+    [
+      422.14776611328125,
+      207.4452667236328
+    ],
+    [
+      416.8236999511719,
+      165.87635803222656
+    ],
+    [
+      459.21502685546875,
+      164.29251098632813
+    ],
+    [
+      465.52545166015625,
+      205.54689025878906
+    ]
+  ],
+  "reference_marker_side_on_plane_mm": 70.0,
+  "reference_frame_count": 15,
+  "reference_jitter": {
+    "position_mm": 0.24,
+    "yaw_deg": 0.357
+  },
+  "anchors": [
+    {
+      "marker_id": 1,
+      "center_px": [
+        359.24,
+        429.63
+      ]
+    }
+  ],
+  "view_check": {
+    "mode": "FIXED_MARKERS",
+    "max_anchor_shift_px": 15.0,
+    "single_anchor_trusted": true
+  },
+  "tolerance": {
+    "position_mm": 25.0,
+    "yaw_deg": 5.0
+  },
+  "axes": "dx +: 마커 오른쪽 변 방향, dy +: 마커 윗변(화살표) 방향, dyaw +: 천장 카메라에서 볼 때 반시계",
+  "created_at": "2026-11-11T13:04:06.071298+00:00",
+  "status": "DRAFT_ONLY",
+  "review_required": true,
+  "usable_for_robot_control": false
+}
