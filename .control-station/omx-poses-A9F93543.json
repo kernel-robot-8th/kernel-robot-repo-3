@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "robot": "omx_follower",
+  "follower_board": "ROBOTIS_OpenRB-150_A9F9354350323952582E3120FF070727",
+  "motor_ids": {
+    "shoulder_pan": 11,
+    "shoulder_lift": 12,
+    "elbow_flex": 13,
+    "wrist_flex": 14,
+    "wrist_roll": 15,
+    "gripper": 16
+  },
+  "position_unit": "dynamixel_ticks_extended_position",
+  "calibration": "lerobot_omx_factory_default (Homing_Offset 0, Drive_Mode 0)",
+  "slot_map_sha256": "a8b1e14c938f8480226247a608a968e7d488e7fe95030333f39f5569bebced4e",
+  "poses": {
+    "home": {
+      "recorded_at": "2026-11-07T00:44:34+00:00",
+      "ticks": {
+        "shoulder_pan": 2033,
+        "shoulder_lift": 748,
+        "elbow_flex": 3175,
+        "wrist_flex": 2945,
+        "wrist_roll": 2025,
+        "gripper": 2038
+      },
+      "torque_enabled_while_recording": {
+        "shoulder_pan": false,
+        "shoulder_lift": false,
+        "elbow_flex": false,
+        "wrist_flex": false,
+        "wrist_roll": false,
+        "gripper": false
+      }
+    },
+    "place_pinky": {
+      "recorded_at": "2026-11-11T09:27:01+00:00",
+      "ticks": {
+        "shoulder_pan": 3616,
+        "shoulder_lift": 2411,
+        "elbow_flex": 1622,
+        "wrist_flex": 2722,
+        "wrist_roll": 1996,
+        "gripper": 2424
+      },
+      "torque_enabled_while_recording": {
+        "shoulder_pan": false,
+        "shoulder_lift": false,
+        "elbow_flex": false,
+        "wrist_flex": false,
+        "wrist_roll": false,
+        "gripper": true
+      }
+    }
+  }
+}

@@ -154,7 +154,21 @@ activemq-data/
 .envrc
 .venv
 .venv-mujoco/
-.control-station/
+# Local control-station data. Calibrations, registrations and arm poses that every PC needs are tracked;
+# photos, logs, models (scripts/check_setup.sh --vision), rejected/older results and the PC's env stay local.
+.control-station/*
+!.control-station/control-station.env.example
+!.control-station/omx-poses-*.json
+!.control-station/camera-calibrations/
+.control-station/camera-calibrations/*
+!.control-station/camera-calibrations/ceiling_camera.json
+!.control-station/camera-calibrations/shelf_camera.json
+!.control-station/shelf-pose-calibrations/
+.control-station/shelf-pose-calibrations/*
+!.control-station/shelf-pose-calibrations/shelf_camera.json
+!.control-station/parking-spots/
+.control-station/parking-spots/*
+!.control-station/parking-spots/*.json
 env/
 venv/
 ENV/

@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "robot": "omx_follower",
+  "follower_board": "ROBOTIS_OpenRB-150_F58AE68650323952582E3120FF05260E",
+  "motor_ids": {
+    "shoulder_pan": 11,
+    "shoulder_lift": 12,
+    "elbow_flex": 13,
+    "wrist_flex": 14,
+    "wrist_roll": 15,
+    "gripper": 16
+  },
+  "position_unit": "dynamixel_ticks_extended_position",
+  "calibration": "lerobot_omx_factory_default (Homing_Offset 0, Drive_Mode 0)",
+  "slot_map_sha256": "a8b1e14c938f8480226247a608a968e7d488e7fe95030333f39f5569bebced4e",
+  "poses": {
+    "slot_a_2_1": {
+      "recorded_at": "2026-11-03T13:19:51+00:00",
+      "ticks": {
+        "shoulder_pan": 2118,
+        "shoulder_lift": 2153,
+        "elbow_flex": 2601,
+        "wrist_flex": 1790,
+        "wrist_roll": 2071,
+        "gripper": 2454
+      },
+      "torque_enabled_while_recording": {
+        "shoulder_pan": false,
+        "shoulder_lift": false,
+        "elbow_flex": false,
+        "wrist_flex": false,
+        "wrist_roll": false,
+        "gripper": false
+      }
+    },
+    "home": {
+      "recorded_at": "2026-11-04T12:13:14+00:00",
+      "ticks": {
+        "shoulder_pan": 2049,
+        "shoulder_lift": 735,
+        "elbow_flex": 3168,
+        "wrist_flex": 2676,
+        "wrist_roll": 2070,
+        "gripper": 2025
+      },
+      "torque_enabled_while_recording": {
+        "shoulder_pan": false,
+        "shoulder_lift": false,
+        "elbow_flex": false,
+        "wrist_flex": false,
+        "wrist_roll": false,
+        "gripper": false
+      }
+    },
+    "slot_a_1_2": {
+      "recorded_at": "2026-11-04T12:20:16+00:00",
+      "ticks": {
+        "shoulder_pan": 1939,
+        "shoulder_lift": 1967,
+        "elbow_flex": 2329,
+        "wrist_flex": 1671,
+        "wrist_roll": 2056,
+        "gripper": 2026
+      },
+      "torque_enabled_while_recording": {
+        "shoulder_pan": false,
+        "shoulder_lift": false,
+        "elbow_flex": false,
+        "wrist_flex": false,
+        "wrist_roll": false,
+        "gripper": false
+      }
+    },
+    "pick_apple_above": {
+      "recorded_at": "2026-11-11T08:14:08+00:00",
+      "ticks": {
+        "shoulder_pan": 1674,
+        "shoulder_lift": 2138,
+        "elbow_flex": 2053,
+        "wrist_flex": 1913,
+        "wrist_roll": 2206,
+        "gripper": 2411
+      },
+      "torque_enabled_while_recording": {
+        "shoulder_pan": false,
+        "shoulder_lift": false,
+        "elbow_flex": false,
+        "wrist_flex": false,
+        "wrist_roll": false,
+        "gripper": false
+      }
+    },
+    "pick_apple_grasp": {
+      "recorded_at": "2026-11-11T08:14:56+00:00",
+      "ticks": {
+        "shoulder_pan": 1704,
+        "shoulder_lift": 2563,
+        "elbow_flex": 1256,
+        "wrist_flex": 2564,
+        "wrist_roll": 1720,
+        "gripper": 2199
+      },
+      "torque_enabled_while_recording": {
+        "shoulder_pan": false,
+        "shoulder_lift": false,
+        "elbow_flex": false,
+        "wrist_flex": false,
+        "wrist_roll": false,
+        "gripper": false
+      }
+    },
+    "place_pinky": {
+      "recorded_at": "2026-11-11T08:21:19+00:00",
+      "ticks": {
+        "shoulder_pan": 546,
+        "shoulder_lift": 2494,
+        "elbow_flex": 1531,
+        "wrist_flex": 2868,
+        "wrist_roll": 2236,
+        "gripper": 2175
+      },
+      "torque_enabled_while_recording": {
+        "shoulder_pan": false,
+        "shoulder_lift": false,
+        "elbow_flex": false,
+        "wrist_flex": false,
+        "wrist_roll": false,
+        "gripper": false
+      }
+    },
+    "slot_a_1_1": {
+      "recorded_at": "2026-11-11T08:56:52+00:00",
+      "ticks": {
+        "shoulder_pan": 1908,
+        "shoulder_lift": 1829,
+        "elbow_flex": 2351,
+        "wrist_flex": 2011,
+        "wrist_roll": 2068,
+        "gripper": 2157
+      },
+      "torque_enabled_while_recording": {
+        "shoulder_pan": false,
+        "shoulder_lift": false,
+        "elbow_flex": false,
+        "wrist_flex": false,
+        "wrist_roll": false,
+        "gripper": false
+      }
+    }
+  }
+}

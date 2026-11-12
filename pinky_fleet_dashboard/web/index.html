@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pinky Fleet · 통합 관제</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">P</span><div><strong>Pinky Fleet</strong><small>3-robot fleet console</small></div></div>
+    <div class="top-actions">
+      <a class="button button-quiet" href="/ir-calibration">IR 캘리브레이션 수집</a>
+      <span id="bridge-status" class="system-pill"><i></i> 브릿지 확인 중</span>
+      <label class="password-box"><span>SSH 접속</span><input id="ssh-password" type="password" autocomplete="current-password" placeholder="비밀번호 입력"><button id="save-password" class="button button-quiet">연결 설정</button></label>
+    </div>
+  </header>
+
+  <main>
+    <section class="intro">
+      <div>
+        <p class="eyebrow">LOCAL CONTROL · ROS 2 JAZZY</p>
+        <h1>통합 관제</h1>
+        <p class="lede">P0 · P1 · P2 동시 경로 주행 · 로봇별 도킹과 수령을 제어합니다.</p>
+      </div>
+      <div class="intro-actions">
+      <div class="sequence" aria-label="준비 순서">
+        <span>기본 bringup</span><b>›</b><span>센서 확인</span><b>›</b><span>Nav2</span>
+      </div>
+      <button id="reset-all" class="button button-reset" type="button">전체 초기화</button>
+      </div>
+    </section>
+
+    <section id="alerts" class="alerts" aria-live="polite"></section>
+    <section class="fleet-overview">
+      <div id="fleet-map"></div>
+      <div class="fleet-actions"><button id="fleet-start" class="button" disabled>세 대 동시 경로 시작</button><button id="fleet-stop" class="button button-reset" disabled>주행 중인 로봇 전체 정지</button><span id="fleet-result" role="status"></span></div>
+      <div class="fleet-legend"><span style="color:#ff3686">➤ P0 · DOMAIN 10</span><span style="color:#27b86d">➤ P1 · DOMAIN 11</span><span style="color:#3988ff">➤ P2 · DOMAIN 12</span></div>
+      <p class="waypoint-hint">공용 map 좌표 · 단위 m · 화살표는 위치와 방향, 원은 AMCL 95% 오차 반경입니다. 최신 위치가 없는 로봇은 지도에 표시하지 않습니다. 사각형은 기체별 주차장입니다. 코스 완주 후 주행완료 버튼을 누르면 자기 주차장으로 복귀합니다.</p>
+    </section>
+    <section id="robot-grid" class="robot-grid" aria-live="polite">
+      <div class="loading">로봇 상태를 불러오는 중…</div>
+    </section>
+
+    <footer>
+      <span>대시보드는 PC 내부에서만 열립니다 · 경로 주행은 화면에서 시작을 눌러야 합니다.</span>
+      <span>상태 갱신 1초 · 센서 stale 기준 4초</span>
+    </footer>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>

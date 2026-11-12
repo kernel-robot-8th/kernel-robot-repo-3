@@ -1,0 +1,61 @@
+name: pinky_10_to_pc
+from_domain: 10
+to_domain: 0
+topics:
+  scan:
+    type: sensor_msgs/msg/LaserScan
+    remap: /pinky_10/scan
+    qos:
+      reliability: best_effort
+      durability: volatile
+      history: keep_last
+      depth: 10
+  odom:
+    type: nav_msgs/msg/Odometry
+    remap: /pinky_10/odom
+  joint_states:
+    type: sensor_msgs/msg/JointState
+    remap: /pinky_10/joint_states
+  ir_sensor/range:
+    type: std_msgs/msg/UInt16MultiArray
+    remap: /pinky_10/ir_sensor/range
+  us_sensor/range:
+    type: sensor_msgs/msg/Range
+    remap: /pinky_10/us_sensor/range
+  batt_state:
+    type: sensor_msgs/msg/BatteryState
+    remap: /pinky_10/batt_state
+  imu_raw:
+    type: sensor_msgs/msg/Imu
+    remap: /pinky_10/imu_raw
+  battery/percent:
+    type: std_msgs/msg/Float32
+    remap: /pinky_10/battery/percent
+  battery/voltage:
+    type: std_msgs/msg/Float32
+    remap: /pinky_10/battery/voltage
+  map:
+    type: nav_msgs/msg/OccupancyGrid
+    remap: /pinky_10/map
+    qos:
+      reliability: reliable
+      durability: transient_local
+      history: keep_last
+      depth: 1
+  amcl_pose:
+    type: geometry_msgs/msg/PoseWithCovarianceStamped
+    remap: /pinky_10/amcl_pose
+  tf:
+    type: tf2_msgs/msg/TFMessage
+    remap: /pinky_10/tf
+  tf_static:
+    type: tf2_msgs/msg/TFMessage
+    remap: /pinky_10/tf_static
+    qos:
+      reliability: reliable
+      durability: transient_local
+      history: keep_last
+      depth: 1
+  line/status:
+    type: std_msgs/msg/String
+    remap: /pinky_10/line/status

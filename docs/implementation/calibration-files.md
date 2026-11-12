@@ -2,7 +2,16 @@
 
 카메라마다 어떤 스크립트로 어떤 보정 파일을 만들고, 그 파일이 어디에 저장되는지 정리합니다. 각 도구의 상세 절차는 표에 링크한 문서를 따릅니다.
 
-보정 결과와 원본 사진은 모두 `.control-station/` 아래에 저장되며 Git에서 제외됩니다. 저장소에는 스크립트, 문서, 인쇄용 패턴만 있습니다. 다른 PC에서 쓰거나 다시 계산하려면 결과 파일과 원본 사진을 따로 옮기거나 백업해야 합니다.
+보정 결과와 원본 사진은 모두 `.control-station/` 아래에 저장됩니다. 2026-11-12부터 다른 PC에서도 같은 판정을 하도록, 지금 쓰는 결과 파일은 Git에 올립니다.
+
+| Git에 올림 | Git에서 제외 |
+|---|---|
+| `camera-calibrations/ceiling_camera.json`, `camera-calibrations/shelf_camera.json` (내부 보정) | 원본 사진(`calibration-images/`, 약 30 MB) |
+| `shelf-pose-calibrations/shelf_camera.json` (지금 쓰는 선반 위치·칸 영역) | 이전·후보 결과(`camera-calibrations/*-shelf-pose-*`, `*-25views.json`, `*.before-*.json`, `rejected/`) |
+| `parking-spots/*.json` (핑키 주차 위치) | YOLO 모델(`models/`, `scripts/check_setup.sh --vision`이 Git 커밋에서 받음) |
+| `omx-poses-*.json` (follower 보드별 팔 자세) | PC별 설정 `control-station.env` (예시: `control-station.env.example`), 로그·관측·녹화 |
+
+보정을 다시 하면 새 결과를 위 경로에 두고 커밋합니다. 카메라나 거치 위치가 바뀌면 Git의 결과도 맞지 않으므로 다시 보정합니다.
 
 ## 저장 위치
 
@@ -14,6 +23,8 @@
     <camera_id>.json                     내부 보정 (렌즈 왜곡)
     <camera_id>-shelf-regions-<id>.json  선반 층 영상 영역
     <camera_id>-shelf-pose-<id>.json     선반 기준 카메라 위치와 6칸 영역 (+ .overlay.png)
+  shelf-pose-calibrations/
+    <camera_id>.json                     관제가 쓰는 선반 위치·칸 영역 (위 결과 중 하나를 복사)
   parking-spots/
     <spot_id>.json                       Pinky 주차 정답 위치
     rejected/                            쓰지 않는 이전 등록 파일
