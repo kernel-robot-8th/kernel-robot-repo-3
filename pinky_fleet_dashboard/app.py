@@ -28,6 +28,11 @@ from urllib.parse import unquote
 from scripts.route_geometry import build_dense_route
 from scripts.line_following import default_profile, capture_profile, normalize, validate_profile
 from scripts.ir_profiles import IRProfiles
+from scripts.fleet_ops import operational_status
+from scripts.traffic import TrafficCoordinator
+from scripts.runtime_bundle import install_command
+from scripts.motion_gate import geometry
+from scripts.control_journal import ControlJournal
 from scripts.ir_calibration import IRCalibrationStore
 
 ROOT = Path(__file__).resolve().parent
@@ -69,9 +74,18 @@ def _blank_robot(robot: dict[str, Any]) -> dict[str, Any]:
 
 
 class FleetState:
-    def __init__(self) -> None:
+    def __init__(self, state_path=None) -> None:
+        self.state_path=Path(state_path) if state_path else None
         self.lock = threading.RLock()
         self.robots = {key: _blank_robot(value) for key, value in ROBOTS.items()}
+        if self.state_path:
+            try:
+                saved=json.loads(self.state_path.read_text())
+                for rid,info in saved.items():
+                    if rid in self.robots:
+                        self.robots[rid]['last_prepared_at']=info.get('last_prepared_at')
+                        self.robots[rid]['previously_prepared']=bool(info.get('previously_prepared'))
+            except (OSError,ValueError):pass
         self.waypoints = {key: [] for key in ROBOTS}
         try:
             saved = json.loads(WAYPOINTS_PATH.read_text(encoding="utf-8"))
@@ -97,13 +111,30 @@ class FleetState:
     def update(self, robot_id: str, **values: Any) -> None:
         with self.lock:
             self.robots[robot_id].update(values)
+            if values.get('stage')=='prepared':
+                self.robots[robot_id]['last_prepared_at']=time.time()
+                self.robots[robot_id]['previously_prepared']=True
+                if self.state_path:
+                    self.state_path.parent.mkdir(parents=True,exist_ok=True)
+                    temp=self.state_path.with_suffix('.tmp')
+                    temp.write_text(json.dumps({rid:{'last_prepared_at':r.get('last_prepared_at'),'previously_prepared':r.get('previously_prepared',False)} for rid,r in self.robots.items()}))
+                    temp.replace(self.state_path)
 
 
-STATE = FleetState()
+STATE = FleetState(ROOT/'data/last_preparation.json')
 IR_PROFILES = IRProfiles(ROOT / "data" / "ir_profiles.json", list(ROBOTS))
 IR_CALIBRATION = IRCalibrationStore(ROOT / 'data' / 'ir_calibration')
 WORKERS = ThreadPoolExecutor(max_workers=8, thread_name_prefix="pinky-fleet")
 DOCK_COMMAND_LOCK = threading.Lock()
+_zones={'parking':{'bounds':[min(p['x_m'] for p in PARKING.values())-.2,max(p['x_m'] for p in PARKING.values())+.2,min(p['y_m'] for p in PARKING.values())-.2,max(p['y_m'] for p in PARKING.values())+.2]}}
+for _label,_name in [('7','junction7'),('5','dock5')]:
+    _anchor=next((p for p in STATE.waypoints['10'] if p.get('label')==_label),None)
+    if _anchor:_zones[_name]=dict(x_m=_anchor['x_m'],y_m=_anchor['y_m'],request_radius_m=.40)
+TRAFFIC=TrafficCoordinator(ROOT/'data/traffic_reservations.json',_zones)
+TRAFFIC_BOOT=uuid.uuid4().hex
+TRAFFIC_SEQUENCE=0
+SHUTTING_DOWN=threading.Event()
+JOURNAL=ControlJournal(ROOT/'logs/telemetry.jsonl')
 
 
 def _finite(value: Any) -> float | None:
@@ -173,10 +204,10 @@ def _read_pgm(path: Path) -> tuple[int, int, list[int]] | None:
     return width, height, values
 
 
-def _load_local_map_grid() -> dict[str, Any] | None:
+def _load_local_map_grid(yaml_path: Path = LOCAL_MAP_YAML) -> dict[str, Any] | None:
     """Build an OccupancyGrid-shaped fallback from map-proto's YAML and PGM."""
     try:
-        yaml_text = LOCAL_MAP_YAML.read_text(encoding="utf-8")
+        yaml_text = yaml_path.read_text(encoding="utf-8")
         image_name = re.search(r"(?m)^image:\s*(\S+)\s*$", yaml_text).group(1)  # type: ignore[union-attr]
         resolution = float(re.search(r"(?m)^resolution:\s*([0-9.eE+-]+)", yaml_text).group(1))  # type: ignore[union-attr]
         origin_match = re.search(r"(?m)^origin:\s*\[([^]]+)\]", yaml_text)
@@ -184,7 +215,7 @@ def _load_local_map_grid() -> dict[str, Any] | None:
         occupied = float(re.search(r"(?m)^occupied_thresh:\s*([0-9.eE+-]+)", yaml_text).group(1))  # type: ignore[union-attr]
         free = float(re.search(r"(?m)^free_thresh:\s*([0-9.eE+-]+)", yaml_text).group(1))  # type: ignore[union-attr]
         negate = int(re.search(r"(?m)^negate:\s*(\d+)", yaml_text).group(1))  # type: ignore[union-attr]
-        pgm = _read_pgm(LOCAL_MAP_DIR / image_name)
+        pgm = _read_pgm(yaml_path.parent / image_name)
     except (OSError, ValueError, AttributeError):
         return None
     if pgm is None or len(origin) < 3:
@@ -212,10 +243,21 @@ def _load_local_map_grid() -> dict[str, Any] | None:
 LOCAL_MAP_GRID = _load_local_map_grid()
 
 
+def keepout_view():
+    """Render the on-disk Nav2 mask in its own metric origin/resolution."""
+    path = ROOT / 'config/keepout/keepout_mask.yaml'
+    grid = _load_local_map_grid(path)
+    if grid is None:
+        return dict(available=False, error='keepout YAML/PGM 읽기 실패')
+    return dict(grid, available=True, map='map-proto.yaml', frame_id='map',
+                source='keepout_mask.yaml', display_only=True)
+
+
+
 class Telemetry:
     """ROS 2 subscriptions in PC domain 0; bridges remap each robot into a namespace."""
 
-    KEYS = ("scan", "ir", "ultrasonic", "batt_state", "imu", "battery_percent", "battery_voltage", "odom", "joints", "map", "amcl_pose", "tf_pose", "line_control")
+    KEYS = ("scan", "ir", "ultrasonic", "batt_state", "imu", "battery_percent", "battery_voltage", "odom", "joints", "map", "amcl_pose", "tf_pose", "line_control", "safety_status")
 
     def __init__(self) -> None:
         import rclpy
@@ -252,6 +294,7 @@ class Telemetry:
             "map": OccupancyGrid,
             "amcl_pose": PoseWithCovarianceStamped,
             "line_control": String,
+            "safety_status": String,
         }
         paths = {
             "scan": "scan",
@@ -266,7 +309,9 @@ class Telemetry:
             "map": "map",
             "amcl_pose": "amcl_pose",
             "line_control": "line/status",
+            "safety_status": "safety/status",
         }
+        self.traffic_publishers = {}
         self.domain_readers = []
         for rid, robot in ROBOTS.items():
             context = rclpy.context.Context()
@@ -275,6 +320,7 @@ class Telemetry:
             executor = MultiThreadedExecutor(num_threads=2,context=context)
             executor.add_node(node)
             self.domain_readers.append((context,node,executor))
+            self.traffic_publishers[rid]=node.create_publisher(String,'/fleet/lease',QoSProfile(depth=1,reliability=ReliabilityPolicy.BEST_EFFORT))
             for key, msg_type in types.items():
                 topic = f"/{paths[key]}"
                 subscription_qos = QoSProfile(depth=10,reliability=ReliabilityPolicy.BEST_EFFORT,durability=DurabilityPolicy.VOLATILE)
@@ -332,9 +378,9 @@ class Telemetry:
         value: Any
         if key == "ir":
             value = {"channels": [int(v) for v in msg.data]}
-        elif key == "line_control":
+        elif key in {"line_control", "safety_status"}:
             try:
-                value = json.loads(msg.data)
+                value = json.loads(msg.data,parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
                 if not isinstance(value, dict):
                     value = {"state": "invalid_status"}
             except (ValueError, TypeError):
@@ -415,6 +461,8 @@ class Telemetry:
             }
         else:
             value = None
+        if key in {'line_control','safety_status','odom','ir','ultrasonic'}:
+            JOURNAL.record(key,robot_id=robot_id,state=(value or {}).get('state'),data=value)
         with self.changed:
             self.data[robot_id][key] = {"value": value, "received_at": now}
             if key == "ir":
@@ -461,8 +509,8 @@ class Telemetry:
                 edge["y"] + math.sin(edge_yaw) * x + math.cos(edge_yaw) * y,
             )
             yaw += edge_yaw
-            if frame == self.base_frames[robot_id] and not edge["static"]:
-                base_received_at = edge["received_at"]
+            if not edge["static"]:
+                base_received_at = edge["received_at"] if base_received_at is None else min(base_received_at,edge["received_at"])
             frame = edge["parent"]
         if frame != "map" or base_received_at is None:
             return
@@ -771,6 +819,7 @@ def _robot_reset_command(robot_id: str) -> str:
     """Stop processes started by this dashboard, plus a lingering teleop node."""
     stage_commands = {
         "navigation": "pinky_navigation bringup_launch.xml",
+        "velocity_guard": "python3 /home/pinky/.cache/pinky-fleet/nav2/velocity_guard.py",
         "ultrasonic_safety": "python3 /home/pinky/.cache/pinky-fleet/nav2/ultrasonic_safety.py",
         "imu": "pinky_imu_bno055 main_node",
         "adc": "pinky_sensor_adc main_node",
@@ -860,26 +909,18 @@ def _ir_profile_install_command(profile: dict[str, Any]) -> str:
             f"mv {target}.tmp {target} && echo IR_PROFILE_SAVED")
 
 
-def _nav2_runtime_install_command(robot_id: str) -> str:
-    installer = (ROOT / "scripts" / "install_nav2_runtime.py").read_bytes()
-    safety = (ROOT / "scripts" / "ultrasonic_safety.py").read_bytes()
-    installer_b64 = base64.b64encode(installer).decode("ascii")
-    safety_b64 = base64.b64encode(safety).decode("ascii")
-    line_b64 = base64.b64encode((ROOT / 'scripts' / 'line_following.py').read_bytes()).decode('ascii')
-    route_b64 = base64.b64encode((ROOT / 'scripts' / 'navigate_route.py').read_bytes()).decode('ascii')
-    mission_b64 = base64.b64encode((ROOT / 'scripts' / 'mission_behaviors.py').read_bytes()).decode('ascii')
-    runtime = "/home/pinky/.cache/pinky-fleet/nav2"
-    return (
-        f"mkdir -p /home/pinky/.cache/pinky-fleet {runtime} && "
-        f"printf '%s' {shlex.quote(installer_b64)} | base64 -d > /home/pinky/.cache/pinky-fleet/install_nav2_runtime.py && "
-        f"printf '%s' {shlex.quote(safety_b64)} | base64 -d > {runtime}/ultrasonic_safety.py && "
-        "chmod 700 /home/pinky/.cache/pinky-fleet/install_nav2_runtime.py "
-        f"{runtime}/ultrasonic_safety.py && "
-        f"printf '%s' {shlex.quote(line_b64)} | base64 -d > {runtime}/line_following.py && "
-        f"printf '%s' {shlex.quote(route_b64)} | base64 -d > /home/pinky/.cache/pinky-fleet/navigate_route.py && "
-        f"printf '%s' {shlex.quote(mission_b64)} | base64 -d > {runtime}/mission_behaviors.py && "
-        + _ir_profile_install_command(IR_PROFILES.get(robot_id)) + " && "
-        "python3 /home/pinky/.cache/pinky-fleet/install_nav2_runtime.py"
+def _nav2_runtime_install_command(robot_id: str, map_name: str) -> str:
+    settings=json.loads((ROOT/'config/robot_geometry.json').read_text())
+    dimensions=geometry({**settings['default'],**settings.get('robots',{}).get(robot_id,{})})
+    return install_command(
+        ROOT,
+        dict(
+            robot_id=robot_id,
+            geometry=dimensions,
+            traffic_zones=TRAFFIC.zones,
+            keepout_enabled=map_name == "map-proto.yaml",
+        ),
+        IR_PROFILES.get(robot_id),
     )
 
 
@@ -897,6 +938,8 @@ def _stop_ultrasonic_safety(robot_id: str) -> tuple[bool, str]:
         "kill -INT \"$pid\" 2>/dev/null || true; "
         "for n in 1 2 3 4 5; do kill -0 \"$pid\" 2>/dev/null || break; sleep 1; done; "
         "if kill -0 \"$pid\" 2>/dev/null; then kill -TERM \"$pid\" 2>/dev/null || true; fi; "
+        "for n in 1 2 3; do kill -0 \"$pid\" 2>/dev/null || break; sleep 1; done; "
+        "if kill -0 \"$pid\" 2>/dev/null; then kill -KILL \"$pid\" 2>/dev/null || true; fi; "
         "echo SAFETY_STOPPED ;; "
         "*) echo SAFETY_PID_MISMATCH ;; "
         "esac; "
@@ -904,17 +947,27 @@ def _stop_ultrasonic_safety(robot_id: str) -> tuple[bool, str]:
         "esac; "
         "else echo SAFETY_NOT_RUNNING; fi"
     )
-    return _ssh_run(robot_id, command)
+    outputs=[]
+    for stage in ('ultrasonic_safety','velocity_guard'):
+        current=command.replace('ultrasonic_safety',stage)
+        ok,output=_ssh_run(robot_id,current)
+        outputs.append(output)
+        if not ok or 'SAFETY_PID_MISMATCH' in output:return False,'\n'.join(outputs)
+    return True,'\n'.join(outputs)
 
 
-def _start_navigation_with_safety(robot_id: str, map_path: str) -> tuple[bool, str]:
+def _start_navigation_with_safety(robot_id: str, map_path: str, map_name: str) -> tuple[bool, str]:
     stopped, stop_output = _stop_ultrasonic_safety(robot_id)
     if not stopped or "SAFETY_PID_MISMATCH" in stop_output:
         return False, stop_output or "이전 초음파 안전 감시기를 정리하지 못했습니다."
-    ok, output = _ssh_run(robot_id, _nav2_runtime_install_command(robot_id))
+    ok, output = _ssh_run(robot_id, _nav2_runtime_install_command(robot_id, map_name))
     if not ok or "NAV2_RUNTIME_READY" not in output:
         return False, output or "Nav2 안전 설정을 만들지 못했습니다."
 
+    ok, output = _ssh_run(robot_id, _remote_start_command(robot_id,'velocity_guard',
+                             'python3 /home/pinky/.cache/pinky-fleet/nav2/velocity_guard.py'))
+    if not ok or not any(token in output for token in ('STARTED','ALREADY_RUNNING')):
+        return False, output or '최종 충돌 감시기 시작 실패'
     safety_command = (
         "python3 /home/pinky/.cache/pinky-fleet/nav2/ultrasonic_safety.py"
     )
@@ -970,6 +1023,9 @@ def _run_waypoint_route(robot_id: str, goals: list[dict[str, Any]]) -> None:
     temp_dir = None
     with STATE.lock:
         route_ref=STATE.routes[robot_id]
+        # A queued start can be cancelled before its worker gets CPU time.
+        if not route_ref or route_ref.get('status') != 'starting':
+            return
     goals[0]["run_id"]=route_ref.get("run_id") if route_ref else None
     terminal_status = "failed"
     try:
@@ -1036,7 +1092,7 @@ def _run_waypoint_route(robot_id: str, goals: list[dict[str, Any]]) -> None:
             temp_dir.cleanup()
         with STATE.lock:
             route = STATE.routes[robot_id]
-            if route is route_ref and route and route.get('status')!='cancelled':
+            if route is route_ref and route and route.get('status') not in {'cancelled','cancel_requested'}:
                 route.update(status=terminal_status,
                              message={"complete": "임무 종료 · 자기 주차장 복귀 완료",
                                       "cancelled": "주행 취소를 요청했습니다.",
@@ -1056,10 +1112,11 @@ def _cancel_waypoint_route(robot_id: str) -> None:
     with STATE.lock:
         route=STATE.routes[robot_id]
         if route is route_ref and route and route.get('status')=='cancel_requested':
+            route['stop_pending']=False
             if ok and 'STOP_LATCHED' in output:
                 route.update(status='cancelled',message='정지 요청 적용 · 경로 취소',detail='정지 유지 상태를 설정했습니다.')
             else:
-                route.update(status='failed',message='정지 적용 확인 실패',detail=output[-1200:])
+                route.update(message='정지 적용 미확인 · 정지 버튼으로 재시도하세요.',detail=output[-1200:])
 
 
 def _prepare_robot(robot_id: str, map_name: str, release_busy: bool = True) -> None:
@@ -1104,7 +1161,7 @@ def _prepare_robot(robot_id: str, map_name: str, release_busy: bool = True) -> N
             raise RuntimeError(f"이전 Nav2 실행을 정리하지 못했습니다: {stop_output.strip()}")
 
         STATE.update(robot_id, stage="nav_starting", message=f"Nav2와 {map_name} 지도를 시작합니다.")
-        ok, output = _start_navigation_with_safety(robot_id, map_path)
+        ok, output = _start_navigation_with_safety(robot_id, map_path, map_name)
         if not ok:
             raise RuntimeError(f"Nav2 시작 실패: {output.strip() or 'SSH 오류'}")
         map_ready, missing = _topic_ready(robot_id, ("map",), timeout=25.0)
@@ -1136,7 +1193,7 @@ def _recover_navigation(robot_id: str) -> None:
         map_path = _remote_map_path(robot_id, map_name)
         if map_path is None:
             raise RuntimeError(f"로봇에서 {map_name} 지도 경로를 확인하지 못했습니다.")
-        ok, output = _start_navigation_with_safety(robot_id, map_path)
+        ok, output = _start_navigation_with_safety(robot_id, map_path, map_name)
         if not ok:
             raise RuntimeError("Nav2 시작 실패: " + output.strip())
         map_ready, missing = _topic_ready(robot_id, ("map",), timeout=25.0)
@@ -1153,6 +1210,51 @@ def _recover_navigation(robot_id: str) -> None:
         with STATE.lock:
             if STATE.busy_robot == robot_id:
                 STATE.busy_robot = None
+
+
+def _traffic_observations(telemetry):
+    result={}
+    for rid in ROBOTS:
+        topics=telemetry.get(rid,{})
+        position=topics.get('tf_pose',{});control=topics.get('line_control',{})
+        p=position.get('value') or {};request=(control.get('value') or {}).get('traffic_request') or {}
+        fresh=bool(position.get('fresh') and control.get('fresh') and position.get('age_s',99) is not None
+                   and position.get('age_s',99)<1. and control.get('age_s',99) is not None and control.get('age_s',99)<1.)
+        final=topics.get('safety_status',{})
+        fresh=bool(fresh and final.get('fresh') and (final.get('value') or {}).get('sensors_fresh'))
+        pose=[p.get('x_m'),p.get('y_m')]
+        if not all(isinstance(v,(int,float)) and math.isfinite(v) for v in pose):fresh=False;pose=[0.,0.]
+        if not isinstance(request,dict):request={};fresh=False
+        if not isinstance(request.get('zones',[]),list) or any(not isinstance(z,str) or z not in TRAFFIC.zones for z in request.get('zones',[])):request={};fresh=False
+        route=STATE.routes[rid] or {};home=PARKING[rid]
+        odom=topics.get('odom',{});v=odom.get('value') or {}
+        at_home_and_stopped=bool(fresh and odom.get('fresh')
+                    and all(isinstance(v.get(k),(int,float)) and math.isfinite(v[k]) for k in ('linear_mps','angular_rps'))
+                    and math.hypot(pose[0]-home['x_m'],pose[1]-home['y_m'])<.05
+                    and abs(v.get('linear_mps') or 0)<.005 and abs(v.get('angular_rps') or 0)<.02)
+        result[rid]=dict(fresh=fresh,pose=pose,token=request.get('token'),zones=request.get('zones',[]),
+                         parked=at_home_and_stopped and route.get('status')=='complete',
+                         at_home_and_stopped=at_home_and_stopped and route.get('status') not in {'starting','running','cancel_requested'})
+    return result
+
+
+def _traffic_loop():
+    global TRAFFIC_SEQUENCE
+    from std_msgs.msg import String
+    while not SHUTTING_DOWN.wait(.25):
+        if TELEMETRY is None:continue
+        observations=_traffic_observations(TELEMETRY.snapshot())
+        try:grants=TRAFFIC.update(observations)
+        except (OSError,ValueError) as exc:
+            JOURNAL.record('traffic_storage_error',state=str(exc));continue
+        if STATE.password is None:continue
+        TRAFFIC_SEQUENCE+=1
+        for rid,zones in grants.items():
+            token=observations[rid].get('token')
+            if token and (STATE.routes[rid] or {}).get('status') in {'starting','running'}:
+                payload=dict(token=token,zones=zones,boot=TRAFFIC_BOOT,sequence=TRAFFIC_SEQUENCE)
+                try:TELEMETRY.traffic_publishers[rid].publish(String(data=json.dumps(payload)))
+                except Exception as exc:JOURNAL.record('traffic_publish_error',state=str(exc),robot_id=rid)
 
 
 def _health_loop() -> None:
@@ -1214,8 +1316,8 @@ class Handler(BaseHTTPRequestHandler):
                     raw = (topics.get('ir', {}).get('value') or {}).get('channels', [])
                     profile_view = {**profile, 'calibration_error': validate_profile(profile), 'normalized': normalize(raw, profile)}
                     robots.append({**info, "topics": topics, "waypoints": anchors, "route_preview": preview,
-                                   "ir_profile": profile_view, "parking": PARKING[robot_id], "route": STATE.routes[robot_id]})
-                self._json(200, {"robots": robots, "busy_robot": STATE.busy_robot, "monitor_error": STATE.monitor_error})
+                                   "operational": operational_status(info,topics), "traffic": TRAFFIC.snapshot(), "ir_profile": profile_view, "parking": PARKING[robot_id], "route": STATE.routes[robot_id]})
+                self._json(200, {"robots": robots, "busy_robot": STATE.busy_robot, "monitor_error": STATE.monitor_error, "keepout": keepout_view(), "traffic": TRAFFIC.snapshot()})
             return
         preview_match = re.fullmatch(r"/api/robots/(10|11|12)/route-preview\.csv", path)
         if preview_match:
@@ -1228,9 +1330,9 @@ class Handler(BaseHTTPRequestHandler):
                     return
             output = io.StringIO()
             writer = csv.writer(output)
-            writer.writerow(["seq", "name", "map", "frame", "x_m", "y_m", "yaw_rad", "anchor"])
+            writer.writerow(["seq", "name", "map", "frame", "x_m", "y_m", "yaw_rad", "anchor", "motion"])
             for seq, p in enumerate(points, 1):
-                writer.writerow([seq, p["label"], p["map"], p["frame_id"], p["x_m"], p["y_m"], p["yaw_rad"], p["anchor"]])
+                writer.writerow([seq, p["label"], p["map"], p["frame_id"], p["x_m"], p["y_m"], p["yaw_rad"], p["anchor"], "reverse" if p.get("reverse") else "forward"])
             payload = ("\ufeff" + output.getvalue()).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/csv; charset=utf-8")
@@ -1280,6 +1382,15 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
             self._json(400, {"error": "invalid JSON"})
             return
+        if path=='/api/traffic/release':
+            try:
+                rid=str(data.get('robot_id'))
+                if rid not in ROBOTS:raise ValueError('로봇을 확인하세요.')
+                observation=_traffic_observations(TELEMETRY.snapshot() if TELEMETRY else {}).get(rid)
+                TRAFFIC.release(data.get('zone'),rid,data.get('token'),observation)
+                self._json(200,{'ok':True})
+            except (ValueError,OSError) as exc:self._json(409,{'error':str(exc)})
+            return
         docking_match = re.fullmatch(r'/api/robots/(10|11|12)/docking', path)
         if docking_match:
             robot_id = docking_match.group(1)
@@ -1303,7 +1414,7 @@ class Handler(BaseHTTPRequestHandler):
                 dock = control.get('docking') or {}
                 if not data.get('dock_id') or data.get('dock_id') != dock.get('dock_id'):
                     raise ValueError('도킹 회차가 바뀌었습니다. 화면을 새로고침한 뒤 다시 눌러 주세요.')
-                allowed = {'docking','await_confirmation','recovery_hold'} if action == 'complete' else {'stopped'}
+                allowed = {'docking','await_confirmation','recovery_hold'} if action == 'complete' else ({'stopped'} if dock.get('anchored') else set())
                 if (not entry.get('fresh') or not control.get('ir_fresh') or not control.get('lidar_fresh')
                         or not control.get('ultrasonic_fresh')
                         or dock.get('state') not in allowed or not dock.get('dock_id') or not dock.get('token')):
@@ -1332,7 +1443,7 @@ class Handler(BaseHTTPRequestHandler):
                 if acknowledged.get('command_error'):
                     raise ValueError(acknowledged['command_error'])
                 result = {'ok': True, 'docking': acknowledged, 'message':
-                          '도킹완료 확인 신호를 전달했습니다. 흰색 유지가 확인되면 정지합니다.' if action == 'complete'
+                          '도킹완료 확인 신호를 전달했습니다. 흰색 유지와 5번 위치 재설정 확인 후 수령 대기로 전환합니다.' if action == 'complete'
                           else '물건 수령 완료를 확인했습니다. 시나리오를 재개합니다.'}
             except ValueError as exc:
                 code, result = 409, {'error': str(exc)}
@@ -1554,13 +1665,20 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 telemetry = TELEMETRY.snapshot() if TELEMETRY is not None else {}
                 robot_topics = telemetry.get(robot_id, {})
-                required_live = ("map", "tf_pose", "scan", "odom", "ultrasonic", "ir", "line_control")
+                required_live = ("map", "tf_pose", "scan", "odom", "ultrasonic", "ir", "line_control", "safety_status")
                 live_ready = all(robot_topics.get(key, {}).get("fresh") for key in required_live)
                 guard = robot_topics.get('line_control', {})
                 guard_value = guard.get('value') or {}
                 if (not guard.get('fresh') or guard_value.get('recovery_policy') != 'parking_mission_v2'
-                        or guard_value.get('line_algorithm') != 'three_surface_pd_v2'):
+                        or guard_value.get('line_algorithm') != 'fleet_control_v4'
+                        or guard_value.get('dock_protocol') != 'sponge_v1'):
                     self._json(409, {'error': '새 주행 감시기를 적용하려면 Nav2 복구 또는 주행준비를 실행하세요.'})
+                    return
+                if (robot_topics.get('safety_status', {}).get('value') or {}).get('version') != 'final_gate_v1':
+                    self._json(409, {'error':'독립 최종 충돌 감시기를 적용하려면 주행준비를 실행하세요.'})
+                    return
+                if TRAFFIC.storage_error or guard_value.get('traffic_config') != TRAFFIC.zones:
+                    self._json(409,{'error':'공유 구역 설정·예약 저장 상태를 확인하고 주행준비를 다시 실행하세요.'})
                     return
                 calibration_error = validate_profile(IR_PROFILES.get(robot_id))
                 if IR_PROFILES.get(robot_id).get('enabled') and calibration_error:
@@ -1642,11 +1760,15 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(401, {"error": "SSH 비밀번호를 먼저 입력하세요."})
                     return
                 route = STATE.routes[robot_id]
+                if route and route.get('stop_pending'):
+                    self._json(409, {'error':'정지 적용 확인 중입니다. 잠시 기다려 주세요.'})
+                    return
                 if route is None:
                     route={'status':'cancel_requested','labels':[],'message':'정지 유지 요청 중','detail':''}
                     STATE.routes[robot_id]=route
                 else:
                     route.update(status='cancel_requested',message='정지 유지와 Nav2 취소를 요청합니다.')
+                route['stop_pending']=True
             WORKERS.submit(_cancel_waypoint_route, robot_id)
             self._json(202, {"ok": True, "message": "경로 취소를 요청했습니다."})
             return
@@ -1773,11 +1895,13 @@ def main() -> None:
     except Exception as exc:
         STATE.monitor_error = f"ROS 모니터를 시작하지 못했습니다: {exc}"
         print(STATE.monitor_error)
+    threading.Thread(target=_traffic_loop,daemon=True,name="traffic-coordinator").start()
     threading.Thread(target=_health_loop, daemon=True, name="robot-health").start()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     # rclpy installs signal handlers that stop ROS without stopping HTTP.
     # Shut down both cleanly so restarting does not strand DDS participants.
     def stop_server(*_):
+        SHUTTING_DOWN.set()
         threading.Thread(target=server.shutdown,daemon=True).start()
     signal.signal(signal.SIGTERM,stop_server)
     signal.signal(signal.SIGINT,stop_server)
@@ -1788,6 +1912,7 @@ def main() -> None:
         pass
     finally:
         server.server_close()
+        SHUTTING_DOWN.set()
         WORKERS.shutdown(wait=False, cancel_futures=True)
         if TELEMETRY is not None:
             for context,node,executor in TELEMETRY.domain_readers:

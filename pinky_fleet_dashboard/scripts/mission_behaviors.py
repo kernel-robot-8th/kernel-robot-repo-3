@@ -1,8 +1,13 @@
 """Bounded junction traversal and an operator-gated docking state machine."""
 from __future__ import annotations
 from dataclasses import dataclass
+import json
 import math
 import uuid
+try:
+    from .motion_gate import geometry, range_arc, detour_clearance
+except ImportError:
+    from motion_gate import geometry, range_arc, detour_clearance
 
 
 def angle(value):
@@ -127,14 +132,116 @@ class Crossing:
                     ir_required=self.ir_required)
 
 
+class UltrasonicDetour:
+    """Odometry-bounded detour; a single range sensor cannot measure object width."""
+    def __init__(self, config=None):
+        self.config = geometry(config)
+        self.phase = 'idle'
+        self.origin = None
+        self.started = 0.
+        self.clear_since = None
+        self.direction = 1.
+        self.low_points = []
+        self.failure = ''
+        self.line_since = None
+        self.line_count = 0
+        self.line_sample_at = None
+        self.require_line = False
+
+    def start(self, pose, range_m, points, now, require_line=False):
+        self.__init__(self.config)
+        self.require_line = require_line
+        self.origin, self.started, self.phase = pose, now, 'stopped'
+        self.pass_distance = min(.50, max(.25, self.config['ultrasound_x_m']+range_m + self.config['half_length_m']+.08))
+        self.offset = max(self.config['detour_offset_m'], self.config['half_width_m']+.03)
+        obstacle = points+range_arc(range_m,self.config)
+        candidates = [(detour_clearance(obstacle,d,self.config,self.pass_distance),d) for d in (1.,-1.)]
+        score,self.direction = max(candidates,key=lambda candidate:candidate[0])
+        if score < 0:self.phase,self.failure='fault','no_clear_detour'
+        self.remember(pose, range_m)
+
+    def remember(self, pose, distance_m):
+        if distance_m is None or not math.isfinite(distance_m):return
+        c,s=math.cos(pose[2]),math.sin(pose[2])
+        for x,y in range_arc(distance_m,self.config):
+            hit = pose[0]+c*x-s*y,pose[1]+s*x+c*y
+            if not self.low_points or min(distance(hit,p) for p in self.low_points)>.008:self.low_points.append(hit)
+        self.low_points=self.low_points[-200:]
+
+    def update(self, pose, range_m, points, now, clear_path, line_center=False, line_sample_at=None):
+        if self.phase == 'fault':
+            return Motion(0., 0., 'ultrasonic_fault')
+        if now-self.started > 60. or distance(pose, self.origin) > .70:
+            self.phase, self.failure = 'fault', 'detour_limit'
+            return Motion(0., 0., 'ultrasonic_fault')
+        blocked = range_m is not None and math.isfinite(range_m) and range_m <= .10
+        if blocked:
+            self.remember(pose, range_m)
+        c, s = math.cos(pose[2]), math.sin(pose[2])
+        obstacles = points + [(c*(x-pose[0])+s*(y-pose[1]), -s*(x-pose[0])+c*(y-pose[1]))
+                              for x, y in self.low_points]
+        ox, oy, heading = self.origin
+        forward = (pose[0]-ox)*math.cos(heading)+(pose[1]-oy)*math.sin(heading)
+        lateral = self.direction*(-(pose[0]-ox)*math.sin(heading)+(pose[1]-oy)*math.cos(heading))
+        v, w = 0., 0.
+        if self.phase == 'stopped':
+            if now-self.started >= .5:
+                self.phase = 'turning'
+        elif self.phase in {'turning', 'aligning', 'return_turn', 'line_align'}:
+            target = heading + (self.direction*math.pi/3 if self.phase == 'turning' else -self.direction*math.pi/3 if self.phase == 'return_turn' else 0.)
+            error = angle(target-pose[2])
+            if abs(error) > .035:
+                w = math.copysign(min(.25, max(.08, 1.2*abs(error))), error)
+                self.clear_since = None
+            elif range_m is None or range_m >= .15:
+                if self.clear_since is None:
+                    self.clear_since = now
+                if now-self.clear_since >= .75:
+                    self.phase = {'turning':'offset','aligning':'passing','return_turn':'returning','line_align':'line_confirm'}[self.phase]
+                    self.clear_since = None
+            else:
+                self.clear_since = None
+        elif self.phase == 'offset':
+            if lateral >= self.offset:
+                self.phase = 'aligning'
+            elif not blocked:
+                v, w = .03, max(-.12, min(.12, angle(heading+self.direction*math.pi/3-pose[2])))
+        elif self.phase == 'passing':
+            if forward >= self.pass_distance:
+                self.phase = 'return_turn'
+            elif not blocked:
+                v, w = .03, max(-.12, min(.12, angle(heading-pose[2])))
+        elif self.phase == 'returning':
+            if line_center or lateral <= .008:
+                self.phase = 'line_align'
+            elif not blocked:
+                v,w=.02,max(-.12,min(.12,angle(heading-self.direction*math.pi/3-pose[2])))
+        elif self.phase == 'line_confirm':
+            if not self.require_line:self.phase='idle'
+            elif line_center:
+                if self.line_since is None:self.line_since=now
+                sample=now if line_sample_at is None else line_sample_at
+                if sample!=self.line_sample_at:self.line_count+=1;self.line_sample_at=sample
+                if now-self.line_since>=.3 and self.line_count>=3:self.phase='idle'
+            else:self.line_since=None;self.line_count=0
+        if not clear_path(obstacles, v, w):
+            return Motion(0., 0., 'ultrasonic_clearance_wait')
+        return Motion(v, w, 'ultrasonic_'+self.phase)
+
+    def status(self):
+        return dict(phase=self.phase, failure=self.failure, lateral_target_m=getattr(self,'offset',self.config['detour_offset_m']),
+                    footprint_width_m=2*self.config['half_width_m'], direction=self.direction)
+
+
 class Docking:
-    ACTIVE = {'docking', 'reverse', 'await_confirmation', 'stopped', 'fault', 'recovery_hold', 'search', 'search_hold'}
+    ACTIVE = {'docking', 'reverse', 'await_confirmation', 'stopped', 'fault', 'recovery_hold', 'search', 'search_hold', 'anchor_wait'}
 
     def __init__(self):
         self.token = None
         self.state = 'idle'
         self.dock_id = None
         self.complete = False
+        self.anchored = False
         self.handled = set()
         self.sample_at = None
         self.white_count = 0
@@ -176,7 +283,7 @@ class Docking:
             self.complete = True
             self.white_count = 0  # Confirm fresh white samples after the signal.
             self.message = '도킹완료 신호 수신 · 흰색 유지 확인 중'
-        elif command.get('action') == 'received' and self.state == 'stopped':
+        elif command.get('action') == 'received' and self.state == 'stopped' and self.anchored:
             self.state = 'released'
             self.message = '물건 수령 완료 · 경로 재개'
         else:
@@ -202,7 +309,7 @@ class Docking:
             else:
                 self.state, self.dock_id = 'docking', uuid.uuid4().hex
                 self.handled.add(context['segment'])
-                self.complete, self.reversed_once = False, False
+                self.complete, self.reversed_once, self.anchored = False, False, False
                 self.origin, self.heading, self.started = odom, odom[2], now
                 self.message = '도킹중 · 저속 진입 · 도킹완료 신호 대기'
         if self.state == 'search':
@@ -211,7 +318,7 @@ class Docking:
             if self.white_count >= 3:
                 self.state = 'docking'
                 self.handled.add(context['segment'])
-                self.complete, self.reversed_once = False, False
+                self.complete, self.reversed_once, self.anchored = False, False, False
                 self.origin, self.started = odom, now
                 self.message = '흰색 패턴 확인 · 도킹중 · 도킹완료 신호 대기'
             else:
@@ -237,7 +344,7 @@ class Docking:
             if self.white_count >= 3:
                 self.state = 'docking'
                 self.handled.add(context['segment'])
-                self.complete, self.reversed_once = False, False
+                self.complete, self.reversed_once, self.anchored = False, False, False
                 self.origin, self.started = odom, now
                 self.message = '흰색 패턴 확인 · 도킹중'
             else:
@@ -246,14 +353,16 @@ class Docking:
             return None
         if self.state == 'fault':
             return Motion(0., 0., 'docking_fault')
+        if self.state == 'anchor_wait':
+            return Motion(0., 0., 'docking_anchor_wait')
         if self.state == 'stopped':
             self.message = ('도킹완료 · 물건 수령 완료 버튼 대기' if self.all_white
                             else '도킹완료 · IR 변화 감지 · 정지 유지')
             return Motion(0., 0., 'docking_stopped')
         if self.complete and self.white_count >= 3 and self.state != 'reverse':
-            self.state = 'stopped'
-            self.message = '도킹완료 · 물건 수령 완료 버튼 대기'
-            return Motion(0., 0., 'docking_stopped')
+            self.state = 'anchor_wait'
+            self.message = '도킹완료 확인 · 5번 지도 위치 재설정 중'
+            return Motion(0., 0., 'docking_anchor_wait')
         if self.complete and self.all_white and self.state != 'reverse':
             return Motion(0., 0., 'docking_wait')
         if self.state == 'recovery_hold':
@@ -281,7 +390,55 @@ class Docking:
 
     def status(self):
         return dict(state=self.state, token=self.token, dock_id=self.dock_id,
-                    complete=self.complete, all_white=self.all_white, white_count=self.white_count,
+                    complete=self.complete, anchored=self.anchored, all_white=self.all_white, white_count=self.white_count,
                     black_count=self.black_count,
                     command_id=self.command_id, command_error=self.command_error,
                     message=self.message, handled=sorted(self.handled))
+
+
+class DockExit:
+    """Reverse out of the sponge station using continuous wheel odometry.
+
+    A restart during the maneuver fails closed; the origin is never rebased.
+    The independent final guard retains rear and side collision checks.
+    """
+    def __init__(self):
+        self.key = None
+        self.origin = None
+        self.started = 0.
+        self.state = 'idle'
+        self.progress = 0.
+        self.message = ''
+
+    def update(self, context, odom, now, persist):
+        key = [context['token'], context['segment']]
+        if key != self.key:
+            self.key, self.origin, self.started = key, odom, now
+            try:
+                previous = json.loads(persist.read_text())
+            except FileNotFoundError:
+                previous = {}
+            except (OSError, ValueError):
+                previous = {'key': key}
+            self.state = 'fault' if previous.get('key') == key else 'reversing'
+            try:
+                temporary = persist.with_suffix('.tmp')
+                temporary.write_text(json.dumps(dict(key=key, state=self.state)))
+                temporary.replace(persist)
+            except OSError:
+                self.state = 'fault'
+        dx, dy = odom[0]-self.origin[0], odom[1]-self.origin[1]
+        self.progress = -(dx*math.cos(self.origin[2])+dy*math.sin(self.origin[2]))
+        lateral = abs(-dx*math.sin(self.origin[2])+dy*math.cos(self.origin[2]))
+        if self.state == 'reversing':
+            if lateral > .02 or abs(angle(odom[2]-self.origin[2])) > .12 or now-self.started > 30.:
+                self.state = 'fault'
+            elif self.progress >= .198:
+                self.state = 'complete'
+        self.message = {'reversing':'도킹 스테이션 탈출 · 2cm/s로 20cm 후진',
+                        'complete':'20cm 후진 완료 · 6번 이동 준비',
+                        'fault':'도킹 후진 중단 · 재시작/방향/이동 제한 확인'}[self.state]
+        return Motion(-.02 if self.state == 'reversing' else 0., 0., 'docking_exit_'+self.state)
+
+    def status(self):
+        return dict(key=self.key, state=self.state, progress_m=self.progress, target_m=.20, message=self.message)

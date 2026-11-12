@@ -12,7 +12,8 @@ import uuid
 
 import rclpy
 from action_msgs.msg import GoalStatus
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+from rclpy.qos import qos_profile_sensor_data
 from nav2_msgs.action import NavigateToPose
 from rclpy.action import ActionClient
 from rclpy.node import Node
@@ -42,11 +43,60 @@ class RouteRunner(Node):
     def __init__(self):
         super().__init__('pinky_dashboard_route')
         self.client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+        self.initial_pose = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', 10)
+        self.amcl_sample = None
+        self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose', self.on_amcl, qos_profile_sensor_data)
         self.interrupted = False
         self.run_id = None
         self.active_goal = None
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+
+    def on_amcl(self, msg):
+        self.amcl_sample = (time.monotonic(), msg)
+
+    def anchor_dock(self, context, target, token, dock_id=None):
+        """Reset map localization; keep wheel odometry continuous for reverse distance."""
+        self.cancel_active()
+        last_pose = self.pose(.8)
+        started, published = time.monotonic(), None
+        message = PoseWithCovarianceStamped()
+        message.header.frame_id = 'map'
+        message.pose.pose.position.x, message.pose.pose.position.y = target[:2]
+        message.pose.pose.orientation.z = math.sin(target[2]/2)
+        message.pose.pose.orientation.w = math.cos(target[2]/2)
+        message.pose.covariance[0] = message.pose.covariance[7] = .0001
+        message.pose.covariance[35] = math.radians(5)**2
+        print('MISSION_STATUS '+json.dumps(dict(phase='docking_anchor', message='도킹완료 확인 · 5번 지도 위치 재설정 중'), ensure_ascii=False), flush=True)
+        while rclpy.ok() and not self.interrupted and time.monotonic()-started < 18.:
+            context(last_pose, mission_wait=True)
+            now = time.monotonic()
+            if self.initial_pose.get_subscription_count() and published is None:
+                message.header.stamp = self.get_clock().now().to_msg()
+                self.initial_pose.publish(message)
+                published = now
+            rclpy.spin_once(self, timeout_sec=.05)
+            # pose() also polls the persistent operator stop latch.
+            try:
+                last_pose = self.pose(.1)
+            except RouteFailure as exc:
+                if exc.code != 9: raise
+                continue
+            sample = self.amcl_sample
+            if published and sample and sample[0] >= published:
+                pose = sample[1].pose.pose
+                q = pose.orientation
+                yaw = math.atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z))
+                if (sample[1].header.frame_id == 'map'
+                        and math.hypot(pose.position.x-target[0],pose.position.y-target[1]) <= .03
+                        and abs(angle(yaw-target[2])) <= math.radians(5)
+                        and math.hypot(last_pose[0]-target[0],last_pose[1]-target[1]) <= .03
+                        and abs(angle(last_pose[2]-target[2])) <= math.radians(5)):
+                    atomic_json('dock_anchor.json', dict(token=token, dock_id=dock_id,
+                        monotonic=time.monotonic(),success=True,target=list(target)))
+                    return
+        if self.interrupted: raise RouteFailure(130, 'cancelled')
+        raise RouteFailure(18, '5번 위치 재설정 확인 실패: AMCL /initialpose 구독과 최신 AMCL·TF 좌표를 확인하세요. 정지를 유지합니다.')
 
     def cancel(self, *_args):
         self.interrupted = True
@@ -103,15 +153,40 @@ def mission_feedback(token):
                                f" (단계 {crossing.get('phase')}, {crossing.get('phase_elapsed_s', 0):.1f}초). 정지 후 위치를 확인하세요.")
         if feedback.get('state')=='line_search_failed':
             raise RouteFailure(16,'IR 차선 재탐색 한도(6초/약23도)에 도달했습니다. 정지 후 선 위치와 보정값을 확인하세요.')
+        if feedback.get('avoidance', {}).get('phase') == 'fault':
+            raise RouteFailure(17, '초음파 우회 공간/진행 한도 초과 · 정지 후 장애물과 주변 공간을 확인하세요.')
         return feedback
     except (OSError, ValueError, TypeError, KeyError):
         return None
 
 
+def detour_wait(node,context,token):
+    # Cancel Nav2 without blocking the route heartbeat. Otherwise its progress
+    # checker can abort while a different controller is performing the detour.
+    if node.active_goal is not None:
+        node.active_goal.cancel_goal_async()
+        node.active_goal=None
+    print('MISSION_STATUS '+json.dumps(dict(phase='recovering',token=token,message='초음파 우회·차선 복귀 중 · Nav2 목표 일시 중단'),ensure_ascii=False),flush=True)
+    started=time.monotonic()
+    while rclpy.ok() and not node.interrupted:
+        context(node.pose(.8))
+        feedback=mission_feedback(token)
+        if feedback is None:
+            if time.monotonic()-started>2.:raise RouteFailure(17,'우회 감시 상태 미수신 · 정지')
+        elif feedback.get('avoidance',{}).get('phase')=='idle':
+            print('MISSION_STATUS '+json.dumps(dict(phase='driving',token=token,message='차선 복귀 확인 · Nav2 목표 재개'),ensure_ascii=False),flush=True)
+            return
+        if time.monotonic()-started>90.:raise RouteFailure(17,'우회·차선 복귀 대기 한도 초과')
+        rclpy.spin_once(node,timeout_sec=.05)
+    raise RouteFailure(130,'cancelled')
+
+
 def docking_wait(node, context, token, require_marker=False):
-    active = {'docking','reverse','await_confirmation','stopped','fault','recovery_hold','search','search_hold'}
+    active = {'docking','reverse','await_confirmation','stopped','fault','recovery_hold','search','search_hold','anchor_wait'}
     node.cancel_active()
     started, previous = time.monotonic(), None
+    anchored_id = None
+    anchored_at = None
     while rclpy.ok() and not node.interrupted:
         context(node.pose(.8), dock_search=require_marker)
         feedback = mission_feedback(token)
@@ -121,6 +196,18 @@ def docking_wait(node, context, token, require_marker=False):
             continue
         dock = feedback.get('docking', {})
         state = dock.get('state')
+        if state == 'anchor_wait' and anchored_id != dock.get('dock_id'):
+            try:
+                route = json.loads((CACHE/'route_context.json').read_text())
+                target = (*route['dock_xy'], route['heading_rad'])
+            except (OSError, ValueError, TypeError, KeyError):
+                raise RouteFailure(18, '5번 위치 재설정 기준이 없습니다.')
+            node.anchor_dock(context, target, token, dock.get('dock_id'))
+            anchored_id = dock.get('dock_id')
+            anchored_at = time.monotonic()
+            context(node.pose(.8), dock_search=require_marker)
+        if state == 'anchor_wait' and anchored_at and time.monotonic()-anchored_at > 4.:
+            raise RouteFailure(18, '5번 위치 재설정 이후 도킹 정지 상태를 확인하지 못했습니다. 센서를 확인하세요.')
         if state == 'released':
             print('MISSION_STATUS '+json.dumps(dict(phase='driving', message='물건 수령 완료 · 경로 재개'), ensure_ascii=False), flush=True)
             return
@@ -161,10 +248,10 @@ def run(node, points):
     for _ in range(20):
         rclpy.spin_once(node, timeout_sec=.05)
     publishers = node.get_publishers_info_by_topic('/cmd_vel')
-    competitors = sorted({p.node_name for p in publishers if p.node_name != 'pinky_ultrasonic_safety'})
+    competitors = sorted({p.node_name for p in publishers if p.node_name != 'pinky_final_guard'})
     if competitors:
         raise RouteFailure(11, '수동/다른 cmd_vel 발행자를 종료한 뒤 시작하세요: '+', '.join(competitors))
-    if not any(p.node_name == 'pinky_ultrasonic_safety' for p in publishers):
+    if not any(p.node_name == 'pinky_final_guard' for p in publishers):
         raise RouteFailure(11, '통합 안전 감시기가 없습니다. 주행준비를 다시 실행하세요.')
     anchors = [i for i, p in enumerate(points) if p.get('anchor')]
     if not anchors or anchors[0] != 0 or anchors[-1] != len(points)-1:
@@ -199,13 +286,15 @@ def run(node, points):
             following = points[anchors[segment+2]]
             outgoing = math.atan2(following['y_m']-end['y_m'], following['x_m']-end['x_m'])
             end_turn = abs(angle(outgoing-heading)) > .35
+        if end['label'] == '5':
+            end_turn = False  # Dock straight in; reverse exit owns the next maneuver.
         cursor = start_index+1
         print(f"WAYPOINT_START {cursor+1} {points[cursor]['label']}", flush=True)
         def context(pose, dock_search=False, mission_wait=False):
             near_start = math.hypot(pose[0]-start['x_m'], pose[1]-start['y_m']) < .12
             near_end = math.hypot(pose[0]-end['x_m'], pose[1]-end['y_m']) < .12
             atomic_json('route_context.json', dict(token=token, segment=segment,
-                monotonic=time.monotonic(), dock_search=dock_search, mission_wait=mission_wait, use_ir=bool(end.get("use_ir")), transit=start["label"]=="주차장" or end["label"]=="주차장", corner=(start_turn and near_start) or (end_turn and near_end),
+                monotonic=time.monotonic(), dock_exit=bool(end.get('dock_exit')), dock_search=dock_search, mission_wait=mission_wait, use_ir=bool(end.get("use_ir")), transit=start["label"]=="주차장" or end["label"]=="주차장", corner=(start_turn and near_start) or (end_turn and near_end),
                 start_transition=not course_departure and (start_turn or start['label'] in junctions),
                 end_transition=end_turn or end['label'] in junctions,
                 start_xy=[start['x_m'],start['y_m']], end_xy=[end['x_m'],end['y_m']],
@@ -218,6 +307,27 @@ def run(node, points):
         if not startup_armed and start["label"]!="주차장" and end.get("use_ir"):
             atomic_json('route_start.json', dict(token=token, monotonic=time.monotonic()))
             startup_armed = True
+        if end.get('dock_exit'):
+            node.cancel_active()
+            print('MISSION_STATUS '+json.dumps(dict(phase='dock_exit', message='도킹 탈출 · 20cm 후진 후 6번으로 이동'), ensure_ascii=False), flush=True)
+            started = time.monotonic()
+            while rclpy.ok() and not node.interrupted:
+                pose = node.pose(.8)
+                context(pose)
+                feedback = mission_feedback(token)
+                exit_status = (feedback or {}).get('dock_exit', {})
+                if exit_status.get('key') != [token, segment]:
+                    exit_status = {}
+                if exit_status.get('state') == 'fault':
+                    raise RouteFailure(19, exit_status.get('message', '도킹 후진 실패'))
+                if exit_status.get('state') == 'complete':
+                    checkpoint(end_index, end, pose)
+                    break
+                if time.monotonic()-started > 32.:
+                    raise RouteFailure(19, '20cm 도킹 후진 제한 시간 초과 · 후방 장애물/센서를 확인하세요.')
+                rclpy.spin_once(node, timeout_sec=.05)
+            if node.interrupted: raise RouteFailure(130, 'cancelled')
+            continue
         goal = NavigateToPose.Goal()
         goal.pose = PoseStamped()
         goal.pose.header.frame_id = 'map'
@@ -243,11 +353,23 @@ def run(node, points):
         deadline = time.monotonic()+240.
         previous_pose = pose
         dock_serviced = False
-        while rclpy.ok() and not result.done() and time.monotonic() < deadline and not node.interrupted:
+        while rclpy.ok() and time.monotonic() < deadline and not node.interrupted:
             pose = node.pose(.8)
             context(pose)
             feedback = mission_feedback(token)
-            if end.get('use_ir') and feedback and feedback.get('docking', {}).get('state') in {'docking','reverse','await_confirmation','stopped','fault','recovery_hold','search','search_hold'}:
+            if feedback and feedback.get('avoidance',{}).get('phase') not in {None,'idle','fault'}:
+                detour_wait(node,context,token)
+                goal.pose.header.stamp=node.get_clock().now().to_msg()
+                future=node.client.send_goal_async(goal)
+                rclpy.spin_until_future_complete(node,future,timeout_sec=5.)
+                if not future.done() or future.exception() or not future.result().accepted:
+                    raise RouteFailure(4,'차선 복귀 후 Nav2 목표 재개 실패')
+                node.active_goal=future.result();result=node.active_goal.get_result_async()
+                deadline=time.monotonic()+240.
+                previous_pose=node.pose(.8)
+                continue
+            if result.done():break
+            if end.get('use_ir') and feedback and feedback.get('docking', {}).get('state') in {'docking','reverse','await_confirmation','stopped','fault','recovery_hold','search','search_hold','anchor_wait'}:
                 docking_wait(node, context, token)
                 dock_serviced = True
                 break
@@ -289,6 +411,7 @@ def run(node, points):
         checkpoint(end_index, end, pose, sampling='docking_service' if dock_serviced else None)
         if end['label']=='5' and not end.get('use_ir'):
             operator_wait(node,context,token,'docking_manual','dock_complete','5번 도착 · 정지 · IR 보정 전 수동 도킹완료 확인 대기')
+            node.anchor_dock(context, (end['x_m'],end['y_m'],heading), token)
             operator_wait(node,context,token,'docked_manual','received','도킹완료 · 정지 유지 · 물건 수령 완료 대기')
         if end.get('course_end'):
             node.cancel_active()
@@ -296,7 +419,7 @@ def run(node, points):
             while rclpy.ok() and not node.interrupted:
                 context(node.pose(.8), mission_wait=True)
                 try:
-                    signal_data=json.loads((CACHE/'mission_complete.json','operator_confirm.json').read_text())
+                    signal_data=json.loads((CACHE/'mission_complete.json').read_text())
                     if signal_data.get('token')==token and 0<=time.monotonic()-float(signal_data.get('monotonic',0))<=10.:
                         break
                 except (OSError,ValueError,TypeError): pass
@@ -338,7 +461,7 @@ def main():
         try:
             node.cancel_active()
         finally:
-            for name in ('route_start.json','route_context.json','route.pid','mission_complete.json','operator_confirm.json'):
+            for name in ('route_start.json','route_context.json','route.pid','mission_complete.json','operator_confirm.json','dock_anchor.json'):
                 (CACHE/name).unlink(missing_ok=True)
             node.destroy_node()
             if rclpy.ok():
