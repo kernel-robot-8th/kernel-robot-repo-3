@@ -17,7 +17,7 @@ from control_station.act_policies import load_act_policies
 from control_station.arms import load_arms
 from control_station.mock_world import MockWorld
 from control_station.order_flow import OrderDevices, OrderFlow
-from control_station.pinky_fleet import _fresh_battery, PinkyFleetClient, PinkyFleetError
+from control_station.pinky_fleet import BatteryHistory, _fresh_battery, PinkyFleetClient, PinkyFleetError
 from control_station.store import TaskStore
 from control_station.task_orchestrator import MockTaskOrchestrator
 
@@ -151,6 +151,19 @@ class BatteryReadingTest(unittest.TestCase):
         robot = {"topics": {"battery_percent": {"fresh": True, "value": {"percent": 0.0}},
                             "battery_voltage": {"fresh": True, "value": {"voltage_v": 6.59249210357666}}}}
         self.assertEqual(_fresh_battery(robot), (0.0, 6.59249210357666))
+
+    def test_a_battery_value_a_few_seconds_old_is_kept(self) -> None:
+        # Published every 4-5 s, marked stale by the dashboard after about 4 s.
+        robot = {"topics": {"battery_percent": {"fresh": False, "age_s": 4.7, "value": {"percent": 77.4}},
+                            "battery_voltage": {"fresh": False, "age_s": 20.0, "value": {"voltage_v": 7.49}}}}
+        self.assertEqual(_fresh_battery(robot), (77.4, None))
+
+    def test_the_median_steadies_a_jumpy_percentage(self) -> None:
+        history = BatteryHistory(window_s=60)
+        for at, percent in ((0, 77.4), (5, 98.9), (10, 76.0)):
+            history.add("10", at, percent)
+        self.assertEqual(history.add("10", 12, None), 77.4)
+        self.assertEqual(history.add("10", 80, None), None)  # everything older than the window is dropped
 
     def test_a_real_percentage_and_stale_topics(self) -> None:
         robot = {"topics": {"battery_percent": {"fresh": True, "value": {"percent": 64.0}},

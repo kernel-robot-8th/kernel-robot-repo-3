@@ -20,8 +20,10 @@ The dashboard listens on 127.0.0.1:8765 by default; reaching it from another PC 
 from __future__ import annotations
 
 import json
+import statistics
 import threading
 import time
+from collections import deque
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -32,19 +34,50 @@ _IDLE_ROUTE_STATES = {None, "complete", "cancelled", "failed"}
 STATION_PHASES = frozenset({"docking_manual", "docking_anchor", "docked_manual"})
 
 
-def _fresh_topic(robot: dict[str, Any], key: str, field: str) -> float | None:
+# The Pinky publishes its battery every 4-5 s while the dashboard calls a topic stale after about 4 s, so a battery
+# value is kept for this long. A battery does not change faster than that.
+BATTERY_MAX_AGE_S = 15.0
+# The Pinky's own percentage jumps between readings (77 % then 99 % at a steady 7.49 V on 2026-11-14), so the
+# client reports the median of the readings it saw in this window.
+BATTERY_WINDOW_S = 60.0
+
+
+def _fresh_topic(robot: dict[str, Any], key: str, field: str, max_age_s: float | None = None) -> float | None:
+    """A live topic value; with `max_age_s`, also one the dashboard calls stale but is younger than that."""
     topic = (robot.get("topics") or {}).get(key) or {}
-    value = (topic.get("value") or {}).get(field) if topic.get("fresh") else None
+    age = topic.get("age_s")
+    recent = max_age_s is not None and isinstance(age, (int, float)) and age <= max_age_s
+    value = (topic.get("value") or {}).get(field) if topic.get("fresh") or recent else None
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
 def _fresh_battery(robot: dict[str, Any]) -> tuple[float | None, float | None]:
-    """(percent, volts) from the dashboard's live topics; None when missing or stale.
+    """(percent, volts) from the dashboard's topics; None when missing or older than BATTERY_MAX_AGE_S.
 
     The percentage is the Pinky's own (`/battery/percent`, computed from the voltage) and is used as is, including
-    0 %: on 2026-11-14 Pinky C76C read 0 % at a 6.59 V dip and 64-66 % at 7.37 V a few minutes later, so a low
-    reading is the robot saying its battery is low, not a missing value."""
-    return _fresh_topic(robot, "battery_percent", "percent"), _fresh_topic(robot, "battery_voltage", "voltage_v")
+    0 %: on 2026-11-14 Pinky C76C read 0 % at a 6.59 V dip, so a low reading is the robot saying its battery is
+    low, not a missing value."""
+    return (_fresh_topic(robot, "battery_percent", "percent", BATTERY_MAX_AGE_S),
+            _fresh_topic(robot, "battery_voltage", "voltage_v", BATTERY_MAX_AGE_S))
+
+
+class BatteryHistory:
+    """Recent battery readings per Pinky; the median steadies a jumpy percentage without hiding a real drop."""
+
+    def __init__(self, window_s: float = BATTERY_WINDOW_S) -> None:
+        self.window_s = window_s
+        self._readings: dict[str, deque[tuple[float, float]]] = {}
+        self._lock = threading.Lock()
+
+    def add(self, pinky_id: str, at: float, percent: float | None) -> float | None:
+        """Record a reading (None adds nothing) and return the median of the window, or None if it is empty."""
+        with self._lock:
+            readings = self._readings.setdefault(pinky_id, deque())
+            if percent is not None:
+                readings.append((at, percent))
+            while readings and at - readings[0][0] > self.window_s:
+                readings.popleft()
+            return statistics.median(value for _, value in readings) if readings else None
 
 
 class PinkyFleetError(RuntimeError):
@@ -59,6 +92,7 @@ class PinkyFleetClient:
     def __init__(self, base_url: str, timeout_s: float = 3.0, status_max_age_s: float = 0.5) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
+        self._battery = BatteryHistory()
         # Three Pinky cards and the waiting order poll the same status; share one answer for a moment.
         self.status_max_age_s = status_max_age_s
         self._cache: tuple[float, dict[str, Any]] | None = None
@@ -127,6 +161,7 @@ class PinkyFleetClient:
             phase = "driving"  # starting / running before the robot reported a mission phase
         operational = robot.get("operational") if isinstance(robot.get("operational"), dict) else {}
         battery_percent, battery_volts = _fresh_battery(robot)
+        battery_percent = self._battery.add(pinky_id, time.monotonic(), battery_percent)
         return {
             "source": "pinky_fleet", "simulated": False, "pinky_id": pinky_id, "phase": phase,
             "mission_token": route.get("mission_token"), "route_status": route_status,
