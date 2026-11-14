@@ -214,7 +214,7 @@ ros2 launch parking_vision_ros ceiling_parking.launch.py repository_root:=$PWD s
 
 ## 남은 일
 
-- 팔 집기를 실제 `PICK_WITH_POLICY` 명령으로 바꾸기. 팔별 정책(`arm_id`)을 고르고, 잡았는지는 `VERIFY_TRANSFER`가 카메라로 판단합니다.
+- 실제 팔 집기(`CONTROL_STATION_ORDER_REAL_ARM=1`, HTTP 큐 또는 ROS 2 액션)를 실물 팔·카메라로 끝까지 돌려 보기. 코드는 들어가 있고 가짜 팔로워·모의로만 확인했습니다.
 - 큰 주문의 운송분을 동시에 달리게 하기(핑키 관제의 교통 관리와 수령 구역 여러 칸이 확인된 뒤).
 - 탑 캠에서 핑키 쟁반 위 물건 검출 개선(YOLO 학습).
 - 핑키 관제 외부 접속, 핑키별 주차 마커 등록.
