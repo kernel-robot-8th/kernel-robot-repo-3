@@ -17,7 +17,7 @@ from control_station.act_policies import load_act_policies
 from control_station.arms import load_arms
 from control_station.mock_world import MockWorld
 from control_station.order_flow import OrderDevices, OrderFlow
-from control_station.pinky_fleet import PinkyFleetClient, PinkyFleetError
+from control_station.pinky_fleet import _fresh_battery, PinkyFleetClient, PinkyFleetError
 from control_station.store import TaskStore
 from control_station.task_orchestrator import MockTaskOrchestrator
 
@@ -140,6 +140,22 @@ class PinkyFleetClientTests(unittest.TestCase):
         self.assertEqual(finished["status"], "SUCCEEDED", finished["error"])
         self.assertEqual([signal["action"] for signal in self.fleet.signals], ["dock_complete", "received"])
         self.assertEqual(self.fleet.routes["10"]["phase"], "driving")
+
+
+
+class BatteryReadingTest(unittest.TestCase):
+    """Shapes seen from the real dashboard on 2026-11-14 (Pinky C76C, domain 10)."""
+
+    def test_zero_percent_beside_a_live_voltage_is_unknown(self) -> None:
+        robot = {"topics": {"battery_percent": {"fresh": True, "value": {"percent": 0.0}},
+                            "battery_voltage": {"fresh": True, "value": {"voltage_v": 6.59249210357666}}}}
+        self.assertEqual(_fresh_battery(robot), (None, 6.59249210357666))
+
+    def test_a_real_percentage_and_stale_topics(self) -> None:
+        robot = {"topics": {"battery_percent": {"fresh": True, "value": {"percent": 64.0}},
+                            "battery_voltage": {"fresh": False, "value": {"voltage_v": 7.6}}}}
+        self.assertEqual(_fresh_battery(robot), (64.0, None))
+        self.assertEqual(_fresh_battery({}), (None, None))
 
 
 if __name__ == "__main__":

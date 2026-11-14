@@ -32,11 +32,23 @@ _IDLE_ROUTE_STATES = {None, "complete", "cancelled", "failed"}
 STATION_PHASES = frozenset({"docking_manual", "docking_anchor", "docked_manual"})
 
 
-def _fresh_battery(robot: dict[str, Any]) -> float | None:
-    """Battery percent from the dashboard's live topics, or None when it is missing or stale."""
-    topic = (robot.get("topics") or {}).get("battery_percent") or {}
-    percent = (topic.get("value") or {}).get("percent") if topic.get("fresh") else None
-    return float(percent) if isinstance(percent, (int, float)) and not isinstance(percent, bool) else None
+def _fresh_topic(robot: dict[str, Any], key: str, field: str) -> float | None:
+    topic = (robot.get("topics") or {}).get(key) or {}
+    value = (topic.get("value") or {}).get(field) if topic.get("fresh") else None
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _fresh_battery(robot: dict[str, Any]) -> tuple[float | None, float | None]:
+    """(percent, volts) from the dashboard's live topics; None when missing or stale.
+
+    A Pinky that still publishes its sensors is not at 0 %: the robots seen on 2026-11-14 publish
+    `battery/percent` 0.0 next to a 6.6 V reading, i.e. the percentage is not computed. A 0 % beside a live
+    voltage is therefore reported as unknown rather than as an empty battery."""
+    percent = _fresh_topic(robot, "battery_percent", "percent")
+    volts = _fresh_topic(robot, "battery_voltage", "voltage_v")
+    if percent == 0.0 and volts:
+        percent = None
+    return percent, volts
 
 
 class PinkyFleetError(RuntimeError):
@@ -99,14 +111,17 @@ class PinkyFleetClient:
         else:
             phase = "driving"  # starting / running before the robot reported a mission phase
         operational = robot.get("operational") if isinstance(robot.get("operational"), dict) else {}
+        battery_percent, battery_volts = _fresh_battery(robot)
         return {
             "source": "pinky_fleet", "simulated": False, "pinky_id": pinky_id, "phase": phase,
             "mission_token": route.get("mission_token"), "route_status": route_status,
             "message": route.get("message") or robot.get("message"),
             "location": route.get("current_label") or robot.get("stage"),
+            "connected": operational.get("state") != "disconnected",
             "ready_for_motion": bool(operational.get("ready_for_motion")),
             "readiness_label": operational.get("label"),
-            "battery_percent": _fresh_battery(robot),
+            "battery_percent": battery_percent,
+            "battery_volts": battery_volts,
         }
 
     def fleet_confirm(self, pinky_id: str, action: str, token: str | None) -> dict[str, Any]:

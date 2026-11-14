@@ -156,7 +156,9 @@ def build_flow_view(
         )
         pinkies.append({
             "pinky_id": pinky_id, "name": name, "phase": status.get("phase"),
-            "phase_label": PHASE_LABELS.get(status.get("phase"), status.get("phase") or "상태 모름"),
+            # Without a connection the fleet has no route for it, which would otherwise read as "parked".
+            "phase_label": "연결 끊김" if status.get("connected") is False
+            else PHASE_LABELS.get(status.get("phase"), status.get("phase") or "상태 모름"),
             "message": status.get("message") or status.get("error"), "location": status.get("location"),
             "order_id": holder, "stopped_order_id": stopped, "simulated": status.get("simulated", False),
             "reachable": bool(status) and "error" not in status,
