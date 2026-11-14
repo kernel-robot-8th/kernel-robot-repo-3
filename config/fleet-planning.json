@@ -1,7 +1,13 @@
 {
   "schema_version": 1,
-  "notes": "주문을 핑키 여러 대로 나누고 두 팔의 적재 시간을 미리 계산할 때 쓰는 값. 2026-11-14 기준 모두 가정값이라 실측해서 바꿔야 한다. pinky_capacity: 핑키 쟁반에 싣는 양(크기 단위). unit_sizes: 물체 크기(없으면 1). pick_timing_s: 녹화 에피소드 약 15초를 선반 구간(집어서 대기 자세까지)과 적재 구간(핑키 위에 놓고 빠지기)으로 나눈 가정.",
+  "notes": "주문을 핑키 여러 대로 나누고 적재 시간을 미리 계산할 때 쓰는 값. pinky_capacity: 핑키 쟁반 칸 수. unit_sizes: 물체가 차지하는 칸(없으면 1) — 2026-11-14 사용자: 쟁반에 3~4개, 큰 물건은 나눠야 함 → 4칸, 큰 물건 2칸으로 둠(물티슈를 큰 물건으로 본 것은 가정). arms_overlap: 두 팔 겹치기. ACT 정책이 집기→핑키 위에 놓기→대기 자세까지 한 번에 학습돼 있어 적재 공간에 들어가고 나오는 순간을 알 수 없으므로 끔(한 팔이 끝나면 다른 팔). pick_timing_s: 녹화 에피소드 약 15초를 선반 구간과 적재 구간으로 나눈 가정.",
   "pinky_capacity": 4,
-  "unit_sizes": {},
-  "pick_timing_s": {"shelf": 9, "place": 6}
+  "unit_sizes": {
+    "tissue": 2
+  },
+  "arms_overlap": false,
+  "pick_timing_s": {
+    "shelf": 9,
+    "place": 6
+  }
 }

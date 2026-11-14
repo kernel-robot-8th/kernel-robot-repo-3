@@ -398,21 +398,31 @@ class LoadingSchedule:
     picks: tuple[TimedPick, ...]  # in the order they reach the Pinky
     total_s: float
     one_arm_at_a_time_s: float
+    overlap: bool = True
 
     def as_dict(self) -> dict[str, Any]:
-        return {"total_s": self.total_s, "one_arm_at_a_time_s": self.one_arm_at_a_time_s,
+        return {"total_s": self.total_s, "one_arm_at_a_time_s": self.one_arm_at_a_time_s, "overlap": self.overlap,
                 "picks": [pick.as_dict() for pick in self.picks]}
 
 
 def schedule_loading(
-    picks: Sequence[ArmPick], timing: Callable[[ArmPick], PickTiming], arm_ids: Sequence[str]
+    picks: Sequence[ArmPick], timing: Callable[[ArmPick], PickTiming], arm_ids: Sequence[str], *, overlap: bool = True
 ) -> LoadingSchedule:
-    """When each pick happens if the arms overlap their shelf work and take turns over the Pinky.
+    """When each pick happens.
 
-    The loading space above the Pinky is the only shared resource, so it is a lock: an arm grasps at its own shelf
-    while the other places, then waits at its waiting pose until the space is free. The arm that is ready first
-    places first (ties: the arm with more picks left, then config order), which makes the arms alternate whenever
-    both have work. Each arm keeps the plan's order for its own picks."""
+    Without `overlap`, one whole pick after another in plan order: what the arms do while each ACT policy runs
+    grasp -> place -> rest in one go. With it, the loading space above the Pinky is the only shared resource and
+    becomes a lock: an arm grasps at its own shelf while the other places, then waits at its waiting pose until the
+    space is free. The arm that is ready first places first (ties: the arm with more picks left, then config
+    order), which makes the arms alternate whenever both have work. Each arm keeps the plan's order for its picks."""
+    sequential = sum(timing(pick).shelf_s + timing(pick).place_s for pick in picks)
+    if not overlap:
+        timeline, clock = [], 0.0
+        for pick in picks:
+            step = timing(pick)
+            timeline.append(TimedPick(pick, clock, clock + step.shelf_s, clock + step.shelf_s + step.place_s, 0.0))
+            clock += step.shelf_s + step.place_s
+        return LoadingSchedule(tuple(timeline), clock, sequential, overlap=False)
     queues = {arm: deque(pick for pick in picks if pick.arm_id == arm) for arm in arm_ids}
     free_at = dict.fromkeys(arm_ids, 0.0)
     space_free_at = 0.0
@@ -427,5 +437,4 @@ def schedule_loading(
         place_end = place_start + timing(pick).place_s
         timeline.append(TimedPick(pick, free_at[arm], place_start, place_end, place_start - ready_at))
         free_at[arm] = space_free_at = place_end
-    sequential = sum(timing(pick).shelf_s + timing(pick).place_s for pick in picks)
-    return LoadingSchedule(tuple(timeline), max((p.place_end_s for p in timeline), default=0.0), sequential)
+    return LoadingSchedule(tuple(timeline), max((p.place_end_s for p in timeline), default=0.0), sequential, overlap=True)

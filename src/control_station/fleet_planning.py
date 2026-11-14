@@ -29,6 +29,9 @@ class FleetPlanning:
     shelf_s: float
     place_s: float
     unit_sizes: Mapping[str, int] = field(default_factory=dict)
+    # Overlap the two arms only when a pick can be split where the arm enters the space above the Pinky. The ACT
+    # policies run grasp -> place -> rest in one go, so the arms take turns whole picks at a time.
+    arms_overlap: bool = False
 
     def size_of(self, object_class: str) -> int:
         return self.unit_sizes.get(object_class, 1)
@@ -46,7 +49,7 @@ def _positive_number(value: object, name: str) -> float:
 def load_fleet_planning(path: str | Path | None = None) -> FleetPlanning:
     planning_path = Path(path or os.environ.get("CONTROL_STATION_FLEET_PLANNING") or DEFAULT_PLANNING_PATH)
     _, document = load_json_file(planning_path, MAX_PLANNING_BYTES, "핑키·팔 계획값 파일", FleetPlanningError)
-    expected = {"schema_version", "notes", "pinky_capacity", "unit_sizes", "pick_timing_s"}
+    expected = {"schema_version", "notes", "pinky_capacity", "unit_sizes", "arms_overlap", "pick_timing_s"}
     if not isinstance(document, dict) or set(document) - expected or document.get("schema_version") != 1:
         raise FleetPlanningError("핑키·팔 계획값 파일은 schema_version 1과 정해진 항목만 가져야 합니다")
     capacity = document.get("pinky_capacity")
@@ -61,5 +64,8 @@ def load_fleet_planning(path: str | Path | None = None) -> FleetPlanning:
     timing = document.get("pick_timing_s")
     if not isinstance(timing, dict) or set(timing) != {"shelf", "place"}:
         raise FleetPlanningError("pick_timing_s must have exactly shelf and place")
+    overlap = document.get("arms_overlap", False)
+    if not isinstance(overlap, bool):
+        raise FleetPlanningError("arms_overlap must be true or false")
     return FleetPlanning(capacity, _positive_number(timing["shelf"], "pick_timing_s.shelf"),
-                         _positive_number(timing["place"], "pick_timing_s.place"), dict(sizes))
+                         _positive_number(timing["place"], "pick_timing_s.place"), dict(sizes), overlap)

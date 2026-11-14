@@ -122,7 +122,8 @@ class OrderDeskTest(unittest.TestCase):
         for trip in fleet["trips"]:
             schedule = trip["schedule"]
             self.assertEqual(len(schedule["picks"]), 3)
-            self.assertLess(schedule["total_s"], schedule["one_arm_at_a_time_s"])  # the arms overlap
+            # ACT runs grasp -> place -> rest in one go, so overlap is off: one whole pick after another.
+            self.assertEqual((schedule["overlap"], schedule["total_s"]), (False, schedule["one_arm_at_a_time_s"]))
         with self.assertRaises(OrderDeskError) as error:
             self.desk.start(order["id"])
         self.assertEqual(error.exception.error_code, "MULTI_PINKY_NOT_SUPPORTED")

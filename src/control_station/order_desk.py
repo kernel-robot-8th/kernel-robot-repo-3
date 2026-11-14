@@ -129,7 +129,8 @@ class OrderDesk:
                     for pick in plan.picks:
                         stock[pick.shelf_id][pick.object_class] -= 1
                     entry["arms"] = plan.as_dict()
-                    entry["schedule"] = schedule_loading(plan.picks, self.planning.timing, arm_ids).as_dict()
+                    entry["schedule"] = schedule_loading(plan.picks, self.planning.timing, arm_ids,
+                                                         overlap=self.planning.arms_overlap).as_dict()
             trips.append(entry)
         arms = trips[0]["arms"] if len(trips) == 1 else {
             "error": {"code": "MULTI_PINKY", "message": f"{fleet.summary} · 배송별 팔 계획은 fleet에 있습니다"}}

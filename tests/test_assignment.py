@@ -128,6 +128,11 @@ class SplitIntoShipmentsTest(unittest.TestCase):
         self.assertEqual([shipment.load for shipment in shipments], [3, 2, 2])  # not 3, 3, 1
         self.assertEqual(sum(len(shipment.units) for shipment in shipments), 7)
 
+    def test_big_objects_take_two_slots_of_four(self) -> None:
+        # The configured tray: 4 slots, tissue 2. Two tissues and two apples need two Pinkys.
+        shipments = split_into_shipments(units(("tissue", 2), ("apple", 2)), 4, sizes(tissue=2), LABELS.get)
+        self.assertEqual([shipment.load for shipment in shipments], [3, 3])
+
     def test_sizes_count_against_the_tray(self) -> None:
         shipments = split_into_shipments(units(("tissue", 2), ("apple", 2)), 3, sizes(tissue=2), LABELS.get)
         self.assertEqual([sorted(u["object_class"] for u in s.units) for s in shipments],
@@ -175,6 +180,13 @@ class ScheduleLoadingTest(unittest.TestCase):
                          [("arm-01", 8, 13), ("arm-02", 13, 18), ("arm-01", 21, 26)])
         self.assertEqual(schedule.picks[1].waited_s, 5)  # the right arm held the carrot while the left one placed
         self.assertEqual((schedule.total_s, schedule.one_arm_at_a_time_s), (26, 39))
+
+    def test_without_overlap_whole_picks_follow_each_other(self) -> None:
+        picks = [arm_pick("arm-02", "apple", 1), arm_pick("arm-01", "carrot", 1)]
+        schedule = schedule_loading(picks, self.TIMING, ["arm-01", "arm-02"], overlap=False)
+        self.assertEqual([(p.pick.arm_id, p.shelf_start_s, p.place_end_s) for p in schedule.picks],
+                         [("arm-02", 0, 13), ("arm-01", 13, 26)])
+        self.assertEqual((schedule.total_s, schedule.overlap), (26, False))
 
     def test_one_arm_gains_nothing(self) -> None:
         picks = [arm_pick("arm-01", "apple", 1), arm_pick("arm-01", "apple", 2)]
