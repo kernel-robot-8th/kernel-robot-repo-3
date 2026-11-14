@@ -96,6 +96,10 @@ POST_ROUTES: tuple[Route, ...] = (
     Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "pinky"] and parts[3] == "stop",
           pinky.post_stop, "Cross-origin Pinky-stop request rejected", reads_body=False),
     Route(_path("/api/pinky/credentials"), pinky.post_credentials, "Cross-origin credentials request rejected"),
+    Route(lambda route, parts: parts[:2] == ["api", "pinky"] and (
+              (len(parts) == 4 and parts[3] in {"ready", "initial-pose", "nav-restart", "waypoints"})
+              or (len(parts) == 6 and parts[3] == "waypoints" and parts[5] == "delete")),
+          pinky.post_action, "Cross-origin Pinky request rejected"),
     Route(lambda route, parts: len(parts) == 3 and parts[:2] == ["api", "inventory"],
           orders.post_inventory, "Cross-origin inventory request rejected"),
     # The order window is a page of this server, so a browser order is same-origin like the operator screen.

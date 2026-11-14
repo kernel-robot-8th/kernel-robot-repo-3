@@ -37,6 +37,26 @@ class FakeFleet:
         self.sent.append(("stop", pinky_id))
         return self.answers.get(pinky_id, (202, {"ok": True, "message": "경로 취소를 요청했습니다."}))
 
+    def prepare(self, pinky_id: str, map_name: str) -> tuple[int, dict]:
+        self.sent.append(("prepare", (pinky_id, map_name)))
+        return 202, {"ok": True, "robot": pinky_id}
+
+    def initial_pose(self, pinky_id: str) -> tuple[int, dict]:
+        self.sent.append(("initial_pose", pinky_id))
+        return 409, {"error": "주행준비 완료 후 초기 위치를 설정하세요."}
+
+    def nav_restart(self, pinky_id: str) -> tuple[int, dict]:
+        self.sent.append(("nav_restart", pinky_id))
+        return 202, {"ok": True, "message": "Nav2를 재시작하고 액션 서버를 확인합니다."}
+
+    def record_waypoint(self, pinky_id: str, label: str) -> tuple[int, dict]:
+        self.sent.append(("waypoint", (pinky_id, label)))
+        return 200, {"ok": True, "waypoint": {"label": label}}
+
+    def delete_waypoint(self, pinky_id: str, waypoint_id: str) -> tuple[int, dict]:
+        self.sent.append(("waypoint_delete", (pinky_id, waypoint_id)))
+        return 200, {"ok": True}
+
     def send_password(self, password: str) -> tuple[int, dict]:
         self.sent.append(("password", password))
         return 200, {"ok": True, "message": "비밀번호를 실행 중인 프로세스 메모리에만 보관합니다."}
@@ -148,6 +168,22 @@ class PinkyApiTest(ApiTestCase):
         self.assertEqual((status, len(body["commands"])), (207, 3))
         status, body, _ = self.request("POST", "/api/pinky/99/stop")
         self.assertEqual((status, body["error_code"]), (404, "PINKY_UNKNOWN"))
+
+    def test_preparation_and_waypoint_actions(self) -> None:
+        status, body, _ = self.request("POST", "/api/pinky/10/ready", {"map": "map-proto.yaml"})
+        self.assertEqual((status, body["command"]["action"]), (202, "prepare"))
+        status, body, _ = self.request("POST", "/api/pinky/10/ready", {"map": "other.yaml"})
+        self.assertEqual((status, body["error_code"]), (400, "PINKY_ACTION_INVALID"))
+        status, body, _ = self.request("POST", "/api/pinky/10/initial-pose", {})
+        self.assertEqual((status, body["command"]["message"]), (409, "주행준비 완료 후 초기 위치를 설정하세요."))
+        status, _, _ = self.request("POST", "/api/pinky/10/nav-restart", {})
+        self.assertEqual(status, 202)
+        status, body, _ = self.request("POST", "/api/pinky/10/waypoints", {"label": "수령 구역 A"})
+        self.assertEqual((status, body["command"]["ok"]), (200, True))
+        status, _, _ = self.request("POST", f"/api/pinky/10/waypoints/{'a' * 32}/delete", {})
+        self.assertEqual(status, 200)
+        self.assertEqual([action for action, _ in self.fleet.sent],
+                         ["prepare", "initial_pose", "nav_restart", "waypoint", "waypoint_delete"])
 
     def test_password_route(self) -> None:
         status, body, _ = self.request("POST", "/api/pinky/credentials", {"password": "s3cret"})

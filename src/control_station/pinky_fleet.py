@@ -144,11 +144,30 @@ class PinkyFleetClient:
         202 = accepted (not yet applied), 401 = no SSH password yet, 409 = a stop is still being applied."""
         return self._send("POST", f"/api/robots/{pinky_id}/route/cancel", {})
 
+    def prepare(self, pinky_id: str, map_name: str) -> tuple[int, dict[str, Any]]:
+        """Run preparation (주행준비): bringup, Nav2 and the robot-side safety monitor with the chosen map."""
+        return self._send("POST", f"/api/robots/{pinky_id}/ready", {"map": map_name})
+
+    def initial_pose(self, pinky_id: str) -> tuple[int, dict[str, Any]]:
+        """Set AMCL's pose to the Pinky's own parking spot; the Pinky must stand there."""
+        return self._send("POST", f"/api/robots/{pinky_id}/initial-pose", {})
+
+    def nav_restart(self, pinky_id: str) -> tuple[int, dict[str, Any]]:
+        """Restart Nav2 when its action server is missing; refused while a route runs."""
+        return self._send("POST", f"/api/robots/{pinky_id}/nav/restart", {})
+
+    def record_waypoint(self, pinky_id: str, label: str) -> tuple[int, dict[str, Any]]:
+        """Save the Pinky's current map pose as a named waypoint (needs a fresh map and pose)."""
+        return self._send("POST", f"/api/robots/{pinky_id}/waypoints", {"label": label})
+
+    def delete_waypoint(self, pinky_id: str, waypoint_id: str) -> tuple[int, dict[str, Any]]:
+        return self._send("DELETE", f"/api/robots/{pinky_id}/waypoints/{waypoint_id}", None)
+
     def send_password(self, password: str) -> tuple[int, dict[str, Any]]:
         """Hand the SSH password to the dashboard, which keeps it in its own memory only."""
         return self._send("POST", "/api/credentials", {"password": password})
 
-    def _send(self, method: str, path: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    def _send(self, method: str, path: str, body: dict[str, Any] | None) -> tuple[int, dict[str, Any]]:
         status, answer = self._request(method, path, body)
         with self._lock:
             self._cache = None  # the state is about to change

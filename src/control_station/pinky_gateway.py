@@ -266,6 +266,40 @@ class PinkyGateway:
             raise ValueError(f"unknown Pinky {pinky_id}")
         return self._command("stop", pinky_id, lambda client: client.stop(pinky_id))
 
+    MAPS = ("map-proto.yaml", "my_map.yaml", "pinklab.yaml")  # the maps the fleet dashboard can prepare with
+
+    def prepare(self, pinky_id: str, map_name: str = "map-proto.yaml") -> dict[str, Any]:
+        """주행준비. map-proto.yaml is the one with the keepout mask."""
+        self._known(pinky_id)
+        if map_name not in self.MAPS:
+            raise ValueError("지도는 " + ", ".join(self.MAPS) + " 중 하나여야 합니다")
+        return self._command("prepare", pinky_id, lambda client: client.prepare(pinky_id, map_name))
+
+    def initial_pose(self, pinky_id: str) -> dict[str, Any]:
+        self._known(pinky_id)
+        return self._command("initial_pose", pinky_id, lambda client: client.initial_pose(pinky_id))
+
+    def nav_restart(self, pinky_id: str) -> dict[str, Any]:
+        self._known(pinky_id)
+        return self._command("nav_restart", pinky_id, lambda client: client.nav_restart(pinky_id))
+
+    def record_waypoint(self, pinky_id: str, label: str) -> dict[str, Any]:
+        self._known(pinky_id)
+        if not isinstance(label, str) or not label.strip() or len(label.strip()) > 48:
+            raise ValueError("지점 이름은 1~48자로 입력하세요")
+        return self._command("waypoint", pinky_id, lambda client: client.record_waypoint(pinky_id, label.strip()))
+
+    def delete_waypoint(self, pinky_id: str, waypoint_id: str) -> dict[str, Any]:
+        self._known(pinky_id)
+        if not isinstance(waypoint_id, str) or len(waypoint_id) != 32 or not all(c in "0123456789abcdef" for c in waypoint_id):
+            raise ValueError("웨이포인트 id가 올바르지 않습니다")
+        return self._command("waypoint_delete", pinky_id, lambda client: client.delete_waypoint(pinky_id, waypoint_id))
+
+    @staticmethod
+    def _known(pinky_id: str) -> None:
+        if pinky_id not in PINKY_IDS:
+            raise ValueError(f"unknown Pinky {pinky_id}")
+
     def stop_all(self) -> list[dict[str, Any]]:
         """Stop request to every Pinky, each recorded on its own; one refusal does not hold back the others."""
         return [self.stop(pinky_id) for pinky_id in PINKY_IDS]

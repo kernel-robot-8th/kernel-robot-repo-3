@@ -5,6 +5,7 @@ GET  /api/pinky/map             the cell from above in map metres: Nav2 grid, ke
 POST /api/pinky/{id}/stop       stop one Pinky (the dashboard latches a stop and cancels its Nav2 goal)
 POST /api/pinky/stop-all        stop request to every Pinky
 POST /api/pinky/credentials     {password}: passed to the dashboard, never stored or logged here
+POST /api/pinky/{id}/ready {map}, /initial-pose, /nav-restart, /waypoints {label}, /waypoints/{wid}/delete
 """
 
 from __future__ import annotations
@@ -19,7 +20,8 @@ if TYPE_CHECKING:
 
 def _answer(h: ControlStationHandler, entry: dict[str, Any]) -> None:
     """202 when the dashboard accepted it; otherwise its own refusal status (401 no password, 409 busy) or 502."""
-    status = 202 if entry["ok"] else (entry["http_status"] if entry["http_status"] in {400, 401, 409} else 502)
+    status = (202 if entry["http_status"] in {None, 202} else entry["http_status"]) if entry["ok"] else (
+        entry["http_status"] if entry["http_status"] in {400, 401, 409} else 502)
     if entry.get("simulated"):
         status = 409
     h._json(status, {"command": entry})
@@ -43,6 +45,26 @@ def post_stop(h: ControlStationHandler, route: str, parts: list[str], body: None
         h._json_error(404, "PINKY_UNKNOWN", f"핑키 {pinky_id}가 없습니다")
         return
     _answer(h, h.app.pinky_gateway.stop(pinky_id))
+
+
+def post_action(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:
+    """주행준비·위치 재설정·Nav2 복구·웨이포인트 기록과 삭제를 핑키 관제로 전달"""
+    gateway, pinky_id, action = h.app.pinky_gateway, parts[2], parts[3]
+    try:
+        if action == "ready":
+            entry = gateway.prepare(pinky_id, body.get("map", "map-proto.yaml"))
+        elif action == "initial-pose":
+            entry = gateway.initial_pose(pinky_id)
+        elif action == "nav-restart":
+            entry = gateway.nav_restart(pinky_id)
+        elif action == "waypoints" and len(parts) == 4:
+            entry = gateway.record_waypoint(pinky_id, body.get("label"))
+        else:  # /api/pinky/{id}/waypoints/{waypoint id}/delete
+            entry = gateway.delete_waypoint(pinky_id, parts[4])
+    except ValueError as exc:
+        h._json_error(400, "PINKY_ACTION_INVALID", str(exc))
+        return
+    _answer(h, entry)
 
 
 def post_stop_all(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
