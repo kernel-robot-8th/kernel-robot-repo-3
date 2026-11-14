@@ -42,7 +42,7 @@ body { margin: 0; min-width: 320px; font-size: 16px; line-height: 1.55; letter-s
 h1, h2, h3, p { margin: 0; letter-spacing: -.02em; }
 button { font: inherit; cursor: pointer; }
 button:disabled { cursor: not-allowed; }
-button:focus-visible, .zone-chip:has(input:focus-visible) { outline: 3px solid rgba(49, 130, 246, .35); outline-offset: 2px; }
+button:focus-visible { outline: 3px solid rgba(49, 130, 246, .35); outline-offset: 2px; }
 [hidden] { display: none !important; }
 
 .order-page { width: min(100%, 640px); margin: 0 auto; padding: 36px 20px 0; }
@@ -92,19 +92,13 @@ button:focus-visible, .zone-chip:has(input:focus-visible) { outline: 3px solid r
 .step-value { min-width: 2ch; font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; text-align: center; }
 .product.selected .step-value { color: var(--blue); }
 
-/* ---- receiving zones ---- */
-.zone-list { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.zone-chip { position: relative; display: inline-flex; align-items: center; gap: 8px; min-height: 48px; padding: 10px 20px; border-radius: 999px; background: var(--card); color: var(--text); font-size: 16px; font-weight: 600; box-shadow: var(--shadow); cursor: pointer; }
-.zone-chip input { position: absolute; opacity: 0; pointer-events: none; }
-.zone-chip.selected, .zone-chip.fixed { background: var(--blue); color: #fff; }
-.zone-chip.fixed { cursor: default; }
-.zone-fixed-note { color: var(--text-3); font-size: 14px; }
-
 /* ---- cart bar: stays at the bottom of the screen on long pages ---- */
 .cart-bar { position: sticky; bottom: 0; margin: 32px -20px 0; padding: 16px 20px calc(16px + env(safe-area-inset-bottom)); border-radius: 24px 24px 0 0; background: var(--card); box-shadow: 0 -4px 16px rgba(0, 0, 0, .06); }
 .cart-row { display: grid; gap: 12px; }
 .cart-summary { min-width: 0; color: var(--text-3); font-size: 15px; overflow-wrap: anywhere; }
 .cart-summary.filled { color: var(--text); font-weight: 600; }
+.cart-note { margin-top: 10px; color: var(--text-3); font-size: 13px; text-align: center; }
+.cart-note.error { color: var(--red-ink); font-weight: 500; }
 .form-error { margin-bottom: 12px; padding: 14px 16px; border-radius: 16px; background: var(--red-soft); color: var(--red-ink); font-size: 15px; font-weight: 500; overflow-wrap: anywhere; }
 
 .primary { width: 100%; min-height: 56px; padding: 12px 24px; border: 0; border-radius: 16px; background: var(--blue); color: #fff; font-size: 17px; font-weight: 700; transition: background-color .15s; }
@@ -146,6 +140,7 @@ button:focus-visible, .zone-chip:has(input:focus-visible) { outline: 3px solid r
 .track-details > div:last-child { border-bottom: 0; }
 .track-details dt { color: var(--text-3); font-size: 14px; }
 .track-details dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.track-details dd.pending { color: var(--text-3); font-weight: 500; }
 .done-items { margin: 0; padding: 0; list-style: none; }
 
 .order-page::after { content: ""; display: block; height: 32px; }

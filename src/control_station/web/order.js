@@ -11,7 +11,7 @@ const FINISHED_STAGES = ['done', 'canceled'];
 const orderForm = document.querySelector('#orderForm');
 const productList = document.querySelector('#products');
 const stockNotice = document.querySelector('#stockNotice');
-const zoneList = document.querySelector('#zones');
+const cartNote = document.querySelector('#cartNote');
 const cartSummary = document.querySelector('#cartSummary');
 const submitButton = document.querySelector('#submitOrder');
 const formError = document.querySelector('#formError');
@@ -25,10 +25,9 @@ const state = {
   catalogFailed: false,  // the latest refresh failed; the last good catalog stays on screen
   products: [],          // [{object_class, label, available, status, notice}] in catalog order
   notice: null,          // why some objects cannot be ordered now (stock unknown), from the catalog
-  zones: [],             // [{zone_id, label}]
+  zones: [],             // [{zone_id, label}]; the server picks one when the order starts, the app only needs one to exist
   cart: new Map(),       // object_class -> quantity, only quantities above 0
   adjusted: new Map(),   // object class -> 'lowered' (to the stock left) | 'removed' (closed or sold out) by a refresh
-  zoneId: null,
   sending: false,
   orderId: null,         // the order being followed on the tracking screen
   track: null,           // the latest GET /api/orders/{id}/track answer
@@ -85,7 +84,7 @@ function setQuantity(product, quantity) {
 function applyCatalog(catalog) {
   state.products = catalog.products;
   state.notice = catalog.notice ?? catalog.stock_error ?? null;
-  state.zones = catalog.zones;
+  state.zones = catalog.zones || [];
   // Stock can drop or close while the customer is choosing: lower the cart to what is left and say so on the card.
   for (const [objectClass, quantity] of state.cart) {
     const product = state.products.find((item) => item.object_class === objectClass);
@@ -94,9 +93,6 @@ function applyCatalog(catalog) {
     if (max) state.cart.set(objectClass, max);
     else state.cart.delete(objectClass);
     state.adjusted.set(objectClass, max ? 'lowered' : 'removed');
-  }
-  if (!state.zones.some((zone) => zone.zone_id === state.zoneId)) {
-    state.zoneId = state.zones.length === 1 ? state.zones[0].zone_id : null;
   }
 }
 
@@ -193,50 +189,25 @@ function renderProducts() {
   state.products.forEach((product, index) => updateProductCard(productList.children[index], product));
 }
 
-function zoneChoices() {
-  if (!state.catalogLoaded) return [];
-  if (!state.zones.length) {
-    return [element('p', { class: 'notice error' }, '받을 곳이 정해지지 않아 지금은 주문할 수 없어요')];
-  }
-  if (state.zones.length === 1) {
-    return [element('span', { class: 'zone-chip fixed' }, state.zones[0].label),
-      element('span', { class: 'zone-fixed-note' }, '지금은 이곳에서만 받을 수 있어요')];
-  }
-  return state.zones.map((zone) => element('label', { class: 'zone-chip' },
-    element('input', { type: 'radio', name: 'receiving_zone', value: zone.zone_id }), zone.label));
-}
-
-function renderZones() {
-  const keys = `${state.catalogLoaded}|${state.zones.map((zone) => `${zone.zone_id}:${zone.label}`).join('|')}`;
-  if (zoneList.dataset.keys !== keys) {
-    zoneList.dataset.keys = keys;
-    zoneList.replaceChildren(...zoneChoices());
-  }
-  zoneList.querySelectorAll('input[name="receiving_zone"]').forEach((input) => {
-    input.checked = input.value === state.zoneId;
-    input.disabled = state.sending;
-    input.closest('.zone-chip').classList.toggle('selected', input.checked);
-  });
-}
-
 function renderCart() {
   const items = cartItems();
   const total = items.reduce((sum, item) => sum + item.quantity, 0);
   let summary = '담은 물건이 없어요';
   if (total) {
     summary = `${items.map((item) => `${item.label} ${item.quantity}개`).join(', ')}, 모두 ${total}개`;
-    if (!state.zoneId && state.zones.length) summary += '. 받을 곳을 골라 주세요';
   }
   cartSummary.textContent = summary;
   cartSummary.classList.toggle('filled', total > 0);
-  submitButton.disabled = state.sending || !total || !state.zoneId;
+  const noZone = state.catalogLoaded && !state.zones.length;  // the server could not read its receiving zones
+  cartNote.textContent = noZone ? '받을 곳이 정해지지 않아 지금은 주문할 수 없어요' : '받을 곳은 로봇이 출발할 때 알려 드려요';
+  cartNote.classList.toggle('error', noZone);
+  submitButton.disabled = state.sending || !total || noZone;
   submitButton.textContent = state.sending ? '보내는 중…' : '주문하기';
 }
 
 function render() {
   renderNotice();
   renderProducts();
-  renderZones();
   renderCart();
 }
 
@@ -281,7 +252,9 @@ function renderTrack() {
     element('span', { class: 'track-dot', 'aria-hidden': 'true' }), element('span', { class: 'track-label' }, stage.label))));
   document.querySelector('#trackItems').replaceChildren(
     ...track.items.map((item) => element('li', {}, `${item.label} ${item.quantity}개`)));
-  document.querySelector('#trackZone').textContent = track.zone;
+  const trackZone = document.querySelector('#trackZone');
+  trackZone.textContent = track.zone || '출발할 때 정해져요';
+  trackZone.classList.toggle('pending', !track.zone);
   document.querySelector('#trackId').textContent = track.order_id;
   pickupButton.hidden = !track.can_confirm_pickup;
   pickupButton.disabled = state.confirming;
@@ -372,17 +345,10 @@ productList.addEventListener('click', (event) => {
   render();
 });
 
-zoneList.addEventListener('change', (event) => {
-  if (event.target.name !== 'receiving_zone') return;
-  state.zoneId = event.target.value;
-  clearError();
-  render();
-});
-
 orderForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const items = cartItems().map(({ object_class, quantity }) => ({ object_class, quantity }));
-  if (!items.length || !state.zoneId || state.sending) return;
+  if (!items.length || !state.zones.length || state.sending) return;
   state.sending = true;
   clearError();
   render();
@@ -390,7 +356,7 @@ orderForm.addEventListener('submit', async (event) => {
     const response = await fetch('/api/orders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items, receiving_zone: state.zoneId }),
+      body: JSON.stringify({ items }),  // the receiving zone is the server's choice, made when the order starts
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
