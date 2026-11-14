@@ -108,6 +108,8 @@ function dashArmState(arm) {
 
 function dashCameraName(camera) {
   if (camera.label) return camera.label;
+  // GET /api/cameras already sends a person-readable role ("왼쪽 팔 그리퍼 캠"); drop the bracketed note for a short row.
+  if (camera.role && /[^\x00-\x7f]/.test(camera.role)) return camera.role.replace(/\s*\(.*\)$/, '');
   const role = dashCameraRoles[String(camera.role || camera.position || '').toUpperCase()] || camera.id;
   const arm = camera.arm_label || dashArmNames[camera.arm_id];
   return arm && !role.startsWith('천장') && !role.startsWith('선반') ? `${arm} ${role}` : role;
