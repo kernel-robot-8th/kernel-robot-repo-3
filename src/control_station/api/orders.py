@@ -2,6 +2,7 @@
 
 GET  /api/catalog                    what can be ordered, how many can still be sold, receiving zones
 GET  /api/inventory                  shelf inventory: on the shelves, reserved, available, recent changes
+POST /api/inventory/{object}         operator override {mode: auto|closed|manual, count}
 POST /api/orders                     {items: [{object_class, quantity}], receiving_zone} -> a waiting order
 GET  /api/orders                     orders waiting in the intake, oldest first
 GET  /api/orders/{id}/assignment     which Pinky and arms would serve it now, and why (changes nothing)
@@ -32,6 +33,19 @@ def get_catalog(h: ControlStationHandler, route: str, parts: list[str], body: No
 
 def get_inventory(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
     """선반 재고: 물건별 선반 수량, 예약, 주문 가능 수량, 품절 여부와 최근 변화"""
+    h._json(200, h.app.inventory.snapshot())
+
+
+def post_inventory(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:
+    """재고 수정(작업자): {mode: auto|closed|manual, count?} — 카메라 기준, 판매 중지, 직접 센 수량"""
+    if not set(body) <= {"mode", "count"} or "mode" not in body:
+        h._json_error(400, "INVENTORY_OVERRIDE_INVALID", "mode(auto, closed, manual)와 manual일 때 count를 보내 주세요")
+        return
+    try:
+        h.app.inventory.set_override(parts[2], body["mode"], body.get("count"))
+    except ValueError as exc:
+        h._json_error(400, "INVENTORY_OVERRIDE_INVALID", str(exc))
+        return
     h._json(200, h.app.inventory.snapshot())
 
 

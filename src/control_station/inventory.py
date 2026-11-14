@@ -13,22 +13,27 @@ that shelf's count drops by one at once (a ledger), and the camera later only co
 confirms that we did not make (someone took an object, or restocked) is logged as such.
 
 Available = shelf counts - reserved by open orders (ordered and not yet moved onto a Pinky). It is what the order
-window may sell: zero is sold out, `low_stock_at` or fewer is low.
+window may sell. An object whose stock is unknown is closed for ordering, and both windows say why.
+
+The operator can override any object (InventoryOverrides, kept in a small JSON file): `closed` stops selling it,
+`manual` sells from a count the operator typed instead of the camera's (e.g. while a camera is down), `auto` goes
+back to the camera.
 """
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 CONFIRM_READINGS = 3
 STALE_AFTER_S = 10.0
-LOW_STOCK_AT = 1
 READ_PERIOD_S = 2.0
 EVENT_LOG_SIZE = 40
 
@@ -50,11 +55,9 @@ class StockReading:
 class InventoryBook:
     """Confirmed shelf counts, built from readings; no I/O, so the rules are testable with plain readings."""
 
-    def __init__(self, *, confirm_readings: int = CONFIRM_READINGS, stale_after_s: float = STALE_AFTER_S,
-                 low_stock_at: int = LOW_STOCK_AT) -> None:
+    def __init__(self, *, confirm_readings: int = CONFIRM_READINGS, stale_after_s: float = STALE_AFTER_S) -> None:
         self.confirm_readings = confirm_readings
         self.stale_after_s = stale_after_s
-        self.low_stock_at = low_stock_at
         self._confirmed: dict[tuple[str, str], int] = {}
         self._pending: dict[tuple[str, str], tuple[int, int]] = {}  # key -> (value seen, readings in a row)
         self._has_confirmed = False
@@ -120,28 +123,76 @@ class InventoryBook:
                 shelves.setdefault(shelf, {})[name] = count
         return shelves
 
-    def snapshot(self, products: Iterable[Mapping[str, str]], reserved: Mapping[str, int], now: float) -> dict[str, Any]:
-        """Per product: on each shelf, reserved, available and a status the order window and the screen show."""
+    def snapshot(self, products: Iterable[Mapping[str, str]], reserved: Mapping[str, int], now: float,
+                 overrides: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
+        """Per product: where the count comes from, on each shelf, reserved, available, and its status:
+        available (some left), sold_out, unknown (camera count missing, closed for ordering), closed (by the
+        operator)."""
         state, reason = self.state(now)
         shelves = self.on_shelves()
+        overrides = overrides or {}
         rows = []
         for product in products:
             name = product["object_class"]
-            per_shelf = {shelf: counts[name] for shelf, counts in shelves.items() if counts.get(name)}
-            total = sum(per_shelf.values())
+            override = overrides.get(name) or {}
             held = int(reserved.get(name, 0))
-            available = max(0, total - held) if state != "unknown" else None
-            if available is None:
-                status = "unknown"
-            elif available == 0:
-                status = "sold_out"
-            elif available <= self.low_stock_at:
-                status = "low"
+            per_shelf = {shelf: counts[name] for shelf, counts in shelves.items() if counts.get(name)}
+            if override.get("mode") == "closed":
+                source, total, available, status = "closed", sum(per_shelf.values()), 0, "closed"
+            elif override.get("mode") == "manual":
+                source, total = "manual", int(override.get("count", 0))
+                available = max(0, total - held)
+                status = "available" if available else "sold_out"
+            elif state == "unknown":
+                source, total, available, status = "camera", None, None, "unknown"
             else:
-                status = "in_stock"
-            rows.append({"object_class": name, "label": product.get("label", name), "on_shelves": total,
-                         "per_shelf": per_shelf, "reserved": held, "available": available, "status": status})
+                source, total = "camera", sum(per_shelf.values())
+                available = max(0, total - held)
+                status = "available" if available else "sold_out"
+            rows.append({"object_class": name, "label": product.get("label", name), "source": source,
+                         "on_shelves": total, "per_shelf": per_shelf, "reserved": held, "available": available,
+                         "status": status, "override": dict(override) or None})
         return {"state": state, "reason": reason, "products": rows}
+
+
+class InventoryOverrides:
+    """The operator's per-object settings, kept in a JSON file so they survive a restart."""
+
+    MODES = frozenset({"auto", "closed", "manual"})
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._lock = threading.Lock()
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            loaded = {}
+        self._values: dict[str, dict[str, Any]] = {
+            name: value for name, value in (loaded.items() if isinstance(loaded, dict) else [])
+            if isinstance(value, dict) and value.get("mode") in {"closed", "manual"}
+        }
+
+    def all(self) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            return {name: dict(value) for name, value in self._values.items()}
+
+    def set(self, object_class: str, mode: str, count: object = None) -> dict[str, Any] | None:
+        """Set one object's mode; returns the stored override (None for auto). Raises ValueError on bad input."""
+        if mode not in self.MODES:
+            raise ValueError("mode는 auto, closed, manual 중 하나여야 합니다")
+        if mode == "manual" and (isinstance(count, bool) or not isinstance(count, int) or not 0 <= count <= 99):
+            raise ValueError("수동 수량은 0에서 99 사이의 정수여야 합니다")
+        value = None if mode == "auto" else ({"mode": "manual", "count": count} if mode == "manual" else {"mode": "closed"})
+        with self._lock:
+            if value is None:
+                self._values.pop(object_class, None)
+            else:
+                self._values[object_class] = {**value, "set_at": _now_iso()}
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(self._values, ensure_ascii=False, indent=2), encoding="utf-8")
+            temporary.replace(self.path)
+            return dict(self._values[object_class]) if value is not None else None
 
 
 class InventoryMonitor:
@@ -150,7 +201,8 @@ class InventoryMonitor:
     def __init__(self, read_shelves: Callable[[], Mapping[str, Any]], busy: Callable[[], bool],
                  products: Callable[[], list[dict[str, str]]], reserved: Callable[[], Mapping[str, int]],
                  transfers: Callable[[], list[tuple[str, str, str]]], book: InventoryBook | None = None,
-                 period_s: float = READ_PERIOD_S, clock: Callable[[], float] = time.monotonic) -> None:
+                 overrides: InventoryOverrides | None = None, period_s: float = READ_PERIOD_S,
+                 clock: Callable[[], float] = time.monotonic) -> None:
         self.read_shelves = read_shelves
         self.busy = busy
         self.products = products
@@ -159,6 +211,7 @@ class InventoryMonitor:
         # Transfers that happened before this start are already reflected in what the camera sees.
         self._booked = {step_id for step_id, _, _ in transfers()}
         self.book = book or InventoryBook()
+        self.overrides = overrides
         self.period_s = period_s
         self.clock = clock
         self._events: deque[dict[str, Any]] = deque(maxlen=EVENT_LOG_SIZE)
@@ -181,11 +234,24 @@ class InventoryMonitor:
 
     def snapshot(self) -> dict[str, Any]:
         reserved = self.reserved()
+        overrides = self.overrides.all() if self.overrides is not None else {}
         with self._lock:
-            view = self.book.snapshot(self.products(), reserved, self.clock())
+            view = self.book.snapshot(self.products(), reserved, self.clock(), overrides)
             view["events"] = list(self._events)[::-1]
         view["checked_at"] = _now_iso()
         return view
+
+    def set_override(self, object_class: str, mode: str, count: object = None) -> dict[str, Any] | None:
+        """The operator closes, hand-counts or returns an object to the camera; the change is logged."""
+        if self.overrides is None:
+            raise ValueError("재고 수정 기능이 켜져 있지 않습니다")
+        if object_class not in {product["object_class"] for product in self.products()}:
+            raise ValueError(f"주문할 수 있는 물건이 아닙니다: {object_class}")
+        stored = self.overrides.set(object_class, mode, count)
+        with self._lock:
+            self._events.append({"at": _now_iso(), "kind": "OVERRIDE", "object_class": object_class, "mode": mode,
+                                 "count": count if mode == "manual" else None})
+        return stored
 
     def start(self) -> InventoryMonitor:
         def loop() -> None:

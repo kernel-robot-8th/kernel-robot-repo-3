@@ -37,6 +37,10 @@ class OrderDeskError(RuntimeError):
         self.details = details
 
 
+# What the order window says under a product that cannot be ordered as usual.
+_PRODUCT_NOTICE = {"unknown": "재고 확인 중이라 주문을 닫았습니다", "closed": "판매 중지", "sold_out": "품절"}
+
+
 def _topic(word: str) -> str:
     """The word with its Korean topic particle: 은 after a final consonant, 는 otherwise (사과는, 당근은)."""
     last = word[-1:] if word else ""
@@ -77,9 +81,12 @@ class OrderDesk:
         if self.inventory is not None:
             view = self.inventory()
             products = [{"object_class": row["object_class"], "label": row["label"], "available": row["available"],
-                         "status": row["status"]} for row in view["products"]]
-            return {"products": products, "stock_error": view["reason"] if view["state"] == "unknown" else None,
-                    "zones": zones}
+                         "status": row["status"], "notice": _PRODUCT_NOTICE.get(row["status"])}
+                        for row in view["products"]]
+            notice = None
+            if view["state"] == "unknown" and any(row["status"] == "unknown" for row in view["products"]):
+                notice = f"재고를 확인하지 못해 해당 물건의 주문을 잠시 닫았습니다 ({view['reason']})"
+            return {"products": products, "stock_error": notice, "notice": notice, "zones": zones}
         stock, stock_error = self._stock()
         on_shelves: Counter = Counter()
         for counts in stock.values():
@@ -113,21 +120,23 @@ class OrderDesk:
             )
 
     def _check_available(self, order_items: list[dict[str, Any]]) -> None:
-        """Refuse what the shelves cannot cover after open orders; an unknown stock sells nothing."""
+        """Refuse what cannot be sold now: an object closed (stock unknown, or by the operator), or more than the
+        shelves cover after open orders. Every refused object is named in one message."""
         if self.inventory is None:
             return
-        view = self.inventory()
-        if view["state"] == "unknown":
-            raise OrderDeskError("INVENTORY_UNKNOWN", f"재고를 확인할 수 없어 주문을 받지 않습니다: {view['reason']}")
-        rows = {row["object_class"]: row for row in view["products"]}
-        short = []
+        rows = {row["object_class"]: row for row in self.inventory()["products"]}
+        closed, short = [], []
         for item in order_items:
-            available = (rows.get(item["object_class"]) or {}).get("available") or 0
-            if item["quantity"] > available:
-                label = self._label(item["object_class"])
-                short.append(f"{_topic(label)} 품절입니다" if available == 0 else f"{_topic(label)} {available}개 남았습니다")
-        if short:
-            raise OrderDeskError("OUT_OF_STOCK", " · ".join(short))
+            row = rows.get(item["object_class"]) or {"status": "unknown", "available": None}
+            subject = _topic(self._label(item["object_class"]))
+            if row["status"] == "unknown":
+                closed.append(f"{subject} 재고를 확인하지 못해 주문을 닫았습니다")
+            elif row["status"] == "closed":
+                closed.append(f"{subject} 지금 판매하지 않습니다")
+            elif item["quantity"] > (row["available"] or 0):
+                short.append(f"{subject} 품절입니다" if not row["available"] else f"{subject} {row['available']}개 남았습니다")
+        if closed or short:
+            raise OrderDeskError("ITEM_CLOSED" if closed else "OUT_OF_STOCK", " · ".join(closed + short))
 
     # ---- the operator's intake ---------------------------------------------------------------------------
 

@@ -10,8 +10,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from control_station.inventory import InventoryBook, InventoryMonitor, StockReading
+from control_station.inventory import InventoryBook, InventoryMonitor, InventoryOverrides, StockReading
+from control_station.mock_world import MockWorld
 from control_station.store import TaskStore
+from test_api_routes import ApiTestCase
 from test_order_desk import make_desk
 from test_order_flow import CARROT_APPLE, TERMINAL
 
@@ -68,19 +70,43 @@ class InventoryBookTest(unittest.TestCase):
         self.assertEqual(book.on_shelves()["shelf_b"]["apple"], 2)
         self.assertEqual([read(book, at, shelf_b={"apple": 2}) for at in (4, 5, 6)], [[], [], []])  # no outside change
 
-    def test_available_and_status(self) -> None:
-        book = InventoryBook(low_stock_at=1)
+    def test_available_sold_out_and_unknown(self) -> None:
+        book = InventoryBook()
         for at in (1, 2, 3):
             read(book, at, shelf_a={"apple": 1}, shelf_b={"apple": 3})
 
-        def row(reserved: int) -> dict:
-            return book.snapshot(APPLE, {"apple": reserved}, 3)["products"][0]
+        def row(reserved: int, now: float = 3, overrides=None) -> dict:
+            return book.snapshot(APPLE, {"apple": reserved}, now, overrides)["products"][0]
 
-        self.assertEqual((row(2)["available"], row(2)["status"], row(2)["per_shelf"]),
-                         (2, "in_stock", {"shelf_a": 1, "shelf_b": 3}))
-        self.assertEqual((row(3)["available"], row(3)["status"]), (1, "low"))
+        self.assertEqual((row(3)["available"], row(3)["status"], row(3)["per_shelf"]),
+                         (1, "available", {"shelf_a": 1, "shelf_b": 3}))
         self.assertEqual((row(4)["available"], row(4)["status"]), (0, "sold_out"))
         self.assertEqual(row(6)["available"], 0)  # never negative
+        self.assertEqual((row(0, now=30)["status"], row(0, now=30)["available"]), ("unknown", None))
+
+    def test_operator_overrides(self) -> None:
+        book = InventoryBook()
+        unknown_camera = book.snapshot(APPLE, {"apple": 1}, 0, {"apple": {"mode": "manual", "count": 3}})["products"][0]
+        self.assertEqual((unknown_camera["source"], unknown_camera["available"], unknown_camera["status"]),
+                         ("manual", 2, "available"))  # a hand count keeps selling while the camera is out
+        closed = book.snapshot(APPLE, {}, 0, {"apple": {"mode": "closed"}})["products"][0]
+        self.assertEqual((closed["status"], closed["available"]), ("closed", 0))
+
+
+class InventoryOverridesTest(unittest.TestCase):
+    def test_settings_survive_a_restart_and_auto_clears_them(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / "overrides.json"
+        InventoryOverrides(path).set("apple", "manual", 2)
+        InventoryOverrides(path).set("carrot", "closed")
+        reopened = InventoryOverrides(path)
+        self.assertEqual({name: value["mode"] for name, value in reopened.all().items()},
+                         {"apple": "manual", "carrot": "closed"})
+        reopened.set("apple", "auto")
+        self.assertNotIn("apple", InventoryOverrides(path).all())
+        with self.assertRaises(ValueError):
+            reopened.set("apple", "manual", -1)
 
 
 class InventoryWithOrdersTest(unittest.TestCase):
@@ -115,6 +141,29 @@ class InventoryWithOrdersTest(unittest.TestCase):
         monitor.read_once()  # books the three moves; the mock shelves already show them
         self.assertEqual(monitor.snapshot()["products"][0]["available"], 2)  # 4 - 2 moved, nothing reserved
         self.assertEqual(monitor.snapshot()["events"], [])  # our own picks are not outside changes
+
+
+
+class InventoryApiTest(ApiTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        world = MockWorld()
+        self.server.inventory = InventoryMonitor(
+            world.shelf_stock, lambda: False, lambda: APPLE, self.task_store.reserved_units,
+            self.task_store.confirmed_transfers, overrides=InventoryOverrides(self.directory / "overrides.json"))
+
+    def test_read_and_override(self) -> None:
+        for _ in range(3):
+            self.server.inventory.read_once()
+        status, view, _ = self.request("GET", "/api/inventory")
+        self.assertEqual((status, view["products"][0]["available"]), (200, 4))
+        status, view, _ = self.request("POST", "/api/inventory/apple", {"mode": "manual", "count": 1})
+        self.assertEqual((status, view["products"][0]["source"], view["products"][0]["available"]), (200, "manual", 1))
+        self.assertEqual(view["events"][0]["kind"], "OVERRIDE")
+        status, body, _ = self.request("POST", "/api/inventory/banana", {"mode": "closed"})
+        self.assertEqual((status, body["error_code"]), (400, "INVENTORY_OVERRIDE_INVALID"))
+        status, _, _ = self.request("POST", "/api/inventory/apple", {"mode": "closed"}, origin="http://evil.example")
+        self.assertEqual(status, 403)
 
 
 if __name__ == "__main__":

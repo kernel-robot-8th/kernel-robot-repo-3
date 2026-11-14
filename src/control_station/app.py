@@ -25,7 +25,7 @@ from control_station.camera_adapters import (
 )
 from control_station.load_check import mock_load_observer_from_env
 from control_station.mock_world import MockWorld
-from control_station.inventory import InventoryMonitor
+from control_station.inventory import InventoryMonitor, InventoryOverrides
 from control_station.order_desk import OrderDesk
 from control_station.order_flow import OrderDevices, OrderFlow
 from control_station.receiving_zones import ReceivingZoneError, load_receiving_zones
@@ -313,8 +313,11 @@ def main() -> None:
         # An arm hides the shelf while it picks: the loading spot is held by an order, or a policy run is going.
         return server.order_flow.station_owner is not None or bool(server.policy_run_supervisor.snapshot()["process_alive"])
 
+    overrides_path = Path(os.environ.get("CONTROL_STATION_INVENTORY_OVERRIDES")
+                          or Path(__file__).resolve().parents[2] / "data" / "inventory-overrides.json")
     server.inventory = InventoryMonitor(
         shelf_stock, arms_at_work, orderable_products, task_store.reserved_units, task_store.confirmed_transfers,
+        overrides=InventoryOverrides(overrides_path),
     ).start()
     server.order_desk = OrderDesk(
         task_store, server.task_orchestrator, server.order_devices, server.arms, act_policies,

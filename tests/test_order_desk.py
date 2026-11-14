@@ -130,22 +130,29 @@ class OrderDeskTest(unittest.TestCase):
         self.assertIsNone(self.store.get_task(order["id"])["pinky_id"])
 
     def test_the_window_sells_only_what_is_available(self) -> None:
-        def inventory(state: str = "live", apples: int | None = 2) -> dict:
-            return {"state": state, "reason": None if state == "live" else "선반 카메라의 새 값이 없습니다",
-                    "products": [{"object_class": "apple", "label": "사과", "available": apples, "status": "low"},
-                                 {"object_class": "carrot", "label": "당근", "available": 0, "status": "sold_out"}]}
+        def inventory(apple_status: str = "available", apples: int | None = 2) -> dict:
+            return {"state": "live" if apple_status != "unknown" else "unknown", "reason": "선반 카메라의 새 값이 없습니다",
+                    "products": [{"object_class": "apple", "label": "사과", "available": apples, "status": apple_status},
+                                 {"object_class": "carrot", "label": "당근", "available": 0, "status": "sold_out"},
+                                 {"object_class": "tissue", "label": "물티슈", "available": 0, "status": "closed"}]}
         self.desk.inventory = inventory
-        self.assertEqual(self.desk.catalog()["products"][1]["status"], "sold_out")
+        catalog = self.desk.catalog()
+        self.assertEqual([p["notice"] for p in catalog["products"]], [None, "품절", "판매 중지"])
         self.assertEqual(self.desk.receive([{"object_class": "apple", "quantity": 2}], "zone_a")["status"], "PENDING")
-        with self.assertRaises(OrderDeskError) as error:
+        with self.assertRaises(OrderDeskError) as short:
             self.desk.receive([{"object_class": "apple", "quantity": 3}, {"object_class": "carrot", "quantity": 1}],
                               "zone_a")
-        self.assertEqual((error.exception.error_code, str(error.exception)),
+        self.assertEqual((short.exception.error_code, str(short.exception)),
                          ("OUT_OF_STOCK", "사과는 2개 남았습니다 · 당근은 품절입니다"))
-        self.desk.inventory = lambda: inventory("unknown")
+        with self.assertRaises(OrderDeskError) as closed:
+            self.desk.receive([{"object_class": "tissue", "quantity": 1}], "zone_a")
+        self.assertEqual((closed.exception.error_code, str(closed.exception)), ("ITEM_CLOSED", "물티슈는 지금 판매하지 않습니다"))
+        self.desk.inventory = lambda: inventory("unknown", None)
+        self.assertIn("재고를 확인하지 못해", self.desk.catalog()["notice"])
         with self.assertRaises(OrderDeskError) as unknown:
             self.desk.receive([{"object_class": "apple", "quantity": 1}], "zone_a")
-        self.assertEqual(unknown.exception.error_code, "INVENTORY_UNKNOWN")
+        self.assertEqual((unknown.exception.error_code, str(unknown.exception)),
+                         ("ITEM_CLOSED", "사과는 재고를 확인하지 못해 주문을 닫았습니다"))
 
     def test_reject_only_waiting_orders(self) -> None:
         order = self.desk.receive(CARROT_APPLE, "zone_a")
