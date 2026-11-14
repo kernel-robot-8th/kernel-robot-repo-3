@@ -24,7 +24,7 @@
 |---|---|---|
 | `VALIDATE_ORDER` | 정책·팔 설정 확인. 모의 핑키는 이때 출발 | `ORDER_POLICY_NOT_FOUND`, `ARMS_NOT_CONFIGURED` |
 | `CHECK_SHELF_STOCK` | 선반별·종류별 재고가 주문 수량 이상인지 | `SHELF_STOCK_SHORT`, `COUNT_*` |
-| `PLAN_ARM_SEQUENCE` | 물체마다 그 물체가 보인 선반 쪽 팔을 배정하고 팔별로 묶어 순서를 정함. 결과는 뒤 단계의 `robot_id`·`detail`과 `PLAN_CREATED` 이벤트 | `POLICY_NOT_FOR_ARM` |
+| `PLAN_ARM_SEQUENCE` | 물체마다 팔을 배정하고 팔별로 묶어 순서를 정함([배정 규칙](#주문-접수와-배정)). 결과와 물체별 배정 이유는 뒤 단계의 `robot_id`·`detail`과 `PLAN_CREATED` 이벤트 | `POLICY_NOT_FOR_ARM`, `SHELF_STOCK_SHORT` |
 | `WAIT_PINKY_ARRIVAL` | 핑키가 5번에 정지(`docking_manual`)하고, 적재 자리가 비고, 주차 판정이 `ARRIVED`일 때 통과. 위치가 어긋나 있으면 경보만 띄우고 계속 기다리다가, 정상 위치가 되면 자동으로 다음 단계로 감 | `PINKY_ARRIVAL_TIMEOUT` (기본 600초) |
 | `CONFIRM_DOCKING` | 핑키 관제에 `dock_complete` 전송 → `docking_anchor`(5번 지도 위치 재설정, 최대 18초)를 거쳐 `docked_manual`(정지 유지) 확인. 기본 30초 안에 안 바뀌면 실패 | `PINKY_SIGNAL_REJECTED`, `PINKY_SIGNAL_NOT_DELIVERED`, `PINKY_SIGNAL_NOT_APPLIED` |
 | `PICK_ITEM` | 배정된 팔이 물체 하나를 집어 핑키 위에 놓음 (**지금은 모의**) | — |
@@ -39,6 +39,24 @@
 - **적재 자리는 하나입니다.**
   - 정류장에 먼저 정지한 핑키의 주문이 자리를 씁니다. 다른 주문은 "적재 자리 대기"로 기다립니다.
   - 멈춘 주문의 핑키는 아직 정류장에 서 있을 수 있습니다. 그래서 운영자가 경보를 **확인**하거나 그 핑키가 떠날 때까지, 자리와 핑키 배정을 그대로 잡아 둡니다.
+
+## 주문 접수와 배정
+
+주문 창에서 들어온 주문은 핑키 없이 접수 상태(`PENDING`)로 기다리고, 작업자가 시작할 때 핑키를 정합니다. 배정 규칙은 `src/control_station/assignment.py`의 순수 함수라서 모의·실제 모드가 같습니다.
+
+| 경로 | 하는 일 |
+| --- | --- |
+| `GET /api/catalog` | 주문할 수 있는 물체(정책이 있는 물체), 선반 재고 합계, 수령 구역 |
+| `POST /api/orders` | `{items: [{object_class, quantity}], receiving_zone}` 접수. 핑키는 아직 없음 |
+| `GET /api/orders` | 시작을 기다리는 주문, 오래된 순 |
+| `GET /api/orders/{id}/assignment` | 지금 시작하면 맡을 핑키와 팔, 그 이유. 아무것도 바꾸지 않음 |
+| `POST /api/orders/{id}/start` | 핑키를 다시 골라 확정(`PINKY_ASSIGNED` 이벤트)하고 주문 흐름 시작 |
+| `POST /api/orders/{id}/reject` | 시작 전 주문 거절(`CANCELED`) |
+
+- **핑키:** 진행 중 주문이 있거나, 핑키 관제가 답하지 않거나, 주차장 대기가 아니거나, 운행 준비가 안 됐거나, 배터리가 30% 미만이면 제외합니다. 남은 핑키는 배터리 10% 구간이 높은 순 → 오늘 운행 횟수가 적은 순 → 오래 쉰 순 → 번호 순으로 고릅니다. 남은 핑키가 없으면 `PINKY_UNAVAILABLE`이고 주문은 접수 상태로 남습니다.
+- **팔:** 팔은 자기 선반에서, 정책이 있는 물체만 집습니다. 집을 수 있는 팔이 적은 물체부터 정하고, 두 팔이 다 되면 집기 성공률((성공+1)/(시도+2)) → 그 선반에 남은 수량 → 설정 순서로 고릅니다. 실행은 맡은 개수가 많은 팔부터 한 팔씩 합니다. 성공률은 지금 집기가 모의라서 모의 결과로만 셉니다.
+- **수령 구역:** `config/receiving-zones.json`에 구역 이름과 핑키 경로의 웨이포인트 순서를 둡니다. 주문에는 `receiving_zone`으로 저장합니다. 핑키를 그 경로로 보내고 수령 확인을 받는 단계는 아직 없습니다.
+- 이전 경로(`POST /api/tasks` + `order_items`)는 그대로 만들 때 핑키를 정합니다. 핑키 없이 접수된 주문을 `/api/tasks/{id}/start`로 시작하면 거절합니다.
 
 ## 무엇이 실제이고 무엇이 모의인가
 

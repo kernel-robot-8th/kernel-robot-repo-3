@@ -25,7 +25,9 @@ from control_station.camera_adapters import (
 )
 from control_station.load_check import mock_load_observer_from_env
 from control_station.mock_world import MockWorld
+from control_station.order_desk import OrderDesk
 from control_station.order_flow import OrderDevices, OrderFlow
+from control_station.receiving_zones import ReceivingZoneError, load_receiving_zones
 from control_station.pinky_fleet import PinkyFleetClient
 from control_station.parking_ros import RosParkingSource
 from control_station.robot_adapters import make_status_provider
@@ -88,6 +90,8 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
             return
         if route == "/":
             self.path = "/index.html"
+        elif route == "/order":  # the customer-side order window (mock)
+            self.path = "/order.html"
         elif route.startswith("/api/"):
             self._json(404, {"error": "API route not found"})
             return
@@ -274,16 +278,29 @@ def main() -> None:
         arrival_timeout_s = float(os.environ.get("CONTROL_STATION_ARRIVAL_TIMEOUT_S", "600"))
     except ValueError:
         arrival_timeout_s = 600.0
+    # Order picks are still the mock world's (world.pick), so the arm choice learns from mock pick results only;
+    # real results will be counted apart once the real pick is connected.
+    pick_stats = partial(task_store.pick_success_stats, simulated=True)
     server.order_flow = OrderFlow(
         server.arms, act_policies, server.order_devices,
         dwell_s=float(os.environ.get("CONTROL_STATION_ORDER_STEP_DWELL_S", "0.8") or 0.8),
         arrival_timeout_s=arrival_timeout_s,
+        pick_stats=pick_stats,
     )
     server.task_orchestrator = MockTaskOrchestrator(
         task_store, mode=mode, arrival_check=arrival_check, load_check=load_check,
         arm_commands=server.arm_commands if real_arm else None,
         target_evidence=partial(front_camera_evidence, server) if real_arm else None,
         order_flow=server.order_flow,
+    )
+    try:
+        receiving_zones = load_receiving_zones()
+    except ReceivingZoneError as exc:
+        receiving_zones = {}
+        print(f"수령 구역 파일을 읽지 못해 주문을 받을 수 없습니다: {exc}", flush=True)
+    server.order_desk = OrderDesk(
+        task_store, server.task_orchestrator, server.order_devices, server.arms, act_policies,
+        receiving_zones, pick_stats,
     )
     if real_arm:
         print("작업 흐름의 팔 단계가 실제 팔 명령(PICK_WITH_POLICY)을 보냅니다", flush=True)

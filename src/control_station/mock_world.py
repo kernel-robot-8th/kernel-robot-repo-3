@@ -30,6 +30,8 @@ from control_station.pinky_fleet import PinkyFleetError
 FAULT_KINDS = frozenset({"STOCK_SHORT", "PICK_FAILED", "ITEM_LOST", "EXTRA_ON_PINKY", "PINKY_MISALIGNED", "FLEET_REJECT"})
 DEFAULT_STOCK = "shelf_a:carrot=3,tissue=2,apple=1;shelf_b:apple=3,carrot=1,tissue=1"
 PINKY_HOMES = {"10": "주차장 P0", "11": "주차장 P1", "12": "주차장 P2"}
+# Simulated battery levels, different on purpose so the Pinky assignment has something to rank.
+MOCK_BATTERY = {"10": 92.0, "11": 78.0, "12": 64.0}
 
 
 def _now() -> str:
@@ -74,7 +76,8 @@ class MockWorld:
         self.shelves = {shelf: Counter(counts) for shelf, counts in self._initial_stock.items()}
         self.loads: dict[str, Counter] = {pinky: Counter() for pinky in PINKY_HOMES}
         self.pinkies: dict[str, dict[str, Any]] = {
-            pinky: {"phase": "parked", "token": None, "message": "주차장 대기", "location": home, "until": None}
+            pinky: {"phase": "parked", "token": None, "message": "주차장 대기", "location": home, "until": None,
+                    "battery": MOCK_BATTERY[pinky]}
             for pinky, home in PINKY_HOMES.items()
         }
         self.drive_s = drive_s
@@ -168,6 +171,7 @@ class MockWorld:
             return {
                 "source": "mock_world", "simulated": True, "pinky_id": pinky_id, "phase": pinky["phase"],
                 "mission_token": pinky["token"], "message": pinky["message"], "location": pinky["location"],
+                "ready_for_motion": True, "readiness_label": "모의 핑키", "battery_percent": pinky["battery"],
             }
 
     def fleet_confirm(self, pinky_id: str, action: str, token: str | None) -> dict[str, Any]:

@@ -49,12 +49,21 @@ DEFAULT_TASK_STEPS = (
     ("FINALIZE_TASK", None),
 )
 
+# Order steps carried out by (and so tagged with) the order's Pinky.
+PINKY_STEP_TYPES = frozenset({"WAIT_PINKY_ARRIVAL", "CONFIRM_DOCKING", "NOTIFY_PINKY_RECEIVED"})
+
+
+def pinky_robot_id(pinky_id: str | None) -> str | None:
+    return None if pinky_id is None else f"pinky-{pinky_id}"
+
+
 def order_step_definitions(
-    order_items: list[dict[str, object]], pinky_id: str
+    order_items: list[dict[str, object]], pinky_id: str | None
 ) -> list[tuple[str, str | None, dict[str, object] | None]]:
     """Steps of one order: (step_type, robot_id, detail). One PICK_ITEM + VERIFY_TRANSFER pair per object unit;
-    the arm of each pair is filled in by PLAN_ARM_SEQUENCE after the shelf stock check."""
-    pinky = f"pinky-{pinky_id}"
+    the arm of each pair is filled in by PLAN_ARM_SEQUENCE after the shelf stock check. Without a Pinky yet (an
+    order waiting in the intake), the Pinky steps carry no robot until assign_pinky fills them in."""
+    pinky = pinky_robot_id(pinky_id)
     units = [
         {"object_class": item["object_class"], "unit": index, "of": item["quantity"]}
         for item in order_items
@@ -224,6 +233,8 @@ class TaskStore:
                     raise InvalidStateTransition(
                         f"Task cannot start from {current.value}"
                     )
+                if task.order_items is not None and task.pinky_id is None:
+                    raise InvalidStateTransition("핑키가 배정되지 않은 주문입니다. 주문 접수 창에서 시작하세요")
                 running = select(TaskRecord).where(
                     TaskRecord.status.in_(
                         [
@@ -346,6 +357,7 @@ class TaskStore:
             "pick_request": task.pick_request,
             "order_items": task.order_items,
             "pinky_id": task.pinky_id,
+            "receiving_zone": task.receiving_zone,
             "status": task.status,
             "created_at": task.created_at,
             "started_at": task.started_at,
@@ -407,6 +419,16 @@ class TaskStore:
         with self._sessions() as session:
             tasks = session.scalars(
                 select(TaskRecord).order_by(TaskRecord.created_at.desc(), TaskRecord.id.desc())
+            ).all()
+            return [self._present(task) for task in tasks]
+
+    def pending_orders(self) -> list[dict[str, Any]]:
+        """Orders waiting in the intake (not started yet), oldest first."""
+        with self._sessions() as session:
+            tasks = session.scalars(
+                select(TaskRecord)
+                .where(TaskRecord.order_items.is_not(None), TaskRecord.status == TaskStatus.PENDING.value)
+                .order_by(TaskRecord.created_at, TaskRecord.id)
             ).all()
             return [self._present(task) for task in tasks]
 
@@ -695,8 +717,14 @@ class TaskStore:
         pick_request: dict[str, object] | None = None,
         order_items: list[dict[str, object]] | None = None,
         pinky_id: str | None = None,
+        *,
+        receiving_zone: str | None = None,
+        defer_pinky: bool = False,
     ) -> dict[str, Any]:
-        """Store a task. An order (order_items) is given a free Pinky, or the requested one if it is free."""
+        """Store a task. An order (order_items) is given a free Pinky, or the requested one if it is free.
+
+        With `defer_pinky` the order waits in the intake without a Pinky; assign_pinky gives it one when it starts,
+        so the choice is made with the fleet state of that moment."""
         created_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
         task = TaskRecord(
             id=f"TASK-{uuid.uuid4().hex[:8].upper()}",
@@ -705,6 +733,7 @@ class TaskStore:
             pick_request=pick_request,
             order_items=order_items,
             pinky_id=None,
+            receiving_zone=receiving_zone,
             status=TaskStatus.PENDING.value,
             created_at=created_at,
         )
@@ -713,7 +742,7 @@ class TaskStore:
         ]
         # The claim lock also serializes Pinky assignment inside this single server process.
         with self._claim_lock, self._sessions.begin() as session:
-            if order_items is not None:
+            if order_items is not None and not defer_pinky:
                 busy = {pinky_id for pinky_id, _ in session.execute(_pinky_holding_orders()).all()}
                 if pinky_id is not None:
                     if pinky_id in busy:
@@ -724,7 +753,8 @@ class TaskStore:
                     if not free:
                         raise PinkyUnavailable("모든 핑키에 끝나지 않은 주문이 있습니다")
                     task.pinky_id = free[0]
-                # An order runs its own step list, made once the Pinky is known.
+            if order_items is not None:
+                # An order runs its own step list; its Pinky steps are tagged once the Pinky is known.
                 step_definitions = order_step_definitions(order_items, task.pinky_id)
             task.steps = [
                 TaskStepRecord(
@@ -744,6 +774,7 @@ class TaskStore:
             }
             if order_items is not None:
                 payload["pinky_id"] = task.pinky_id
+                payload["receiving_zone"] = receiving_zone
             task.events = [
                 TaskEventRecord(
                     id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
@@ -758,6 +789,81 @@ class TaskStore:
             session.add(task)
             session.flush()
             return self._present_with_history(task)
+
+    def assign_pinky(self, task_id: str, pinky_id: str, assignment: dict[str, object]) -> dict[str, Any]:
+        """Give a waiting order its Pinky, tag the Pinky steps with it and record why it was chosen."""
+        if pinky_id not in PINKY_IDS:
+            raise ValueError(f"unknown Pinky {pinky_id}")
+        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        with self._claim_lock, self._sessions.begin() as session:
+            task = session.get(TaskRecord, task_id)
+            if task is None:
+                raise TaskNotFoundError(task_id)
+            if task.order_items is None or task.status != TaskStatus.PENDING.value:
+                raise InvalidStateTransition("접수 상태의 주문에만 핑키를 배정할 수 있습니다")
+            if task.pinky_id is not None:
+                raise InvalidStateTransition(f"이미 핑키 {task.pinky_id}가 배정된 주문입니다")
+            holder = dict(session.execute(_pinky_holding_orders()).all()).get(pinky_id)
+            if holder is not None:
+                raise PinkyUnavailable(f"핑키 {pinky_id}는 끝나지 않은 주문 {holder}가 있습니다")
+            task.pinky_id = pinky_id
+            for step in task.steps:
+                if step.step_type in PINKY_STEP_TYPES:
+                    step.robot_id = pinky_robot_id(pinky_id)
+            task.events.append(TaskEventRecord(
+                id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
+                event_type="PINKY_ASSIGNED",
+                previous_status=task.status,
+                new_status=task.status,
+                occurred_at=now,
+                received_at=now,
+                payload={"pinky_id": pinky_id, "assignment": assignment},
+            ))
+            session.flush()
+            return self._present_with_history(task)
+
+    def pinky_usage(self, since: str) -> dict[str, dict[str, object]]:
+        """Per Pinky: orders it started since `since` (ISO time) and when its last order ended."""
+        usage: dict[str, dict[str, object]] = {pinky: {"trips": 0, "last_finished_at": None} for pinky in PINKY_IDS}
+        with self._sessions() as session:
+            rows = session.execute(
+                select(TaskRecord.pinky_id, TaskRecord.started_at, TaskRecord.finished_at).where(
+                    TaskRecord.pinky_id.is_not(None), TaskRecord.order_items.is_not(None)
+                )
+            ).all()
+        for pinky_id, started_at, finished_at in rows:
+            entry = usage.setdefault(pinky_id, {"trips": 0, "last_finished_at": None})
+            if started_at is not None and started_at >= since:
+                entry["trips"] = int(entry["trips"]) + 1  # type: ignore[call-overload]
+            if finished_at is not None and (entry["last_finished_at"] is None or finished_at > entry["last_finished_at"]):
+                entry["last_finished_at"] = finished_at
+        return usage
+
+    def pick_success_stats(self, *, simulated: bool) -> dict[tuple[str, str], tuple[int, int]]:
+        """(policy_id, arm_id) -> (successes, attempts) from finished transfer checks.
+
+        A check counts as mock or real by the pick right before it, so mock runs never shape the choice of a
+        real arm. A failed check is an attempt without success."""
+        finished = [StepStatus.SUCCEEDED.value, StepStatus.FAILED.value]
+        stats: dict[tuple[str, str], tuple[int, int]] = {}
+        with self._sessions() as session:
+            steps = session.scalars(
+                select(TaskStepRecord)
+                .where(TaskStepRecord.step_type.in_(["PICK_ITEM", "VERIFY_TRANSFER"]))
+                .order_by(TaskStepRecord.task_id, TaskStepRecord.sequence)
+            ).all()
+            picks = {(step.task_id, step.sequence): step for step in steps if step.step_type == "PICK_ITEM"}
+            for check in steps:
+                pick = picks.get((check.task_id, check.sequence - 1))
+                if check.step_type != "VERIFY_TRANSFER" or check.status not in finished or pick is None:
+                    continue
+                detail = check.detail or {}
+                if bool((pick.result or {}).get("simulated")) != simulated or not detail.get("policy_id"):
+                    continue
+                key = (str(detail["policy_id"]), str(detail.get("arm_id")))
+                successes, attempts = stats.get(key, (0, 0))
+                stats[key] = (successes + (check.status == StepStatus.SUCCEEDED.value), attempts + 1)
+        return stats
 
     def close(self) -> None:
         self.engine.dispose()

@@ -25,6 +25,7 @@ class TaskRecord(Base):
     # [{"object_class", "quantity"}]; None for tasks made before orders carried several items.
     order_items: Mapped[list[dict[str, object]] | None] = mapped_column("order_items_json", JSON)
     pinky_id: Mapped[str | None] = mapped_column(String)
+    receiving_zone: Mapped[str | None] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
     started_at: Mapped[str | None] = mapped_column(String)

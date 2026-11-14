@@ -1,0 +1,179 @@
+"""The order desk: orders from the order window wait here until an operator starts them.
+
+Receiving an order stores it without a Pinky. The preview shows which Pinky and which arms would serve it right
+now, and why; starting runs the same Pinky choice again with the fleet state of that moment, records it on the
+order and hands the order to the task orchestrator. The arm plan is made again inside the order flow, after the
+shelf check, so the preview is advice and never a reservation. Nothing here moves a device.
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any
+
+from control_station.api.common import validate_order_items
+from control_station.assignment import ArmPlanError, PickStats, PinkyCandidate, choose_pinky, plan_arms
+from control_station.order_flow import OrderDevices
+from control_station.pinky_fleet import PinkyFleetError
+from control_station.receiving_zones import ReceivingZone
+from control_station.store import PINKY_IDS, PINKY_NAMES, PinkyUnavailable, TaskStore
+
+
+class OrderDeskError(RuntimeError):
+    """A request the desk refuses; `status` is the HTTP status the API answers with."""
+
+    def __init__(self, error_code: str, message: str, status: int = 409, **details: object) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.status = status
+        self.details = details
+
+
+def _start_of_today() -> str:
+    """Local midnight as a UTC ISO time, comparable with the store's timestamps."""
+    midnight = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+    return midnight.astimezone(timezone.utc).isoformat(timespec="microseconds")
+
+
+@dataclass
+class OrderDesk:
+    store: TaskStore
+    orchestrator: Any  # .start(task_id) -> (task, changed)
+    devices: OrderDevices
+    arms: Any  # control_station.arms registry (.arms: list of arm dicts in config order)
+    policies: Any  # control_station.act_policies registry
+    zones: Mapping[str, ReceivingZone]
+    pick_stats: Callable[[], PickStats]
+    today: Callable[[], str] = _start_of_today
+
+    # ---- the order window ----------------------------------------------------------------------------------
+
+    def catalog(self) -> dict[str, Any]:
+        """What can be ordered (objects with a trained policy), how many the shelves hold, and where to collect."""
+        if self.policies is None:
+            return {"products": [], "stock_error": "정책 정의 파일이 없어 주문을 받을 수 없습니다", "zones": []}
+        stock, stock_error = self._stock()
+        on_shelves: Counter = Counter()
+        for counts in stock.values():
+            on_shelves.update(counts)
+        products: dict[str, dict[str, Any]] = {}
+        for policy in self.policies.policies.values():
+            products.setdefault(policy["object_class"], {
+                "object_class": policy["object_class"],
+                "label": policy["label"],
+                "available": on_shelves[policy["object_class"]] if stock_error is None else None,
+            })
+        return {
+            "products": list(products.values()),
+            "stock_error": stock_error,
+            "zones": [zone.as_dict() for zone in self.zones.values()],
+        }
+
+    def receive(self, items: object, zone_id: object) -> dict[str, Any]:
+        """Store a new order in the intake (status PENDING, no Pinky yet)."""
+        try:
+            order_items = validate_order_items(items, self.policies)
+        except ValueError as exc:
+            raise OrderDeskError("ORDER_INVALID", str(exc), status=400) from exc
+        zone = self._zone(zone_id)
+        summary = " · ".join(f"{self._label(item['object_class'])} {item['quantity']}" for item in order_items)
+        return self.store.create_task(
+            zone.label, f"{summary} 적재", order_items=order_items, receiving_zone=zone.zone_id, defer_pinky=True,
+        )
+
+    # ---- the operator's intake ---------------------------------------------------------------------------
+
+    def pending(self) -> list[dict[str, Any]]:
+        """Orders waiting for an operator, oldest first."""
+        return self.store.pending_orders()
+
+    def preview(self, order_id: str) -> dict[str, Any]:
+        """Who would serve this order if it started now. Changes nothing."""
+        order = self._pending_order(order_id)
+        pinky = choose_pinky(self.pinky_candidates())
+        stock, stock_error = self._stock()
+        arms: dict[str, Any]
+        if stock_error is not None:
+            arms = {"error": {"code": "SHELF_STOCK_UNAVAILABLE", "message": stock_error}}
+        else:
+            units = [{"object_class": item["object_class"], "unit": index, "of": item["quantity"]}
+                     for item in order["order_items"] for index in range(1, int(item["quantity"]) + 1)]
+            try:
+                arms = plan_arms(units, stock, self.arms.arms, self.policies.resolve, self._label,
+                                 self.pick_stats()).as_dict()
+            except ArmPlanError as exc:
+                arms = {"error": {"code": exc.error_code, "message": str(exc)}}
+        return {"order_id": order_id, "pinky": pinky.as_dict(), "arms": arms}
+
+    def start(self, order_id: str) -> tuple[dict[str, Any], bool]:
+        """Assign the Pinky now (if the order has none) and start the order flow."""
+        order = self._pending_order(order_id, allow_started=True)
+        if order["status"] == "PENDING" and order["pinky_id"] is None:
+            assignment = choose_pinky(self.pinky_candidates())
+            if assignment.pinky_id is None:
+                raise OrderDeskError("PINKY_UNAVAILABLE", assignment.summary, assignment=assignment.as_dict())
+            try:
+                self.store.assign_pinky(order_id, assignment.pinky_id, assignment.as_dict())
+            except PinkyUnavailable as exc:  # taken by another order between the choice and the write
+                raise OrderDeskError("PINKY_UNAVAILABLE", str(exc)) from exc
+        return self.orchestrator.start(order_id)
+
+    def reject(self, order_id: str) -> dict[str, Any]:
+        """Turn down an order that has not started; no device was involved yet."""
+        self._pending_order(order_id)
+        return self.store.cancel_pending_task(order_id)
+
+    # ---- what the Pinky choice is made from ----------------------------------------------------------------
+
+    def pinky_candidates(self) -> list[PinkyCandidate]:
+        holding = self.store.busy_pinkies()
+        usage = self.store.pinky_usage(self.today())
+        candidates = []
+        for pinky_id in PINKY_IDS:
+            used = usage.get(pinky_id, {})
+            common = {
+                "pinky_id": pinky_id, "name": PINKY_NAMES[pinky_id], "holding_order": holding.get(pinky_id),
+                "trips_today": int(used.get("trips", 0)), "last_finished_at": used.get("last_finished_at"),
+            }
+            try:
+                status = self.devices.fleet_status(pinky_id)
+            except (PinkyFleetError, OSError):
+                candidates.append(PinkyCandidate(**common, reachable=False))
+                continue
+            candidates.append(PinkyCandidate(
+                **common, phase=status.get("phase"), ready_for_motion=status.get("ready_for_motion"),
+                readiness_label=status.get("readiness_label"), battery_percent=status.get("battery_percent"),
+            ))
+        return candidates
+
+    # ---- helpers -------------------------------------------------------------------------------------------
+
+    def _stock(self) -> tuple[dict[str, Counter], str | None]:
+        try:
+            shelves = self.devices.shelf_stock()["shelves"]
+        except Exception as exc:  # camera not ready, no frame, node down: the window says why
+            return {}, f"선반 재고를 읽지 못했습니다: {exc}"
+        return {shelf: Counter(counts) for shelf, counts in shelves.items()}, None
+
+    def _zone(self, zone_id: object) -> ReceivingZone:
+        if zone_id is None and len(self.zones) == 1:
+            return next(iter(self.zones.values()))
+        if not isinstance(zone_id, str) or zone_id not in self.zones:
+            known = ", ".join(self.zones) or "없음"
+            raise OrderDeskError("RECEIVING_ZONE_UNKNOWN", f"수령 구역을 골라 주세요 (가능: {known})", status=400)
+        return self.zones[zone_id]
+
+    def _label(self, object_class: str) -> str:
+        found = self.policies.matches(object_class)
+        return found[0]["label"] if found else object_class
+
+    def _pending_order(self, order_id: str, *, allow_started: bool = False) -> dict[str, Any]:
+        order = self.store.get_task(order_id)
+        if order is None or order.get("order_items") is None:
+            raise OrderDeskError("ORDER_NOT_FOUND", f"주문 {order_id}이 없습니다", status=404)
+        if order["status"] != "PENDING" and not allow_started:
+            raise OrderDeskError("ORDER_NOT_PENDING", f"주문 {order_id}은 이미 {order['status']} 상태입니다")
+        return order

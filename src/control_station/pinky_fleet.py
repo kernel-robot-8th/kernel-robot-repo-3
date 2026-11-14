@@ -32,6 +32,13 @@ _IDLE_ROUTE_STATES = {None, "complete", "cancelled", "failed"}
 STATION_PHASES = frozenset({"docking_manual", "docking_anchor", "docked_manual"})
 
 
+def _fresh_battery(robot: dict[str, Any]) -> float | None:
+    """Battery percent from the dashboard's live topics, or None when it is missing or stale."""
+    topic = (robot.get("topics") or {}).get("battery_percent") or {}
+    percent = (topic.get("value") or {}).get("percent") if topic.get("fresh") else None
+    return float(percent) if isinstance(percent, (int, float)) and not isinstance(percent, bool) else None
+
+
 class PinkyFleetError(RuntimeError):
     """The Pinky fleet dashboard refused a signal or answered something unusable."""
 
@@ -91,11 +98,15 @@ class PinkyFleetClient:
             phase = "parked"
         else:
             phase = "driving"  # starting / running before the robot reported a mission phase
+        operational = robot.get("operational") if isinstance(robot.get("operational"), dict) else {}
         return {
             "source": "pinky_fleet", "simulated": False, "pinky_id": pinky_id, "phase": phase,
             "mission_token": route.get("mission_token"), "route_status": route_status,
             "message": route.get("message") or robot.get("message"),
             "location": route.get("current_label") or robot.get("stage"),
+            "ready_for_motion": bool(operational.get("ready_for_motion")),
+            "readiness_label": operational.get("label"),
+            "battery_percent": _fresh_battery(robot),
         }
 
     def fleet_confirm(self, pinky_id: str, action: str, token: str | None) -> dict[str, Any]:

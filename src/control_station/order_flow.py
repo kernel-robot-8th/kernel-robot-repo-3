@@ -27,6 +27,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from control_station.assignment import ArmPlanError, PickStats, plan_arms
 from control_station.pinky_fleet import STATION_PHASES, PinkyFleetError
 from control_station.store import PINKY_NAMES
 
@@ -91,8 +92,11 @@ class OrderFlow:
         arrival_timeout_s: float = 600.0,
         # dock_complete -> docked_manual passes through docking_anchor, which the Pinky allows up to 18 s.
         signal_timeout_s: float = 30.0,
+        pick_stats: Callable[[], PickStats] | None = None,
     ) -> None:
         self.arms = arms
+        # Past pick results per (policy, arm) for the arm choice; none -> every arm starts at the same rate.
+        self.pick_stats = pick_stats or dict
         self.policies = policies
         self.devices = devices
         self.dwell_s = dwell_s
@@ -203,44 +207,28 @@ class OrderFlow:
                 "simulated": observation.get("simulated", False)}
 
     def _plan_arm_sequence(self, ctx: StepContext) -> dict[str, Any]:
+        """Give every unit an arm with the assignment rules (control_station.assignment.plan_arms).
+
+        The plan comes back in execution order and is written onto the PICK_ITEM/VERIFY_TRANSFER pairs in their
+        step order, so the steps run exactly as planned."""
         checked = next((step.get("result") for step in ctx.task["steps"] if step["step_type"] == "CHECK_SHELF_STOCK"), None)
         shelves = (checked or {}).get("shelves") or self._observe("선반 재고", self.devices.shelf_stock)["shelves"]
-        available = {shelf: Counter(counts) for shelf, counts in shelves.items()}
-        pairs = []
         steps = ctx.task["steps"]
-        for index, step in enumerate(steps):
-            if step["step_type"] == "PICK_ITEM":
-                pairs.append((step, steps[index + 1]))
-        units = []
-        for pick_step, _ in pairs:
-            detail = pick_step["detail"]
-            object_class = detail["object_class"]
-            choice = None
-            for arm in self.arms.arms:  # config order: left arm first
-                if available.get(arm["shelf_id"], Counter()).get(object_class, 0) <= 0:
-                    continue
-                policy = self.policies.resolve(object_class, arm["arm_id"])
-                if policy is not None:
-                    choice = (arm, policy)
-                    break
-            if choice is None:
-                seen_on = [arm["label"] for arm in self.arms.arms if available.get(arm["shelf_id"], Counter()).get(object_class, 0) > 0]
-                raise OrderFlowError(
-                    "POLICY_NOT_FOR_ARM",
-                    f"{_label(self.policies, object_class)}: 물체가 있는 쪽 팔({', '.join(seen_on) or '없음'})에 학습된 정책이 없습니다",
-                )
-            arm, policy = choice
-            available[arm["shelf_id"]][object_class] -= 1
-            units.append({**detail, "arm_id": arm["arm_id"], "arm_label": arm["label"], "shelf_id": arm["shelf_id"],
-                          "policy_id": policy["policy_id"], "label": _label(self.policies, object_class)})
-        arm_order = [arm["arm_id"] for arm in self.arms.arms]
-        units.sort(key=lambda unit: arm_order.index(unit["arm_id"]))  # stable: one arm finishes before the other
+        pairs = [(step, steps[index + 1]) for index, step in enumerate(steps) if step["step_type"] == "PICK_ITEM"]
+        try:
+            plan = plan_arms(
+                [pick["detail"] for pick, _ in pairs], shelves, self.arms.arms, self.policies.resolve,
+                lambda object_class: _label(self.policies, object_class), self.pick_stats(),
+            )
+        except ArmPlanError as exc:
+            raise OrderFlowError(exc.error_code, str(exc)) from exc
+        units = [pick.as_dict() for pick in plan.picks]
         for (pick_step, verify_step), unit in zip(pairs, units):
             ctx.set_plan(pick_step["id"], unit["arm_id"], unit)
             ctx.set_plan(verify_step["id"], None, unit)
         sequence = [f"{unit['arm_label']} · {unit['label']} #{unit['unit']}" for unit in units]
-        ctx.record("PLAN_CREATED", {"sequence": units, "message": " → ".join(sequence)})
-        return {"source": "control_station", "outcome": "PLAN_READY", "sequence": units}
+        ctx.record("PLAN_CREATED", {"sequence": units, "summary": plan.summary, "message": " → ".join(sequence)})
+        return {"source": "control_station", "outcome": "PLAN_READY", "sequence": units, "summary": plan.summary}
 
     def _wait_pinky_arrival(self, ctx: StepContext) -> dict[str, Any] | None:
         pinky, task_id = self._pinky(ctx), ctx.task["id"]
