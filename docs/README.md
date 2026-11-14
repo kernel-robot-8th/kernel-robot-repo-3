@@ -19,7 +19,6 @@
 - [OMX 명령 HTTP 인터페이스](implementation/arm-command-api.md): 관제가 OMX 명령(칸 자세, 원상복귀, 학습 정책)을 넘기고 OMX 워커가 long-poll로 받아 결과를 보고하는 계약, 모의 워커 실행 방법
 - [카메라 내부 보정](implementation/camera-intrinsic-calibration.md): 체커보드로 카메라 내부 파라미터를 구하는 오프라인 도구 (천장 카메라 주차 판정과 정면 카메라 선반 위치 보정에 사용)
 - [캘리브레이션 파일 지도](implementation/calibration-files.md): 카메라별 보정 스크립트, 결과 파일 위치와 현황, 팀 체커보드 인쇄 파일
-- [선반 층 영상 영역 초안](implementation/shelf-image-regions.md): 저장된 관측 frame에 polygon 좌표를 입력하는 브라우저 도구와 provenance를 확인해 review-only ROI artifact를 만드는 CLI
 - [실행 방법](implementation/runbook.md): 모의 서버와 팔 텔레오퍼레이션 실행
 - [개발 로드맵](development-plan.md): 에픽 순서, 목적, 의존성 및 전체 진행 상황
 - [Pinky 도착 판정과 로봇 진행 계획](plans/pinky-arrival-gate.md): 천장 카메라 주차 판정을 팔 단계 시작 조건으로 쓰는 흐름, 미정 항목과 실물 적용 전 조건

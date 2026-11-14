@@ -33,7 +33,7 @@ flowchart LR
     subgraph ADAPTERS[장치 연결 계층]
         PINKY_ADAPTER[Pinky 이동 어댑터]
         OMX_ADAPTER[OMX 작업 어댑터]
-        VISION[물품 인식·좌표 계산]
+        VISION[물품 인식·칸 확인]
     end
 
     subgraph B_ZONE[B 구역 · 적재 작업대]
@@ -69,7 +69,7 @@ flowchart LR
     PINKY_ADAPTER --> EVENT
 
     B_CAMERA -->|영상 입력| VISION
-    VISION -->|검출 결과·작업 위치 후보| ORCH
+    VISION -->|검출 결과·칸 근거·개수| ORCH
     ORCH -->|집기·적재 요청| OMX_ADAPTER
     OMX_ADAPTER --> OMX
     OMX -->|파지·적재 결과| OMX_ADAPTER
@@ -91,15 +91,15 @@ flowchart LR
 | 구성요소 | 책임 | 현재 확인 범위 |
 |---|---|---|
 | 고객 화면·주문 서비스 | 물품/수량 주문, 재고 예약, 픽업 위치 선택, 주문 상태와 수령 확인 | 외부 제품 요구사항. 이 저장소와 연동되지 않음 |
-| 관리자 관제 화면·HTTP API | 로봇·카메라·작업 정보 표시, 관제 요청 접수 | localhost 상태 조회, 구조화 작업 이력 생성·조회, mock start/cancel, 픽셀 후보 관측 이력, 팔 수동 텔레오퍼레이션 제어가 구현됨 |
+| 관리자 관제 화면·HTTP API | 로봇·카메라·작업 정보 표시, 관제 요청 접수 | localhost 상태 조회, 주문·작업 생성·조회와 시작·취소, 주문 진행 화면, 팔 수동 조작(텔레오퍼레이션·OMX 명령)이 구현됨 |
 | 자연어 작업 해석기 | 명령에서 물체·색상·선반·목적지를 뽑아 확인 가능한 구조화 초안 생성 | 제한 어휘/문법의 rule-based draft와 폼 채우기 구현; 자연어 이해·모호성 해소는 미구현 |
 | 중앙 오케스트레이터 | 주문/작업 조건 확인, Pinky·OMX 단계 순서와 완료 조건 관리 | mock 단계 실행과 저장은 구현됨; 실제 이동·팔 adapter 실행은 미구현 |
-| 물품 인식·좌표 계산 | 고정/손목 카메라에서 대상 후보 확인, 3D 위치 및 OMX 목표 계산 | Head Camera YOLO 픽셀 후보 관측, `--arm`과 별도 가중치 설정 시 Joint Camera 재관측 후보, YOLO-World task 관측 POST의 요청 class one-shot prompt, task 감사 이벤트 및 측정값을 입력받는 고정 평면 2D draft 계산 도구까지 구현; 물체별 인식 검증·RGB-D/TF·camera/joint time alignment·카메라→OMX 변환은 미구현 |
+| 물품 인식·칸 확인 | 선반·핑키 위 물체 검출과 개수, 집을 물체가 있는 칸 확인 | 카메라별 YOLO 검출, 선반 칸 영역 안 개수와 칸 근거, 핑키 쟁반 영역 안 개수 구현. 좌표 계산은 2026-11-11에 계획에서 뺌. 탑 캠의 쟁반 위 물건 검출은 아직 부정확 |
 | Pinky 어댑터 | Nav2 목적지 요청, 수락·진행·최종 결과를 공통 모델로 변환 | ROS 2 action server 발견만 구현; goal 전송 미구현 |
 | Pinky 주차 판정 | B 적재 위치에 Pinky가 등록된 자리에 섰는지 천장 카메라 ArUco 마커로 확인하고 어긋난 양을 보고 | CLI, 관제 `GET /api/parking-spots/{spot_id}/check`, 현황 화면 패널, mock 작업 `VERIFY_ARRIVAL` 연결 구현; 실제 Nav2 결과 이후 호출과 수레 정렬 확인은 미구현 |
 | OMX 어댑터 | 집기·수레 적재 명령과 완료/실패 결과 변환 | LeRobot 수동 텔레오퍼레이션만 관리; 자동 작업 인터페이스 미확정 |
 | 이벤트·상태·이력 | 장치 결과를 해당 작업과 연결해 상태·이력으로 저장 | 작업/단계 상태 저장과 조회 구현; 장치 이벤트 연동 미구현 |
-| 팔 카메라 관리자 | 로봇팔 Head/Joint 카메라를 개별 수집하고 UI로 전달 | 두 카메라 경로 설정 및 MJPEG 수집 경로 구현; Head YOLO 입력과 task 관측 이벤트 연결, 별도 가중치 설정 시 Joint detector 및 camera별 step review link 구현. 실장 위치·접근 시점 재인식 동작은 미확인 |
+| 팔 카메라 관리자 | 로봇팔 Head/Joint 카메라를 개별 수집하고 UI로 전달 | 카메라별 장치 경로(V4L2 또는 `ros:<토픽>`), MJPEG 표시와 카메라별 YOLO 표시 구현. 탑 캠은 주차 노드가 열고 관제는 토픽으로 받음. 실장 위치는 화면으로 확인 |
 
 ## B ↔ A 운송과 대기 위치
 
@@ -111,8 +111,8 @@ flowchart LR
         ALIGN_OK{주차 판정 ARRIVED?}
         CART[수레 정렬 확인<br/>방법 미확정]
         CART_OK{수레 정렬 허용?}
-        RECOGNIZE[대상 물품 인식·집기 위치 계산]
-        TARGET_OK{물품·좌표 유효?}
+        RECOGNIZE[대상 물품 인식·칸 확인]
+        TARGET_OK{물품이 한 칸에서 보임?}
         LOAD[OMX 집기·수레 적재]
         COUNT{목표 수량 적재 성공 확인?}
         HOLD[작업 보류·관리자 알림]
@@ -176,7 +176,7 @@ sequenceDiagram
     O->>H: PARKING_OBSERVED 기록
 
     alt B 도착 성공 · 주차 판정 ARRIVED · 수레 정렬 확인(미확정)
-        V-->>O: 대상 검출·좌표 후보 (구현 미확정)
+        V-->>O: 대상 검출·칸 근거
         O->>X: 집기·수레 적재 요청
         X-->>O: 파지·적재 성공/실패 결과
         alt 목표 수량 적재 성공 확인
@@ -196,7 +196,7 @@ sequenceDiagram
     end
 ```
 
-이 흐름은 제품 목표이며 mock 작업 start/cancel 및 task 이력 경로는 현재 구현돼 있습니다. mock 실행 결과는 장치 결과가 아닙니다. 실제 Nav2/OMX 명령과 결과, 일반 자연어 이해(제한 parser 초안 제외), 주문/재고 서비스 연결은 구현되지 않았습니다. 현재 관측 경로는 픽셀 후보를 저장하며 작업 상태를 전이하지 않습니다.
+이 흐름은 제품 목표입니다. 지금 코드가 하는 일과 모의인 부분은 [주문 흐름](../implementation/order-flow.md)에 있습니다. 일반 자연어 이해(제한 parser 초안 제외)와 주문/재고 서비스 연결은 구현되지 않았습니다.
 
 ## 미확정 기술과 후속 확인
 
@@ -204,7 +204,6 @@ sequenceDiagram
 |---|---|---|
 | 주문 서비스 연동 | endpoint, 인증, 주문/운송 payload, 상태 소유자 | 주문 서비스 담당자와 API schema·이벤트 책임 합의 |
 | B 비전 입력 | 카메라의 실제 장착 위치/장치, Head·Joint 카메라와 관계, 영상 endpoint | 현장에서 카메라 물리 위치와 영상 소스를 대조 |
-| 좌표 변환 | source/target frame, 단위, 축, 원점, calibration, 허용 오차 | OMX 제어 입력·카메라 보정 정보를 확인하고 고정된 물품으로 비교 측정 |
 | Pinky 이동 | ROS 2 domain/배포판, Nav2 action 이름·타입, map/waypoint, A·B·P 위치 | 로봇에서 ROS graph/action/interface와 지도 좌표 조사 |
 | 정차·정렬 | Pinky 정차는 천장 카메라 주차 판정으로 확인(임시 허용 25 mm / 5°, 근거 측정 전). 수레 정렬 신호는 없음 | 팔이 감당할 어긋남과 Nav2 재주차 반복성을 재서 허용 오차 결정; 수레 정렬 확인 방법(수레 마커 추가 등) 결정 |
 | OMX 자동 작업 | 명령 형식, READY, 파지·적재 완료, 오류 결과 | 자동 작업용 API/Action과 결과를 제공하는 OMX 인터페이스 확인; 텔레오퍼레이션과 분리 |

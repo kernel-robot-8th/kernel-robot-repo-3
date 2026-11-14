@@ -2,9 +2,6 @@
 
 주행로봇과 로봇팔을 위한 Python 관제 서버입니다. 저장소만 복제한 환경에서는 모의 상태 화면과 API를 실행할 수 있습니다. 실제 팔 제어에는 별도의 LeRobot 및 OMX 지원 환경이 필요합니다.
 
-
-저장된 카메라 관측 이미지의 선반 층 ROI polygon 입력은 `scripts/shelf_region_editor.html`을 사용하고, provenance 검증은 [선반 영상 영역 절차](docs/implementation/shelf-image-regions.md)를 따릅니다.
-
 ## 시작 전 환경 확인
 
 새 PC에서 처음 작업하거나 새로 합류했다면, 먼저 필요한 것이 준비됐는지 확인합니다. 옵션 없이 실행하면 확인만 하고 아무것도 바꾸지 않습니다.

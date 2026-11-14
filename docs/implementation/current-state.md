@@ -20,8 +20,6 @@
 | `src/control_station/policy_run_supervisor.py` | LeRobot async ACT client를 총 액션 상한으로 한 번 실행; 기본 비활성, process 결과만 기록하며 작업 성공을 추정하지 않음 |
 | `scripts/calibrate_camera_intrinsics.py` | 저장된 체커보드 이미지(각 최대 64 MiB, symlink 거부) bytes의 SHA-256과 OpenCV 내부 파라미터 schema v2 초안을 계산하고 공통 validator로 출력 계약 확인; camera API의 `pixel_transform_id` 입력 필요; 카메라/로봇 연결 없음 |
 | `scripts/calibration_artifacts.py` | calibration input regular-file bounded reader(이미지 64 MiB), 중복 JSON key 거부, intrinsic draft validator와 산출물 no-overwrite atomic publisher; 측정 품질 승인 없음 |
-| `scripts/calibrate_shelf_regions.py` | 최대 64 MiB task JSON 및 최대 1 MB ROI JSON bounded reader, 저장된 task observation event의 task/frame provenance와 최대 64 MiB PNG/pixel SHA-256 검증, symlink 경로·입력 JSON 중복 키 거부를 거쳐 운영자 측정 층 polygon을 `DRAFT_ONLY`·선택 비활성 artifact로 생성; 활성 파일로 명시 배치하면 관측 API가 검토 전용 비교 |
-| `scripts/shelf_region_editor.html` | 저장 observation PNG에 원본 해상도 픽셀 좌표 polygon을 수동 입력하고 PNG file SHA-256/해상도를 포함한 `regions.json` schema v2로 다운로드하는 브라우저 도구; 물리 측정·승인 없음, CLI가 PNG provenance를 대조 |
 | `scripts/probe_omx_readonly.py` | LeRobot 버스의 ID/model handshake 후 OMX register `sync_read`; 목표·설정 쓰기 없이 한 시점 값을 표준 출력 |
 | `scripts/omx_act_policy_test.sh` | LeRobot ACT 정책 서버, 정책 파일의 카메라 역할에 맞춘 수동 정책 클라이언트, OMX 워커 실행 도우미; 종료 시 토크 유지, 다른 팔 프로세스·카메라 사용 중이면 시작 거부 ([runbook](runbook.md#act-집기-정책-실물-시험)) |
 | `config/omx-act-policies.json`, `src/control_station/act_policies.py` | 물체 이름(YOLO 클래스·한글·별칭) → 그 물체용 ACT 정책(모델, front/wrist 카메라 역할, 최대 실행 시간); 중복 이름·잘못된 카메라 대응 거부; 파일 SHA-256을 명령에 고정 |
@@ -33,7 +31,6 @@
 | `src/control_station/parking_ros.py` | `CONTROL_STATION_PARKING_SPOT`이 있으면 C++ 노드의 상태 토픽과 판정 서비스를 관제 JSON(`/live`, `/check`, `VERIFY_ARRIVAL`)으로 바꿈; 노드 상태가 없거나 2초 넘게 멈추면 `NODE_UNAVAILABLE`, 서비스 연결 실패·6초 timeout은 판정 불가(재시도 없음); 단위 테스트 12개 |
 | `cpp/parking_vision/tools/pinky_parking.cpp` | `ros2 run parking_vision pinky_parking`. 주차 정답 위치 `register`(흔들림 5 mm/3° 초과 또는 고정 마커 없음이면 거부, `--no-anchors`, `--marker-forward-axis`, `--trust-single-anchor`, 창 없는 `--headless`, 덮어쓰기 불가 `DRAFT_ONLY` schema v2 JSON)와 `check`(실시간 창 또는 `--once` JSON·종료 코드 0/1/2); 등록 결과가 옮기기 전 Python CLI와 같은지 비교 테스트; Pinky·팔 명령 없음 |
 | `src/control_station/camera_adapters.py` | OpenCV physical camera manager: Head·Joint·Front·선반 카메라 feed, 선택 YOLO/YOLO-World 검출 표시, 최근 raw frame 보관, `ros:<topic>` 카메라 구독. 학습 정책 client(관제의 정책 한 번 실행)가 도는 동안 Front Camera를 닫고, 정책 집기 명령(`PICK_WITH_POLICY`)이 워커에 있는 동안 정책 카메라와 같은 V4L2 피드를 닫았다가 끝나면 다시 엶 |
-| `src/control_station/shelf_regions.py` | 명시된 camera별 ROI artifact의 source/camera/해상도/pixel transform 계약과 공통 shelf-level 범위(1–999,999,999)를 확인해 후보 `center_px`의 층 비교 상태/index를 계산; 1 MB 이내로 읽은 artifact bytes SHA-256을 성공·검증실패 결과에 보존; 경로 구성요소 symlink/non-file 입력 거부; 미설정·불일치·모호 상태 구분, 후보 선택 없음 |
 | `src/control_station/models.py` | 작업·단계 상태 어휘 및 카메라 스냅샷 |
 | `src/control_station/database.py` | SQLAlchemy ORM 모델, SQLite 엔진과 세션 설정; optional task `pick_request` JSON |
 | `src/control_station/store.py` | ORM 세션으로 작업/단계 상태 및 감사 이벤트를 저장; 활성 task/step/command 일치가 확인된 step 진행 이벤트도 상태 전이 없이 추가 |

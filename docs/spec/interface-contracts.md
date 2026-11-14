@@ -58,7 +58,7 @@ HTTP 서버 생존, 카메라 프레임 수신, Nav2 action server 발견, LeRob
 |---|---|---|---|
 | 고객 화면 → 주문 서비스 | 물품, 양수 수량, 픽업 위치 `A-1`/`A-2`/`A-3` | 주문 ID 반환; 검증·재고 실패 시 저장하지 않고 사유 반환 | 제품 요구사항 확정; 이 저장소와 미연동 |
 | 주문 서비스 → 관제 | 주문 ID, 물품·수량, 선택 픽업 위치, 배정 운송 작업 | 배정/대기 또는 거절·보류 사유 | 의미는 요구사항에 있음; endpoint·전송 방식·schema 미확정 |
-| 관제 UI → HTTP API | 작업 생성·조회, 구조화된 대상 조건, 카메라 관측 기록, mock 작업 시작·취소 | HTTP 접수와 작업 ID; 관측은 task event이며 상태 전이 아님; 완료/취소는 별도 상태·이벤트 | localhost 구현; `pick_request`는 저장 전용, 관측 이벤트는 픽셀 후보 근거, `/start`와 `/cancel`은 mock 전용, 실제 장치 실행 미연결 |
+| 관제 UI → HTTP API | 주문·작업 생성·조회, 구조화된 대상 조건, 작업 시작·취소 | HTTP 접수와 작업 ID; 완료/취소는 별도 상태·이벤트 | localhost 구현; 단계별로 무엇이 모의인지는 [구현 현황](../implementation/current-state.md)과 [주문 흐름](../implementation/order-flow.md) |
 | Mock start/cancel API → UI/client | task-control 결과 또는 오류 | 오류는 `error_code`, 사용자용 `message`, 호환용 `error`를 함께 반환 | `TASK_NOT_FOUND`, `TASK_STATE_CONFLICT`, `TASK_NOT_STARTABLE`, `TASK_NOT_CANCELLABLE`, `TASK_WORKER_OWNERSHIP_UNCERTAIN`, `EXECUTION_MODE_UNSUPPORTED`, `MOCK_WORKER_START_FAILED`, `TASK_CONTROL_ERROR`, `CROSS_ORIGIN_REQUEST_REJECTED`; 다른 API는 아직 공통 오류 envelope 적용 전 |
 | Mock 오케스트레이터 → 작업 이력 저장소 | 현재 task/active-step/step/command/robot ID와 mock progress | task가 `VALIDATING`/`RUNNING`이고 같은 step이 `active_step_id` 및 `RUNNING` 상태이며 command ID가 일치할 때만 `PROGRESS` event를 추가; task/step 상태는 유지 | mock 지연 구간의 50% 표시; 장치 feedback이나 실측 작업량 아님; 모든 상관 ID와 상태 선행 조건을 저장소가 확인 |
 | 오케스트레이터 → Pinky 어댑터 | task/step/command ID, 목적지, deadline | 수락/거절, 진행, terminal 성공·실패, 취소 결과 | 공통 의미 확정; ROS 2 action 이름·타입·namespace·frame 미확정 |
@@ -66,12 +66,6 @@ HTTP 서버 생존, 카메라 프레임 수신, Nav2 action server 발견, LeRob
 | 로봇 어댑터 → 이벤트 처리기 | robot/task/step/command ID, 장치 결과 | `ACCEPTED`, `EXECUTION_STARTED`, `PROGRESS`, `SUCCEEDED`, `FAILED`, `CANCELED` 또는 미확정 | 공통 이벤트 의미 확정; 장치별 실제 메시지 미확정 |
 | 천장 카메라 주차 판정 → 관제 | spot·marker ID, 등록 위치 대비 dx·dy·dyaw와 허용 오차·비율, 시야 확인 여부, 프레임 출처 | `ARRIVED`, `MISALIGNED`, 판정 불가(`NOT_FOUND`/`AMBIGUOUS`/`VIEW_UNVERIFIED`); Nav2 결과와 별개의 관측 | 초안: CLI, 관제 GET 관측, 모의 작업 `VERIFY_ARRIVAL`의 `PARKING_OBSERVED` event·팔 단계 조건·이력 화면 구현 ([주차 정렬 관측](#pinky-주차-정렬-관측-초안)) |
 | Head/Joint Camera → 관제 UI | 카메라별 프레임·연결·스트림·프레임 sequence/해상도·마지막 프레임 시각, closed-set YOLO 또는 선택 YOLO-World의 camera/frame 출처·고정 prompt vocabulary·픽셀 영역 | 카메라별 오류; 다른 카메라나 로봇 상태에 전파하지 않음; 검출 후보는 자동 선택/명령 신호가 아님 | API 관측 필드 구현; 가중치 미포함; 실제 장착 위치·실물 객체별 검출 적합성은 미검증 |
-| 설정된 ROS 2 `sensor_msgs/msg/JointState` → `/api/robots` | 명시적으로 설정한 topic의 관절명·유효한 position, ROS 메시지 원본 `header.stamp`의 sec/nanosec와 `frame_id`, 관제 수신시각/나이 | 미설정, 아직 미수신, fresh `observed`, stale, 또는 배열 불일치·이름 오류·비유한 위치가 있는 `invalid` 관측 | ROS 2 상태 adapter의 읽기 전용 subscription; topic source는 운영자가 확인해야 하며 joint-state 수신은 arm readiness/safety/command acceptance가 아님; ROS goal/command 전송 없음 |
-| 선택 설정 ROS 2 `FollowJointTrajectory` action → `/api/robots` | absolute action name과 ROS graph의 server 발견 여부 | `unconfigured`, `not_discovered`, `discovered` | 선택형 discovery-only `ActionClient`; goal을 보내지 않으며 server discovery는 controller/arm readiness, safety 또는 command acceptance가 아님 |
-
-`/api/robots`의 `source_stamp`는 메시지에 실려 온 숫자를 그대로 보존하며 ROS clock 설정, 유효성, 실제 샘플 시각을 검증하지 않습니다. 0 또는 null일 수 있고 관제 `received_at`과 같은 시간축이라고 보장하지 않습니다. 카메라 캡처 시각과의 차이를 계산하거나 joint pose를 카메라 관측에 결합하는 데 사용하지 않습니다. `frame_id`도 원문 메타데이터이며 TF 변환을 수행했다는 뜻이 아닙니다.
-
-샘플은 joint name/position 개수 일치, 선택적 velocity/effort 배열이 비어 있거나 name 개수와 일치하는지, 비어 있지 않은 유일한 이름, 유한한 모든 position을 확인합니다. 실패하면 `state: "invalid"`, `sample_valid: false`, 설명용 `sample_error`를 반환하고 `positions`는 `null`입니다. 검증에 성공했을 때만 `sample_valid: true`와 원본 숫자 배열을 반환하며, `position_unit_status`는 `UNSPECIFIED`입니다. ROS `JointState`에서 position 단위는 revolute joint는 rad, prismatic joint는 m이지만 메시지 자체에 joint type이 없으므로 관제는 단위를 임의로 붙이지 않습니다 ([Jazzy `JointState.msg`](https://github.com/ros2/common_interfaces/blob/jazzy/sensor_msgs/msg/JointState.msg)). 이는 관절 한계·모터 상태·안전 상태를 검증하지 않습니다.
 
 ## 4. 명령·이벤트 공통 envelope
 
@@ -141,24 +135,15 @@ OMX에는 좌표를 보내지 않습니다(2026-11-11 결정). 팔은 기록한 
 
 응답 202는 핑키 관제가 신호를 받아 로봇에 기록했다는 뜻입니다. 핑키가 실제로 움직였는지는 다음 `GET /api/status` 단계로 확인합니다. 409(단계·토큰 불일치)는 `PINKY_SIGNAL_REJECTED`, 502(로봇 전달 실패)는 `PINKY_SIGNAL_NOT_DELIVERED`, 무응답은 `PINKY_FLEET_UNREACHABLE`로 기록하고 자동으로 다시 보내지 않습니다.
 
-### 카메라 관측 결과 (현재 API)
+### 카메라 검출 결과 (현재 API)
 
-schema v2/v3의 observation object는 `camera_connection_state`와 `camera_stream_state`에 관측 당시 카메라 연결/스트림 enum을 보존합니다. `GET /api/cameras/{camera_id}/target-observation` 응답의 중첩 observation에 모두 포함되며, 판정 status만으로 원래 장치 상태를 추정할 필요가 없습니다.
-
-
-색상 힌트는 bbox 중앙 60% crop에 OpenCV HSV를 적용합니다. black은 `V<=45`, white는 `S<=45 and V>=200`; red/yellow/green/blue는 각각 `S>=65`, `V>=50`이며 H 범위는 red `<=10 or >=170`, yellow `16–37`, green `38–85`, blue `90–130`입니다. 가장 많은 지원 색상이 crop 전체 픽셀의 20% 미만이면 `LOW_COLOR_COVERAGE`, 1·2위 차가 5% 미만이면 `MIXED_COLOR`, 그 외에만 `ESTIMATED`를 반환합니다. `pixel_fraction`은 그 색상의 픽셀 수를 crop 전체 픽셀 수로 나눈 값입니다.
-
-이 데이터는 화면 표시와 관측에만 사용합니다. 검출 결과가 비어 있으면 해당 프레임에서 후보가 없거나 detector가 설정되지 않은 것일 수 있으므로 `detector_state`를 함께 확인해야 합니다. 카메라 프레임이 stale이면 이 결과를 집기 목표로 사용하지 않습니다. 좌표 변환·작업영역 판정·로봇 명령은 이 API에 연결되어 있지 않습니다.
-
-
-
-
+`GET /api/cameras`의 검출 결과는 화면 표시와 개수 세기·칸 근거에만 씁니다. 검출 결과가 비어 있으면 해당 프레임에서 후보가 없거나 detector가 설정되지 않은 것일 수 있으므로 `detector_state`를 함께 확인해야 합니다. 카메라 프레임이 stale이면 개수 세기와 칸 근거에 쓰지 않습니다. 좌표 변환은 없습니다.
 
 관제의 JSON POST body parser는 object 내 중복 key를 거부하고 HTTP 400을 반환합니다. 요청 값이 parser 선택 순서에 따라 달라지지 않도록 하는 입력 계약이며, task/event 저장이나 장치 동작을 시작하지 않습니다.
 
 `GET /api/tasks/{task_id}`는 응답에 비저장 `local_execution_owner` 관측을 덧붙입니다. 현재 활성 task에 대한 값은 `LOCAL_WORKER_ACTIVE`, `NO_LOCAL_WORKER`, `MODE_NOT_MANAGED` 중 하나이며 terminal/pending task는 `NOT_ACTIVE`입니다. 이는 이 Python 프로세스가 가진 mock worker 여부만 설명하며, 다른 프로세스의 worker나 장치 상태·정지·작업 결과를 증명하지 않습니다. worker가 없는 활성 task를 자동 재개하거나 종료하지 않습니다.
 
-`POST /api/tasks/parse-command`는 `{"text":"..."}`를 받아 `RULE_BASED_DRAFT`와 구조화 후보, 누락/모호 필드 및 warning을 반환합니다. 현재는 제한된 한국어 문형에서 지원 동사·목적지(동사 우선 및 간단한 목적어 우선 배치/이동 문형), 일부 색상어, 아라비아 숫자와 첫째부터 열째까지 일부 한국어 서수의 선반 층을 추출하며 일반 영어 문장은 지원하지 않습니다. 한 작업의 parser는 물체 한 개를 전제로 하며, 대상 주변의 복수형·2개 이상 수량 표현이 있으면 category를 비우고 `MULTIPLE_TARGETS_UNSUPPORTED`로 표시합니다. `ready` 상태 카메라의 detector class 목록이 있으면 문장에 쓰인 label을 대소문자 구분 없이 대조하고, `box`/`bottle` 한국어 별칭도 해당 label과 연결합니다. Head Camera가 ready YOLO-World인 경우에만 고정 vocabulary에 없는 별칭 또는 단일 한국어 목적격 대상구를 `REQUEST_PROMPT_REVIEW_REQUIRED` category 초안으로 채웁니다. 이는 요청별 class prompt를 사람이 검토하도록 돕는 규칙이며 object detection 결과가 아닙니다. 복수/수량, conjunction, 부정·대조 표현이 대상구에 있거나 대상구가 단일하지 않으면 자동 채우지 않습니다. 오류·미준비 카메라의 클래스는 사용 가능 목록으로 보지 않습니다. 물체·색상·선반 층의 부정/제외 표현이나 목적지의 대조/선택 표현이 추출값에 걸리면 해당 필드를 자동 선택하지 않고 모호/누락으로 표시합니다. 색상과 선반 층은 관측 때 검토용 hint 비교만 할 수 있고 후보 필터·선택에는 사용하지 않는다고 경고합니다. 결과는 항상 `review_required: true`, `task_created: false`, `arm_command_sent: false`이며 DB나 로봇 상태를 바꾸지 않습니다. 해석 결과는 task 등록 전에 사용자가 확인·수정해야 합니다.
+`POST /api/tasks/parse-command`는 `{"text":"..."}`를 받아 `RULE_BASED_DRAFT`와 구조화 후보, 누락/모호 필드 및 warning을 반환합니다. 현재는 제한된 한국어 문형에서 지원 동사·목적지(동사 우선 및 간단한 목적어 우선 배치/이동 문형), 일부 색상어, 아라비아 숫자와 첫째부터 열째까지 일부 한국어 서수의 선반 층을 추출하며 일반 영어 문장은 지원하지 않습니다. 한 작업의 parser는 물체 한 개를 전제로 하며, 대상 주변의 복수형·2개 이상 수량 표현이 있으면 category를 비우고 `MULTIPLE_TARGETS_UNSUPPORTED`로 표시합니다. `ready` 상태 카메라의 detector class 목록이 있으면 문장에 쓰인 label을 대소문자 구분 없이 대조하고, `box`/`bottle` 한국어 별칭도 해당 label과 연결합니다. Head Camera가 ready YOLO-World인 경우에만 고정 vocabulary에 없는 별칭 또는 단일 한국어 목적격 대상구를 `REQUEST_PROMPT_REVIEW_REQUIRED` category 초안으로 채웁니다. 이는 요청별 class prompt를 사람이 검토하도록 돕는 규칙이며 object detection 결과가 아닙니다. 복수/수량, conjunction, 부정·대조 표현이 대상구에 있거나 대상구가 단일하지 않으면 자동 채우지 않습니다. 오류·미준비 카메라의 클래스는 사용 가능 목록으로 보지 않습니다. 물체·색상·선반 층의 부정/제외 표현이나 목적지의 대조/선택 표현이 추출값에 걸리면 해당 필드를 자동 선택하지 않고 모호/누락으로 표시합니다. 색상과 선반 층은 `pick_request`에 저장만 하며 후보 필터·선택에는 쓰지 않습니다. 결과는 항상 `review_required: true`, `task_created: false`, `arm_command_sent: false`이며 DB나 로봇 상태를 바꾸지 않습니다. 해석 결과는 task 등록 전에 사용자가 확인·수정해야 합니다.
 
 ### Pinky 주차 정렬 관측 (초안)
 
@@ -244,7 +229,7 @@ Pinky가 멈춘 뒤 천장 카메라로 "등록된 주차 위치와 얼마나 �
 | UI ↔ 관제 | localhost HTTP API | 원격 배포 인증·TLS·접근 제어 |
 | 관제 ↔ 저장소 | SQLite, SQLAlchemy ORM, Alembic | 원격/다중 사용자 배포 DB |
 | 관제 ↔ Pinky | 임무 단계와 도킹완료·수령 완료 신호는 핑키 팀 관제 HTTP(`origin/pinky_fleet`, 위 "주문과 핑키 관제 신호"). 주차 판정은 관제 쪽 C++ ROS 2 노드 | 핑키 관제 외부 접속(기본 127.0.0.1만 열림)과 인증; 주행 명령은 핑키 팀이 담당 |
-| 관제 ↔ OMX | HTTP 명령 큐: 워커가 long-poll로 명령을 가져가고 이벤트를 보고하며, `ACCEPTED`에 200을 받아야 실행 ([OMX 명령 HTTP 인터페이스](../implementation/arm-command-api.md)); 현장 read-only register probe 확인 | 실물 LeRobot 워커, 카메라 좌표로 명령 생성, 작업 단계 연결, 실행 중 결과 제한 시간, 안전 작업 영역, 원격 배포 인증; LeRobot `send_action()`은 관절 목표 쓰기 함수이므로 XYZ→관절 IK는 워커 쪽에 필요 |
+| 관제 ↔ OMX | HTTP 명령 큐: 워커가 long-poll로 명령을 가져가고 이벤트를 보고하며, `ACCEPTED`에 200을 받아야 실행 ([OMX 명령 HTTP 인터페이스](../implementation/arm-command-api.md)); 현장 read-only register probe 확인 | 주문 흐름의 `PICK_ITEM` 연결(지금은 모의), 실행 중 결과 제한 시간, 안전 작업 영역, 원격 배포 인증 |
 | 카메라 ↔ 관제 | 현재 OpenCV 캡처와 브라우저용 MJPEG | 배포 장치 ID, 동시 스트림 성능, 장착 위치 최종 확인 |
 | 주문 서비스 ↔ 관제 | 주문 ID·물품·수량·픽업 위치가 필요 | endpoint, HTTP/event 방식, 인증, payload, 재시도와 저장 책임자 |
 | 로봇 결과 이벤트 | 관제 내부 식별자와 이벤트 의미 | 실제 topic/action result 형식, event ID·sequence·시각, 순서·재전송 보장 |

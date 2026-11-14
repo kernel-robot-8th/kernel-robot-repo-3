@@ -56,17 +56,17 @@ curl -sS -X POST http://127.0.0.1:8000/api/tasks/parse-command \
 
 API로도 확인할 수 있습니다.
 
-`POST /api/tasks`는 `destination`, `arm_job`, 선택적 `pick_request`만 받습니다. 그 밖의 최상위 필드는 오타나 미지원 입력으로 보고 HTTP 400을 반환합니다. Pick & Place 대상 조건은 `pick_request: {"category":"box","color":"red","shelf_level":2}`처럼 별도 객체로 보냅니다.
+이전 형식의 `POST /api/tasks`는 `destination`, `arm_job`, 선택적 `pick_request`를 받습니다(주문은 `order_items`, [주문 흐름](order-flow.md)). 그 밖의 최상위 필드는 오타나 미지원 입력으로 보고 HTTP 400을 반환합니다. 주문 물체 조건은 `pick_request: {"category":"carrot"}`처럼 별도 객체로 보냅니다.
 
 ```bash
 # 기존 이동·팔 작업 등록 예시
 curl -sS -X POST http://127.0.0.1:8000/api/tasks \
   -H 'Content-Type: application/json' \
   -d '{"destination":"작업대 A","arm_job":"상자 이동"}'
-# 대상 조건이 있는 Pick & Place 작업 등록 예시
+# 주문 물체 조건이 있는 작업 등록 예시
 curl -sS -X POST http://127.0.0.1:8000/api/tasks \
   -H 'Content-Type: application/json' \
-  -d '{"destination":"작업대 A","arm_job":"상자 이동","pick_request":{"category":"box","color":"red","shelf_level":2}}'
+  -d '{"destination":"작업대 A","arm_job":"당근 집기","pick_request":{"category":"carrot"}}'
 # 둘 중 하나의 응답에서 task.id를 복사해 사용
 curl -sS -X POST http://127.0.0.1:8000/api/tasks/TASK-ID/start
 curl -sS http://127.0.0.1:8000/api/tasks/TASK-ID
@@ -74,23 +74,13 @@ curl -sS http://127.0.0.1:8000/api/tasks/TASK-ID
 
 `TASK-ID`는 생성 응답의 실제 작업 ID로 바꿉니다. 진행 중인 작업은 `/api/tasks/{task_id}/cancel`로 취소할 수 있습니다. `CONTROL_STATION_MOCK_STEP_DELAY`는 모의 단계별 표시 대기 시간(초)이며 기본은 `0.25`, 허용 범위는 `0.05–2.0`입니다. 시작 접수나 mock 성공은 실물 동작을 의미하지 않습니다.
 
-모의 실패 종결 경로를 화면에서 확인해야 할 때만 서버 시작 환경에 `CONTROL_STATION_MOCK_FAIL_STEP`을 설정합니다. 예를 들어 `CONTROL_STATION_MOCK_FAIL_STEP=GRASP_TARGET ./run-control-station.sh`는 Pick & Place 작업의 해당 step이 `COMMAND_SENT → ACCEPTED → RUNNING`을 거친 뒤 `MOCK_SCENARIO_FAILURE`로 실패하고, 남은 step은 미실행으로 닫힙니다. 지원 값은 저장소의 표준 task step type입니다. 이 설정은 `mock` mode에서만 적용되며 실제 adapter·카메라·로봇 동작을 시험하거나 예측하지 않습니다. 기본값은 비활성입니다.
+모의 실패 종결 경로를 화면에서 확인해야 할 때만 서버 시작 환경에 `CONTROL_STATION_MOCK_FAIL_STEP`을 설정합니다. 예를 들어 `CONTROL_STATION_MOCK_FAIL_STEP=EXECUTE_ARM_TASK ./run-control-station.sh`는 이동·팔 작업의 해당 step이 `COMMAND_SENT → ACCEPTED → RUNNING`을 거친 뒤 `MOCK_SCENARIO_FAILURE`로 실패하고, 남은 step은 미실행으로 닫힙니다. 지원 값은 이동·팔 작업과 주문의 step type이며, 그 밖의 값이면 서버가 시작하지 않습니다. 이 설정은 `mock` mode에서만 적용되며 실제 adapter·카메라·로봇 동작을 시험하거나 예측하지 않습니다. 기본값은 비활성입니다.
 
 이동·팔 작업의 `VERIFY_LOAD`(적재 확인) 흐름은 `CONTROL_STATION_MOCK_LOAD_OBSERVED`로 확인합니다. 값은 수레 위에서 "보였다고 칠" 물건 개수(0 이상 정수)입니다. 기대 수량은 작업당 1개로 고정돼 있습니다. 예를 들어 `CONTROL_STATION_MOCK_LOAD_OBSERVED=0 ./run-control-station.sh`로 띄운 뒤 작업을 실행하면 `LOAD_OBSERVED`(덜 실림)가 남고 `LOAD_INCOMPLETE`로 실패하며 `FINALIZE_TASK`는 실행하지 않습니다. `1`이면 `LOAD_CONFIRMED`, `2` 이상이면 `LOAD_EXCESS`입니다. 이 관측은 카메라를 열지 않고 설정값을 그대로 보고하는 모의 관측(`simulated: true`)이며, 실제 적재 여부를 확인한 것이 아닙니다. 설정하지 않으면 `VERIFY_LOAD`는 다른 단계처럼 모의 성공입니다. `mock` mode에서만 적용됩니다.
 
 작업 상세에 “활성 상태지만 이 서버 프로세스에 실행 worker가 없습니다”가 표시되면 `/start`를 반복해 재실행하지 마세요. 해당 값은 현재 프로세스의 worker 소유만 보여 주며 다른 프로세스·장치 동작을 판단하지 않습니다. `.control-station/logs`의 해당 세션 로그와 저장된 task/step/event를 확인하고 운영 절차에 따라 처리합니다. 현재 UI에는 이런 활성 작업을 자동 복구·재생하는 기능이 없습니다.
 
-작업의 팔 단계는 주문 물체(`pick_request.category`, 예: `carrot`·`당근`)로 학습 정책을 고릅니다. 정책이 없는 물체면 팔 명령을 만들지 않고 `ARM_JOB_POLICY_NOT_FOUND`로 멈춥니다.
-
-카메라 화면에서 별도로 확인하려면 클래스와 선택 색상 조건을 넣습니다. 이 GET 요청은 이력을 저장하지 않습니다.
-
-```bash
-curl -sS 'http://127.0.0.1:8000/api/cameras/head_camera/target-observation?class_name=box&color=red&shelf_level=2'
-```
-
-`shelf_level_evaluation.status`가 `CALIBRATION_NOT_CONFIGURED`이면 활성 영역 파일이 없다는 뜻입니다. 영역 파일이 있어도 camera/frame 출처가 다르면 층 일치 비교를 만들지 않습니다. 활성 영역 파일 구성은 [선반 영역 초안 절차](shelf-image-regions.md)를 참고하세요.
-
-작업 관측 기록 기능을 2026-11-11에 지워서, 새 층 영역 초안의 입력인 저장 관측 PNG는 더 만들 수 없습니다. 이미 활성화한 영역 파일은 계속 읽습니다. 층별 영상 영역을 측정할 때는 저장된 event ID와 PNG를 확인한 뒤 [선반 영역 초안 절차](shelf-image-regions.md)의 입력 schema로 polygon을 기록하고 `scripts/calibrate_shelf_regions.py`를 실행합니다. editor의 `regions.json` schema v2는 원본 PNG file hash/해상도를 함께 저장하며 CLI는 task event 이미지와 원본 BGR frame hash를 대조합니다. CLI 산출물은 `DRAFT_ONLY`이며 자동 활성화되지 않습니다. 관측 UI/API에서 검토용 층 비교를 보려면 문서 절차에 따라 사람이 artifact를 검토한 뒤 활성 디렉터리에 `{camera_id}.json` 이름으로 명시 배치해야 합니다. 이 배치는 물리 측정의 승인이나 로봇 사용 허가가 아니며 결과는 후보 선택과 팔 제어에 쓰이지 않습니다.
+`CONTROL_STATION_TASK_REAL_ARM=1`이면 작업의 팔 단계가 주문 물체(`pick_request.category`, 예: `carrot`·`당근`)로 학습 정책을 고릅니다([HTTP 인터페이스](arm-command-api.md#학습-정책으로-집기-pick_with_policy)). 정책이 없는 물체면 팔 명령을 만들지 않고 `ARM_JOB_POLICY_NOT_FOUND`로 멈춥니다.
 
 런처로 시작할 때마다 `.control-station/logs/session-<시각>-<프로세스ID>.log`에 관제 서버 출력과 HTTP 요청 로그를 저장하고, 터미널에도 함께 표시합니다. `--arm` 실행의 LeRobot 출력은 같은 세션 ID를 가진 `arm-<시각>-<프로세스ID>.log`에 따로 저장합니다. 이 폴더는 Git에서 제외됩니다.
 
@@ -232,7 +222,7 @@ python -m pip install -r requirements-vision.txt   # 처음 한 번. PyTorch가 
 CONTROL_STATION_HEAD_YOLO_WEIGHTS=/경로/best.pt ./run-control-station.sh
 ```
 
-팔 카메라의 접근 직전 관측에도 detector를 켜려면 별도 가중치 경로를 지정합니다.
+Joint Camera에도 detector를 켜려면 별도 가중치 경로를 지정합니다.
 
 ```bash
 CONTROL_STATION_HEAD_YOLO_WEIGHTS=/경로/shelf-search.pt \
@@ -256,7 +246,7 @@ CONTROL_STATION_JOINT_YOLO_WEIGHTS=/경로/wrist-refine.pt \
 | `CONTROL_STATION_FRONT_YOLO_DEVICE` | 자동 | Front Camera detector device (`0` 또는 `cpu`) |
 
 
-YOLO-World는 별도 데이터셋 episode 수집이나 fine-tuning 없이 지정한 text vocabulary에 대한 open-vocabulary 후보를 생성합니다. `requirements-vision.txt`의 Ultralytics 의존성을 재사용합니다. 가중치 파일은 이 저장소에 포함되지 않으며 존재하는 파일 경로를 명시해야 합니다. 상시 카메라 검출의 prompt list는 관제 프로세스 시작 시 고정됩니다. 대기 task에서 **카메라에서 대상 관측**을 명시적으로 요청하면, YOLO-World에서만 설정 vocabulary에 없는 task category를 일회성 prompt로 적용해 정확히 캡처한 raw frame을 추론하고 기존 vocabulary를 복원합니다. 일반 `GET` 관측은 모델 prompt를 변경하지 않으며, closed-set YOLO에는 요청별 prompt 기능이 없습니다. 프롬프트 class 후보는 관측/대상 명령 초안에 제공되지만 정확도 보정, 자동 후보 선택 또는 로봇 제어에 쓰이지 않습니다. 검증된 저장 가중치가 준비되면 다음처럼 opt-in으로 켤 수 있습니다.
+YOLO-World는 별도 데이터셋 episode 수집이나 fine-tuning 없이 지정한 text vocabulary에 대한 open-vocabulary 후보를 생성합니다. `requirements-vision.txt`의 Ultralytics 의존성을 재사용합니다. 가중치 파일은 이 저장소에 포함되지 않으며 존재하는 파일 경로를 명시해야 합니다. prompt 목록은 관제 프로세스 시작 시 고정되며, 요청마다 prompt를 바꾸는 기능은 없습니다. 검증된 저장 가중치가 준비되면 다음처럼 opt-in으로 켤 수 있습니다.
 
 ```bash
 CONTROL_STATION_HEAD_YOLO_WEIGHTS=/경로/yolov8s-worldv2.pt \
@@ -473,7 +463,7 @@ CONTROL_STATION_MODE=ros2 CONTROL_STATION_MOBILE_DOMAIN=15 ./run-control-station
 
 domain을 지정하지 않으면 `ROS_DOMAIN_ID`, 없으면 `0`을 사용합니다. 관제 설정은 ROS 2 domain ID `0`–`232`만 허용합니다.
 
-`/api/robots`는 ROS 2 모드에서 Nav2 action-server 발견을 표시합니다. `CONTROL_STATION_ARM_TRAJECTORY_ACTION_NAME`을 설정하면 해당 `control_msgs/action/FollowJointTrajectory` endpoint의 server 발견 여부도 확인합니다. 이는 discovery-only이며 goal을 보내지 않고 controller readiness나 안전을 증명하지 않습니다. OMX 관절 상태를 함께 보려면 `CONTROL_STATION_ARM_JOINT_STATES_TOPIC`에 ROS graph에서 출처를 확인한 절대 토픽 이름을 지정합니다. 설정 전에는 팔 관절 topic을 구독하지 않습니다. 저장소 inventory에서 `/joint_states`가 주행 시뮬레이터 모델에도 사용되는 것을 확인했으므로, 토픽 이름만으로 OMX source를 판정하지 마세요. 관제는 지정 topic의 `sensor_msgs/msg/JointState`를 읽기만 하며 joint 이름·원본 position 숫자·원본 ROS stamp/frame ID·관제 수신 시각과 freshness를 표시합니다. 메시지에는 joint type이 없어 position 단위를 미확정으로 표시합니다. 배열 길이 불일치, 빈/중복 이름, 비유한 position은 `invalid`로 표시하고 position 배열을 응답에서 제외합니다. 기본 freshness 한계는 2초이고 `CONTROL_STATION_ARM_JOINT_STATES_MAX_AGE`로 조절할 수 있습니다. 원본 ROS stamp는 clock 기준을 확인하지 않으므로 카메라 시각과 비교하거나 TF 변환에 사용할 수 없습니다.
+`/api/robots`는 ROS 2 모드에서 Nav2 `navigate_to_pose` action server 발견 여부만 표시합니다. goal을 보내지 않으며 Nav2 준비나 안전을 증명하지 않습니다. 팔 칸은 항상 "미설정"이고, 팔 상태는 수동 조작 탭의 OMX 워커 표시로 봅니다.
 
 
 ```bash
