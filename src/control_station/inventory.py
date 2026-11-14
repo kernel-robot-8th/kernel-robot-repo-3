@@ -215,6 +215,7 @@ class InventoryMonitor:
         self.period_s = period_s
         self.clock = clock
         self._events: deque[dict[str, Any]] = deque(maxlen=EVENT_LOG_SIZE)
+        self._simulated = False
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -223,7 +224,10 @@ class InventoryMonitor:
         moves = [(step_id, shelf, name) for step_id, shelf, name in self.transfers() if step_id not in self._booked]
         busy = bool(self.busy())
         try:
-            reading = StockReading(self.clock(), None if busy else self.read_shelves()["shelves"], busy=busy)
+            answer = None if busy else self.read_shelves()
+            if answer is not None:
+                self._simulated = bool(answer.get("simulated"))
+            reading = StockReading(self.clock(), None if answer is None else answer["shelves"], busy=busy)
         except Exception as exc:  # camera gone, detector not ready, no fresh frames: the stock becomes unknown
             reading = StockReading(self.clock(), error=f"선반 재고를 읽지 못했습니다: {exc}")
         with self._lock:
@@ -238,6 +242,12 @@ class InventoryMonitor:
         with self._lock:
             view = self.book.snapshot(self.products(), reserved, self.clock(), overrides)
             view["events"] = list(self._events)[::-1]
+        # Counts from the mock world are labeled as such, never as the camera's.
+        view["simulated"] = self._simulated
+        if self._simulated:
+            for row in view["products"]:
+                if row["source"] == "camera":
+                    row["source"] = "mock_world"
         view["checked_at"] = _now_iso()
         return view
 

@@ -157,6 +157,7 @@ class InventoryApiTest(ApiTestCase):
             self.server.inventory.read_once()
         status, view, _ = self.request("GET", "/api/inventory")
         self.assertEqual((status, view["products"][0]["available"]), (200, 4))
+        self.assertEqual((view["simulated"], view["products"][0]["source"]), (True, "mock_world"))
         status, view, _ = self.request("POST", "/api/inventory/apple", {"mode": "manual", "count": 1})
         self.assertEqual((status, view["products"][0]["source"], view["products"][0]["available"]), (200, "manual", 1))
         self.assertEqual(view["events"][0]["kind"], "OVERRIDE")
