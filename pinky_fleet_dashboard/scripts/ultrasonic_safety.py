@@ -563,6 +563,18 @@ class UltrasonicSafety(Node):
 
     def avoidance_tick(self, now, context):
         self.mission_token = context.get('token')
+        if not (getattr(self, 'runtime', {}).get('navigation') or {}).get('ultrasonic_detour', True):
+            # Nav2 avoids with the LiDAR + ultrasonic costmap (navigation.json). Close to an obstacle only forward
+            # motion is held back; Nav2's turns and reversing still pass so it can take its new path out.
+            command = self.forward_nav_command()
+            linear = command.linear.x
+            if not self.sensor_clear and linear > 0.0:
+                linear = 0.0
+                self.line_state = 'ultrasonic_hold_forward'
+            if self.sensor_clear:
+                self.state = 'idle'
+            self.send(linear, command.angular.z)
+            return
         odom = self.fresh_pose('odom')
         if odom is None or now-self.last_scan_at > .6:
             self.line_state = 'ultrasonic_geometry_unavailable'

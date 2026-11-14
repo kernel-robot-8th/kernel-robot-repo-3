@@ -1,0 +1,15 @@
+{
+  "ir_steering": false,
+  "ultrasonic_fusion": true,
+  "ultrasonic_detour": false,
+  "ultrasonic_cloud": {
+    "min_range_m": 0.03,
+    "mark_max_range_m": 0.6,
+    "clear_max_range_m": 0.8,
+    "window": 5,
+    "agree_m": 0.03,
+    "agree_count": 3,
+    "arc_points": 7,
+    "fov_rad": 0.26
+  }
+}

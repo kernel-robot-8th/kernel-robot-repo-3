@@ -188,7 +188,9 @@ Center-first policy: CH2 is the line reference. With only CH2 on the line, small
 
 - 로봇별 정지 버튼은 경로가 없거나 취소 대기 중이어도 사용할 수 있습니다. 전체 정지도 연결된 모든 로봇에 요청합니다. 정지 요청은 로봇의 `stop_latch.json`에 저장되며 안전 감시기는 다른 조건보다 먼저 0 속도를 발행합니다. 관리 중인 경로 프로세스를 종료하고 해당 ROS 도메인의 Nav2 목표만 취소합니다.
 - 정지 유지 해제는 새로운 명시적 경로 실행에서 새 Nav2 목표가 수락된 다음에만 합니다. 시작과 동시에 정지가 들어오면 run_id가 일치하는 정지 요청을 새 실행이 제거하지 않습니다. 경로 취소 상태는 원격 적용 응답으로 종료하며 SSH 로그의 끝을 무한히 기다리지 않습니다.
-- 위치 재설정 때 센서·지도·안전 감시기가 없거나 AMCL 구독자가 없으면 해당 기체의 주행준비를 한 번 복구하고 재시도합니다. 실패하면 준비 완료 대신 오류 상태로 표시합니다. 현재 위치가 지정 주차장과 일치할 때 위치 재설정 버튼을 사용해야 합니다.
+- 위치 재설정 때 센서·지도·안전 감시기가 없거나 AMCL 구독자가 없으면 해당 기체의 주행준비를 한 번 복구합니다(주행준비가 위치까지 잡음). 실패하면 준비 완료 대신 오류 상태로 표시합니다. 현재 위치가 지정 주차장과 일치할 때 위치 재설정 버튼을 사용해야 합니다.
+- 주행준비는 Nav2 액션 확인 뒤 자기 주차장 좌표(`config/parking.json`)를 AMCL `/initialpose`로 보내고, 그 뒤에 받은 `/amcl_pose` 또는 map 기준 TF 위치가 주차장에서 15 cm·약 20° 안에 12초 안에 들어오면 위치를 잡은 것으로 봅니다(`_localize_at_parking`). 오도메트리가 움직이는 중이면 보내지 않습니다. 실패해도 Nav2는 준비된 상태로 두고 오류 내용을 남기며, 지도 위치(`tf_pose`)가 없으므로 주행 가능으로 보이지 않습니다. 이 확인은 AMCL이 좌표를 받았다는 뜻이지 로봇이 실제로 그 칸에 있다는 증거가 아니므로, 주행준비 전에 로봇을 자기 주차 칸에 둡니다. Nav2 복구는 주행 중일 수 있어 위치를 넣지 않습니다.
+- `POST /api/prepare-all {map}`은 주행준비가 안 된 기체(주행 중·준비됨·SSH 포트 미응답 제외)를 하나의 작업(`busy_robot="all"`)으로 차례로 준비합니다. 한 기체가 실패해도 다음 기체를 계속 준비합니다. `GET /api/status`의 `password_set`은 SSH 비밀번호를 메모리에 갖고 있는지만 알려 줍니다.
 
 
 ### 초음파 차체 폭 우회 및 정지 경합 수정 (2026-11-11)
@@ -218,3 +220,12 @@ Center-first policy: CH2 is the line reference. With only CH2 on the line, small
 ### 목표 즉시 거부 / SSH 종료 코드 5
 
 2026-11-14 수정: keepout `lethal_override_cost`는 ROS 정수 파라미터이므로 `252`로 생성합니다. 실수 `252.0`은 local_costmap 활성화를 실패시키고 BT 액션을 inactive 상태로 남깁니다. 준비 확인은 액션 목록뿐 아니라 map_server/amcl/controller_server/planner_server/bt_navigator/behavior_server의 GetState가 모두 active인지 확인합니다. Nav2 정리 시 설치 패키지 launch와 캐시 경로 launch를 모두 종료합니다. 주행 준비 확인 과정에서는 이동 목표를 전송하지 않습니다.
+
+### Nav2 주행, 라이다·초음파 퓨전, IR은 보조값 (2026-11-14)
+
+- 주행은 Nav2가 맡습니다. `config/navigation.json`의 `ir_steering: false`이면 IR 보정 프로필이 켜져 있어도 경로의 `use_ir`은 false이고, IR 값은 화면과 기록에만 쓰입니다.
+- `ultrasonic_fusion: true`이면 주행준비 때 로봇에 `ultrasonic_cloud.py`를 띄우고, Nav2 지역·전역 costmap을 모두 `VoxelLayer`(5 cm 높이 칸)로 만들어 `/scan`과 초음파 두 소스(`/us_sensor/cloud_mark` 표시, `/us_sensor/cloud_clear` 지우기)를 함께 넣습니다. 라이다는 약 12.5 cm, 초음파는 약 3.7 cm 높이 칸에 쌓이고, 한 기둥에 차 있는 칸이 있으면 장애물이라 라이다 평면보다 낮은 물체도 Nav2가 돌아갑니다. 높이는 URDF 설계값이며 실측이 아닙니다.
+- 초음파는 최근 5개 중앙값이 3번 연속 3 cm 안으로 맞아야 반영하고, `mark_max_range_m`(임시 0.6 m)보다 먼 값은 바닥 반사일 수 있어 지우기에만 씁니다. 빈 차선에서 초음파를 기록해 이 값을 정해야 합니다.
+- `ultrasonic_detour: false`이면 `ultrasonic_safety`는 10 cm 이내에서 자체 우회를 하지 않고 전진 명령만 막습니다. 회전·후진은 Nav2 명령대로 통과합니다. 설정이 없으면 기존 우회 동작 그대로입니다.
+- 지역 위치는 라이다로 찾습니다(`scripts/scan_localizer.py`, `/api/robots/<id>/localize`, `/locate`). 경기장이 직사각형이라 180° 대칭 후보가 나오면 주차 칸·5번 같은 알려진 자리에 맞는 후보가 하나일 때만 자동으로 고르고, 아니면 운영자가 후보를 고릅니다.
+- 상태 램프: 관제가 `/fleet/indicator`로 색을 보내고 로봇의 `status_lamp.py`가 `set_lamp`/`set_led`에 반영합니다(주황 준비·위치 없음, 파랑 대기, 초록 주행, 빨강 정지·오류, 3초 끊기면 주황 깜빡임). `pinky_lamp_control`이 `WS2811_STRIP_GBR`이라 빨강·파랑을 바꿔 보냅니다.

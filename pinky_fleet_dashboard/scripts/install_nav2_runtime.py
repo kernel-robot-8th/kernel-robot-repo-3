@@ -20,6 +20,44 @@ def replace_once(text: str, old: str, new: str, expected: int = 1) -> str:
     return text.replace(old, new)
 
 
+ULTRASONIC_SOURCES = {
+    # A confirmed low echo marks the cells of its arc; the clearing cloud clears in front of it. Both sit at the
+    # sensor's height (about 3.7 cm), below the LiDAR plane (about 12.5 cm), so neither touches the other's cells.
+    'ultrasonic_mark': {'topic': '/us_sensor/cloud_mark', 'data_type': 'PointCloud2', 'marking': True,
+                        'clearing': False, 'min_obstacle_height': 0.0, 'max_obstacle_height': 0.10,
+                        'obstacle_max_range': 1.0, 'obstacle_min_range': 0.0},
+    'ultrasonic_clear': {'topic': '/us_sensor/cloud_clear', 'data_type': 'PointCloud2', 'marking': False,
+                         'clearing': True, 'min_obstacle_height': 0.0, 'max_obstacle_height': 0.10,
+                         'raytrace_max_range': 1.0, 'raytrace_min_range': 0.0},
+}
+
+
+def add_ultrasonic_fusion(parsed: dict) -> None:
+    """LiDAR + ultrasonic in height cells: both costmaps get a VoxelLayer fed by the scan and the ultrasonic clouds.
+
+    The global costmap's 2D ObstacleLayer would let LiDAR rays passing over a low box clear what the ultrasonic
+    marked, so it becomes a VoxelLayer with the same scan source. A column is an obstacle when any of its cells
+    within the robot's height is occupied."""
+    for name, layer_name in (('local_costmap', 'voxel_layer'), ('global_costmap', 'obstacle_layer')):
+        section = parsed[name][name]['ros__parameters']
+        if layer_name not in section.get('plugins', []):
+            raise RuntimeError(f"{name}에 {layer_name}가 없습니다")
+        layer = section[layer_name]
+        layer['plugin'] = 'nav2_costmap_2d::VoxelLayer'
+        layer.setdefault('origin_z', 0.0)
+        layer.setdefault('z_resolution', 0.05)
+        layer.setdefault('z_voxels', 16)
+        layer.setdefault('max_obstacle_height', 2.0)
+        layer.setdefault('mark_threshold', 0)
+        layer.setdefault('publish_voxel_map', True)
+        sources = str(layer.get('observation_sources', 'scan')).split()
+        for source, settings in ULTRASONIC_SOURCES.items():
+            if source not in sources:
+                sources.append(source)
+            layer[source] = dict(settings)
+        layer['observation_sources'] = ' '.join(sources)
+
+
 def main() -> None:
     RUNTIME.mkdir(parents=True, exist_ok=True)
     runtime_config = json.loads((RUNTIME / "runtime_config.json").read_text(encoding="utf-8"))
@@ -106,6 +144,8 @@ def main() -> None:
                 'override_lethal_cost': True,
                 'lethal_override_cost': 252,
             }
+    if (runtime_config.get('navigation') or {}).get('ultrasonic_fusion'):
+        add_ultrasonic_fusion(parsed)
     params=yaml.safe_dump(parsed,sort_keys=False)
     (RUNTIME / "bringup_launch.xml").write_text(bringup, encoding="utf-8")
     (RUNTIME / "navigation_launch.xml").write_text(navigation, encoding="utf-8")
@@ -158,6 +198,7 @@ def main() -> None:
         'geometry': RUNTIME / 'runtime_config.json',
         'motion_gate': RUNTIME / 'motion_gate.py',
         'traffic': RUNTIME / 'traffic.py',
+        'ultrasonic_cloud': RUNTIME / 'ultrasonic_cloud.py',
     }
     if keepout_enabled:
         sources.update({

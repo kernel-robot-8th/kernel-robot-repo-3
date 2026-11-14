@@ -5,7 +5,7 @@ from pathlib import Path
 
 def install_command(root,config,profile):
     sources={'install_nav2_runtime.py':'scripts/install_nav2_runtime.py','navigate_route.py':'scripts/navigate_route.py'}
-    for name in ['ultrasonic_safety','velocity_guard','line_following','mission_behaviors','motion_gate','traffic','control_journal']:
+    for name in ['ultrasonic_safety','velocity_guard','line_following','mission_behaviors','motion_gate','traffic','control_journal','status_lamp','ultrasonic_cloud']:
         sources['nav2/'+name+'.py']='scripts/'+name+'.py'
     sources.update({
         'nav2/keepout_mask.pgm':'config/keepout/keepout_mask.pgm',

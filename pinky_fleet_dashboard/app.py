@@ -28,21 +28,36 @@ from urllib.parse import unquote
 from scripts.route_geometry import build_dense_route
 from scripts.line_following import default_profile, capture_profile, normalize, validate_profile
 from scripts.ir_profiles import IRProfiles
-from scripts.fleet_ops import operational_status
+from scripts.fleet_ops import operational_status, indicator
 from scripts.traffic import TrafficCoordinator
 from scripts.runtime_bundle import install_command
 from scripts.motion_gate import geometry
 from scripts.control_journal import ControlJournal
+from scripts.scan_localizer import locate as locate_in_map
 from scripts.ir_calibration import IRCalibrationStore
 
 ROOT = Path(__file__).resolve().parent
 PARKING = json.loads((ROOT / "config" / "parking.json").read_text())
+# Driving is Nav2's (decided 2026-11-14): IR only reports, the ultrasonic joins the LiDAR in Nav2's height-cell
+# costmap, and the ultrasonic safety node holds forward motion near an obstacle instead of running its own detour.
+NAVIGATION = json.loads((ROOT / "config" / "navigation.json").read_text())
 WEB = ROOT / "web"
 ROS_DOMAIN = 0
 HOST = "127.0.0.1"
 PORT = 8765
 FRESH_SECONDS = 4.0
 START_TIMEOUT = 20.0
+# Automatic localization after 주행준비: AMCL is given the robot's own parking pose, then its reported map pose
+# must come back this close to it. The pose is set exactly, so these only absorb AMCL's first correction.
+LOCALIZE_RADIUS_M = 0.15
+LOCALIZE_YAW_RAD = 0.35
+LOCALIZE_TIMEOUT_S = 12.0
+# Odometry speeds below these count as standing still before the parking pose is given.
+STILL_LINEAR_MPS = 0.02
+STILL_ANGULAR_RPS = 0.05
+# Two scans in a row must place the robot within these of each other before AMCL is given the pose.
+SCAN_AGREE_M = 0.05
+SCAN_AGREE_YAW_RAD = math.radians(5.0)
 WAYPOINTS_PATH = ROOT / "data" / "waypoints.json"
 LOCAL_MAP_DIR = Path.home() / "Documents" / "Pinky_backup"
 LOCAL_MAP_YAML = LOCAL_MAP_DIR / "map-proto.yaml"
@@ -257,7 +272,7 @@ def keepout_view():
 class Telemetry:
     """ROS 2 subscriptions in PC domain 0; bridges remap each robot into a namespace."""
 
-    KEYS = ("scan", "ir", "ultrasonic", "batt_state", "imu", "battery_percent", "battery_voltage", "odom", "joints", "map", "amcl_pose", "tf_pose", "line_control", "safety_status")
+    KEYS = ("scan", "ir", "ultrasonic", "batt_state", "imu", "battery_percent", "battery_voltage", "odom", "joints", "map", "amcl_pose", "tf_pose", "line_control", "safety_status", "indicator")
 
     def __init__(self) -> None:
         import rclpy
@@ -280,6 +295,9 @@ class Telemetry:
         self.transforms: dict[str, dict[str, dict[str, Any]]] = {rid: {} for rid in ROBOTS}
         self.ir_history = {rid: deque(maxlen=100) for rid in ROBOTS}
         self.base_frames = {rid: "base_footprint" for rid in ROBOTS}
+        # The latest full LaserScan per robot, for finding the robot on the map (scan_localizer).
+        self.scans: dict[str, dict[str, Any] | None] = {rid: None for rid in ROBOTS}
+        self.pose_message = PoseWithCovarianceStamped
         self.node = Node("pinky_fleet_dashboard")
         types = {
             "scan": LaserScan,
@@ -295,6 +313,7 @@ class Telemetry:
             "amcl_pose": PoseWithCovarianceStamped,
             "line_control": String,
             "safety_status": String,
+            "indicator": String,
         }
         paths = {
             "scan": "scan",
@@ -310,8 +329,12 @@ class Telemetry:
             "amcl_pose": "amcl_pose",
             "line_control": "line/status",
             "safety_status": "safety/status",
+            "indicator": "fleet/indicator_status",
         }
         self.traffic_publishers = {}
+        self.initial_pose_publishers = {}
+        self.indicator_publishers = {}
+        self.domain_nodes = {}
         self.domain_readers = []
         for rid, robot in ROBOTS.items():
             context = rclpy.context.Context()
@@ -321,6 +344,10 @@ class Telemetry:
             executor.add_node(node)
             self.domain_readers.append((context,node,executor))
             self.traffic_publishers[rid]=node.create_publisher(String,'/fleet/lease',QoSProfile(depth=1,reliability=ReliabilityPolicy.BEST_EFFORT))
+            # A reliable publisher matches AMCL's /initialpose subscription whether it is reliable or best effort.
+            self.initial_pose_publishers[rid]=node.create_publisher(PoseWithCovarianceStamped,'/initialpose',QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE))
+            self.domain_nodes[rid]=node
+            self.indicator_publishers[rid]=node.create_publisher(String,'/fleet/indicator',QoSProfile(depth=1,reliability=ReliabilityPolicy.BEST_EFFORT))
             for key, msg_type in types.items():
                 topic = f"/{paths[key]}"
                 subscription_qos = QoSProfile(depth=10,reliability=ReliabilityPolicy.BEST_EFFORT,durability=DurabilityPolicy.VOLATILE)
@@ -378,7 +405,7 @@ class Telemetry:
         value: Any
         if key == "ir":
             value = {"channels": [int(v) for v in msg.data]}
-        elif key in {"line_control", "safety_status"}:
+        elif key in {"line_control", "safety_status", "indicator"}:
             try:
                 value = json.loads(msg.data,parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
                 if not isinstance(value, dict):
@@ -400,6 +427,12 @@ class Telemetry:
                 "front_min_m": round(min(front), 3) if front else None,
                 "angle_min": _finite(msg.angle_min),
                 "angle_max": _finite(msg.angle_max),
+            }
+            raw_scan = {
+                "frame_id": str(msg.header.frame_id).lstrip("/"), "angle_min": float(msg.angle_min),
+                "angle_increment": float(msg.angle_increment), "range_min": float(msg.range_min),
+                "range_max": float(msg.range_max), "received_at": now,
+                "ranges": [float(r) if math.isfinite(r) else None for r in msg.ranges],
             }
         elif key == "batt_state":
             value = {"voltage_v": _finite(msg.voltage), "percentage": _finite(msg.percentage)}
@@ -465,6 +498,8 @@ class Telemetry:
             JOURNAL.record(key,robot_id=robot_id,state=(value or {}).get('state'),data=value)
         with self.changed:
             self.data[robot_id][key] = {"value": value, "received_at": now}
+            if key == "scan":
+                self.scans[robot_id] = raw_scan
             if key == "ir":
                 self.ir_history[robot_id].append((now, value['channels']))
             if key == "odom":
@@ -533,6 +568,80 @@ class Telemetry:
                 if remaining <= 0:
                     return False, missing
                 self.changed.wait(min(remaining, 0.5))
+
+    def wait_for_pose_near(self, robot_id: str, since: float, x: float, y: float, yaw: float,
+                           timeout: float) -> str | None:
+        """Which feed ('amcl_pose' or 'tf_pose') showed a map pose near (x, y, yaw) received after `since`, or None.
+
+        AMCL answers a new /initialpose with /amcl_pose on its next scan and re-sends map->odom; either one,
+        received after the pose was sent, shows AMCL took it. It does not show the robot really stands there."""
+        deadline = time.monotonic() + timeout
+        with self.changed:
+            while True:
+                for key in ("amcl_pose", "tf_pose"):
+                    entry = self.data[robot_id][key]
+                    pose = entry["value"] or {}
+                    px, py, pyaw = pose.get("x_m"), pose.get("y_m"), pose.get("yaw_rad")
+                    if (entry["received_at"] is not None and entry["received_at"] >= since
+                            and pose.get("frame_id") == "map" and None not in (px, py, pyaw)
+                            and math.hypot(px - x, py - y) <= LOCALIZE_RADIUS_M
+                            and abs(math.atan2(math.sin(pyaw - yaw), math.cos(pyaw - yaw))) <= LOCALIZE_YAW_RAD):
+                        return key
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self.changed.wait(min(remaining, 0.5))
+
+    def scan_after(self, robot_id: str, after: float, timeout: float) -> dict[str, Any] | None:
+        """The latest full scan received after `after` (PC clock), waiting up to `timeout` seconds."""
+        deadline = time.monotonic() + timeout
+        with self.changed:
+            while True:
+                scan = self.scans[robot_id]
+                if scan is not None and scan["received_at"] > after:
+                    return scan
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self.changed.wait(min(remaining, 0.5))
+
+    def frame_in_base(self, robot_id: str, frame: str) -> tuple[float, float, float] | None:
+        """`frame`'s (x, y, yaw) in the robot's base frame from its TF tree (static mounts), or None if unknown."""
+        base = self.base_frames[robot_id]
+        x = y = yaw = 0.0
+        seen: set[str] = set()
+        with self.lock:
+            while frame != base:
+                edge = self.transforms[robot_id].get(frame)
+                if edge is None or frame in seen:
+                    return None
+                seen.add(frame)
+                c, s = math.cos(edge["yaw"]), math.sin(edge["yaw"])
+                x, y = edge["x"] + c * x - s * y, edge["y"] + s * x + c * y
+                yaw += edge["yaw"]
+                frame = edge["parent"]
+        return x, y, math.atan2(math.sin(yaw), math.cos(yaw))
+
+    def publish_initial_pose(self, robot_id: str, x: float, y: float, yaw: float, wait_s: float = 5.0) -> bool:
+        """Send AMCL a map pose from this PC (no SSH). False when no AMCL subscribes to /initialpose."""
+        publisher = self.initial_pose_publishers[robot_id]
+        deadline = time.monotonic() + wait_s
+        while publisher.get_subscription_count() < 1 and time.monotonic() < deadline:
+            time.sleep(0.1)
+        if publisher.get_subscription_count() < 1:
+            return False
+        message = self.pose_message()
+        message.header.frame_id = "map"
+        message.pose.pose.position.x, message.pose.pose.position.y = float(x), float(y)
+        message.pose.pose.orientation.z, message.pose.pose.orientation.w = math.sin(yaw / 2), math.cos(yaw / 2)
+        # The scan match is good to a few centimetres and degrees: a tight cloud around it.
+        message.pose.covariance[0] = message.pose.covariance[7] = 0.05 ** 2
+        message.pose.covariance[35] = math.radians(5.0) ** 2
+        for _ in range(3):
+            message.header.stamp = self.domain_nodes[robot_id].get_clock().now().to_msg()
+            publisher.publish(message)
+            time.sleep(0.1)
+        return True
 
     def _fresh_unlocked(self, robot_id: str, key: str) -> bool:
         received = self.data[robot_id][key]["received_at"]
@@ -647,9 +756,13 @@ def _remote_start_command(robot_id: str, stage: str, ros_command: str) -> str:
     )
 
 
+MAP_INSTALL_ERRORS: dict[str, str] = {}  # robot id -> why the last map copy to it failed
+
+
 def _remote_map_path(robot_id: str, map_name: str) -> str | None:
     if map_name == "map-proto.yaml":
         if not LOCAL_MAP_YAML.is_file() or not LOCAL_MAP_IMAGE.is_file():
+            MAP_INSTALL_ERRORS[robot_id] = f"{LOCAL_MAP_YAML} 또는 {LOCAL_MAP_IMAGE.name}이 없습니다."
             return None
         yaml_text = LOCAL_MAP_YAML.read_text(encoding="utf-8")
         image_match = re.search(r"(?m)^image:\s*([^\s#]+)\s*$", yaml_text)
@@ -665,8 +778,11 @@ def _remote_map_path(robot_id: str, map_name: str) -> str | None:
             f"test -s {shlex.quote(REMOTE_MAP_IMAGE)} && test -s {shlex.quote(REMOTE_MAP_YAML)} && "
             f"echo MAP_INSTALLED"
         )
-        ok, _ = _ssh_run(robot_id, install_command)
-        return REMOTE_MAP_YAML if ok else None
+        ok, output = _ssh_run(robot_id, install_command)
+        if not ok or "MAP_INSTALLED" not in output:
+            MAP_INSTALL_ERRORS[robot_id] = (output.strip() or "SSH 응답 없음")[-600:]
+            return None
+        return REMOTE_MAP_YAML
 
     # Saved maps can live outside the SSH login working directory. Nav2's map
     # server needs the YAML path itself, so resolve the selected filename on
@@ -921,6 +1037,7 @@ def _nav2_runtime_install_command(robot_id: str, map_name: str) -> str:
             geometry=dimensions,
             traffic_zones=TRAFFIC.zones,
             keepout_enabled=map_name == "map-proto.yaml",
+            navigation=NAVIGATION,
         ),
         IR_PROFILES.get(robot_id),
     )
@@ -958,6 +1075,14 @@ def _stop_ultrasonic_safety(robot_id: str) -> tuple[bool, str]:
     return True,'\n'.join(outputs)
 
 
+def _stop_script_command(name: str) -> str:
+    """Stop the robot-side runtime script `name`.py started under its pid file, only if that pid is still it."""
+    pidfile = f"/home/pinky/.cache/pinky-fleet/{name}.pid"
+    return (f"pidfile={pidfile}; if [ -s \"$pidfile\" ]; then pid=$(cat \"$pidfile\"); "
+            f"case \"$(tr '\\0' ' ' < /proc/$pid/cmdline 2>/dev/null)\" in *{name}.py*) kill \"$pid\";; esac; "
+            f"rm -f \"$pidfile\"; fi; echo SCRIPT_STOPPED")
+
+
 def _start_navigation_with_safety(robot_id: str, map_path: str, map_name: str) -> tuple[bool, str]:
     stopped, stop_output = _stop_ultrasonic_safety(robot_id)
     if not stopped or "SAFETY_PID_MISMATCH" in stop_output:
@@ -977,6 +1102,22 @@ def _start_navigation_with_safety(robot_id: str, map_path: str, map_name: str) -
     if not ok or not any(token in output for token in ("STARTED", "ALREADY_RUNNING")):
         return False, output or "초음파 안전 감시기를 시작하지 못했습니다."
 
+    # The status lamp is a convenience: if the Pinky has no lamp or LED package, preparation goes on without it.
+    # The lamp script was just reinstalled with the runtime bundle: stop the old one so the new code runs.
+    _ssh_run(robot_id, _stop_script_command("status_lamp"))
+    if NAVIGATION.get("ultrasonic_fusion"):
+        # Nav2's costmap is configured to read these clouds, so preparation needs the node running.
+        _ssh_run(robot_id, _stop_script_command("ultrasonic_cloud"))
+        ok, output = _ssh_run(robot_id, _remote_start_command(robot_id, "ultrasonic_cloud",
+                                  "python3 /home/pinky/.cache/pinky-fleet/nav2/ultrasonic_cloud.py"))
+        if not ok or not any(token in output for token in ("STARTED", "ALREADY_RUNNING")):
+            return False, output or "초음파 퓨전 노드를 시작하지 못했습니다."
+    for stage, lamp_command in (("lamp", "ros2 run pinky_lamp_control main_node"), ("led", "ros2 run pinky_led led_server"),
+                                ("status_lamp", "python3 /home/pinky/.cache/pinky-fleet/nav2/status_lamp.py")):
+        _ssh_run(robot_id, _remote_start_command(robot_id, stage, lamp_command))
+
+    # From here AMCL restarts: whatever map pose it reports is not trusted until localization sets one.
+    STATE.update(robot_id, nav_started_at=time.time())
     params_path = "/home/pinky/.cache/pinky-fleet/nav2/nav2_params.yaml"
     launch_path = "/home/pinky/.cache/pinky-fleet/nav2/bringup_launch.xml"
     command = (
@@ -998,23 +1139,167 @@ def _initial_pose_command(robot_id: str) -> str:
     )
 
 
+def _standing_still(robot_id: str) -> str | None:
+    """Why the robot cannot be given a pose now (odometry missing or moving), or None when it stands still."""
+    odom = TELEMETRY.snapshot().get(robot_id, {}).get("odom", {}) if TELEMETRY else {}
+    speed = odom.get("value") or {}
+    if not odom.get("fresh"):
+        return "오도메트리가 들어오지 않아 핑키가 멈춰 있는지 모릅니다."
+    if abs(speed.get("linear_mps") or 0.0) > STILL_LINEAR_MPS or abs(speed.get("angular_rps") or 0.0) > STILL_ANGULAR_RPS:
+        return "핑키가 움직이는 중이라 위치를 넣지 않았습니다."
+    return None
+
+
+def _lidar_match(robot_id: str, after: float):
+    """(match, why not): scan_localizer's answer for the next scan received after `after` (PC clock)."""
+    grid = TELEMETRY.snapshot().get(robot_id, {}).get("map", {}).get("value") if TELEMETRY else None
+    if not grid or not grid.get("cells"):
+        return None, "지도를 아직 받지 못했습니다."
+    scan = TELEMETRY.scan_after(robot_id, after, 3.0)
+    if scan is None:
+        return None, "라이다 스캔이 들어오지 않습니다."
+    laser = TELEMETRY.frame_in_base(robot_id, scan["frame_id"])
+    if laser is None:
+        return None, f"라이다 장착 위치(TF {scan['frame_id']} → {TELEMETRY.base_frames[robot_id]})를 모릅니다."
+    # Where a standing Pinky is expected: any parking slot facing its parking heading, or station 5 (loading).
+    places = [(spot["x_m"], spot["y_m"], spot["yaw_rad"]) for spot in PARKING.values()]
+    dock = TRAFFIC.zones.get("dock5") or {}
+    if not dock:  # no waypoints on this PC: the robots report station 5 in their traffic_config
+        for topics in TELEMETRY.snapshot().values():
+            dock = (((topics.get("line_control") or {}).get("value") or {}).get("traffic_config") or {}).get("dock5") or {}
+            if dock:
+                break
+    if isinstance(dock.get("x_m"), (int, float)) and isinstance(dock.get("y_m"), (int, float)):
+        places.append((float(dock["x_m"]), float(dock["y_m"]), None))
+    try:
+        match = locate_in_map(grid, scan, laser, known_places=places)
+    except ValueError as exc:
+        return None, f"지도로 위치를 찾을 수 없습니다: {exc}"
+    match.scan_received_at = scan["received_at"]
+    return match, ""
+
+
+def _same_pose(a: tuple[float, float, float], b: tuple[float, float, float]) -> bool:
+    return (math.hypot(a[0] - b[0], a[1] - b[1]) <= SCAN_AGREE_M
+            and abs(math.atan2(math.sin(a[2] - b[2]), math.cos(a[2] - b[2]))) <= SCAN_AGREE_YAW_RAD)
+
+
+CHOICE_MATCH_M = 0.10            # a picked candidate is found again in a fresh scan within these
+CHOICE_MATCH_YAW_RAD = math.radians(10.0)
+
+
+def _closest_candidate(match, pose: tuple[float, float, float]):
+    for candidate in match.candidates:
+        _, x, y, yaw = candidate
+        if (math.hypot(x - pose[0], y - pose[1]) <= CHOICE_MATCH_M
+                and abs(math.atan2(math.sin(yaw - pose[2]), math.cos(yaw - pose[2]))) <= CHOICE_MATCH_YAW_RAD):
+            return candidate
+    return None
+
+
+def _localize_with_lidar(robot_id: str, choice: tuple[float, float, float] | None = None) -> tuple[bool, str]:
+    """Find the robot on its map from its own LiDAR (scripts/scan_localizer.py) and give that pose to AMCL.
+
+    The cell is a rectangle, so a place and its half-turn often fit the scan equally well. Without `choice` the
+    pose is used only when one place is clearly best, or when exactly one of the equally good places is the
+    robot's own parking spot; otherwise the candidates are stored for the operator. `choice` is the pose
+    (x, y, yaw) of the candidate the operator picked; it must still be a candidate of two fresh scans. Two scans in a row must agree either way. The pose goes to AMCL from this PC
+    over DDS (no SSH password), and AMCL must then report a map pose there. Returns (ok, what happened)."""
+    if TELEMETRY is None:
+        return False, "ROS 수신이 없어 위치를 찾을 수 없습니다."
+    why_not = _standing_still(robot_id)
+    if why_not:
+        return False, why_not
+    first, why_not = _lidar_match(robot_id, time.time() - 1.0)
+    if first is None:
+        return False, why_not
+    second, why_not = _lidar_match(robot_id, first.scan_received_at)
+    if second is None:
+        return False, why_not
+    result = dict(first.as_dict(), at=time.time(), method="lidar")
+    STATE.update(robot_id, localization=result)
+    if choice is not None:
+        picked, again = _closest_candidate(first, choice), _closest_candidate(second, choice)
+        if picked is None or again is None:
+            return False, "고른 자리가 지금 라이다 후보에 없습니다. 핑키가 움직였는지 확인하고 후보를 다시 보세요."
+        score, x, y, yaw = picked
+        reason = "운영자가 고른 라이다 후보로 위치를 넣었습니다"
+    else:
+        if not first.ok:
+            return False, first.reason
+        x, y, yaw, score, reason = first.x_m, first.y_m, first.yaw_rad, first.score, first.reason
+        if not second.ok or not _same_pose((x, y, yaw), (second.x_m, second.y_m, second.yaw_rad)):
+            return False, "연속한 라이다 스캔 두 장이 서로 다른 위치를 가리켜 정하지 않았습니다."
+    since = time.time()
+    if not TELEMETRY.publish_initial_pose(robot_id, x, y, yaw):
+        return False, "AMCL이 /initialpose를 구독하지 않습니다. 주행준비(Nav2)를 먼저 하세요."
+    source = TELEMETRY.wait_for_pose_near(robot_id, since, x, y, yaw, LOCALIZE_TIMEOUT_S)
+    if source is None:
+        return False, f"AMCL에 위치를 보냈지만 {LOCALIZE_TIMEOUT_S:.0f}초 안에 그 근처의 지도 위치가 돌아오지 않았습니다."
+    STATE.update(robot_id, localization=dict(result, applied=True, applied_pose={"x_m": x, "y_m": y, "yaw_rad": yaw}),
+                 localized_at=time.time())
+    where = f"x {x:.2f} · y {y:.2f} m · {math.degrees(yaw):.0f}°"
+    return True, f"{reason}: {where}, 일치도 {score:.2f}"
+
+
+def _relocalize(robot_id: str, choice: tuple[float, float, float] | None = None) -> None:
+    try:
+        ok, detail = _localize_with_lidar(robot_id, choice)
+        if ok:
+            STATE.update(robot_id, message=detail, error=None)
+        else:
+            STATE.update(robot_id, message="라이다로 위치를 찾지 못했습니다.", error=detail)
+    finally:
+        with STATE.lock:
+            if STATE.busy_robot == robot_id:
+                STATE.busy_robot = None
+
+
+def _ir_steers(robot_id: str) -> bool:
+    """IR line following steers only when navigation.json allows it and the robot's IR profile is enabled."""
+    return bool(NAVIGATION.get("ir_steering")) and bool(IR_PROFILES.get(robot_id).get("enabled"))
+
+
+def _localize_at_parking(robot_id: str) -> tuple[bool, str]:
+    """Give AMCL the robot's own parking pose and wait until AMCL reports a map pose there.
+
+    The robot must stand in its own parking spot: nothing here can tell where it really is, so a robot left
+    elsewhere gets a wrong pose. A moving robot is refused. Returns (ok, why not or what confirmed it)."""
+    home = PARKING[robot_id]
+    if TELEMETRY is None:
+        return False, "ROS 수신이 없어 위치를 잡을 수 없습니다."
+    why_not = _standing_still(robot_id)
+    if why_not:
+        return False, why_not
+    since = time.time()
+    ok, output = _ssh_run(robot_id, _initial_pose_command(robot_id))
+    if not ok or "Published AMCL initial pose" not in output:
+        return False, output.strip() or "AMCL 응답 없음"
+    source = TELEMETRY.wait_for_pose_near(robot_id, since, home["x_m"], home["y_m"], home["yaw_rad"], LOCALIZE_TIMEOUT_S)
+    if source is None:
+        return False, (f"AMCL에 {home['label']} 좌표를 보냈지만 {LOCALIZE_TIMEOUT_S:.0f}초 안에 "
+                       "그 근처의 지도 위치가 돌아오지 않았습니다.")
+    return True, source
+
+
 def _set_initial_pose(robot_id: str) -> None:
     try:
         topics=TELEMETRY.snapshot().get(robot_id,{}) if TELEMETRY else {}
         if any(not topics.get(key,{}).get('fresh') for key in ('scan','odom','map','line_control')):
+            # 주행준비 itself ends by localizing at the parking spot.
             STATE.update(robot_id,message='실제 구동 상태가 없어 주행준비를 복구합니다.',error=None)
             _prepare_robot(robot_id,STATE.robots[robot_id]['map'],release_busy=False)
-            if STATE.robots[robot_id]['stage']!='prepared':return
-        ok,output=_ssh_run(robot_id,_initial_pose_command(robot_id))
-        if not ok and 'AMCL is not subscribed' in output:
+            return
+        ok,detail=_localize_at_parking(robot_id)
+        if not ok and 'AMCL is not subscribed' in detail:
             STATE.update(robot_id,message='AMCL 미실행 · 주행준비를 한 번 복구합니다.',error=None)
             _prepare_robot(robot_id,STATE.robots[robot_id]['map'],release_busy=False)
-            if STATE.robots[robot_id]['stage']!='prepared':return
-            ok,output=_ssh_run(robot_id,_initial_pose_command(robot_id))
-        if ok and 'Published AMCL initial pose' in output:
-            STATE.update(robot_id,stage='prepared',message=f"AMCL 위치를 {PARKING[robot_id]['label']} 좌표로 설정했습니다.",error=None)
+            return
+        if ok:
+            STATE.update(robot_id,stage='prepared',message=f"AMCL 위치를 {PARKING[robot_id]['label']} 좌표로 설정했습니다.",error=None,
+                         localized_at=time.time())
         else:
-            STATE.update(robot_id,stage='fault',message='AMCL 위치 설정 실패 · 주행준비가 필요합니다.',error=output or 'AMCL 응답 없음')
+            STATE.update(robot_id,stage='fault',message='AMCL 위치 설정 실패 · 주행준비가 필요합니다.',error=detail)
     finally:
         with STATE.lock:
             if STATE.busy_robot==robot_id:STATE.busy_robot=None
@@ -1162,7 +1447,8 @@ def _prepare_robot(robot_id: str, map_name: str, release_busy: bool = True) -> N
         map_path = _remote_map_path(robot_id, map_name)
         if map_path is None:
             if map_name == "map-proto.yaml":
-                raise RuntimeError("PC의 map-proto.yaml/map-proto.pgm 복사 실패 또는 파일이 없습니다.")
+                raise RuntimeError("PC의 map-proto.yaml/map-proto.pgm을 로봇에 복사하지 못했습니다: "
+                                   + MAP_INSTALL_ERRORS.get(robot_id, "이유 모름"))
             raise RuntimeError(f"로봇에서 {map_name} 파일을 /home/pinky 아래에서 찾지 못했습니다.")
 
         stopped, stop_output = _stop_existing_navigation(robot_id)
@@ -1183,12 +1469,34 @@ def _prepare_robot(robot_id: str, map_name: str, release_busy: bool = True) -> N
             _, diagnostics = _ssh_run(robot_id, _nav_diagnostics_command(robot_id))
             detail = (action_detail + "\n" + diagnostics).strip() or "Nav2 액션 진단을 가져오지 못했습니다."
             raise RuntimeError("Nav2가 /navigate_to_pose 액션 서버를 올리지 못했습니다: " + detail[-1800:])
-        STATE.update(robot_id, stage="prepared", message=f"센서·지도·Nav2 주행 액션을 확인했습니다 ({map_name}).")
+        # A freshly started AMCL has no pose, so the robot has no map position (tf_pose) and cannot be dispatched.
+        # The robot finds itself on the map with its own LiDAR.
+        STATE.update(robot_id, message="라이다로 지도에서 자기 위치를 찾습니다.")
+        located, detail = _localize_with_lidar(robot_id)
+        if located:
+            STATE.update(robot_id, stage="prepared", error=None,
+                         message=f"센서·지도·Nav2를 확인했습니다 ({map_name}). {detail}")
+        else:
+            # Nav2 is up, so the stage is prepared; with no map position the robot still reads as not ready.
+            STATE.update(robot_id, stage="prepared", error=detail[-1200:],
+                         message="Nav2는 준비됐지만 라이다로 위치를 찾지 못했습니다. [라이다로 위치 찾기]를 다시 누르거나, "
+                                 f"{PARKING[robot_id]['label']} 칸에 있으면 [주차장 좌표로 맞추기]를 쓰세요.")
     except Exception as exc:  # surfaced in the dashboard for operator action
         STATE.update(robot_id, stage="fault", message="준비 과정에서 오류가 발생했습니다.", error=str(exc))
     finally:
         with STATE.lock:
             if release_busy and STATE.busy_robot == robot_id:
+                STATE.busy_robot = None
+
+
+def _prepare_robots_in_turn(robot_ids: list[str], map_name: str) -> None:
+    """주행준비 for several robots one after another under one busy lock; one robot's fault does not stop the rest."""
+    try:
+        for robot_id in robot_ids:
+            _prepare_robot(robot_id, map_name, release_busy=False)
+    finally:
+        with STATE.lock:
+            if STATE.busy_robot == "all":
                 STATE.busy_robot = None
 
 
@@ -1212,7 +1520,16 @@ def _recover_navigation(robot_id: str) -> None:
         if not action_ready:
             _, diagnostics = _ssh_run(robot_id, _nav_diagnostics_command(robot_id))
             raise RuntimeError("Nav2 주행 액션이 준비되지 않았습니다: " + (action_detail + "\n" + diagnostics)[-1800:])
-        STATE.update(robot_id, stage="prepared", message="Nav2 주행 액션이 준비됐습니다. 경로를 다시 시작할 수 있습니다.", error=None)
+        # A restarted AMCL has no pose. Recovery is refused while a route runs, so the robot stands still and the
+        # LiDAR can find it again wherever it stopped.
+        STATE.update(robot_id, message="Nav2가 다시 떴습니다. 라이다로 위치를 다시 찾습니다.")
+        located, detail = _localize_with_lidar(robot_id)
+        if located:
+            STATE.update(robot_id, stage="prepared", error=None,
+                         message=f"Nav2 주행 액션이 준비됐습니다. {detail}")
+        else:
+            STATE.update(robot_id, stage="prepared", error=detail[-1200:],
+                         message="Nav2는 다시 떴지만 라이다로 위치를 찾지 못했습니다. 상세에서 후보를 골라 주세요.")
     except Exception as exc:
         STATE.update(robot_id, stage="fault", message="Nav2 복구에 실패했습니다.", error=str(exc))
     finally:
@@ -1245,6 +1562,24 @@ def _traffic_observations(telemetry):
                          parked=at_home_and_stopped and route.get('status')=='complete',
                          at_home_and_stopped=at_home_and_stopped and route.get('status') not in {'starting','running','cancel_requested'})
     return result
+
+
+def _indicator_loop() -> None:
+    """Twice a second, each Pinky's lamp colour (scripts/fleet_ops.indicator) to its own domain."""
+    from std_msgs.msg import String
+    while True:
+        time.sleep(0.5)
+        if TELEMETRY is None:
+            continue
+        try:
+            telemetry = TELEMETRY.snapshot()
+            with STATE.lock:
+                wanted = {rid: indicator(info, STATE.routes[rid], operational_status(info, telemetry.get(rid, {})))
+                          for rid, info in STATE.robots.items()}
+            for rid, value in wanted.items():
+                TELEMETRY.indicator_publishers[rid].publish(String(data=json.dumps(value)))
+        except Exception as exc:  # the lamp is a convenience; never let it stop the dashboard
+            JOURNAL.record('indicator_error', state=str(exc))
 
 
 def _traffic_loop():
@@ -1310,6 +1645,22 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError, ValueError) as exc:
                 self._json(500, {'error': f'수집 기록 읽기 실패: {exc}'})
             return
+        processes_match = re.fullmatch(r"/api/robots/(10|11|12)/processes", path)
+        if processes_match:
+            # Read only, for developers: what runs on the robot (ROS, Nav2, Python), busiest first.
+            ok, output = _ssh_run(processes_match.group(1),
+                                  "ps -eo pid,etime,pcpu,pmem,args --sort=-pcpu | grep -E 'ros|nav2|python3|PID' | grep -v grep | cut -c1-220 | head -60")
+            self._json(200 if ok else 502, {"ok": ok, "output": output})
+            return
+        locate_match = re.fullmatch(r"/api/robots/(10|11|12)/locate", path)
+        if locate_match:
+            # Read only: where the LiDAR puts the robot now and the other places that fit; AMCL is not touched.
+            match, why_not = _lidar_match(locate_match.group(1), time.time() - 1.0)
+            if match is None:
+                self._json(409, {"error": why_not})
+            else:
+                self._json(200, {"robot": locate_match.group(1), "match": match.as_dict()})
+            return
         if path == "/api/status":
             telemetry = TELEMETRY.snapshot() if TELEMETRY is not None else {}
             with STATE.lock:
@@ -1326,7 +1677,8 @@ class Handler(BaseHTTPRequestHandler):
                     profile_view = {**profile, 'calibration_error': validate_profile(profile), 'normalized': normalize(raw, profile)}
                     robots.append({**info, "topics": topics, "waypoints": anchors, "route_preview": preview,
                                    "operational": operational_status(info,topics), "traffic": TRAFFIC.snapshot(), "ir_profile": profile_view, "parking": PARKING[robot_id], "route": STATE.routes[robot_id]})
-                self._json(200, {"robots": robots, "busy_robot": STATE.busy_robot, "monitor_error": STATE.monitor_error, "keepout": keepout_view(), "traffic": TRAFFIC.snapshot()})
+                self._json(200, {"robots": robots, "busy_robot": STATE.busy_robot, "password_set": STATE.password is not None,
+                                 "monitor_error": STATE.monitor_error, "keepout": keepout_view(), "traffic": TRAFFIC.snapshot()})
             return
         preview_match = re.fullmatch(r"/api/robots/(10|11|12)/route-preview\.csv", path)
         if preview_match:
@@ -1725,7 +2077,7 @@ class Handler(BaseHTTPRequestHandler):
                     anchors[-2]['course_end']=True
                     anchors[1]['arrival_yaw_rad']=0.
                     for point in goals:
-                        point['use_ir']=bool(IR_PROFILES.get(robot_id).get('enabled'))
+                        point['use_ir']=_ir_steers(robot_id)
                 except ValueError as exc:
                     self._json(400, {"error": str(exc)})
                     return
@@ -1738,6 +2090,31 @@ class Handler(BaseHTTPRequestHandler):
                 }
             WORKERS.submit(_run_waypoint_route, robot_id, goals)
             self._json(202, {"ok": True, "robot": robot_id, "labels": labels})
+            return
+        localize_match = re.fullmatch(r"/api/robots/(10|11|12)/localize", path)
+        if localize_match:
+            # LiDAR localization goes to AMCL over DDS from this PC: no SSH password, only a running Nav2.
+            robot_id = localize_match.group(1)
+            choice = None
+            if data.get("pose") is not None:
+                pose = data["pose"] if isinstance(data["pose"], dict) else {}
+                values = [pose.get(k) for k in ("x_m", "y_m", "yaw_rad")]
+                if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in values):
+                    self._json(400, {"error": "pose는 고른 후보의 x_m, y_m, yaw_rad여야 합니다."})
+                    return
+                choice = tuple(float(v) for v in values)
+            with STATE.lock:
+                if STATE.busy_robot is not None:
+                    self._json(409, {"error": f"Pinky {STATE.busy_robot} 작업이 끝난 뒤 위치를 찾으세요."})
+                    return
+                route = STATE.routes[robot_id]
+                if route and route.get("status") in {"starting", "running", "cancel_requested"}:
+                    self._json(409, {"error": "경로 주행을 정지한 뒤 위치를 찾으세요."})
+                    return
+                STATE.busy_robot = robot_id
+                STATE.robots[robot_id].update(message="라이다로 지도에서 자기 위치를 찾습니다.", error=None)
+            WORKERS.submit(_relocalize, robot_id, choice)
+            self._json(202, {"ok": True, "message": "라이다로 위치 찾기를 시작했습니다."})
             return
         initial_pose_match = re.fullmatch(r"/api/robots/(10|11|12)/initial-pose", path)
         if initial_pose_match:
@@ -1798,6 +2175,41 @@ class Handler(BaseHTTPRequestHandler):
                 STATE.robots[robot_id].update(stage="nav_starting", message="Nav2 복구를 준비합니다.", error=None)
             WORKERS.submit(_recover_navigation, robot_id)
             self._json(202, {"ok": True, "message": "Nav2를 재시작하고 액션 서버를 확인합니다."})
+            return
+        if path == "/api/prepare-all":
+            map_name = data.get("map", "map-proto.yaml")
+            if map_name not in {"map-proto.yaml", "my_map.yaml", "pinklab.yaml"}:
+                self._json(400, {"error": "지원하는 지도는 map-proto.yaml, my_map.yaml, pinklab.yaml입니다."})
+                return
+            with STATE.lock:
+                if STATE.password is None:
+                    self._json(401, {"error": "SSH 비밀번호를 먼저 입력하세요."})
+                    return
+                if STATE.busy_robot is not None:
+                    self._json(409, {"error": f"Pinky {STATE.busy_robot} 작업이 끝날 때까지 기다려 주세요."})
+                    return
+                targets, skipped = [], []
+                for robot_id, info in STATE.robots.items():
+                    route = STATE.routes[robot_id] or {}
+                    if route.get("status") in {"starting", "running", "cancel_requested"}:
+                        skipped.append(f"{robot_id} 주행 중")
+                    elif info["stage"] == "prepared":
+                        skipped.append(f"{robot_id} 이미 준비됨")
+                    elif not info.get("ssh_reachable"):
+                        skipped.append(f"{robot_id} 연결 안 됨")
+                    else:
+                        targets.append(robot_id)
+                if not targets:
+                    self._json(409, {"error": "준비할 핑키가 없습니다: " + ", ".join(skipped)})
+                    return
+                STATE.busy_robot = "all"
+                for order, robot_id in enumerate(targets, 1):
+                    STATE.robots[robot_id].update(map=map_name, error=None,
+                                                  message=f"차례로 주행준비합니다 ({order}/{len(targets)}번째).")
+            WORKERS.submit(_prepare_robots_in_turn, targets, map_name)
+            note = f" (건너뜀: {', '.join(skipped)})" if skipped else ""
+            self._json(202, {"ok": True, "robots": targets, "skipped": skipped,
+                             "message": f"Pinky {', '.join(targets)} 차례로 주행준비하고 주차장 좌표로 위치를 잡습니다{note}."})
             return
         match = re.fullmatch(r"/api/robots/(10|11|12)/ready", path)
         if match:
@@ -1906,6 +2318,7 @@ def main() -> None:
         print(STATE.monitor_error)
     threading.Thread(target=_traffic_loop,daemon=True,name="traffic-coordinator").start()
     threading.Thread(target=_health_loop, daemon=True, name="robot-health").start()
+    threading.Thread(target=_indicator_loop, daemon=True, name="status-lamp").start()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     # rclpy installs signal handlers that stop ROS without stopping HTTP.
     # Shut down both cleanly so restarting does not strand DDS participants.
