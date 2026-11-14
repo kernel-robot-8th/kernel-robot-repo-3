@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "notes": "물체 이름(YOLO 클래스) → 그 물체만 집도록 학습한 LeRobot ACT 정책. ACT는 위치나 문장을 입력으로 받지 않고, 카메라 영상과 관절 값만 봄. cameras는 정책 입력 이름(front/wrist)에 실제로 넣을 카메라 역할(OVERHEAD: 선반을 위에서 본 카메라, GRIPPER: 그리퍼 카메라). 2026-11-07 데이터셋 영상으로 확인.",
+  "notes": "물체 이름(YOLO 클래스) → 그 물체만 집도록 학습한 LeRobot ACT 정책. ACT는 위치나 문장을 입력으로 받지 않고, 카메라 영상과 관절 값만 봄. cameras는 정책 입력 이름(front/wrist)에 실제로 넣을 카메라 역할(OVERHEAD: 선반을 위에서 본 카메라, GRIPPER: 그리퍼 카메라). 2026-11-07 데이터셋 영상으로 확인. arm_id는 그 정책을 녹화한 팔(config/arms.json): 정책은 그 팔의 포트·카메라로만 실행. null이면 녹화 팔 미확인 — 어느 팔에도 배정되고, 관제의 정책 실행은 예전 단일 팔 설정(CONTROL_STATION_POLICY_*·FOLLOWER_PORT)으로 돈다.",
   "policies": [
     {
       "policy_id": "carrot_act_v2",
@@ -18,8 +18,9 @@
         "front": "OVERHEAD",
         "wrist": "GRIPPER"
       },
+      "arm_id": null,
       "max_run_s": 45,
-      "notes": "에피소드 20개 모두 당근. task 문장은 녹화 때 붙인 이름일 뿐이며 ACT는 쓰지 않음. 에피소드가 쉬는 자세 근처에서 시작하고 끝남."
+      "notes": "에피소드 20개 모두 당근. task 문장은 녹화 때 붙인 이름일 뿐이며 ACT는 쓰지 않음. 에피소드가 쉬는 자세 근처에서 시작하고 끝남. 녹화한 팔 확인 필요(arm_id null)."
     },
     {
       "policy_id": "tissue_act_v1",
@@ -38,8 +39,9 @@
         "front": "GRIPPER",
         "wrist": "OVERHEAD"
       },
+      "arm_id": null,
       "max_run_s": 45,
-      "notes": "에피소드 20개 모두 물티슈. 녹화 때 카메라 이름이 뒤바뀌어 front에 그리퍼 카메라, wrist에 위에서 본 카메라가 들어감. 실물 실행은 아직 하지 않음."
+      "notes": "에피소드 20개 모두 물티슈. 녹화 때 카메라 이름이 뒤바뀌어 front에 그리퍼 카메라, wrist에 위에서 본 카메라가 들어감. 실물 실행은 아직 하지 않음. 녹화한 팔 확인 필요(arm_id null)."
     },
     {
       "policy_id": "apple_act_20261109",
@@ -57,8 +59,9 @@
         "front": "GRIPPER",
         "wrist": "OVERHEAD"
       },
+      "arm_id": null,
       "max_run_s": 40,
-      "notes": "에피소드 20개(약 15초), 쉬는 자세에서 시작. 녹화 때 카메라 이름이 뒤바뀌어 front에 그리퍼 카메라(분홍 손가락, F58AE686 팔), wrist에 위에서 본 카메라가 들어감. 2026-11-11 영상으로 확인. 실물 실행은 아직 안 함."
+      "notes": "에피소드 20개(약 15초), 쉬는 자세에서 시작. 녹화 때 카메라 이름이 뒤바뀌어 front에 그리퍼 카메라(분홍 손가락, F58AE686 팔), wrist에 위에서 본 카메라가 들어감. 2026-11-11 영상으로 확인. 실물 실행은 아직 안 함. F58AE686(arm-01)에서 녹화 — arm_id 고정은 모의 재고·주문 시험과 함께 따로 반영."
     }
   ]
 }

@@ -1,4 +1,8 @@
-"""Lifecycle management for one bounded LeRobot async policy run."""
+"""Lifecycle management for one bounded LeRobot async policy run.
+
+A policy is trained on one arm (`arm_id` in config/omx-act-policies.json) and runs only on that arm's follower port
+and cameras (arm_devices.py). A policy without `arm_id` runs on the single-arm settings, as before. One run at a time:
+the two arms take turns (config/fleet-planning.json arms_overlap false)."""
 
 from __future__ import annotations
 
@@ -13,6 +17,8 @@ from pathlib import Path
 from typing import Any
 
 from control_station.act_policies import ActPolicyError, load_act_policies
+from control_station.arm_devices import arm_devices
+from control_station.arms import ArmConfigError, ArmRegistry, load_arms
 
 
 ACTION_LIMIT_EXIT_CODE = 75
@@ -42,6 +48,7 @@ def _policy_profiles(path: str | None) -> dict[str, dict[str, Any]]:
         policy["policy_id"]: {
             "id": policy["policy_id"], "name": policy["label"], "policy_type": policy["policy_type"],
             "model": policy["model"], "task": policy["task"], "cameras": dict(policy["cameras"]),
+            "arm_id": policy["arm_id"],
         }
         for policy in registry.policies.values()
     }
@@ -54,7 +61,7 @@ class PolicyRunSupervisor:
     LeRobot client does not receive a grasp/place completion signal.
     """
 
-    def __init__(self, *, disabled_reason: str | None = None) -> None:
+    def __init__(self, *, disabled_reason: str | None = None, arms: ArmRegistry | None = None) -> None:
         configured_enabled = os.environ.get("CONTROL_STATION_POLICY_ENABLED", "0").lower() in {
             "1",
             "true",
@@ -75,6 +82,15 @@ class PolicyRunSupervisor:
         self.server_address = os.environ.get("CONTROL_STATION_POLICY_SERVER_ADDRESS", "127.0.0.1:8080")
         self.policy_profiles = _policy_profiles(os.environ.get("CONTROL_STATION_ACT_POLICIES"))
         self.current_profile_id = next(iter(self.policy_profiles))
+        if arms is None:
+            try:
+                arms = load_arms()
+            except ArmConfigError:
+                arms = None  # arm-bound policies then report that their arm is not configured
+        # Per-arm devices for arm-bound policies; the single-arm settings below are for policies without arm_id.
+        self.arm_devices = arm_devices(arms.arms if arms is not None else ())
+        self._run_arm: dict[str, str | None] | None = None  # the arm of the running (or last) run
+        self._run_devices: list[str] = []
         self.robot_port = os.environ.get("CONTROL_STATION_POLICY_ROBOT_PORT", "/dev/omx_follower")
         self.robot_id = os.environ.get("CONTROL_STATION_POLICY_ROBOT_ID", "omx_follower_arm")
         # Devices by camera role. Each policy says which role feeds its `front` and `wrist` inputs (some were
@@ -120,7 +136,41 @@ class PolicyRunSupervisor:
         self._updated_at = _now()
         self._exit_code: int | None = None
 
-    def _command(self, profile: dict[str, str]) -> list[str]:
+    def run_config(self, profile: dict[str, Any]) -> dict[str, Any]:
+        """Arm, follower port, LeRobot robot id and camera device per role for one profile."""
+        arm_id = profile.get("arm_id")
+        if arm_id is None:
+            return {"arm_id": None, "arm_label": None, "port": self.robot_port, "robot_id": self.robot_id,
+                    "cameras": dict(self.camera_devices)}
+        devices = self.arm_devices.get(arm_id)
+        if devices is None:
+            raise RuntimeError(f"{profile['name']} 정책은 {arm_id}에서 학습됐는데 config/arms.json에 그 팔이 없습니다.")
+        if not devices.ready:
+            raise RuntimeError(
+                f"{profile['name']} 정책은 {devices.label}({arm_id}) 전용입니다. "
+                f"이 팔의 장치 설정이 없습니다: {', '.join(devices.missing)}"
+            )
+        return {"arm_id": arm_id, "arm_label": devices.label, "port": devices.follower_port,
+                "robot_id": devices.robot_id, "cameras": dict(devices.cameras)}
+
+    def devices_for(self, profile_id: str | None = None) -> list[str]:
+        """Cameras the run of this profile would open; [] when the profile cannot run here."""
+        profile = self.policy_profiles.get(profile_id or self.current_profile_id)
+        if profile is None:
+            return []
+        try:
+            cameras = self.run_config(profile)["cameras"]
+        except RuntimeError:
+            return []
+        return [cameras[role] for role in ("OVERHEAD", "GRIPPER") if cameras.get(role)]
+
+    def active_devices(self) -> list[str]:
+        """Cameras held by the live policy process (the control station keeps them closed meanwhile)."""
+        with self._lock:
+            self._refresh_locked()
+            return list(self._run_devices) if self._process is not None else []
+
+    def _command(self, profile: dict[str, Any]) -> list[str]:
         if self.max_action_steps is None or self.max_action_steps <= 0:
             raise RuntimeError(
                 "CONTROL_STATION_POLICY_MAX_ACTION_STEPS에 양의 정수 액션 상한을 설정해야 합니다."
@@ -129,8 +179,9 @@ class PolicyRunSupervisor:
             raise RuntimeError(f"LeRobot Python 실행 파일을 찾을 수 없습니다: {self.python}")
         if not self.lerobot_dir.is_dir():
             raise RuntimeError(f"LeRobot 디렉터리를 찾을 수 없습니다: {self.lerobot_dir}")
-        front = self.camera_devices[profile["cameras"]["front"]]
-        wrist = self.camera_devices[profile["cameras"]["wrist"]]
+        config = self.run_config(profile)
+        front = config["cameras"][profile["cameras"]["front"]]
+        wrist = config["cameras"][profile["cameras"]["wrist"]]
         cameras = (
             "{ front: {type: opencv, index_or_path: "
             f"{front}, width: 640, height: 480, fps: {self.fps}, fourcc: MJPG}}, "
@@ -146,8 +197,8 @@ class PolicyRunSupervisor:
                 "from lerobot.async_inference.robot_client import async_client; async_client()"
             ),
             "--robot.type=omx_follower",
-            f"--robot.port={self.robot_port}",
-            f"--robot.id={self.robot_id}",
+            f"--robot.port={config['port']}",
+            f"--robot.id={config['robot_id']}",
             f"--robot.cameras={cameras}",
             # LeRobot's default turns torque off on disconnect, which drops the arm when the client ends.
             "--robot.disable_torque_on_disconnect=false",
@@ -212,6 +263,9 @@ class PolicyRunSupervisor:
                 "max_action_steps": self.max_action_steps,
                 "run_id": self._run_id,
                 "current_profile_id": self.current_profile_id,
+                # The arm of the running or last run (None: the single-arm settings), and each arm's readiness.
+                "current_arm": dict(self._run_arm) if self._run_arm else None,
+                "arms": [devices.summary() for devices in self.arm_devices.values()],
                 "current_profile": self.policy_profiles[self.current_profile_id],
                 "policy_profiles": list(self.policy_profiles.values()),
                 "server_address": self.server_address,
@@ -235,7 +289,10 @@ class PolicyRunSupervisor:
             if profile is None:
                 raise RuntimeError(f"등록되지 않은 정책 프로필입니다: {selected_profile_id}")
             command = self._command(profile)
+            config = self.run_config(profile)
             self.current_profile_id = selected_profile_id
+            self._run_arm = {"arm_id": config["arm_id"], "label": config["arm_label"]}
+            self._run_devices = [config["cameras"][role] for role in ("OVERHEAD", "GRIPPER") if config["cameras"].get(role)]
             self._run_id = uuid.uuid4().hex
             self._active_log_path = self.log_path.with_name(
                 f"{self.log_path.stem}-{self._run_id}{self.log_path.suffix}"
@@ -268,8 +325,9 @@ class PolicyRunSupervisor:
                 self._updated_at = _now()
                 raise RuntimeError(self._detail) from exc
             self._state = "STARTING"
+            on_arm = f"{config['arm_label']}({config['arm_id']})에서 " if config["arm_id"] else ""
             self._detail = (
-                f"{profile['name']} 정책 시작 요청됨 · 최대 {self.max_action_steps}개 액션 · "
+                f"{on_arm}{profile['name']} 정책 시작 요청됨 · 최대 {self.max_action_steps}개 액션 · "
                 "집기/배치 완료 여부는 별도 확인이 필요합니다."
             )
             self._exit_code = None

@@ -1,18 +1,20 @@
 {
   "schema_version": 1,
-  "notes": "팔은 선반 위치로 나눈다(2026-11-11): 왼쪽 선반(shelf_a)의 물체는 왼쪽 팔, 오른쪽 선반(shelf_b)의 물체는 오른쪽 팔이 집어 두 팔 가운데에 선 핑키 위에 놓는다. stock_camera_id는 그 선반의 재고를 세는 카메라이며, 카메라 1대가 두 선반을 다 보면 둘 다 같은 ID를 쓴다.",
+  "notes": "팔은 선반 위치로 나눈다(2026-11-11): 왼쪽 선반(shelf_a)의 물체는 왼쪽 팔, 오른쪽 선반(shelf_b)의 물체는 오른쪽 팔이 집어 두 팔 가운데에 선 핑키 위에 놓는다. stock_camera_id는 그 선반의 재고를 세는 카메라이며, 카메라 1대가 두 선반을 다 보면 둘 다 같은 ID를 쓴다. board_serial은 팔의 OpenRB-150 보드 시리얼(물리적인 팔 이름표)이며, 팔마다의 장치 경로(팔로워 포트·그리퍼 캠·탑 캠)는 PC마다 .control-station/control-station.env의 CONTROL_STATION_ARM01_*·ARM02_*로 정한다(2026-11-14).",
   "arms": [
     {
       "arm_id": "arm-01",
       "label": "왼쪽 팔",
       "shelf_id": "shelf_a",
-      "stock_camera_id": "shelf_camera"
+      "stock_camera_id": "shelf_camera",
+      "board_serial": "F58AE68650323952582E3120FF05260E"
     },
     {
       "arm_id": "arm-02",
       "label": "오른쪽 팔",
       "shelf_id": "shelf_b",
-      "stock_camera_id": "shelf_camera"
+      "stock_camera_id": "shelf_camera",
+      "board_serial": "A9F9354350323952582E3120FF070727"
     }
   ]
 }
