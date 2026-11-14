@@ -1,0 +1,98 @@
+/* 수동 조작 (팔): grouped by what the operator wants to do — pick with a policy, see the latest command, recover.
+ * Uses the tokens of styles.css. Things that are not ready for everyday use only show with ?dev=1. */
+
+body:not(.dev) .dev-only { display: none !important; }
+
+.manual { margin-top: 8px; }
+.manual-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; margin: 0 4px 16px; }
+.manual-lead { margin: 4px 0 0; color: var(--text-2); font-size: 14px; }
+
+/* Which arm the buttons send to. A second arm stays greyed out until its worker is attached. */
+.arm-picker { display: flex; flex-wrap: wrap; gap: 8px; }
+.arm-choice { display: grid; justify-items: start; gap: 0; min-width: 132px; min-height: 52px; padding: 8px 16px; border-radius: 14px; background: var(--card); color: var(--text); box-shadow: var(--shadow); text-align: left; }
+.arm-choice span { font-size: 15px; font-weight: 700; }
+.arm-choice small { color: var(--text-3); font-size: 12px; font-weight: 500; }
+:where(.arm-choice:hover:not(:disabled)) { background: var(--card-muted); }
+.arm-choice.chosen { background: var(--blue); color: #fff; box-shadow: none; }
+.arm-choice.chosen small { color: rgba(255, 255, 255, .8); }
+.arm-choice.chosen:hover:not(:disabled) { background: var(--blue-strong); }
+.arm-choice:disabled { background: var(--card-muted); color: var(--text-disabled); box-shadow: none; }
+.arm-choice:disabled small { color: var(--text-disabled); }
+
+/* One confirm bar for anything that moves the arm. */
+.manual-confirm { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px; margin: 0 0 14px; padding: 16px 20px; border-radius: var(--radius-card); background: var(--yellow-soft); }
+.manual-confirm strong { display: block; font-size: 16px; font-weight: 700; }
+.manual-confirm p { margin: 2px 0 0; color: var(--text-2); font-size: 14px; }
+.manual-confirm-actions { display: flex; flex-shrink: 0; gap: 8px; }
+.manual-confirm-actions button { min-width: 96px; min-height: 44px; }
+
+.manual-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); grid-template-rows: auto auto; gap: 14px; }
+.manual-card { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 20px; border-radius: var(--radius-card); background: var(--card); box-shadow: var(--shadow); }
+.manual-grid > .manual-card:first-child { grid-row: span 2; }
+.manual-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.manual-card-head h3 { font-size: 17px; font-weight: 700; }
+.manual-hint { margin: 0; color: var(--text-2); font-size: 14px; }
+.manual-empty { margin: 0; color: var(--text-3); font-size: 14px; }
+
+.worker-state { display: inline-flex; align-items: center; gap: 6px; color: var(--text-3); font-size: 13px; }
+.worker-state::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--text-disabled); }
+.worker-state.live { color: var(--green-ink); }
+.worker-state.live::before { background: var(--green); }
+
+/* Policy picks as big tiles: the object is what the operator thinks in. */
+.pick-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-top: 4px; }
+.pick-tile { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; align-items: center; column-gap: 12px; min-height: 76px; padding: 14px 16px; border-radius: 16px; background: var(--fill); color: var(--text); text-align: left; }
+:where(.pick-tile:hover:not(:disabled)) { background: var(--blue-soft); }
+.pick-tile:disabled { background: var(--card-muted); color: var(--text-disabled); }
+.pick-mark { display: grid; grid-row: span 2; width: 44px; height: 44px; place-items: center; border-radius: 14px; background: var(--blue-soft); color: var(--blue-strong); font-size: 19px; font-weight: 700; }
+.pick-tile:hover:not(:disabled) .pick-mark { background: var(--card); }
+.pick-tile:disabled .pick-mark { background: var(--fill); color: var(--text-disabled); }
+.pick-name { font-size: 17px; font-weight: 700; }
+.pick-tile small { color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.pick-checklist { margin-top: auto; padding: 14px 16px; border-radius: var(--radius-inner); background: var(--card-muted); }
+.pick-checklist p { margin: 0 0 6px; color: var(--text-2); font-size: 13px; font-weight: 700; }
+.pick-checklist ol { display: grid; gap: 4px; margin: 0; padding-left: 20px; color: var(--text-2); font-size: 13px; }
+
+/* The latest command for the chosen arm, and what can be done about it. */
+.manual-now-body { display: grid; gap: 4px; min-height: 92px; }
+.manual-now-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.manual-now-row .chip { font-size: 13px; }
+.manual-now-action { margin-left: auto; }
+.manual-now-action button { min-height: 36px; padding: 6px 14px; font-size: 13px; }
+.manual-now-action small { color: var(--text-3); font-size: 12px; }
+.manual-now-what { margin: 6px 0 0; font-size: 20px; font-weight: 700; letter-spacing: -.02em; }
+.manual-now-meta { margin: 0; color: var(--text-2); font-size: 13px; font-variant-numeric: tabular-nums; }
+.manual-reason { color: var(--text-3); font-size: 12px; }
+.manual-message { margin: 0; color: var(--text-2); font-size: 13px; }
+.manual-message:empty { display: none; }
+
+.manual-recover button.wide { width: 100%; min-height: 48px; margin-top: auto; font-size: 15px; }
+
+/* The log and the explanation stay folded until asked for. */
+.manual-log, .manual-help { margin-top: 14px; border-radius: var(--radius-card); background: var(--card); box-shadow: var(--shadow); }
+.manual-log > summary, .manual-help > summary { display: flex; align-items: baseline; gap: 10px; padding: 16px 20px; font-size: 15px; font-weight: 700; cursor: pointer; list-style: none; }
+.manual-log > summary::-webkit-details-marker, .manual-help > summary::-webkit-details-marker { display: none; }
+.manual-log > summary::after, .manual-help > summary::after { content: "펼치기"; margin-left: auto; color: var(--text-3); font-size: 13px; font-weight: 500; }
+.manual-log[open] > summary::after, .manual-help[open] > summary::after { content: "접기"; }
+.manual-log .table-wrap { margin: 0 12px 12px; box-shadow: none; }
+.manual-log .arm-command-table td, .manual-log .arm-command-table th { font-variant-numeric: tabular-nums; }
+.manual-help ul { margin: 0; padding: 0 24px 18px 40px; color: var(--text-2); font-size: 14px; line-height: 1.7; }
+
+/* Running LeRobot directly on this PC: only when the server was started with it. */
+.manual-direct, .manual-legacy { margin-top: 28px; }
+.manual-subtitle { display: flex; align-items: center; gap: 10px; margin: 0 4px 4px; font-size: 16px; font-weight: 700; }
+.manual-direct > .manual-hint, .manual-legacy > .manual-hint { margin: 0 4px 12px; }
+.manual-direct .arm-control + .arm-control { margin-top: 10px; }
+.manual-row-title { display: flex; align-items: baseline; gap: 10px; margin: 0 0 4px; font-size: 15px; font-weight: 700; }
+.manual-legacy .camera-command-form { justify-content: start; margin-top: 0; padding: 18px 20px; border-radius: var(--radius-card); background: var(--card); box-shadow: var(--shadow); }
+.manual-legacy .slot-command-form { margin-top: 10px; }
+
+@media (max-width: 960px) {
+  .manual-grid { grid-template-columns: 1fr; }
+  .manual-grid > .manual-card:first-child { grid-row: auto; }
+}
+@media (max-width: 720px) {
+  .manual-confirm-actions { width: 100%; }
+  .manual-confirm-actions button { flex: 1; }
+  .arm-choice { flex: 1; }
+}
