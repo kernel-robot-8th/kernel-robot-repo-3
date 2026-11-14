@@ -48,10 +48,9 @@ button:focus-visible, .zone-chip:has(input:focus-visible) { outline: 3px solid r
 .order-page { width: min(100%, 640px); margin: 0 auto; padding: 36px 20px 0; }
 
 /* ---- header ---- */
-.order-header { padding: 0 4px; }
+.order-header { display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; padding: 0 4px; }
 .order-header h1 { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 28px; font-weight: 700; letter-spacing: -.03em; line-height: 1.3; }
-.order-header p { margin-top: 8px; color: var(--text-2); font-size: 16px; }
-.mock-tag { padding: 2px 10px; border: 1px dashed var(--text-3); border-radius: 999px; color: var(--text-2); font-size: 12px; font-weight: 500; letter-spacing: 0; }
+.order-header p { flex-basis: 100%; margin-top: 8px; color: var(--text-2); font-size: 16px; }
 
 /* ---- sections ---- */
 .order-form section { margin-top: 32px; }
@@ -112,20 +111,44 @@ button:focus-visible, .zone-chip:has(input:focus-visible) { outline: 3px solid r
 .primary:hover:not(:disabled) { background: var(--blue-strong); }
 .primary:disabled { background: var(--fill); color: var(--text-disabled); }
 
-/* ---- confirmation ---- */
-.order-done { margin-top: 32px; padding: 36px 24px 28px; border-radius: 24px; background: var(--card); box-shadow: var(--shadow); text-align: center; }
-.done-mark { display: inline-grid; width: 68px; height: 68px; place-items: center; border-radius: 50%; background: var(--green-soft); color: var(--green); font-size: 32px; font-weight: 700; }
-.order-done h2 { margin-top: 16px; font-size: 24px; font-weight: 700; outline: none; }
-.done-details { display: grid; max-width: 420px; margin: 22px auto 16px; padding: 4px 18px; border-radius: 18px; background: var(--card-muted); text-align: left; }
-.done-details > div { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
-.done-details > div:last-child { border-bottom: 0; }
-.done-details dt { color: var(--text-3); font-size: 14px; }
-.done-details dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.done-items { margin: 0; padding: 0; list-style: none; }
-.order-done .hint { max-width: 420px; margin: 0 auto 20px; }
-.order-done .primary { max-width: 420px; }
+.secondary { width: 100%; min-height: 52px; padding: 12px 24px; border: 0; border-radius: 16px; background: var(--fill); color: var(--text-2); font-size: 16px; font-weight: 600; transition: background-color .15s; }
+.secondary:hover { background: var(--fill-strong); }
+.my-order-link { margin-left: auto; min-height: 36px; padding: 6px 14px; border: 0; border-radius: 999px; background: var(--blue-soft); color: var(--blue-strong); font-size: 14px; font-weight: 600; }
 
-.order-footer { margin: 32px 0 0; padding: 0 0 24px; color: var(--text-3); font-size: 12px; text-align: center; }
+/* ---- tracking: one order, from 접수 to 완료 ---- */
+.tracking { margin-top: 28px; padding: 28px 24px 24px; border-radius: 24px; background: var(--card); box-shadow: var(--shadow); }
+.track-eyebrow { min-height: 22px; color: var(--blue); font-size: 15px; font-weight: 600; }
+.track-title { margin-top: 6px; font-size: 26px; font-weight: 700; letter-spacing: -.03em; line-height: 1.35; outline: none; }
+.track-detail { margin-top: 6px; color: var(--text-2); font-size: 16px; }
+.tracking[data-stage="arrived"] .track-eyebrow, .tracking[data-stage="done"] .track-eyebrow { color: var(--green-ink); }
+.tracking[data-stage="problem"] .track-eyebrow, .tracking[data-stage="canceled"] .track-eyebrow { color: var(--red-ink); }
+
+/* The line of stages: done ones are filled, the current one rings, the rest wait in grey. */
+.track-stages { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); margin: 28px 0 0; padding: 0; list-style: none; }
+.track-stage { position: relative; display: grid; justify-items: center; gap: 8px; color: var(--text-3); font-size: 12px; font-weight: 500; text-align: center; }
+.track-stage::before { content: ""; position: absolute; top: 7px; right: 50%; left: -50%; height: 2px; background: var(--line); }
+.track-stage:first-child::before { display: none; }
+.track-stage.done::before, .track-stage.current::before { background: var(--blue); }
+.track-dot { position: relative; z-index: 1; width: 16px; height: 16px; border-radius: 50%; background: var(--fill-strong); }
+.track-stage.done .track-dot { background: var(--blue); }
+.track-stage.current .track-dot { background: var(--blue); box-shadow: 0 0 0 5px var(--blue-soft); }
+.track-stage.done { color: var(--text-2); }
+.track-stage.current { color: var(--blue); font-weight: 700; }
+.track-label { line-height: 1.3; word-break: keep-all; }
+.tracking[data-stage="canceled"] .track-stages, .tracking[data-stage="problem"] .track-stages { opacity: .45; }
+
+.pickup { margin-top: 28px; min-height: 60px; font-size: 18px; animation: pickup-in .3s ease-out; }
+@keyframes pickup-in { from { transform: translateY(6px); opacity: 0; } }
+.tracking .form-error { margin: 16px 0 0; }
+
+.track-details { display: grid; margin: 28px 0 16px; padding: 4px 18px; border-radius: 18px; background: var(--card-muted); }
+.track-details > div { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.track-details > div:last-child { border-bottom: 0; }
+.track-details dt { color: var(--text-3); font-size: 14px; }
+.track-details dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.done-items { margin: 0; padding: 0; list-style: none; }
+
+.order-page::after { content: ""; display: block; height: 32px; }
 
 @media (max-width: 480px) {
   .order-page { padding: 24px 16px 0; }
@@ -134,5 +157,8 @@ button:focus-visible, .zone-chip:has(input:focus-visible) { outline: 3px solid r
   .product-mark { width: 44px; height: 44px; border-radius: 15px; font-size: 19px; }
   .step { width: 40px; height: 40px; }
   .cart-bar { margin: 28px -16px 0; padding-right: 16px; padding-left: 16px; }
+  .tracking { padding: 24px 18px 20px; }
+  .track-title { font-size: 23px; }
+  .track-stage { font-size: 11px; }
 }
-@media (prefers-reduced-motion: reduce) { .product, .step, .primary { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .product, .step, .primary, .secondary { transition: none; } .pickup { animation: none; } }

@@ -1,8 +1,12 @@
-// Order window (/order): a customer-side mock. It reads what can be ordered from GET /api/catalog and sends the
-// order to the operator's intake with POST /api/orders. Nothing here starts a robot; an operator does that.
+// Order app (/order): the customer side. It reads what can be ordered from GET /api/catalog, sends the order to
+// the operator's intake with POST /api/orders, then follows it with GET /api/orders/{id}/track until the customer
+// presses [받았어요] at the receiving zone. Nothing here starts a robot; an operator does that.
 
 const MAX_PER_PRODUCT = 5;  // the server accepts 1 to 5 of each object
 const CATALOG_REFRESH_MS = 5000;
+const TRACK_REFRESH_MS = 2000;
+const ORDER_KEY = 'robot-order:last';  // the order this phone placed, so a reload returns to its progress
+const FINISHED_STAGES = ['done', 'canceled'];
 
 const orderForm = document.querySelector('#orderForm');
 const productList = document.querySelector('#products');
@@ -11,7 +15,10 @@ const zoneList = document.querySelector('#zones');
 const cartSummary = document.querySelector('#cartSummary');
 const submitButton = document.querySelector('#submitOrder');
 const formError = document.querySelector('#formError');
-const orderDone = document.querySelector('#orderDone');
+const tracking = document.querySelector('#tracking');
+const myOrderLink = document.querySelector('#myOrderLink');
+const pickupButton = document.querySelector('#pickupButton');
+const trackError = document.querySelector('#trackError');
 
 const state = {
   catalogLoaded: false,
@@ -23,9 +30,18 @@ const state = {
   adjusted: new Map(),   // object class -> 'lowered' (to the stock left) | 'removed' (closed or sold out) by a refresh
   zoneId: null,
   sending: false,
+  orderId: null,         // the order being followed on the tracking screen
+  track: null,           // the latest GET /api/orders/{id}/track answer
+  trackTimer: null,
+  confirming: false,
 };
 
-const clockFormat = new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+// localStorage can be missing or throw (private mode, blocked site data); the app then just forgets the order.
+const saved = {
+  get() { try { return window.localStorage.getItem(ORDER_KEY); } catch { return null; } },
+  set(orderId) { try { window.localStorage.setItem(ORDER_KEY, orderId); } catch { /* not kept */ } },
+  clear() { try { window.localStorage.removeItem(ORDER_KEY); } catch { /* nothing kept */ } },
+};
 
 // Builds an element; string children become text nodes, so catalog text is never parsed as HTML.
 function element(tag, attributes = {}, ...children) {
@@ -49,10 +65,6 @@ function orderable(product) {
 function maxQuantity(product) {
   if (!orderable(product)) return 0;
   return product.available == null ? MAX_PER_PRODUCT : Math.min(MAX_PER_PRODUCT, product.available);
-}
-
-function labelFor(objectClass) {
-  return state.products.find((product) => product.object_class === objectClass)?.label || objectClass;
 }
 
 function cartItems() {
@@ -240,17 +252,114 @@ function clearError() {
 
 // ---- ordering ---------------------------------------------------------------------------------------------
 
-function showConfirmation(order) {
-  const zone = state.zones.find((item) => item.zone_id === order.receiving_zone);
-  document.querySelector('#doneId').textContent = order.id;
-  document.querySelector('#doneItems').replaceChildren(
-    ...order.order_items.map((item) => element('li', {}, `${labelFor(item.object_class)} ${item.quantity}개`)));
-  document.querySelector('#doneZone').textContent = zone?.label || order.destination;
-  document.querySelector('#doneTime').textContent = clockFormat.format(new Date(order.created_at));
-  orderForm.hidden = true;
-  orderDone.hidden = false;
-  document.querySelector('#done-title').focus();
+// ---- following an order -----------------------------------------------------------------------------------
+
+function showScreen(name) {
+  orderForm.hidden = name !== 'order';
+  tracking.hidden = name !== 'track';
+  myOrderLink.hidden = name !== 'order' || !state.orderId;
+  document.querySelector('#pageTitle').textContent = name === 'track' ? '내 주문' : '무엇을 가져다 드릴까요?';
+  document.querySelector('#pageLead').hidden = name === 'track';
 }
+
+function eyebrow(track) {
+  if (track.stage === 'canceled' || track.stage === 'problem') return '';
+  if (track.stage === 'done') return '배달 완료';
+  return track.pinky ? `배달 로봇 · 핑키 ${track.pinky}` : '배달 로봇 배정 전';
+}
+
+function renderTrack() {
+  const track = state.track;
+  if (!track) return;
+  document.querySelector('#track-title').textContent = track.title;
+  document.querySelector('#trackDetail').textContent = track.detail;
+  document.querySelector('#trackPinky').textContent = eyebrow(track);
+  tracking.dataset.stage = track.stage;
+  // canceled / problem orders have no place on the line; the stages stay as they were, the title says why
+  document.querySelector('#trackStages').replaceChildren(...track.stages.map((stage) => element('li',
+    { class: `track-stage ${stage.state}`, ...(stage.state === 'current' ? { 'aria-current': 'step' } : {}) },
+    element('span', { class: 'track-dot', 'aria-hidden': 'true' }), element('span', { class: 'track-label' }, stage.label))));
+  document.querySelector('#trackItems').replaceChildren(
+    ...track.items.map((item) => element('li', {}, `${item.label} ${item.quantity}개`)));
+  document.querySelector('#trackZone').textContent = track.zone;
+  document.querySelector('#trackId').textContent = track.order_id;
+  pickupButton.hidden = !track.can_confirm_pickup;
+  pickupButton.disabled = state.confirming;
+  pickupButton.textContent = state.confirming ? '보내는 중…' : '받았어요';
+  const finished = FINISHED_STAGES.includes(track.stage);
+  document.querySelector('#newOrder').classList.toggle('primary', finished);
+  document.querySelector('#newOrder').classList.toggle('secondary', !finished);
+}
+
+function showTrackError(message) {
+  trackError.textContent = message;
+  trackError.hidden = !message;
+}
+
+async function loadTrack() {
+  if (!state.orderId || (document.hidden && state.track)) return;
+  const orderId = state.orderId;
+  try {
+    const response = await fetch(`/api/orders/${encodeURIComponent(orderId)}/track`, { cache: 'no-store' });
+    if (orderId !== state.orderId) return;  // the customer moved on while this was in flight
+    if (response.status === 404) {
+      forgetOrder();  // the operator's database no longer has it (reset); start fresh instead of spinning
+      return;
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    state.track = await response.json();
+    showTrackError('');
+    renderTrack();
+    if (FINISHED_STAGES.includes(state.track.stage)) stopTracking();
+  } catch {
+    showTrackError('진행 상황을 새로 불러오지 못했어요. 잠시 뒤 다시 확인합니다.');
+  }
+}
+
+function stopTracking() {
+  window.clearInterval(state.trackTimer);
+  state.trackTimer = null;
+}
+
+function followOrder(orderId, { focus = true } = {}) {
+  state.orderId = orderId;
+  state.track = null;
+  saved.set(orderId);
+  showTrackError('');
+  document.querySelector('#track-title').textContent = '주문을 불러오는 중…';
+  document.querySelector('#trackDetail').textContent = '';
+  showScreen('track');
+  stopTracking();
+  loadTrack();
+  state.trackTimer = window.setInterval(loadTrack, TRACK_REFRESH_MS);
+  if (focus) document.querySelector('#track-title').focus();
+}
+
+function forgetOrder() {
+  stopTracking();
+  saved.clear();
+  state.orderId = null;
+  state.track = null;
+  showScreen('order');
+  render();
+}
+
+pickupButton.addEventListener('click', async () => {
+  if (!state.orderId || state.confirming) return;
+  state.confirming = true;
+  renderTrack();
+  try {
+    const response = await fetch(`/api/orders/${encodeURIComponent(state.orderId)}/pickup-confirm`, { method: 'POST' });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) showTrackError(result.message || '수령 확인을 보내지 못했어요. 다시 눌러 주세요.');
+  } catch {
+    showTrackError('수령 확인을 보내지 못했어요. 다시 눌러 주세요.');
+  } finally {
+    state.confirming = false;
+    await loadTrack();
+    renderTrack();
+  }
+});
 
 productList.addEventListener('click', (event) => {
   const button = event.target.closest('[data-step]');
@@ -292,7 +401,7 @@ orderForm.addEventListener('submit', async (event) => {
     }
     state.cart.clear();
     state.adjusted.clear();
-    showConfirmation(result.order);
+    followOrder(result.order.id);
   } catch {
     // The request may have reached the server, so do not invite a second order blindly.
     showError('응답을 받지 못했어요. 주문이 접수됐을 수 있으니 작업자에게 확인한 뒤 다시 주문해 주세요.');
@@ -303,15 +412,35 @@ orderForm.addEventListener('submit', async (event) => {
 });
 
 document.querySelector('#newOrder').addEventListener('click', () => {
-  orderDone.hidden = true;
-  orderForm.hidden = false;
+  // A running order keeps going; the customer can come back to it with "내 주문 보기".
+  const running = state.track && !FINISHED_STAGES.includes(state.track.stage);
+  if (running) {
+    stopTracking();
+    showScreen('order');
+  } else {
+    forgetOrder();
+  }
   render();
   productList.querySelector('[data-step="1"]:not(:disabled)')?.focus();
 });
 
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) loadCatalog();
+myOrderLink.addEventListener('click', () => {
+  if (state.orderId) followOrder(state.orderId);
 });
 
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  loadCatalog();
+  if (!tracking.hidden) loadTrack();
+});
+
+// /order?order=<id> opens that order's progress (a link or QR handed to the customer); otherwise this phone's last.
+const linkedOrder = new URLSearchParams(window.location.search).get('order');
+const lastOrder = linkedOrder || saved.get();
+if (lastOrder) followOrder(lastOrder, { focus: false });
 loadCatalog();
 window.setInterval(loadCatalog, CATALOG_REFRESH_MS);
+
+if ('serviceWorker' in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register('/order-sw.js', { scope: '/order' }).catch(() => { /* the app works without it */ });
+}

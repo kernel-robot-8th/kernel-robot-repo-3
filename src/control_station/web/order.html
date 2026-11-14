@@ -3,16 +3,23 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="icon" href="data:,">
-  <title>주문하기</title>
+  <meta name="theme-color" content="#3182f6">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="로봇 주문">
+  <link rel="manifest" href="/order-manifest.json">
+  <link rel="icon" href="/icons/order-192.png">
+  <link rel="apple-touch-icon" href="/icons/order-180.png">
+  <title>로봇 주문</title>
   <link rel="stylesheet" href="/order.css">
   <script src="/order.js" defer></script>
 </head>
 <body>
   <main class="order-page">
     <header class="order-header">
-      <h1>무엇을 가져다 드릴까요? <span class="mock-tag">목업</span></h1>
-      <p>물건과 수량, 받을 곳을 고르면 관제 작업자에게 주문이 전달돼요.</p>
+      <h1 id="pageTitle">무엇을 가져다 드릴까요?</h1>
+      <button id="myOrderLink" type="button" class="my-order-link" hidden>내 주문 보기</button>
+      <p id="pageLead">물건과 수량을 고르면 로봇이 수령 구역까지 가져다 드려요.</p>
     </header>
 
     <form id="orderForm" class="order-form" novalidate>
@@ -36,20 +43,21 @@
       </div>
     </form>
 
-    <section id="orderDone" class="order-done" aria-labelledby="done-title" hidden>
-      <span class="done-mark" aria-hidden="true">✓</span>
-      <h2 id="done-title" tabindex="-1">주문이 접수됐어요</h2>
-      <dl class="done-details">
-        <div><dt>주문 번호</dt><dd id="doneId"></dd></div>
-        <div><dt>물건</dt><dd><ul id="doneItems" class="done-items"></ul></dd></div>
-        <div><dt>받을 곳</dt><dd id="doneZone"></dd></div>
-        <div><dt>접수 시각</dt><dd id="doneTime"></dd></div>
+    <section id="tracking" class="tracking" aria-labelledby="track-title" hidden>
+      <p class="track-eyebrow" id="trackPinky"></p>
+      <h2 id="track-title" class="track-title" tabindex="-1">주문을 받았어요</h2>
+      <p id="trackDetail" class="track-detail" aria-live="polite"></p>
+      <ol id="trackStages" class="track-stages" aria-label="주문 진행"></ol>
+      <button id="pickupButton" type="button" class="primary pickup" hidden>받았어요</button>
+      <p id="trackError" class="form-error" role="alert" hidden></p>
+      <dl class="track-details">
+        <div><dt>물건</dt><dd><ul id="trackItems" class="done-items"></ul></dd></div>
+        <div><dt>받을 곳</dt><dd id="trackZone"></dd></div>
+        <div><dt>주문 번호</dt><dd id="trackId"></dd></div>
       </dl>
-      <p class="hint">작업자가 확인한 뒤 로봇이 가져다 드려요. 목업 화면이라 진행 상황은 여기에 나오지 않아요.</p>
-      <button id="newOrder" type="button" class="primary">새 주문</button>
+      <button id="newOrder" type="button" class="secondary">새로 주문하기</button>
     </section>
 
-    <footer class="order-footer">목업 화면이에요. 결제와 로그인은 없어요.</footer>
   </main>
 </body>
 </html>

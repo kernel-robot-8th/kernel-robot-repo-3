@@ -1,0 +1,16 @@
+{
+  "name": "로봇 주문",
+  "short_name": "로봇 주문",
+  "description": "물건을 고르면 로봇 팔과 핑키가 수령 구역까지 가져다줘요.",
+  "lang": "ko",
+  "start_url": "/order",
+  "scope": "/order",
+  "display": "standalone",
+  "background_color": "#f2f4f6",
+  "theme_color": "#3182f6",
+  "icons": [
+    { "src": "/icons/order-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/order-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/order-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
