@@ -1,8 +1,9 @@
 """The order desk: orders from the order window wait here until an operator starts them.
 
-Receiving an order stores it without a Pinky. The preview shows which Pinky and which arms would serve it right
-now, and why; starting runs the same Pinky choice again with the fleet state of that moment, records it on the
-order and hands the order to the task orchestrator. The arm plan is made again inside the order flow, after the
+Receiving an order stores it without a Pinky and, unless an operator named one, without a receiving zone. The
+preview shows which Pinky, which arms and which receiving zone would serve it right now, and why; starting runs the
+same choices again with the state of that moment, records them on the order and hands the order to the task
+orchestrator. The arm plan is made again inside the order flow, after the
 shelf check, so the preview is advice and never a reservation. Nothing here moves a device.
 """
 
@@ -17,14 +18,14 @@ from typing import Any
 
 from control_station.api.common import validate_order_items
 from control_station.assignment import (
-    ArmPlanError, PickStats, PinkyCandidate, ShipmentError, assign_fleet, choose_pinky, plan_arms, schedule_loading,
-    split_into_shipments,
+    ArmPlanError, PickStats, PinkyCandidate, ShipmentError, ZoneAssignment, ZoneCandidate, assign_fleet, choose_pinky,
+    choose_zone, plan_arms, schedule_loading, split_into_shipments,
 )
 from control_station.fleet_planning import FleetPlanning, load_fleet_planning
 from control_station.order_flow import OrderDevices
 from control_station.pinky_fleet import PinkyFleetError
 from control_station.receiving_zones import ReceivingZone
-from control_station.store import PINKY_IDS, PINKY_NAMES, PinkyUnavailable, TaskStore
+from control_station.store import PINKY_IDS, PINKY_NAMES, PinkyUnavailable, TaskStore, ZoneUnavailable
 
 
 class OrderDeskError(RuntimeError):
@@ -59,6 +60,10 @@ _CUSTOMER_TEXT = {
     "canceled": ("주문이 취소됐어요", "다시 주문할 수 있어요"),
     "problem": ("주문 처리에 문제가 생겼어요", "직원이 확인하고 있어요"),
 }
+# What the customer sees in place of the zone until the order starts and the server picks one.
+ZONE_PENDING_NOTE = "받을 곳은 로봇이 출발할 때 알려 드려요"
+# An order's destination until its zone is assigned (shown on the operator screen).
+ZONE_PENDING_LABEL = "수령 구역 (시작 때 배정)"
 
 
 def _customer_stage(status: str, step_type: str | None) -> str:
@@ -142,19 +147,25 @@ class OrderDesk:
             "zones": [zone.as_dict() for zone in self.zones.values()],
         }
 
-    def receive(self, items: object, zone_id: object) -> dict[str, Any]:
-        """Store a new order in the intake (status PENDING, no Pinky yet)."""
+    def receive(self, items: object, zone_id: object = None) -> dict[str, Any]:
+        """Store a new order in the intake (status PENDING, no Pinky yet).
+
+        The customer does not pick a receiving zone: `start` assigns one (choose_zone). A zone given here is an
+        operator's choice and is kept as it is."""
         try:
             order_items = validate_order_items(items, self.policies)
         except ValueError as exc:
             raise OrderDeskError("ORDER_INVALID", str(exc), status=400) from exc
-        zone = self._zone(zone_id)
+        if not self.zones:
+            raise OrderDeskError("RECEIVING_ZONE_NOT_CONFIGURED", "수령 구역이 설정되지 않아 주문을 받을 수 없어요")
+        zone = None if zone_id is None else self._zone(zone_id)
         summary = " · ".join(f"{self._label(item['object_class'])} {item['quantity']}" for item in order_items)
         # Check and reserve as one step, so two windows cannot both sell the last unit.
         with self._intake:
             self._check_available(order_items)
             return self.store.create_task(
-                zone.label, f"{summary} 적재", order_items=order_items, receiving_zone=zone.zone_id, defer_pinky=True,
+                zone.label if zone else ZONE_PENDING_LABEL, f"{summary} 적재", order_items=order_items,
+                receiving_zone=zone.zone_id if zone else None, defer_pinky=True, zone_steps=True,
             )
 
     def _check_available(self, order_items: list[dict[str, Any]]) -> None:
@@ -192,11 +203,13 @@ class OrderDesk:
         units = self._units(order)
         candidates = self.pinky_candidates()
         pinky = choose_pinky(candidates)
+        zone = self.zone_plan(order).as_dict()
         try:
             shipments = split_into_shipments(units, self.planning.pinky_capacity, self.planning.size_of, self._label)
         except ShipmentError as exc:
             error = {"code": exc.error_code, "message": str(exc)}
-            return {"order_id": order_id, "pinky": pinky.as_dict(), "arms": {"error": error}, "fleet": {"error": error}}
+            return {"order_id": order_id, "pinky": pinky.as_dict(), "zone": zone, "arms": {"error": error},
+                    "fleet": {"error": error}}
         fleet = assign_fleet(shipments, candidates)
         stock, stock_error = self._stock()
         arm_ids = [arm["arm_id"] for arm in self.arms.arms]
@@ -221,21 +234,33 @@ class OrderDesk:
             trips.append(entry)
         arms = trips[0]["arms"] if len(trips) == 1 else {
             "error": {"code": "MULTI_PINKY", "message": f"{fleet.summary} · 배송별 팔 계획은 fleet에 있습니다"}}
-        return {"order_id": order_id, "pinky": pinky.as_dict(), "arms": arms,
+        return {"order_id": order_id, "pinky": pinky.as_dict(), "zone": zone, "arms": arms,
                 "fleet": {"summary": fleet.summary, "complete": fleet.complete, "trips": trips}}
 
     def start(self, order_id: str) -> tuple[dict[str, Any], bool]:
-        """Assign the Pinky now (if the order has none) and start the order flow."""
+        """Assign the receiving zone and the Pinky now (where the order has none) and start the order flow.
+
+        Both are checked before either is written, so a refusal leaves the order as it was."""
         order = self._pending_order(order_id, allow_started=True)
-        if order["status"] == "PENDING" and order["pinky_id"] is None:
-            self._refuse_multi_pinky(order)
-            assignment = choose_pinky(self.pinky_candidates())
-            if assignment.pinky_id is None:
-                raise OrderDeskError("PINKY_UNAVAILABLE", assignment.summary, assignment=assignment.as_dict())
-            try:
-                self.store.assign_pinky(order_id, assignment.pinky_id, assignment.as_dict())
-            except PinkyUnavailable as exc:  # taken by another order between the choice and the write
-                raise OrderDeskError("PINKY_UNAVAILABLE", str(exc)) from exc
+        if order["status"] == "PENDING":
+            if order["pinky_id"] is None:
+                self._refuse_multi_pinky(order)
+            zone = self.zone_plan(order)
+            if zone.zone_id is None:
+                raise OrderDeskError("ZONE_BUSY", zone.summary, zone=zone.as_dict())
+            if order["pinky_id"] is None:
+                assignment = choose_pinky(self.pinky_candidates())
+                if assignment.pinky_id is None:
+                    raise OrderDeskError("PINKY_UNAVAILABLE", assignment.summary, assignment=assignment.as_dict())
+                try:
+                    self.store.assign_pinky(order_id, assignment.pinky_id, assignment.as_dict())
+                except PinkyUnavailable as exc:  # taken by another order between the choice and the write
+                    raise OrderDeskError("PINKY_UNAVAILABLE", str(exc)) from exc
+            if order["receiving_zone"] is None:
+                try:
+                    self.store.assign_zone(order_id, zone.zone_id, self.zones[zone.zone_id].label, zone.as_dict())
+                except ZoneUnavailable as exc:  # another order started there between the choice and the write
+                    raise OrderDeskError("ZONE_BUSY", f"수령 구역이 모두 사용 중이에요: {exc}") from exc
         return self.orchestrator.start(order_id)
 
     def _refuse_multi_pinky(self, order: dict[str, Any]) -> None:
@@ -268,7 +293,10 @@ class OrderDesk:
             raise OrderDeskError("ORDER_NOT_FOUND", f"주문 {order_id}이 없습니다", status=404)
         active = next((step for step in order["steps"] if step["id"] == order.get("active_step_id")), None)
         stage = _customer_stage(order["status"], active["step_type"] if active else None)
-        zone = order.get("destination") or "수령 구역"
+        zone_id = order.get("receiving_zone")
+        known = self.zones.get(zone_id or "")
+        zone_label = (known.label if known else order.get("destination")) if zone_id else None
+        zone = zone_label or "수령 구역"
         moved = sum(1 for step in order["steps"] if step["step_type"] == "VERIFY_TRANSFER" and step["status"] == "SUCCEEDED")
         total = sum(1 for step in order["steps"] if step["step_type"] == "VERIFY_TRANSFER")
         title, detail = _CUSTOMER_TEXT[stage]
@@ -279,7 +307,8 @@ class OrderDesk:
                        for index, (key, label) in enumerate(_CUSTOMER_STAGES)],
             "title": title.format(zone=zone), "detail": detail.format(zone=zone, moved=moved, total=total),
             "items": [{"label": self._label(item["object_class"]), "quantity": item["quantity"]} for item in order["order_items"]],
-            "zone": zone, "pinky": PINKY_NAMES.get(order.get("pinky_id") or ""),
+            "zone": zone_label, "zone_note": None if zone_label else ZONE_PENDING_NOTE,
+            "pinky": PINKY_NAMES.get(order.get("pinky_id") or ""),
             "loaded": moved, "total": total, "can_confirm_pickup": stage == "arrived",
             "created_at": order.get("created_at"), "finished_at": order.get("finished_at"),
         }
@@ -289,7 +318,18 @@ class OrderDesk:
         self._pending_order(order_id)
         return self.store.cancel_pending_task(order_id)
 
-    # ---- what the Pinky choice is made from ----------------------------------------------------------------
+    # ---- what the zone and Pinky choices are made from ---------------------------------------------------
+
+    def zone_candidates(self) -> list[ZoneCandidate]:
+        holding = self.store.busy_zones()
+        usage = self.store.zone_usage(self.today())
+        return [ZoneCandidate(zone.zone_id, zone.label, len(zone.route_labels), holding.get(zone.zone_id),
+                              usage.get(zone.zone_id, 0)) for zone in self.zones.values()]
+
+    def zone_plan(self, order: dict[str, Any]) -> ZoneAssignment:
+        """The zone this order would go to now: its own (an operator's choice, only checked) or choose_zone's.
+        A waiting order holds no zone itself, so it never stands in its own way."""
+        return choose_zone(self.zone_candidates(), requested=order.get("receiving_zone"))
 
     def pinky_candidates(self) -> list[PinkyCandidate]:
         holding = self.store.busy_pinkies()
@@ -327,11 +367,10 @@ class OrderDesk:
                 for item in order["order_items"] for index in range(1, int(item["quantity"]) + 1)]
 
     def _zone(self, zone_id: object) -> ReceivingZone:
-        if zone_id is None and len(self.zones) == 1:
-            return next(iter(self.zones.values()))
+        """A zone named with the order (an operator's choice)."""
         if not isinstance(zone_id, str) or zone_id not in self.zones:
             known = ", ".join(self.zones) or "없음"
-            raise OrderDeskError("RECEIVING_ZONE_UNKNOWN", f"수령 구역을 골라 주세요 (가능: {known})", status=400)
+            raise OrderDeskError("RECEIVING_ZONE_UNKNOWN", f"알 수 없는 수령 구역이에요 (가능: {known})", status=400)
         return self.zones[zone_id]
 
     def _label(self, object_class: str) -> str:

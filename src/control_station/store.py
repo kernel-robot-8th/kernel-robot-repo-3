@@ -198,8 +198,34 @@ def _pinky_holding_orders():  # type: ignore[no-untyped-def]
     )
 
 
+def _zone_holding_orders():  # type: ignore[no-untyped-def]
+    """Orders that keep their receiving zone: started and not yet picked up there. A waiting (PENDING) order holds
+    no zone; a stopped (FAILED) one keeps it until the operator acknowledged the alert, like its Pinky."""
+    acknowledged = exists().where(
+        TaskEventRecord.task_id == TaskRecord.id, TaskEventRecord.event_type == "ALERT_ACKNOWLEDGED"
+    )
+    picked_up = exists().where(
+        TaskStepRecord.task_id == TaskRecord.id, TaskStepRecord.step_type == "CONFIRM_PICKUP",
+        TaskStepRecord.status == StepStatus.SUCCEEDED.value,
+    )
+    started = tuple(status for status in _ORDER_HOLDING_STATUSES if status != TaskStatus.PENDING.value)
+    return select(TaskRecord.receiving_zone, TaskRecord.id).where(
+        TaskRecord.receiving_zone.is_not(None),
+        TaskRecord.order_items.is_not(None),
+        ~picked_up,
+        or_(
+            TaskRecord.status.in_(started),
+            (TaskRecord.status == TaskStatus.FAILED.value) & ~acknowledged,
+        ),
+    )
+
+
 class PinkyUnavailable(RuntimeError):
     """Every Pinky (or the requested one) already carries an unfinished order."""
+
+
+class ZoneUnavailable(RuntimeError):
+    """The receiving zone is kept by another started order."""
 
 
 class TaskStore:
@@ -757,11 +783,13 @@ class TaskStore:
         *,
         receiving_zone: str | None = None,
         defer_pinky: bool = False,
+        zone_steps: bool | None = None,
     ) -> dict[str, Any]:
         """Store a task. An order (order_items) is given a free Pinky, or the requested one if it is free.
 
         With `defer_pinky` the order waits in the intake without a Pinky; assign_pinky gives it one when it starts,
-        so the choice is made with the fleet state of that moment."""
+        so the choice is made with the fleet state of that moment. An order gets the receiving-zone steps when it
+        names its zone or with `zone_steps` (the zone is then given at start by assign_zone)."""
         created_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
         task = TaskRecord(
             id=f"TASK-{uuid.uuid4().hex[:8].upper()}",
@@ -792,8 +820,8 @@ class TaskStore:
                     task.pinky_id = free[0]
             if order_items is not None:
                 # An order runs its own step list; its Pinky steps are tagged once the Pinky is known.
-                step_definitions = order_step_definitions(order_items, task.pinky_id,
-                                                          receiving_zone=receiving_zone is not None)
+                with_zone = receiving_zone is not None if zone_steps is None else zone_steps
+                step_definitions = order_step_definitions(order_items, task.pinky_id, receiving_zone=with_zone)
             task.steps = [
                 TaskStepRecord(
                     id=f"STEP-{uuid.uuid4().hex[:12].upper()}",
@@ -856,6 +884,53 @@ class TaskStore:
                 occurred_at=now,
                 received_at=now,
                 payload={"pinky_id": pinky_id, "assignment": assignment},
+            ))
+            session.flush()
+            return self._present_with_history(task)
+
+    def busy_zones(self) -> dict[str, str]:
+        """Receiving zone ID -> the started order still using it (not yet picked up there)."""
+        with self._sessions() as session:
+            return {zone_id: task_id for zone_id, task_id in session.execute(_zone_holding_orders()).all()}
+
+    def zone_usage(self, since: str) -> dict[str, int]:
+        """Receiving zone ID -> orders started since `since` (ISO time) that went there."""
+        with self._sessions() as session:
+            rows = session.execute(
+                select(TaskRecord.receiving_zone).where(
+                    TaskRecord.receiving_zone.is_not(None), TaskRecord.order_items.is_not(None),
+                    TaskRecord.started_at.is_not(None), TaskRecord.started_at >= since,
+                )
+            ).scalars().all()
+        usage: dict[str, int] = {}
+        for zone_id in rows:
+            usage[zone_id] = usage.get(zone_id, 0) + 1
+        return usage
+
+    def assign_zone(self, task_id: str, zone_id: str, label: str, assignment: dict[str, object]) -> dict[str, Any]:
+        """Give a waiting order its receiving zone (and the zone's name as its destination), recording why."""
+        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        with self._claim_lock, self._sessions.begin() as session:
+            task = session.get(TaskRecord, task_id)
+            if task is None:
+                raise TaskNotFoundError(task_id)
+            if task.order_items is None or task.status != TaskStatus.PENDING.value:
+                raise InvalidStateTransition("접수 상태의 주문에만 수령 구역을 배정할 수 있습니다")
+            if task.receiving_zone is not None:
+                raise InvalidStateTransition(f"이미 수령 구역 {task.receiving_zone}이 정해진 주문입니다")
+            holder = dict(session.execute(_zone_holding_orders()).all()).get(zone_id)
+            if holder is not None:
+                raise ZoneUnavailable(f"수령 구역({label})은 주문 {holder}이 사용 중입니다")
+            task.receiving_zone = zone_id
+            task.destination = label
+            task.events.append(TaskEventRecord(
+                id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
+                event_type="ZONE_ASSIGNED",
+                previous_status=task.status,
+                new_status=task.status,
+                occurred_at=now,
+                received_at=now,
+                payload={"receiving_zone": zone_id, "label": label, "assignment": assignment},
             ))
             session.flush()
             return self._present_with_history(task)

@@ -21,6 +21,7 @@ from test_api_routes import ApiTestCase
 from test_order_flow import CARROT_APPLE, TERMINAL, devices
 
 ZONES = {"zone_a": ReceivingZone("zone_a", "수령 구역 A", ("1", "5", "9"))}
+TWO_ZONES = {**ZONES, "zone_b": ReceivingZone("zone_b", "수령 구역 B", ("1", "5", "7", "10"))}
 
 
 def finish(desk: OrderDesk, store: TaskStore, order_id: str, *, pickup: bool = True) -> dict:
@@ -70,11 +71,15 @@ class OrderDeskTest(unittest.TestCase):
             time.sleep(0.02)
         self.fail(f"order did not finish: {self.store.get_task(order_id)['status']}")
 
-    def test_received_order_waits_without_a_pinky(self) -> None:
-        order = self.desk.receive([{"object_class": "사과", "quantity": 2}], None)  # the only zone is the default
-        self.assertEqual((order["status"], order["pinky_id"], order["receiving_zone"]), ("PENDING", None, "zone_a"))
-        self.assertEqual((order["destination"], order["arm_job"]), ("수령 구역 A", "사과 2 적재"))
+    def test_received_order_waits_without_a_pinky_or_a_zone(self) -> None:
+        order = self.desk.receive([{"object_class": "사과", "quantity": 2}])  # the customer app sends no zone
+        self.assertEqual((order["status"], order["pinky_id"], order["receiving_zone"]), ("PENDING", None, None))
+        self.assertEqual((order["destination"], order["arm_job"]), ("수령 구역 (시작 때 배정)", "사과 2 적재"))
         self.assertEqual({step["robot_id"] for step in order["steps"] if step["step_type"] == "CONFIRM_DOCKING"}, {None})
+        # The zone steps are there from the start; the zone itself comes with the start.
+        self.assertIn("CONFIRM_PICKUP", [step["step_type"] for step in order["steps"]])
+        track = self.desk.track(order["id"])
+        self.assertEqual((track["zone"], track["zone_note"]), (None, "받을 곳은 로봇이 출발할 때 알려 드려요"))
         self.assertEqual([o["id"] for o in self.desk.pending()], [order["id"]])
         self.assertNotIn("10", self.store.busy_pinkies())  # a waiting order holds no Pinky
 
@@ -100,18 +105,61 @@ class OrderDeskTest(unittest.TestCase):
         self.assertEqual(preview["arms"]["summary"], "오른쪽 팔 2개 → 왼쪽 팔 1개")
         self.assertIsNone(self.store.get_task(order["id"])["pinky_id"])
 
-    def test_start_assigns_the_pinky_and_runs_the_order(self) -> None:
-        first = self.desk.receive(CARROT_APPLE, "zone_a")
-        second = self.desk.receive([{"object_class": "carrot", "quantity": 1}], "zone_a")
+    def use_two_zones(self) -> None:
+        self.desk, self.world, orchestrator = make_desk(self.store, zones=TWO_ZONES)
+        self.addCleanup(orchestrator.close)
+
+    def test_start_assigns_the_zone_and_the_pinky_and_runs_the_order(self) -> None:
+        self.use_two_zones()
+        first = self.desk.receive(CARROT_APPLE)
+        second = self.desk.receive([{"object_class": "carrot", "quantity": 1}])
+        self.assertEqual(self.desk.preview(first["id"])["zone"]["summary"], "수령 구역 A · 오늘 0회 · 경로 3곳")
         self.desk.start(first["id"])
-        self.desk.start(second["id"])  # P0 is held by the first order now
+        preview = self.desk.preview(second["id"])["zone"]  # zone A is the first order's until its pickup
+        self.assertEqual([(v["zone_id"], v["eligible"]) for v in preview["verdicts"]],
+                         [("zone_a", False), ("zone_b", True)])
+        self.desk.start(second["id"])  # P0 and zone A are held by the first order now
         done = finish(self.desk, self.store, first["id"])
-        self.assertEqual((done["status"], done["pinky_id"]), ("SUCCEEDED", "10"))
+        self.assertEqual((done["status"], done["pinky_id"], done["receiving_zone"], done["destination"]),
+                         ("SUCCEEDED", "10", "zone_a", "수령 구역 A"))
         assigned = [event for event in done["events"] if event["event_type"] == "PINKY_ASSIGNED"]
         self.assertEqual(assigned[0]["payload"]["assignment"]["pinky_id"], "10")
+        zoned = [event for event in done["events"] if event["event_type"] == "ZONE_ASSIGNED"]
+        self.assertEqual(zoned[0]["payload"]["assignment"]["zone_id"], "zone_a")
         self.assertEqual({step["robot_id"] for step in done["steps"] if step["step_type"] == "CONFIRM_DOCKING"},
                          {"pinky-10"})
-        self.assertEqual(finish(self.desk, self.store, second["id"])["pinky_id"], "11")
+        second_done = finish(self.desk, self.store, second["id"])
+        self.assertEqual((second_done["pinky_id"], second_done["receiving_zone"]), ("11", "zone_b"))
+        self.assertEqual(self.desk.track(second["id"])["zone"], "수령 구역 B")
+        # Both zones are free again; B was used as often as A today and has the longer route, so A comes first.
+        third = self.desk.receive([{"object_class": "apple", "quantity": 1}])
+        self.assertEqual(self.desk.preview(third["id"])["zone"]["zone_id"], "zone_a")
+
+    def test_a_zone_in_use_keeps_the_next_order_waiting(self) -> None:
+        first = self.desk.receive([{"object_class": "carrot", "quantity": 1}])
+        second = self.desk.receive([{"object_class": "apple", "quantity": 1}])
+        self.desk.start(first["id"])
+        with self.assertRaises(OrderDeskError) as busy:
+            self.desk.start(second["id"])
+        self.assertEqual((busy.exception.error_code, busy.exception.status), ("ZONE_BUSY", 409))
+        self.assertIn("수령 구역이 모두 사용 중이에요", str(busy.exception))
+        waiting = self.store.get_task(second["id"])
+        self.assertEqual((waiting["status"], waiting["pinky_id"], waiting["receiving_zone"]), ("PENDING", None, None))
+        finish(self.desk, self.store, first["id"])  # the pickup frees zone A
+        self.desk.start(second["id"])
+        self.assertEqual(finish(self.desk, self.store, second["id"])["receiving_zone"], "zone_a")
+
+    def test_an_operators_zone_is_kept(self) -> None:
+        self.use_two_zones()
+        first = self.desk.receive([{"object_class": "carrot", "quantity": 1}], "zone_b")  # A would rank first
+        second = self.desk.receive([{"object_class": "apple", "quantity": 1}], "zone_b")
+        self.assertEqual(first["destination"], "수령 구역 B")
+        self.assertEqual(self.desk.preview(first["id"])["zone"]["summary"], "수령 구역 B · 작업자 지정")
+        self.desk.start(first["id"])
+        with self.assertRaises(OrderDeskError) as busy:
+            self.desk.start(second["id"])  # zone A is free, but the operator's zone B is not swapped for it
+        self.assertEqual(busy.exception.error_code, "ZONE_BUSY")
+        self.assertEqual(finish(self.desk, self.store, first["id"])["receiving_zone"], "zone_b")
 
     def test_the_pinky_goes_to_the_receiving_zone_and_home_after_pickup(self) -> None:
         order = self.desk.receive([{"object_class": "carrot", "quantity": 1}], "zone_a")
@@ -208,15 +256,19 @@ class OrderApiTest(ApiTestCase):
     def test_order_window_round_trip(self) -> None:
         status, catalog, _ = self.request("GET", "/api/catalog")
         self.assertEqual((status, catalog["zones"][0]["label"]), (200, "수령 구역 A"))
-        status, created, _ = self.request("POST", "/api/orders", {"items": CARROT_APPLE, "receiving_zone": "zone_a"})
-        self.assertEqual(status, 201)
+        status, created, _ = self.request("POST", "/api/orders", {"items": CARROT_APPLE})  # no zone from the app
+        self.assertEqual((status, created["order"]["receiving_zone"]), (201, None))
         order_id = created["order"]["id"]
         status, pending, _ = self.request("GET", "/api/orders")
         self.assertEqual((status, [order["id"] for order in pending["orders"]]), (200, [order_id]))
         status, preview, _ = self.request("GET", f"/api/orders/{order_id}/assignment")
-        self.assertEqual((status, preview["pinky"]["pinky_id"]), (200, "10"))
+        self.assertEqual((status, preview["pinky"]["pinky_id"], preview["zone"]["zone_id"]), (200, "10", "zone_a"))
         status, started, _ = self.request("POST", f"/api/orders/{order_id}/start")
-        self.assertEqual((status, started["order"]["pinky_id"]), (202, "10"))
+        self.assertEqual((status, started["order"]["pinky_id"], started["order"]["receiving_zone"]),
+                         (202, "10", "zone_a"))
+        status, created, _ = self.request("POST", "/api/orders", {"items": [{"object_class": "apple", "quantity": 1}]})
+        status, body, _ = self.request("POST", f"/api/orders/{created['order']['id']}/start")
+        self.assertEqual((status, body["error_code"], body["zone"]["zone_id"]), (409, "ZONE_BUSY", None))
 
     def test_errors_carry_codes(self) -> None:
         status, body, _ = self.request("POST", "/api/orders", {"items": CARROT_APPLE, "note": "x"})

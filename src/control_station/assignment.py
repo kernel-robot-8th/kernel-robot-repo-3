@@ -132,6 +132,91 @@ def choose_pinky(
 
 
 # ---------------------------------------------------------------------------------------------------------------
+# Receiving zone
+# ---------------------------------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ZoneCandidate:
+    """One receiving zone at the moment an order starts (config/receiving-zones.json order)."""
+
+    zone_id: str
+    label: str
+    route_length: int  # waypoints the Pinky passes on its way there; fewer is a shorter trip
+    holding_order: str | None = None  # a started order not yet picked up there keeps the zone
+    uses_today: int = 0  # orders started today that went to this zone
+
+
+@dataclass(frozen=True)
+class ZoneVerdict:
+    zone_id: str
+    label: str
+    eligible: bool
+    reason: str
+    rank: int | None = None  # 1 = chosen; None when excluded
+    checks: tuple[dict[str, Any], ...] = ()
+    keys: dict[str, Any] | None = None  # what the ranking compared: uses today, route length, config order
+
+
+@dataclass(frozen=True)
+class ZoneAssignment:
+    zone_id: str | None
+    summary: str
+    verdicts: tuple[ZoneVerdict, ...]
+    operator_chosen: bool = False  # the zone came with the order (an operator's choice) and was only checked
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"zone_id": self.zone_id, "summary": self.summary, "operator_chosen": self.operator_chosen,
+                "verdicts": [asdict(v) for v in self.verdicts]}
+
+
+def _zone_reason(candidate: ZoneCandidate) -> str:
+    return f"오늘 {candidate.uses_today}회 · 경로 {candidate.route_length}곳"
+
+
+def _zone_verdicts(candidates: Sequence[ZoneCandidate]) -> tuple[tuple[ZoneVerdict, ...], list[ZoneCandidate]]:
+    order = {c.zone_id: index for index, c in enumerate(candidates)}
+    free = sorted((c for c in candidates if not c.holding_order),
+                  key=lambda c: (c.uses_today, c.route_length, order[c.zone_id]))
+    rank_of = {c.zone_id: index for index, c in enumerate(free, start=1)}
+    verdicts = tuple(
+        ZoneVerdict(
+            c.zone_id, c.label, not c.holding_order,
+            f"주문 {c.holding_order}이 사용 중" if c.holding_order else _zone_reason(c),
+            rank_of.get(c.zone_id),
+            ({"rule": "비어 있음(시작~수령 확인 중인 주문 없음)", "ok": not c.holding_order,
+              "detail": f"주문 {c.holding_order}" if c.holding_order else None},),
+            {"uses_today": c.uses_today, "route_length": c.route_length, "config_order": order[c.zone_id] + 1},
+        )
+        for c in candidates
+    )
+    return verdicts, free
+
+
+def choose_zone(candidates: Sequence[ZoneCandidate], *, requested: str | None = None) -> ZoneAssignment:
+    """Where the Pinky takes this order: a zone no started order is still using, then the one used least today,
+    then the shorter route, then config order. Two orders never share a zone, so a customer never meets someone
+    else's Pinky there.
+
+    `requested` is a zone that came with the order (an operator's choice): it is kept, never swapped for another,
+    and only checked to be free, like a customer who waits for the spot they picked."""
+    verdicts, free = _zone_verdicts(candidates)
+    if requested is not None:
+        wanted = next((c for c in candidates if c.zone_id == requested), None)
+        if wanted is None:
+            return ZoneAssignment(None, f"설정에 없는 수령 구역이에요 ({requested})", verdicts, operator_chosen=True)
+        if wanted.holding_order:
+            return ZoneAssignment(None, f"작업자가 고른 구역({wanted.label})은 주문 {wanted.holding_order}이 쓰고 있어요",
+                                  verdicts, operator_chosen=True)
+        return ZoneAssignment(wanted.zone_id, f"{wanted.label} · 작업자 지정", verdicts, operator_chosen=True)
+    if not free:
+        busy = ", ".join(f"{c.label}: 주문 {c.holding_order}" for c in candidates) or "설정된 구역 없음"
+        return ZoneAssignment(None, f"수령 구역이 모두 사용 중이에요 ({busy})", verdicts)
+    chosen = free[0]
+    return ZoneAssignment(chosen.zone_id, f"{chosen.label} · {_zone_reason(chosen)}", verdicts)
+
+
+# ---------------------------------------------------------------------------------------------------------------
 # OMX arms
 # ---------------------------------------------------------------------------------------------------------------
 
