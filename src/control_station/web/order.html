@@ -40,14 +40,15 @@
     </form>
 
     <section id="tracking" class="tracking" aria-labelledby="track-title" hidden>
-      <p class="track-eyebrow" id="trackPinky"></p>
+      <p class="track-eyebrow"><span id="trackPinky"></span><span id="trackShipment" class="track-shipment" hidden></span></p>
       <h2 id="track-title" class="track-title" tabindex="-1">주문을 받았어요</h2>
       <p id="trackDetail" class="track-detail" aria-live="polite"></p>
       <ol id="trackStages" class="track-stages" aria-label="주문 진행"></ol>
       <button id="pickupButton" type="button" class="primary pickup" hidden>받았어요</button>
       <p id="trackError" class="form-error" role="alert" hidden></p>
       <dl class="track-details">
-        <div><dt>물건</dt><dd><ul id="trackItems" class="done-items"></ul></dd></div>
+        <div id="trackShipmentRow" hidden><dt>이번 운송</dt><dd><ul id="trackShipmentItems" class="done-items"></ul></dd></div>
+        <div><dt id="trackItemsLabel">물건</dt><dd><ul id="trackItems" class="done-items"></ul></dd></div>
         <div><dt>받을 곳</dt><dd id="trackZone"></dd></div>
         <div><dt>주문 번호</dt><dd id="trackId"></dd></div>
       </dl>

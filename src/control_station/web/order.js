@@ -264,6 +264,15 @@ function renderTrack() {
     element('span', { class: 'track-dot', 'aria-hidden': 'true' }), element('span', { class: 'track-label' }, stage.label))));
   document.querySelector('#trackItems').replaceChildren(
     ...track.items.map((item) => element('li', {}, `${item.label} ${item.quantity}개`)));
+  // A larger order comes in several loads, one after another; each one is picked up on its own.
+  const split = (track.shipments || 1) > 1 && !['canceled', 'problem'].includes(track.stage);
+  const shipmentChip = document.querySelector('#trackShipment');
+  shipmentChip.hidden = !split;
+  shipmentChip.textContent = split ? `운송 ${track.shipment}/${track.shipments}` : '';
+  document.querySelector('#trackShipmentRow').hidden = !split || track.stage === 'done' || !track.shipment_items;
+  document.querySelector('#trackShipmentItems').replaceChildren(
+    ...(split && track.shipment_items ? track.shipment_items : []).map((item) => element('li', {}, `${item.label} ${item.quantity}개`)));
+  document.querySelector('#trackItemsLabel').textContent = split ? '주문 전체' : '물건';
   const trackZone = document.querySelector('#trackZone');
   trackZone.textContent = track.zone || '출발할 때 정해져요';
   trackZone.classList.toggle('pending', !track.zone);

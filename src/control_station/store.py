@@ -62,37 +62,63 @@ def pinky_robot_id(pinky_id: str | None) -> str | None:
 
 
 def order_step_definitions(
-    order_items: list[dict[str, object]], pinky_id: str | None, *, receiving_zone: bool = False
+    order_items: list[dict[str, object]], pinky_id: str | None, *, receiving_zone: bool = False,
+    shipments: list[list[dict[str, object]]] | None = None,
 ) -> list[tuple[str, str | None, dict[str, object] | None]]:
     """Steps of one order: (step_type, robot_id, detail). One PICK_ITEM + VERIFY_TRANSFER pair per object unit;
     the arm of each pair is filled in by PLAN_ARM_SEQUENCE after the shelf stock check. Without a Pinky yet (an
-    order waiting in the intake), the Pinky steps carry no robot until assign_pinky fills them in."""
+    order waiting in the intake), the Pinky steps carry no robot until assign_pinky fills them in.
+
+    `shipments` splits a larger order into Pinky loads (assignment.split_into_shipments, unit dicts). They run one
+    after another: the loading-to-parking steps repeat per shipment, each tagged {"shipment": k, "shipments": n},
+    and shipment k > 1 opens with START_SHIPMENT, which waits for the previous Pinky to be parked, picks the Pinky
+    for this load and sends it off. Only one Pinky drives at a time and the order keeps its receiving zone until
+    the last load is picked up. A shipped order needs the receiving-zone steps (each load is picked up there)."""
     pinky = pinky_robot_id(pinky_id)
     units = [
         {"object_class": item["object_class"], "unit": index, "of": item["quantity"]}
         for item in order_items
         for index in range(1, int(item["quantity"]) + 1)  # type: ignore[call-overload]
     ]
+    loads = [list(load) for load in shipments] if shipments else [units]
+    if len(loads) > 1 and not receiving_zone:
+        raise ValueError("an order split into shipments needs the receiving-zone steps")
     steps: list[tuple[str, str | None, dict[str, object] | None]] = [
         ("VALIDATE_ORDER", None, None),
         ("CHECK_SHELF_STOCK", None, None),
         ("PLAN_ARM_SEQUENCE", None, None),
-        ("WAIT_PINKY_ARRIVAL", pinky, None),
-        ("CONFIRM_DOCKING", pinky, None),
     ]
-    for unit in units:
-        steps.append(("PICK_ITEM", None, dict(unit)))
-        steps.append(("VERIFY_TRANSFER", None, dict(unit)))
-    steps += [
-        ("VERIFY_LOAD_TOTAL", None, None),
-        ("NOTIFY_PINKY_RECEIVED", pinky, None),
-    ]
-    if receiving_zone:
-        # The Pinky carries the order on to the receiving zone, waits for the customer, then returns home.
-        steps += [("WAIT_AT_RECEIVING_ZONE", pinky, None), ("CONFIRM_PICKUP", pinky, None),
-                  ("WAIT_PINKY_PARKED", pinky, None)]
+    for number, load in enumerate(loads, start=1):
+        tag: dict[str, object] | None = {"shipment": number, "shipments": len(loads)} if len(loads) > 1 else None
+        robot = pinky if number == 1 else None  # later loads get their Pinky when they start
+        if number > 1:
+            steps.append(("START_SHIPMENT", None, dict(tag or {})))
+        steps += [("WAIT_PINKY_ARRIVAL", robot, _tagged(None, tag)), ("CONFIRM_DOCKING", robot, _tagged(None, tag))]
+        for unit in load:
+            steps.append(("PICK_ITEM", None, _tagged(unit, tag)))
+            steps.append(("VERIFY_TRANSFER", None, _tagged(unit, tag)))
+        steps += [
+            ("VERIFY_LOAD_TOTAL", None, _tagged(None, tag)),
+            ("NOTIFY_PINKY_RECEIVED", robot, _tagged(None, tag)),
+        ]
+        if receiving_zone:
+            # The Pinky carries the load on to the receiving zone, waits for the customer, then returns home.
+            steps += [("WAIT_AT_RECEIVING_ZONE", robot, _tagged(None, tag)), ("CONFIRM_PICKUP", robot, _tagged(None, tag)),
+                      ("WAIT_PINKY_PARKED", robot, _tagged(None, tag))]
     steps.append(("FINALIZE_TASK", None, None))
     return steps
+
+
+def _tagged(detail: dict[str, object] | None, tag: dict[str, object] | None) -> dict[str, object] | None:
+    if detail is None and tag is None:
+        return None
+    return {**(detail or {}), **(tag or {})}
+
+
+def shipment_of(step: dict[str, Any] | Any) -> int:
+    """Which shipment (1, 2, ...) a step belongs to; 1 for orders that are not split and for shared steps."""
+    detail = step.get("detail") if isinstance(step, dict) else getattr(step, "detail", None)
+    return int((detail or {}).get("shipment") or 1)
 
 
 TASK_TRANSITIONS = {
@@ -200,20 +226,21 @@ def _pinky_holding_orders():  # type: ignore[no-untyped-def]
 
 
 def _zone_holding_orders():  # type: ignore[no-untyped-def]
-    """Orders that keep their receiving zone: started and not yet picked up there. A waiting (PENDING) order holds
-    no zone; a stopped (FAILED) one keeps it until the operator acknowledged the alert, like its Pinky."""
+    """Orders that keep their receiving zone: started and not yet picked up there (every shipment of a split
+    order: the zone is kept between them). A waiting (PENDING) order holds no zone; a stopped (FAILED) one keeps it
+    until the operator acknowledged the alert, like its Pinky."""
     acknowledged = exists().where(
         TaskEventRecord.task_id == TaskRecord.id, TaskEventRecord.event_type == "ALERT_ACKNOWLEDGED"
     )
-    picked_up = exists().where(
+    pickup_left = exists().where(
         TaskStepRecord.task_id == TaskRecord.id, TaskStepRecord.step_type == "CONFIRM_PICKUP",
-        TaskStepRecord.status == StepStatus.SUCCEEDED.value,
+        TaskStepRecord.status != StepStatus.SUCCEEDED.value,
     )
     started = tuple(status for status in _ORDER_HOLDING_STATUSES if status != TaskStatus.PENDING.value)
     return select(TaskRecord.receiving_zone, TaskRecord.id).where(
         TaskRecord.receiving_zone.is_not(None),
         TaskRecord.order_items.is_not(None),
-        ~picked_up,
+        pickup_left,
         or_(
             TaskRecord.status.in_(started),
             (TaskRecord.status == TaskStatus.FAILED.value) & ~acknowledged,
@@ -786,6 +813,7 @@ class TaskStore:
         defer_pinky: bool = False,
         zone_steps: bool | None = None,
         idempotency: tuple[str, str] | None = None,
+        shipments: list[list[dict[str, object]]] | None = None,
     ) -> dict[str, Any]:
         """Store a task. An order (order_items) is given a free Pinky, or the requested one if it is free.
 
@@ -826,7 +854,8 @@ class TaskStore:
             if order_items is not None:
                 # An order runs its own step list; its Pinky steps are tagged once the Pinky is known.
                 with_zone = receiving_zone is not None if zone_steps is None else zone_steps
-                step_definitions = order_step_definitions(order_items, task.pinky_id, receiving_zone=with_zone)
+                step_definitions = order_step_definitions(order_items, task.pinky_id, receiving_zone=with_zone,
+                                                          shipments=shipments)
             task.steps = [
                 TaskStepRecord(
                     id=f"STEP-{uuid.uuid4().hex[:12].upper()}",
@@ -890,7 +919,7 @@ class TaskStore:
                 raise PinkyUnavailable(f"핑키 {pinky_id}는 끝나지 않은 주문 {holder}가 있습니다")
             task.pinky_id = pinky_id
             for step in task.steps:
-                if step.step_type in PINKY_STEP_TYPES:
+                if step.step_type in PINKY_STEP_TYPES and shipment_of(step) == 1:  # later loads choose when they start
                     step.robot_id = pinky_robot_id(pinky_id)
             task.events.append(TaskEventRecord(
                 id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
@@ -899,7 +928,39 @@ class TaskStore:
                 new_status=task.status,
                 occurred_at=now,
                 received_at=now,
-                payload={"pinky_id": pinky_id, "assignment": assignment},
+                payload={"pinky_id": pinky_id, "assignment": assignment, "shipment": 1},
+            ))
+            session.flush()
+            return self._present_with_history(task)
+
+    def assign_shipment_pinky(self, task_id: str, shipment: int, pinky_id: str,
+                              assignment: dict[str, object]) -> dict[str, Any]:
+        """Give the next shipment of a running order its Pinky: the order now holds that Pinky (it held the previous
+        one, which is parked again), its steps of that shipment are tagged with it, and the choice is recorded."""
+        if pinky_id not in PINKY_IDS:
+            raise ValueError(f"unknown Pinky {pinky_id}")
+        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        with self._claim_lock, self._sessions.begin() as session:
+            task = session.get(TaskRecord, task_id)
+            if task is None:
+                raise TaskNotFoundError(task_id)
+            if task.order_items is None or task.status not in {TaskStatus.RUNNING.value, TaskStatus.VALIDATING.value}:
+                raise InvalidStateTransition("진행 중인 주문의 다음 운송분에만 핑키를 배정할 수 있습니다")
+            holder = dict(session.execute(_pinky_holding_orders()).all()).get(pinky_id)
+            if holder is not None and holder != task_id:
+                raise PinkyUnavailable(f"핑키 {pinky_id}는 끝나지 않은 주문 {holder}가 있습니다")
+            task.pinky_id = pinky_id
+            for step in task.steps:
+                if step.step_type in PINKY_STEP_TYPES and shipment_of(step) == shipment:
+                    step.robot_id = pinky_robot_id(pinky_id)
+            task.events.append(TaskEventRecord(
+                id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
+                event_type="PINKY_ASSIGNED",
+                previous_status=task.status,
+                new_status=task.status,
+                occurred_at=now,
+                received_at=now,
+                payload={"pinky_id": pinky_id, "assignment": assignment, "shipment": shipment},
             ))
             session.flush()
             return self._present_with_history(task)
