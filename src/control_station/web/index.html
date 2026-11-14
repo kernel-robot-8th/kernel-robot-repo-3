@@ -8,7 +8,9 @@
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
   <script src="/route-strip.js" defer></script>
+  <script src="/pinky-map.js" defer></script>
   <script src="/pinky.js" defer></script>
+  <script src="/pinky-detail.js" defer></script>
   <script src="/inventory.js" defer></script>
 </head>
 <body>
@@ -74,15 +76,31 @@
 
       <div class="view" id="view-pinky" hidden>
     <section id="pinkySummary" class="summary-card" aria-labelledby="pinkyLinkTitle">
-      <div id="pinkyLink" class="pinky-link">
-        <span class="pinky-link-dot" aria-hidden="true"></span>
-        <div><strong id="pinkyLinkTitle" class="summary-title">핑키 관제를 확인하고 있어요</strong><small id="pinkyLinkDetail">핑키 상태를 불러오는 중…</small></div>
+      <div class="pinky-summary-grid">
+        <div class="pinky-summary-main">
+          <div class="pinky-summary-head">
+            <div id="pinkyLink" class="pinky-link">
+              <span class="pinky-link-dot" aria-hidden="true"></span>
+              <div><strong id="pinkyLinkTitle" class="summary-title">핑키 관제를 확인하고 있어요</strong><small id="pinkyLinkDetail">핑키 상태를 불러오는 중…</small></div>
+            </div>
+            <button type="button" id="pinkyPasswordOpen" class="link-button">SSH 비밀번호 보내기</button>
+          </div>
+          <dl class="summary-stats">
+            <div class="stat" id="pinkyStatConnected"><dt>연결된 핑키</dt><dd>–</dd></div>
+            <div class="stat" id="pinkyStatReady"><dt>주행 가능</dt><dd>–</dd></div>
+            <div class="stat" id="pinkyStatStopping"><dt>정지 적용 중</dt><dd>–</dd></div>
+          </dl>
+          <p id="pinkyMapOff" class="route-off"></p>
+          <p id="pinkyMapNote" class="gentle-note" hidden></p>
+        </div>
+        <figure class="map-figure">
+          <button type="button" id="pinkyMapOpen" class="map-open" aria-label="전체 지도 크게 보기">
+            <svg id="pinkyMapSmall" class="pinky-map compact" role="img" aria-label="핑키 지도"></svg>
+            <span id="pinkyMapSmallEmpty" class="map-empty">지도를 불러오는 중…</span>
+          </button>
+          <figcaption><strong>전체 지도</strong><span id="pinkyMapTag"></span><span class="map-hint">누르면 크게 볼 수 있어요</span></figcaption>
+        </figure>
       </div>
-      <dl class="summary-stats">
-        <div class="stat" id="pinkyStatConnected"><dt>연결된 핑키</dt><dd>–</dd></div>
-        <div class="stat" id="pinkyStatReady"><dt>주행 가능</dt><dd>–</dd></div>
-        <div class="stat" id="pinkyStatStopping"><dt>정지 적용 중</dt><dd>–</dd></div>
-      </dl>
       <div class="route-strip">
         <div class="route-strip-head"><h3>경로에서 지금 위치</h3><span class="updated">축척 없음, 경로 순서만</span></div>
         <div id="routeScroll" class="route-scroll" tabindex="0" aria-label="경로 노선도, 옆으로 넘겨 볼 수 있어요">
@@ -92,24 +110,16 @@
       </div>
     </section>
     <section aria-labelledby="pinky-cards-title">
-      <div class="section-heading"><h2 id="pinky-cards-title">핑키 상태</h2><span id="pinkyCount" class="updated"></span></div>
+      <div class="section-heading"><h2 id="pinky-cards-title">핑키</h2><span class="updated">카드를 누르면 센서와 작업이 열려요</span></div>
       <div id="pinkyCards" class="pinky-grid"><p class="loading">핑키 상태를 불러오는 중…</p></div>
-      <p class="note">정지는 핑키 관제를 거쳐 보내는 소프트웨어 정지 요청이며 확인 창 없이 바로 보냅니다. <strong>접수</strong>는 핑키 관제가 요청을 받았다는 뜻일 뿐이니, 핑키가 실제로 멈췄는지는 카드의 안전 감시 상태와 현장에서 확인하세요. 비상정지 스위치를 대신하지 않습니다.</p>
-    </section>
-    <section aria-labelledby="pinky-password-title">
-      <div class="section-heading"><h2 id="pinky-password-title">핑키 관제 접속</h2><span class="updated">1.5초마다 확인해요</span></div>
-      <form id="pinkyPasswordForm" class="pinky-password card" method="post" autocomplete="off">
-        <label for="pinkyPassword">핑키 SSH 비밀번호</label>
-        <div class="pinky-password-row">
-          <input id="pinkyPassword" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="256" required>
-          <button type="submit">보내기</button>
-        </div>
-        <p id="pinkyPasswordMessage" class="pinky-password-message" role="status">핑키 관제가 핑키에 SSH로 접속할 때 씁니다. 이 관제는 저장하지 않고 그대로 넘깁니다.</p>
-      </form>
+      <p class="note">정지는 핑키 관제를 거쳐 보내는 소프트웨어 정지 요청이며 확인 창 없이 바로 보냅니다. <strong>접수</strong>는 핑키 관제가 요청을 받았다는 뜻일 뿐이니, 핑키가 실제로 멈췄는지는 상세의 안전 감시 상태와 현장에서 확인하세요. 비상정지 스위치를 대신하지 않습니다.</p>
     </section>
     <section aria-labelledby="pinky-log-title">
-      <div class="section-heading"><h2 id="pinky-log-title">최근 명령</h2><span class="updated">최근 30건, 관제 서버를 다시 켜면 비워져요</span></div>
-      <ol id="pinkyLog" class="pinky-log"><li class="pinky-log-empty">보낸 명령이 없습니다.</li></ol>
+      <details class="pinky-log-box">
+        <summary><h2 id="pinky-log-title">최근 명령</h2><span id="pinkyLogCount" class="updated"></span></summary>
+        <ol id="pinkyLog" class="pinky-log"><li class="pinky-log-empty">보낸 명령이 없습니다.</li></ol>
+        <p class="note">최근 30건이며 관제 서버 메모리에만 있어 다시 켜면 비워집니다.</p>
+      </details>
     </section>
       </div>
 
@@ -315,5 +325,69 @@
     </main>
   </div>
   <div id="toastStack" class="toast-stack" role="status" aria-live="polite"></div>
+
+  <div id="overlayScrim" class="overlay-scrim" hidden></div>
+
+  <aside id="pinkySheet" class="overlay-panel pinky-sheet" role="dialog" aria-labelledby="pinkySheetTitle" tabindex="-1" hidden>
+    <header class="panel-head">
+      <h2 id="pinkySheetTitle">핑키</h2>
+      <button type="button" class="secondary panel-close" data-overlay-close data-overlay-focus>닫기</button>
+    </header>
+    <div id="pinkySheetBody" class="panel-body"></div>
+  </aside>
+
+  <div id="mapViewer" class="overlay-panel map-viewer" role="dialog" aria-labelledby="mapViewerTitle" tabindex="-1" hidden>
+    <header class="panel-head">
+      <h2 id="mapViewerTitle">전체 지도</h2><span id="mapViewerTag"></span>
+      <button type="button" class="secondary panel-close" data-overlay-close data-overlay-focus>닫기</button>
+    </header>
+    <div class="map-viewer-body">
+      <div class="map-viewer-map">
+        <svg id="pinkyMapLarge" class="pinky-map" role="img" aria-label="핑키 지도"></svg>
+        <p id="pinkyMapLargeEmpty" class="map-empty" hidden></p>
+      </div>
+      <div class="map-viewer-side">
+        <h3>핑키 위치</h3>
+        <ul id="mapPinkyList" class="map-pinky-list"></ul>
+        <p id="mapViewerOff" class="route-off"></p>
+        <p id="mapViewerNote" class="gentle-note" hidden></p>
+        <h3>지도 표시</h3>
+        <ul class="map-legend">
+          <li><i class="swatch free"></i>지나갈 수 있는 곳</li>
+          <li><i class="swatch occupied"></i>벽·물체</li>
+          <li><i class="swatch unknown"></i>모르는 곳</li>
+          <li><i class="swatch keepout"></i>금지 구역</li>
+          <li><i class="swatch spot"></i>주차 자리</li>
+          <li><i class="swatch station"></i>5번 적재</li>
+          <li><i class="swatch junction"></i>교차로 7</li>
+          <li><i class="swatch waypoint"></i>웨이포인트</li>
+          <li><i class="swatch zone"></i>수령 구역</li>
+          <li><i class="swatch pinky"></i>핑키, 화살표가 향한 방향</li>
+        </ul>
+        <p class="note">지도 좌표(m)를 그대로 그렸고 위쪽이 지도의 +y 방향입니다.</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="passwordPrompt" class="overlay-panel password-prompt" role="dialog" aria-labelledby="passwordPromptTitle" tabindex="-1" hidden>
+    <form id="pinkyPasswordForm" method="post" autocomplete="off" novalidate>
+      <h2 id="passwordPromptTitle">SSH 비밀번호가 필요해요</h2>
+      <p id="passwordPromptReason" class="prompt-reason">핑키 관제가 핑키에 SSH로 접속할 때 씁니다. 이 관제는 저장하지 않고 그대로 넘깁니다.</p>
+      <label for="pinkyPassword" class="visually-hidden">핑키 SSH 비밀번호</label>
+      <input id="pinkyPassword" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="256" placeholder="SSH 비밀번호" data-overlay-focus>
+      <p id="pinkyPasswordMessage" class="pinky-password-message" role="status"></p>
+      <div class="prompt-actions">
+        <button type="button" class="secondary" data-overlay-close>닫기</button>
+        <button type="submit">보내기</button>
+      </div>
+      <button type="button" id="passwordRetry" class="prompt-retry" hidden></button>
+    </form>
+  </div>
+
+  <datalist id="waypointLabelOptions">
+    <option value="1"></option><option value="2"></option><option value="3"></option><option value="4"></option>
+    <option value="5"></option><option value="6"></option><option value="7"></option><option value="8"></option>
+    <option value="9"></option><option value="수령 구역 A"></option>
+  </datalist>
 </body>
 </html>

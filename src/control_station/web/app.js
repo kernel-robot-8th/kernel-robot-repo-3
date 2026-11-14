@@ -51,10 +51,15 @@ const controlModeLabels = {
   ros2: 'ROS 2 상태 관측',
 };
 
+let activeView = 'flow';
+
 // The view lives in the address (#pinky, #inventory…), so a reload or a shared link opens the same view.
 // Other scripts follow the switch through the `viewchange` event instead of listening to the menu.
 function showView(requested) {
   const selected = viewNames[requested] ? requested : 'flow';
+  activeView = selected;
+  document.body.dataset.view = selected;
+  closeAllOverlays();
   views.forEach((view) => { view.hidden = view.id !== `view-${selected}`; });
   navItems.forEach((item) => {
     const active = item.dataset.view === selected;
@@ -76,6 +81,53 @@ function keepInNavView(item) {
 }
 
 navItems.forEach((item) => item.addEventListener('click', () => showView(item.dataset.view)));
+
+// ---- panels over the page (Pinky detail, enlarged map, password prompt) ----
+// They open below the sticky header, so 핑키 전체 정지 stays visible and usable while one is open. The dim area
+// or Esc closes the top one; focus goes back to what opened it.
+const overlayScrim = document.querySelector('#overlayScrim');
+const pageHeader = document.querySelector('.header');
+const overlayStack = [];  // [{ panel, opener }], last on top
+
+function placeOverlays() {
+  const top = Math.max(0, Math.round(pageHeader.getBoundingClientRect().bottom));
+  document.documentElement.style.setProperty('--overlay-top', `${top}px`);
+}
+
+function openOverlay(panel, opener = document.activeElement) {
+  if (overlayStack.some((entry) => entry.panel === panel)) return;
+  placeOverlays();
+  overlayStack.push({ panel, opener });
+  panel.style.zIndex = String(30 + overlayStack.length);
+  panel.hidden = false;
+  overlayScrim.hidden = false;
+  (panel.querySelector('[data-overlay-focus]') || panel).focus();
+}
+
+function closeOverlay(panel) {
+  const index = overlayStack.findIndex((entry) => entry.panel === panel);
+  if (index < 0) return;
+  const [{ opener }] = overlayStack.splice(index, 1);
+  panel.hidden = true;
+  overlayScrim.hidden = !overlayStack.length;
+  panel.dispatchEvent(new Event('overlayclose'));
+  if (opener?.isConnected) opener.focus();
+}
+
+function closeAllOverlays() {
+  [...overlayStack].reverse().forEach(({ panel }) => closeOverlay(panel));
+}
+
+overlayScrim.addEventListener('click', () => { if (overlayStack.length) closeOverlay(overlayStack.at(-1).panel); });
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && overlayStack.length) closeOverlay(overlayStack.at(-1).panel);
+});
+document.addEventListener('click', (event) => {
+  const close = event.target.closest('[data-overlay-close]');
+  if (close) closeOverlay(close.closest('.overlay-panel'));
+});
+window.addEventListener('scroll', () => { if (overlayStack.length) placeOverlays(); }, { passive: true });
+window.addEventListener('resize', () => { if (overlayStack.length) placeOverlays(); });
 window.addEventListener('hashchange', () => showView(window.location.hash.slice(1)));
 
 function escapeHtml(value) {
