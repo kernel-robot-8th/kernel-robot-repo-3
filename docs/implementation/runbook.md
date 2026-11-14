@@ -32,12 +32,13 @@ ros2 launch parking_vision_ros ceiling_parking.launch.py repository_root:=$PWD s
 |---|---|
 | `CONTROL_STATION_PINKY_FLEET_URL` | 핑키 팀 관제 주소(예: `http://<핑키 관제 PC>:8765`). 없으면 모의 핑키 |
 | `CONTROL_STATION_ORDER_COUNTS=camera` | 선반 재고·핑키 위 개수를 카메라 YOLO로 셈. 없으면 모의 세계 |
+| `CONTROL_STATION_ORDER_REAL_ARM=1` | 주문의 집기를 실제 팔로: 계획된 팔에 `PICK_WITH_POLICY`(팔마다 `scripts/omx_lerobot_worker.py --robot-id arm-0N` 실행 필요). 카메라 개수가 꼭 있어야 하며, 모의 개수면 팔을 움직이기 전에 멈춤 |
 | `CONTROL_STATION_ORDER_PARKING=mock` | 주차 위치가 설정돼 있어도 핑키 도착을 모의로 판정 |
 | `CONTROL_STATION_LOAD_CAMERA`, `CONTROL_STATION_PINKY_TRAY_REGION`, `CONTROL_STATION_PINKY_TRAY_MARGIN`, `CONTROL_STATION_LOAD_IGNORE_CLASSES` | 핑키 위 물건을 셀 카메라(기본 `head_camera`), 쟁반 영역(픽셀 `x1,y1,x2,y2`, 없으면 등록 마커 둘레 1.6변), 세지 않을 클래스(기본 `car`) |
 | `CONTROL_STATION_ARRIVAL_TIMEOUT_S` | 핑키 도착을 기다리는 최대 시간(기본 600초) |
 | `CONTROL_STATION_MOCK_PINKY_DRIVE_S`, `CONTROL_STATION_MOCK_PICK_S`, `CONTROL_STATION_MOCK_SHELF_STOCK`, `CONTROL_STATION_MOCK_FAULTS` | 모의 핑키 이동 시간, 모의 집기 시간, 모의 선반 재고, 처음부터 넣을 모의 사고 |
 
-팔 집기는 아직 모의라서 실물 팔은 움직이지 않습니다. 카메라로 개수를 셀 때는 집기 단계 동안 사람이 물체를 핑키 위로 옮겨야 옮김 확인을 통과합니다.
+팔 집기는 기본이 모의라서 실물 팔은 움직이지 않습니다. `CONTROL_STATION_ORDER_REAL_ARM=1`이면 실제 팔이 움직이고, 이때는 카메라 개수가 필요합니다. 모의 팔에 카메라 개수를 쓸 때는 집기 단계 동안 사람이 물체를 핑키 위로 옮겨야 옮김 확인을 통과합니다.
 
 ## 모의 작업 흐름 실행
 

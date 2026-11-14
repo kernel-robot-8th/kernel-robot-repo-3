@@ -67,11 +67,13 @@
 | 핑키 도착(주차 판정) | `CONTROL_STATION_PARKING_SPOT` 설정 + 주차 노드 실행 | 모의(`CONTROL_STATION_ORDER_PARKING=mock`이면 강제 모의) |
 | 핑키 단계·신호 | `CONTROL_STATION_PINKY_FLEET_URL=http://<핑키 관제 PC>:8765` | 모의 세계 |
 | 선반·핑키 위 개수 | `CONTROL_STATION_ORDER_COUNTS=camera` | 모의 세계 |
-| 팔 집기 | 아직 없음 (다음 작업) | 모의 세계 |
+| 팔 집기 | `CONTROL_STATION_ORDER_REAL_ARM=1` + 팔마다 워커 실행. 개수도 카메라(`CONTROL_STATION_ORDER_COUNTS=camera`)여야 함 | 모의 세계 |
 
 모의 결과는 이벤트와 결과에 `simulated: true`로 남습니다. 화면에는 "모의" 표시가 붙습니다.
 
-카메라로 개수를 셀 때, 팔 집기는 아직 모의라는 점을 주의해야 합니다. 집기 단계 동안 사람이 물체를 선반에서 핑키 위로 옮겨야 옮김 확인을 통과합니다. 집기 단계 시간은 `CONTROL_STATION_MOCK_PICK_S`(기본 4초)로 늘릴 수 있습니다.
+실제 팔로 집을 때(`CONTROL_STATION_ORDER_REAL_ARM=1`) 집기 단계는 계획된 팔에 `PICK_WITH_POLICY`를 보내고, 그 팔에서 녹화한 정책으로 그 팔의 워커가 끝내기를 기다립니다(정책 최대 시간 + 180초). 워커는 팔이 쉬는 자세로 돌아온 것까지만 알 수 있어 명령을 `UNKNOWN`(`PLACE_NOT_VERIFIED`)으로 끝내고, 옮김 확인 단계가 카메라 개수로 선반 −1·핑키 +1을 보면 그 명령을 닫습니다(`arm_pick.py`). 개수가 모의면 팔을 움직이기 전에 `TRANSFER_EVIDENCE_REQUIRED`로 멈춥니다. 옮김을 확인하지 못하면 명령은 `UNKNOWN`으로 남고, 수동 조작 화면에서 현장을 확인하고 닫아야 그 팔이 다음 명령을 받습니다.
+
+모의 팔에 카메라 개수를 쓸 때는 집기 단계 동안 사람이 물체를 선반에서 핑키 위로 옮겨야 옮김 확인을 통과합니다. 집기 단계 시간은 `CONTROL_STATION_MOCK_PICK_S`(기본 4초)로 늘릴 수 있습니다.
 
 ## 핑키 관제 연결 (HTTP)
 

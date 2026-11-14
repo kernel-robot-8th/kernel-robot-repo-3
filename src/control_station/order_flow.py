@@ -74,6 +74,10 @@ class OrderDevices:
     dispatch: Callable[[str, list[str] | None], Any] | None = None
     # Pickup confirmed at the receiving zone: tell the Pinky to drive home (pinky id, mission token).
     mission_complete: Callable[[str, str | None], dict[str, Any]] | None = None
+    # True when `pick` moves a real arm (arm_pick.ArmQueuePick). Each transfer must then be counted by cameras.
+    pick_is_real: bool = False
+    # After VERIFY_TRANSFER saw the object move: (pick result, evidence) closes the arm's unverified command.
+    pick_settle: Callable[[dict[str, Any], dict[str, Any]], None] | None = None
 
 
 def _label(policies: Any, object_class: str) -> str:
@@ -121,6 +125,7 @@ class OrderFlow:
         self.held_by_stopped: dict[str, str] = {}
         self._tokens: dict[str, str | None] = {}
         self._before: dict[str, dict[str, int]] = {}
+        self._picked: dict[str, dict[str, Any]] = {}  # task id -> the last pick's result, settled by VERIFY_TRANSFER
         self._guard = threading.Lock()
 
     # ---- orchestrator hooks ----
@@ -142,6 +147,7 @@ class OrderFlow:
                     self.station_owner = None
             self._tokens.pop(task_id, None)
             self._before.pop(task_id, None)
+            self._picked.pop(task_id, None)
 
     def free_spot(self, task_id: str) -> bool:
         """The operator acknowledged a stopped order: its Pinky no longer blocks the loading spot."""
@@ -370,7 +376,13 @@ class OrderFlow:
         unit = ctx.step["detail"] or {}
         if "arm_id" not in unit:
             raise OrderFlowError("PLAN_MISSING", "이 물체에 배정된 팔이 없습니다")
-        on_shelves, on_pinky, _, _ = self._counts(ctx, unit["object_class"])
+        on_shelves, on_pinky, shelf, load = self._counts(ctx, unit["object_class"])
+        if self.devices.pick_is_real and (shelf.get("simulated") or load.get("simulated")):
+            # A real arm moves a real object; mock counts cannot see it, so the transfer could not be checked and
+            # the arm's next pick would follow an unverified one. Stop before the arm moves.
+            raise OrderFlowError("TRANSFER_EVIDENCE_REQUIRED",
+                                 "실제 팔로 집으려면 선반과 핑키 위 개수를 카메라로 세야 해요(지금은 모의 개수). "
+                                 "CONTROL_STATION_ORDER_COUNTS=camera로 켜 주세요.", "cameras")
         self._before[ctx.task["id"]] = {"shelf": on_shelves, "pinky": on_pinky}
         ctx.record("ARM_PICK_STARTED", {"arm_id": unit["arm_id"], "unit": unit,
                                         "message": f"{unit['arm_label']}: {unit['label']} #{unit['unit']} 집기 시작"})
@@ -380,6 +392,7 @@ class OrderFlow:
         )
         if result is None:
             return None
+        self._picked[ctx.task["id"]] = result
         return {**result, "unit": unit}
 
     def _verify_transfer(self, ctx: StepContext) -> dict[str, Any]:
@@ -404,6 +417,10 @@ class OrderFlow:
             raise OrderFlowError(verdict, f"{name}: 선반에도 핑키에도 없습니다(분실). 팔 주변 바닥과 핑키를 확인하세요.", "cameras")
         if verdict != "TRANSFERRED":
             raise OrderFlowError(verdict, f"{name}: 선반 {shelf_delta:+d}, 핑키 {pinky_delta:+d}로 옮김을 판단할 수 없습니다.", "cameras")
+        picked = self._picked.pop(ctx.task["id"], None)
+        if picked is not None and self.devices.pick_settle is not None:
+            self.devices.pick_settle(picked, {"task_id": ctx.task["id"], "source": load.get("source"),
+                                              "simulated": bool(load.get("simulated") or shelf.get("simulated"))})
         return {"source": load.get("source"), "outcome": "TRANSFERRED", "unit": unit, "simulated": load.get("simulated", False)}
 
     def _verify_load_total(self, ctx: StepContext) -> dict[str, Any]:
