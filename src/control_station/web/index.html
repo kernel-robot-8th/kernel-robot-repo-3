@@ -6,22 +6,25 @@
   <link rel="icon" href="data:,">
   <title>로봇 관제 서버</title>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/dashboard.css">
   <script src="/app.js" defer></script>
   <script src="/route-strip.js" defer></script>
   <script src="/pinky-map.js" defer></script>
   <script src="/pinky.js" defer></script>
   <script src="/pinky-detail.js" defer></script>
   <script src="/inventory.js" defer></script>
+  <script src="/dashboard.js" defer></script>
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand"><h1>로봇 관제</h1><p>로컬 제어 서버</p></div>
       <nav class="main-nav" aria-label="주 메뉴">
-        <button type="button" class="nav-item active" data-view="flow" aria-current="page"><span>주문 진행</span><span id="intakeBadge" class="nav-badge" hidden></span></button>
+        <button type="button" class="nav-item active" data-view="dashboard" aria-current="page">종합</button>
+        <button type="button" class="nav-item" data-view="flow"><span>주문 진행</span><span id="intakeBadge" class="nav-badge" hidden></span></button>
         <button type="button" class="nav-item" data-view="pinky">핑키</button>
         <button type="button" class="nav-item" data-view="inventory">재고</button>
-        <button type="button" class="nav-item" data-view="overview">현황</button>
+        <button type="button" class="nav-item" data-view="overview">장비·카메라</button>
         <button type="button" class="nav-item" data-view="manual">수동 조작</button>
         <button type="button" class="nav-item" data-view="tasks">작업 이력</button>
         <button type="button" class="nav-item" data-view="api">API</button>
@@ -31,11 +34,52 @@
 
     <main class="main-content">
       <header class="header">
-        <div><h2 id="viewTitle">주문 진행</h2><p id="updatedAt" class="updated">갱신 전</p></div>
+        <div><h2 id="viewTitle">종합</h2><p id="updatedAt" class="updated">갱신 전</p></div>
         <button type="button" id="pinkyStopAll" class="stop-all" title="확인 창 없이 핑키 3대에 바로 정지 요청을 보냅니다">핑키 전체 정지</button>
       </header>
 
-      <div class="view" id="view-flow">
+      <div class="view" id="view-dashboard">
+    <div class="dash">
+      <section id="dashNow" class="dash-now" aria-live="polite">
+        <span class="dash-now-mark" aria-hidden="true"></span>
+        <div class="dash-now-text"><p id="dashNowTitle" class="dash-now-title">상태를 모으고 있어요</p><p id="dashNowDetail" class="dash-now-detail"></p></div>
+        <a class="dash-app-link" href="/order" target="_blank" rel="noopener">고객 주문 앱 열기</a>
+      </section>
+      <div id="dashTiles" class="dash-tiles" aria-label="한눈에 보는 숫자"></div>
+      <div class="dash-grid">
+        <section class="dash-card dash-map-card" aria-labelledby="dash-map-title">
+          <div class="dash-card-head"><h3 id="dash-map-title">전체 지도</h3><span class="updated">누르면 크게</span></div>
+          <button type="button" id="dashMapOpen" class="dash-map-open" aria-label="전체 지도 크게 보기">
+            <svg id="dashMap" class="pinky-map compact" role="img" aria-label="핑키 지도"></svg>
+            <span id="dashMapEmpty" class="map-empty">지도를 불러오는 중…</span>
+          </button>
+          <p id="dashMapNote" class="dash-map-note" hidden></p>
+        </section>
+        <section class="dash-card dash-progress-card" aria-labelledby="dash-progress-title">
+          <div class="dash-card-head"><h3 id="dash-progress-title">진행 중인 주문</h3><span id="dashProgressCount" class="updated"></span></div>
+          <div id="dashProgress" class="dash-progress"></div>
+        </section>
+        <section class="dash-card dash-devices-card" aria-labelledby="dash-devices-title">
+          <div class="dash-card-head"><h3 id="dash-devices-title">장비 상태</h3><button type="button" class="link-button" data-dash-goto="overview">카메라 보기</button></div>
+          <div id="dashDevices" class="dash-devices"></div>
+        </section>
+        <section class="dash-card dash-todo-card" aria-labelledby="dash-todo-title">
+          <div class="dash-card-head"><h3 id="dash-todo-title">처리할 일</h3><span id="dashTodoCount" class="updated"></span></div>
+          <div id="dashTodo" class="dash-todo-list"></div>
+        </section>
+        <section class="dash-card dash-events-card" aria-labelledby="dash-events-title">
+          <div class="dash-card-head"><h3 id="dash-events-title">최근 일</h3><span class="updated">오늘</span></div>
+          <div id="dashEvents" class="dash-events"></div>
+        </section>
+        <section class="dash-card dash-stock-card" aria-labelledby="dash-stock-title">
+          <div class="dash-card-head"><h3 id="dash-stock-title">재고</h3><span id="dashStockNote" class="updated"></span></div>
+          <div id="dashStock" class="dash-stock"></div>
+        </section>
+      </div>
+    </div>
+      </div>
+
+      <div class="view" id="view-flow" hidden>
     <section class="summary-card" aria-labelledby="flowSummaryTitle">
       <p id="flowSummaryTitle" class="summary-title">주문 상황을 불러오고 있어요</p>
       <dl class="summary-stats">
