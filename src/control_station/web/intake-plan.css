@@ -1,0 +1,101 @@
+/* Intake card plan: summary chips, trays, arm timeline and the "자세히" reasons. Tokens come from styles.css.
+ * Blue = what the control station chose, yellow = a person should know before starting, red = cannot. */
+
+.plan { display: grid; gap: 12px; margin-top: 14px; }
+.plan-summary { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; }
+.plan-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 4px 12px; border-radius: 999px; background: var(--fill); color: var(--text-2); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.plan-chip.strong { background: var(--blue-soft); color: var(--blue-strong); }
+.plan-chip.warn { background: var(--yellow-soft); color: var(--yellow-ink); }
+.plan-chip.bad { background: var(--red-soft); color: var(--red-ink); }
+.plan-chip.rule { min-height: 24px; padding: 2px 10px; background: var(--blue-soft); color: var(--blue-strong); font-size: 12px; }
+.plan-chip .pinky-badge { margin: 0; }
+.plan-blocked { margin: 0; color: var(--red-ink); font-size: 14px; font-weight: 600; }
+.plan-muted { margin: 0; color: var(--text-3); font-size: 13px; }
+
+/* one row per Pinky: tray on the left, the arms' timeline on the right */
+.plan-trips { display: grid; gap: 10px; }
+.plan-trip { position: relative; display: grid; grid-template-columns: minmax(170px, 240px) minmax(0, 1fr); gap: 10px; }
+.trip-index { position: absolute; top: -8px; left: 12px; z-index: 1; padding: 0 8px; border-radius: 999px; background: var(--button-dark); color: #fff; font-size: 11px; font-weight: 600; line-height: 18px; }
+.tray-box, .timeline-box { min-width: 0; padding: 12px 14px; border-radius: var(--radius-inner); background: var(--card-muted); }
+.tray-head, .tl-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; color: var(--text-3); font-size: 13px; }
+.tl-head b { color: var(--text); font-size: 15px; font-variant-numeric: tabular-nums; }
+.tray-load { font-variant-numeric: tabular-nums; }
+
+/* the tray: a slot per unit of capacity; a big object spans two */
+.tray { display: grid; gap: 6px; padding: 6px; border-radius: 12px; background: var(--fill-strong); }
+.tray-cell { display: grid; min-width: 0; min-height: 52px; place-content: center; padding: 4px; border-radius: 8px; text-align: center; }
+.tray-cell.filled { background: var(--card); box-shadow: inset 0 0 0 2px var(--blue); color: var(--text); }
+.tray-cell.filled b { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.tray-cell.filled small { color: var(--text-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+.tray-cell.big { background: var(--blue-soft); }
+.tray-cell.empty { border: 1.5px dashed var(--text-disabled); background: transparent; }
+
+/* timeline: one lane per arm, bars placed by seconds */
+.timeline { display: grid; gap: 6px; }
+.tl-lane, .tl-axis { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 8px; }
+.tl-arm { color: var(--text-2); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.tl-track { position: relative; height: 28px; border-radius: 8px; background: var(--fill); }
+.tl-bar { position: absolute; top: 3px; bottom: 3px; overflow: hidden; padding: 0 6px; border-radius: 6px; font-size: 11px; font-weight: 600; line-height: 22px; text-overflow: ellipsis; white-space: nowrap; }
+.tl-bar.shelf { background: var(--blue-soft); color: var(--blue-strong); box-shadow: inset 0 0 0 1px rgba(49, 130, 246, .35); }
+.tl-bar.place { background: var(--blue); }
+.tl-bar.wait { background: repeating-linear-gradient(135deg, var(--yellow-soft) 0 4px, var(--yellow) 4px 6px); }
+.tl-idle { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-3); font-size: 11px; }
+.tl-ticks { position: relative; height: 16px; }
+.tl-ticks span { position: absolute; top: 0; color: var(--text-3); font-size: 11px; font-variant-numeric: tabular-nums; transform: translateX(-50%); }
+.tl-ticks span:first-child { transform: none; }
+.tl-ticks span:last-child:not(:first-child) { transform: translateX(-100%); }
+.tl-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 8px 0 0; color: var(--text-3); font-size: 12px; }
+.tl-legend i { display: inline-block; width: 12px; height: 10px; margin-left: 4px; border-radius: 3px; }
+.tl-legend i:first-child { margin-left: 0; }
+.tl-legend i.shelf { background: var(--blue-soft); box-shadow: inset 0 0 0 1px rgba(49, 130, 246, .35); }
+.tl-legend i.place { background: var(--blue); }
+.tl-legend i.wait { background: var(--yellow); }
+.tl-legend span { flex-basis: 100%; }
+
+/* 자세히 */
+.plan-detail { border-top: 1px solid var(--line); }
+.plan-detail > summary { display: flex; align-items: center; gap: 6px; padding: 10px 2px 2px; color: var(--blue-strong); font-size: 14px; font-weight: 600; cursor: pointer; list-style: none; }
+.plan-detail > summary::-webkit-details-marker { display: none; }
+.plan-detail > summary::after { content: ""; width: 7px; height: 7px; margin-top: -3px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(45deg); transition: transform .15s; }
+.plan-detail[open] > summary::after { margin-top: 3px; transform: rotate(-135deg); }
+.plan-detail > summary:focus-visible { outline: 3px solid rgba(49, 130, 246, .35); outline-offset: 2px; border-radius: 6px; }
+.plan-section { margin-top: 14px; }
+.plan-section h5 { margin: 0 0 8px; font-size: 14px; font-weight: 700; }
+.plan-section h6 { margin: 10px 0 6px; color: var(--text-2); font-size: 13px; font-weight: 600; }
+.plan-rule { margin: 6px 0 0; color: var(--text-3); font-size: 12px; }
+.plan-rule b { color: var(--blue-strong); }
+
+.plan-table-wrap { overflow-x: auto; }
+.plan-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.plan-table th { padding: 6px 8px; border-bottom: 1px solid var(--line); color: var(--text-3); font-size: 12px; font-weight: 500; text-align: left; white-space: nowrap; }
+.plan-table th.decider { color: var(--blue-strong); font-weight: 700; }
+.plan-table th em { margin-left: 4px; padding: 1px 6px; border-radius: 999px; background: var(--blue); color: #fff; font-size: 10px; font-style: normal; }
+.plan-table td { padding: 7px 8px; border-bottom: 1px solid var(--line-soft); color: var(--text-2); vertical-align: middle; }
+.plan-table td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.plan-table td small { margin-left: 4px; color: var(--text-3); font-size: 11px; }
+.plan-table tr.chosen td { background: var(--blue-soft); color: var(--text); }
+.plan-table tr.chosen td:first-child { border-radius: 8px 0 0 8px; }
+.plan-table tr.chosen td:last-child { border-radius: 0 8px 8px 0; }
+.plan-table tr.excluded td { color: var(--text-3); }
+.plan-table .good { color: var(--blue-strong); }
+.plan-table .bad { color: var(--red-ink); }
+.plan-table.mini { margin-top: 6px; font-size: 12px; }
+.plan-table.mini th, .plan-table.mini td { padding: 4px 8px; }
+.check-dots { display: inline-flex; gap: 4px; }
+.check-dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--green); }
+.check-dots i.no { background: var(--red); }
+
+.plan-table.arms td small { display: block; margin: 2px 0 0; }
+.plan-table.arms td .plan-chip { min-height: 22px; }
+.plan-table.arms th small { display: block; color: var(--text-3); font-size: 10px; font-weight: 400; }
+.plan-table td.picked { color: var(--blue-strong); font-weight: 700; }
+
+/* operator pickup confirm on the "수령 확인 대기" alert */
+.alert-card .alert-actions { display: flex; gap: 8px; }
+.alert-card button.pickup-confirm { background: var(--blue); color: #fff; }
+.alert-card button.pickup-confirm:hover:not(:disabled) { background: var(--blue-strong); }
+
+@media (max-width: 900px) {
+  .plan-trip { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { .plan-detail > summary::after { transition: none; } }

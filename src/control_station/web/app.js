@@ -1367,26 +1367,71 @@ function elapsed(fromIso, toIso) {
   return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
+const pickupSending = new Set();  // order ids whose pickup confirmation is in flight
+let renderedAlerts = '';
+
+function alertActionsHtml(alert) {
+  const id = escapeHtml(alert.task_id);
+  if (alert.pickup) {
+    const sending = pickupSending.has(alert.task_id);
+    return `<span class="alert-actions"><button type="button" class="pickup-confirm" data-pickup-confirm="${id}"${sending ? ' disabled' : ''}>${sending ? '보내는 중…' : '수령 확인'}</button></span>`;
+  }
+  return alert.acknowledgeable ? `<button type="button" class="secondary" data-ack-alert="${id}">확인</button>` : '<span></span>';
+}
+
+// Rewritten only when something changed: the flow polls every second, and a button swapped out under the
+// pointer would lose the click.
 function renderFlowAlerts(alerts) {
-  flowAlerts.innerHTML = alerts.map((alert) => `
+  const html = alerts.map((alert) => `
     <div class="alert-card ${alert.level}" role="alert">
       <span class="alert-icon" aria-hidden="true">!</span>
       <div><strong>${escapeHtml(alert.title || '확인 필요')}</strong>
         <div>${escapeHtml(alert.message || '')}</div>
         <small class="alert-meta">${[alert.pinky_name ? `핑키 ${alert.pinky_name}` : '', alert.task_id, alert.code]
           .filter(Boolean).map((part) => `<span>${escapeHtml(part)}</span>`).join('')}</small></div>
-      ${alert.acknowledgeable ? `<button type="button" class="secondary" data-ack-alert="${escapeHtml(alert.task_id)}">확인</button>` : '<span></span>'}
+      ${alertActionsHtml(alert)}
     </div>`).join('');
-  flowAlerts.querySelectorAll('[data-ack-alert]').forEach((button) => {
-    button.addEventListener('click', async () => {
-      button.disabled = true;
-      await fetch(`/api/flow/alerts/${encodeURIComponent(button.dataset.ackAlert)}/ack`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note: '화면에서 확인' }),
-      });
-      await refreshFlow();
-    });
-  });
+  if (html === renderedAlerts) return;
+  renderedAlerts = html;
+  flowAlerts.innerHTML = html;
 }
+
+// The operator confirms for the customer (no phone, or the customer left): the Pinky then goes home.
+async function confirmPickup(orderId) {
+  if (pickupSending.has(orderId)) return;
+  if (!window.confirm(`${orderId} 주문을 손님이 받았다고 확인할까요?\n확인하면 핑키가 주차장으로 돌아갑니다.`)) return;
+  pickupSending.add(orderId);
+  renderedAlerts = '';
+  await refreshFlow();
+  try {
+    const response = await fetch(`/api/orders/${encodeURIComponent(orderId)}/pickup-confirm`, { method: 'POST' });
+    const result = await response.json().catch(() => ({}));
+    if (response.ok) showToast('수령 확인을 보냈어요', `${orderId} · 핑키가 주차장으로 돌아갑니다`);
+    else showToast('수령 확인을 보내지 못했어요', result.message || `HTTP ${response.status}`, 'error');
+  } catch {
+    showToast('수령 확인 응답을 받지 못했어요', '주문 상태를 확인한 뒤 다시 눌러 주세요', 'warning');
+  } finally {
+    pickupSending.delete(orderId);
+    renderedAlerts = '';
+    await Promise.all([refreshFlow(), refreshIntake()]);
+  }
+}
+
+flowAlerts.addEventListener('click', async (event) => {
+  const pickup = event.target.closest('[data-pickup-confirm]');
+  if (pickup) {
+    confirmPickup(pickup.dataset.pickupConfirm);
+    return;
+  }
+  const ack = event.target.closest('[data-ack-alert]');
+  if (!ack) return;
+  ack.disabled = true;
+  await fetch(`/api/flow/alerts/${encodeURIComponent(ack.dataset.ackAlert)}/ack`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note: '화면에서 확인' }),
+  });
+  renderedAlerts = '';
+  await refreshFlow();
+});
 
 function renderFlowRobots(view) {
   const pinkies = view.pinkies.map((pinky) => `
@@ -1569,31 +1614,13 @@ function verdictListHtml(verdicts, chosenId) {
   }).join('')}</ul>`;
 }
 
-function pinkyPreviewHtml(order, pinky) {
-  if (order.pinky_id) {  // orders made through the older /api/tasks path already carry their Pinky
-    return `<p class="preview-summary">${pinkyBadge(order.pinky_id)} 주문할 때 정한 핑키</p>`;
-  }
-  return `<p class="preview-summary${pinky.pinky_id ? '' : ' blocked'}">${escapeHtml(pinky.summary)}</p>
-    ${verdictListHtml(pinky.verdicts, pinky.pinky_id)}`;
-}
-
-function armPreviewHtml(arms) {
-  if (arms.error) {
-    return `<p class="preview-summary blocked">${escapeHtml(arms.error.message)}</p><small class="preview-code">${escapeHtml(arms.error.code)}</small>`;
-  }
-  return `<p class="preview-summary">${escapeHtml(arms.summary)}</p>
-    <ol class="pick-list">${arms.picks.map((pick) => `
-      <li><span>${escapeHtml(pick.arm_label)} · ${escapeHtml(pick.label)} #${escapeHtml(pick.unit)}</span><small>${escapeHtml(pick.reason)}</small></li>`).join('')}</ol>`;
-}
-
+// The plan itself is drawn by intake-plan.js (trays, arm timeline, reasons behind "자세히").
 function previewHtml(order) {
   const preview = intake.previews.get(order.id);
   if (!preview) return '<p class="preview-state">배정 미리보기를 계산하는 중…</p>';
   if (preview.error) return `<p class="preview-state blocked">배정 미리보기 실패 · ${escapeHtml(preview.error)}</p>`;
-  return `<div class="intake-preview">
-      <div class="preview-block"><h4>핑키</h4>${pinkyPreviewHtml(order, preview.result.pinky)}</div>
-      <div class="preview-block"><h4>팔 순서</h4>${armPreviewHtml(preview.result.arms)}</div>
-    </div>`;
+  if (window.IntakePlan) return window.IntakePlan.html(order, preview.result);
+  return `<p class="preview-state">${escapeHtml(preview.result.pinky?.summary || '')}</p>`;
 }
 
 function intakeCardHtml(order) {
