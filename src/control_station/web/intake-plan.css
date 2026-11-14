@@ -92,6 +92,8 @@
 
 /* operator pickup confirm on the "수령 확인 대기" alert */
 .alert-card .alert-actions { display: flex; gap: 8px; }
+/* `.alert-card small` (display: block) out-ranked `.alert-meta`, so 핑키·주문 번호·코드 ran together */
+.alert-card small.alert-meta { display: flex; flex-wrap: wrap; gap: 0 12px; }
 .alert-card button.pickup-confirm { background: var(--blue); color: #fff; }
 .alert-card button.pickup-confirm:hover:not(:disabled) { background: var(--blue-strong); }
 
