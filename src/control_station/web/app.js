@@ -292,7 +292,6 @@ async function refreshTargetObservation(camera, requestId) {
     const labels = {
       DETECTOR_NOT_CONFIGURED: '검출 모델 미설정', DETECTOR_LOADING: '검출 모델 준비 중',
       DETECTOR_ERROR: '검출 모델 오류', DETECTOR_NOT_READY: '검출기 사용 불가',
-      REQUEST_PROMPT_INFERENCE_ERROR: '요청 대상 prompt 추론 오류',
       CLASS_UNKNOWN: '모델에 없는 클래스', PIXEL_TRANSFORM_UNKNOWN: '픽셀 변환 출처 미확인',
       CAMERA_DISCONNECTED: '카메라 연결 끊김', CAMERA_STREAM_UNAVAILABLE: '카메라 스트림 오류',
       FRAME_PROVENANCE_UNKNOWN: '프레임 fingerprint 미확인',

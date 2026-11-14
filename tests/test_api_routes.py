@@ -142,7 +142,6 @@ class ApiTestCase(unittest.TestCase):
         server.task_store = self.task_store
         server.arm_commands = ArmCommandStore(self.task_store.session_factory, slot_map=slot_map)
         server.shelf_slot_zones = ShelfSlotZones(slot_map, directory=self.directory / "poses")
-        server.parking_source = "ros" if self.parking else None
         server.parking_spot_id = "pinky_dock_1" if self.parking else None
         server.parking_camera_id = "head_camera" if self.parking else None
         server.parking_check = self.fake_parking.check if self.parking else None
@@ -206,7 +205,7 @@ class ReadRouteTests(ApiTestCase):
     def test_health_without_parking(self) -> None:
         self.assertEqual(self.get("/api/health"), (200, {
             "status": "ok", "mode": "mock",
-            "parking": {"source": None, "camera_id": None, "spot_id": None, "live_tracking": False},
+            "parking": {"camera_id": None, "spot_id": None, "live_tracking": False},
         }))
 
     def test_robots(self) -> None:
@@ -300,7 +299,7 @@ class ParkingRouteTests(ApiTestCase):
 
     def test_health_with_parking(self) -> None:
         self.assertEqual(self.get("/api/health")[1]["parking"], {  # type: ignore[index]
-            "source": "ros", "camera_id": "head_camera", "spot_id": "pinky_dock_1", "live_tracking": True})
+            "camera_id": "head_camera", "spot_id": "pinky_dock_1", "live_tracking": True})
 
     def test_live_and_check(self) -> None:
         self.assertEqual(self.get("/api/parking-spots/pinky_dock_1/live"), (200, {"live": self.fake_parking.snapshot()}))

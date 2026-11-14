@@ -11,7 +11,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Callable, Protocol
+from typing import Callable
 
 from control_station.models import (
     CameraConnectionState,
@@ -95,14 +95,6 @@ def _estimate_color_hint(image, bbox_xyxy):  # type: ignore[no-untyped-def]
             "review_required": True,
             "used_for_selection": False,
         }
-
-
-class CameraStreamManager(Protocol):
-    def snapshots(self) -> list[CameraSnapshot]: ...
-
-    def frame_for(self, camera_id: str) -> bytes | None: ...
-
-    def close(self) -> None: ...
 
 
 @dataclass
@@ -238,7 +230,7 @@ class _YoloDetector:
         self.state = "ready"
         return True
 
-    def _predict(self, image, *, render: bool = True):  # type: ignore[no-untyped-def]
+    def _predict(self, image):  # type: ignore[no-untyped-def]
         result = self._model.predict(
             source=image,
             conf=self.confidence,
@@ -259,20 +251,13 @@ class _YoloDetector:
             }
             for box in result.boxes
         ]
-        return (result.plot() if render else image), detections
+        return result.plot(), detections
 
     def annotate(self, image):  # type: ignore[no-untyped-def]
         with self._inference_lock:
             if self.state != "ready" or self._model is None:
                 raise RuntimeError("YOLO detector is no longer ready")
             return self._predict(image)
-
-    def detect(self, image) -> list[dict[str, object]]:  # type: ignore[no-untyped-def]
-        with self._inference_lock:
-            if self.state != "ready" or self._model is None:
-                raise RuntimeError("YOLO detector is no longer ready")
-            _, detections = self._predict(image, render=False)
-            return detections
 
 
 class UnconfiguredArmCameraStreamManager:

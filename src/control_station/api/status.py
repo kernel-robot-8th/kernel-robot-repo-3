@@ -18,7 +18,6 @@ def get_health(h: ControlStationHandler, route: str, parts: list[str], body: Non
             "status": "ok",
             "mode": h.app.mode,
             "parking": {
-                "source": h.app.parking_source,
                 "camera_id": h.app.parking_camera_id,
                 "spot_id": h.app.parking_spot_id,
                 "live_tracking": h.app.parking_tracker is not None,

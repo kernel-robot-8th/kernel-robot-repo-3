@@ -62,7 +62,6 @@ class Ros2RobotStatusProvider:
         mobile_discovery_enabled: bool = True,
     ) -> None:
         try:
-            import rclpy
             from rclpy.action import ActionClient
             from rclpy.context import Context
             from rclpy.executors import SingleThreadedExecutor

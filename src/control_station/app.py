@@ -13,7 +13,6 @@ from urllib.parse import urlsplit
 
 from control_station.api import routes
 from control_station.api.common import is_cross_origin, read_json_object
-from control_station.api.observations import evaluate_color_hints, target_observation
 from control_station.act_policies import ActPolicyError, load_act_policies
 from control_station.arm_commands import ARM_ROBOT_IDS, ArmCommandStore
 from control_station.arms import ArmConfigError, load_arms
@@ -49,16 +48,9 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
     """요청을 api/routes.py 경로 표대로 처리 함수에 넘김"""
     server_version = "ControlStation/0.2"
 
-    # Kept on the handler for callers that classify observations directly.
-    _target_observation = staticmethod(target_observation)
-    _evaluate_color_hints = staticmethod(evaluate_color_hints)
-
     @property
     def app(self) -> ControlStationServer:
         return self.server  # type: ignore[return-value]
-
-    def log_message(self, format: str, *args: object) -> None:
-        super().log_message(format, *args)
 
     def _json(self, status: int, body: dict[str, Any]) -> None:
         """JSON 응답"""
@@ -85,16 +77,6 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
         }
         body.update(details)
         self._json(status, body)
-
-    def _image(self, payload: bytes) -> None:
-        """PNG 응답"""
-        self.send_response(200)
-        self.send_header("Content-Type", "image/png")
-        self.send_header("Content-Length", str(len(payload)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        self.wfile.write(payload)
 
     def do_GET(self) -> None:
         """GET 분배, 맞는 경로가 없으면 웹 화면 파일"""
@@ -172,9 +154,6 @@ def main() -> None:
     # its own. Setting a spot gates VERIFY_ARRIVAL on a fresh check from the node and follows its live state.
     parking_spot_id = os.environ.get("CONTROL_STATION_PARKING_SPOT", "").strip() or None
     server.parking_spot_id = parking_spot_id
-    if os.environ.get("CONTROL_STATION_PARKING_SOURCE", "ros").strip().lower() not in {"", "ros"}:
-        raise RuntimeError("CONTROL_STATION_PARKING_SOURCE는 ros만 지원합니다 (관제 안의 Python 주차 판정은 제거됨).")
-    server.parking_source = "ros" if parking_spot_id else None
     # The feed the parking panel streams: the Head Camera shows the ceiling view, taken from the driver topic.
     server.parking_camera_id = os.environ.get("CONTROL_STATION_PARKING_CAMERA", "").strip() or (
         "head_camera" if parking_spot_id else None
@@ -265,9 +244,9 @@ def main() -> None:
     # Pinky arrival for orders: the real ceiling-camera judgment when a parking spot is configured (one registered
     # spot, the loading spot between the two arms), else the mock. CONTROL_STATION_ORDER_PARKING=mock forces the mock.
     order_parking = world.parking
-    if server.parking_check is not None and os.environ.get("CONTROL_STATION_ORDER_PARKING", "").strip() != "mock":
+    if arrival_check is not None and os.environ.get("CONTROL_STATION_ORDER_PARKING", "").strip() != "mock":
         def order_parking(pinky_id: str) -> dict[str, Any]:
-            return server.parking_check(parking_spot_id)
+            return arrival_check()
         print(f"주문 흐름의 핑키 도착 판정: 실제 주차 판정 ({parking_spot_id})", flush=True)
     # Pinky mission phases and the dock_complete / received signals: the Pinky team's fleet dashboard when its URL
     # is set (e.g. http://<pinky PC>:8765), else the mock world, which also sends the mock Pinky off for each order.

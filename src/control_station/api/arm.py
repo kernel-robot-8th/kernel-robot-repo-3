@@ -193,19 +193,17 @@ def post_command_from_camera(h: ControlStationHandler, route: str, parts: list[s
         return
     class_name = object_class.strip()
     policies = h.app.arm_commands.act_policies
-    if operation != "PICK_WITH_POLICY" and policies is not None and policies.resolve(class_name):
-        class_name = policies.resolve(class_name)["object_class"]  # 당근 -> carrot for the other operations too
+    policy = policies.resolve(class_name) if policies is not None else None
     if operation == "PICK_WITH_POLICY":
-        policies = h.app.arm_commands.act_policies
         if policies is None:
             h._json_error(409, "ACT_POLICIES_NOT_CONFIGURED", getattr(h.app, "act_policies_error", None) or "정책 정의 파일이 없습니다")
             return
-        policy = policies.resolve(class_name)
         if policy is None:
             h._json_error(409, "POLICY_NOT_FOUND", f"{class_name}에 학습된 정책이 없습니다",
                           details={"policies": [f"{item['label']}({item['object_class']})" for item in policies.policies.values()]})
             return
-        class_name = policy["object_class"]  # 당근 -> carrot: the detector's class name
+    if policy is not None:
+        class_name = policy["object_class"]  # 당근 -> carrot: the detector's class name, for every operation
     camera_id = body.get("camera_id", "shelf_camera")
     snapshot = next((camera for camera in h.app.camera_manager.snapshots() if camera.id == camera_id), None)
     if snapshot is None:
