@@ -2,7 +2,7 @@
 // header of every view, and the SSH password the dashboard needs before it can reach a Pinky.
 //
 // Loaded after app.js and uses its helpers: escapeHtml, apiErrorMessage, formatClock, showToast, setStat, pinkyBadge,
-// pinkyNames.
+// pinkyNames; and after route-strip.js for renderRouteStrip.
 //
 // "Accepted" (202) only means the fleet dashboard took the stop request; whether the Pinky stopped shows up later in
 // its card (safety monitor, stop pending). Stops go out at once without a confirm dialog, and nothing here resends a
@@ -222,6 +222,7 @@ function renderPinkyLog() {
 
 function renderPinkyScreen() {
   renderPinkyLink();
+  if (pinkyScreen.view) renderRouteStrip(pinkyScreen.view);
   renderPinkyCards();
   renderPinkyLog();
 }

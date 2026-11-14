@@ -181,10 +181,10 @@ p.loading { margin: 0; padding: 20px; }
 .alert-band:empty { display: none; }
 .alert-card { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 16px 18px; border-radius: var(--radius-card); }
 .alert-card.error { background: var(--red-soft); color: var(--text); }
-.alert-card.warning { background: var(--yellow-soft); color: var(--text); }
+.alert-card.warning, .alert-card.action { background: var(--yellow-soft); color: var(--text); }
 .alert-icon { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 50%; font-size: 16px; font-weight: 700; line-height: 1; }
 .alert-card.error .alert-icon { background: var(--red); color: #fff; }
-.alert-card.warning .alert-icon { background: var(--yellow); color: var(--text); }
+.alert-card.warning .alert-icon, .alert-card.action .alert-icon { background: var(--yellow); color: var(--text); }
 .alert-card strong { display: block; font-size: 16px; }
 .alert-card.error strong { color: var(--red-ink); }
 .alert-card small { display: block; margin-top: 2px; color: var(--text-2); font-size: 13px; }
@@ -345,6 +345,38 @@ dl.pinky-facts { display: grid; margin: 0; padding: 0; }
 .result-chip.ok { background: var(--green-soft); color: var(--green-ink); }
 .result-chip.refused { background: var(--red-soft); color: var(--red-ink); }
 .result-chip.unknown { background: var(--yellow-soft); color: var(--yellow-ink); }
+
+/* ---- 핑키: route strip. Order only, no scale; it scrolls sideways on its own at phone width. ---- */
+.route-strip { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line-soft); }
+.route-strip-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
+.route-scroll { margin: 8px -12px 0; padding: 0 12px; overflow-x: auto; border-radius: var(--radius-inner); }
+.route-svg { display: block; }
+.route-svg text { font-family: var(--font); text-anchor: middle; dominant-baseline: central; }
+.route-line { stroke: var(--fill-strong); stroke-width: 8; stroke-linecap: round; }
+.route-return { fill: none; stroke: var(--text-disabled); stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: 1 7; }
+.route-return-label { fill: var(--text-3); font-size: 12px; paint-order: stroke; stroke: var(--card); stroke-width: 10px; stroke-linejoin: round; }
+.route-stop circle { fill: var(--card); stroke: var(--text-disabled); stroke-width: 2; }
+.route-stop text { fill: var(--text-2); font-size: 12px; font-weight: 700; }
+.route-parking rect { fill: var(--button-dark); }
+.route-parking text { fill: #fff; font-size: 14px; font-weight: 700; }
+.route-station circle { fill: var(--blue-soft); stroke: var(--blue); stroke-width: 2.5; }
+.route-station text { fill: var(--blue-strong); font-size: 14px; font-weight: 700; }
+.route-zone circle { fill: var(--yellow); }
+.route-zone text { fill: var(--text); font-size: 14px; font-weight: 700; }
+.route-caption { fill: var(--text-3); font-size: 12px; }
+.route-caption.end { text-anchor: end; }
+.route-caption.start { text-anchor: start; }
+.route-caption.strong { font-size: 13px; font-weight: 700; }
+.route-caption.station { fill: var(--blue-strong); }
+.route-caption.zone { fill: var(--yellow-ink); }
+/* The one moving thing on the screen: a dot slides when its Pinky reaches the next stop. */
+.route-dot { transition: transform .6s cubic-bezier(.2, .8, .2, 1); }
+.route-dot circle, .route-dot path { fill: var(--blue); }
+.route-dot circle { stroke: var(--card); stroke-width: 2.5; }
+.route-dot text { fill: #fff; font-size: 11px; font-weight: 700; }
+.route-dot.stopping circle, .route-dot.stopping path { fill: var(--red); }
+.route-off { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+.route-off:empty { display: none; }
 
 /* ---- 재고 ---- */
 .attention-banner { position: relative; display: grid; gap: 2px; margin-top: 16px; padding: 14px 16px 14px 50px; border-radius: var(--radius-inner); background: var(--yellow-soft); }
@@ -595,6 +627,8 @@ footer { margin-top: 40px; padding: 16px 4px 0; color: var(--text-3); font-size:
   .inventory-events { padding: 4px 16px; }
   .inventory-events li { grid-template-columns: 4.8em minmax(0, 1fr); }
   .inventory-events li > span:last-child { grid-column: 1 / -1; }
+  /* A soft right edge says the strip goes on past the screen. */
+  .route-scroll { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
   .pinky-log { padding: 4px 16px; }
   .pinky-log li { grid-template-columns: 4.8em minmax(0, 1fr) auto; gap: 4px 8px; }
   .pinky-log-message { grid-column: 1 / -1; }

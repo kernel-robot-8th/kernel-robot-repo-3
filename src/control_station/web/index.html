@@ -7,6 +7,7 @@
   <title>로봇 관제 서버</title>
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
+  <script src="/route-strip.js" defer></script>
   <script src="/pinky.js" defer></script>
   <script src="/inventory.js" defer></script>
 </head>
@@ -82,6 +83,13 @@
         <div class="stat" id="pinkyStatReady"><dt>주행 가능</dt><dd>–</dd></div>
         <div class="stat" id="pinkyStatStopping"><dt>정지 적용 중</dt><dd>–</dd></div>
       </dl>
+      <div class="route-strip">
+        <div class="route-strip-head"><h3>경로에서 지금 위치</h3><span class="updated">축척 없음, 경로 순서만</span></div>
+        <div id="routeScroll" class="route-scroll" tabindex="0" aria-label="경로 노선도, 옆으로 넘겨 볼 수 있어요">
+          <svg id="routeStrip" class="route-svg" role="img" aria-label="경로 노선도"></svg>
+        </div>
+        <p id="routeOffStrip" class="route-off"></p>
+      </div>
     </section>
     <section aria-labelledby="pinky-cards-title">
       <div class="section-heading"><h2 id="pinky-cards-title">핑키 상태</h2><span id="pinkyCount" class="updated"></span></div>
