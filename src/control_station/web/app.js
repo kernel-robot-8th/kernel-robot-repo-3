@@ -13,8 +13,6 @@ const policyRunStop = document.querySelector('#policyRunStop');
 const policyProfile = document.querySelector('#policyProfile');
 const detectorClassOptions = document.querySelector('#detectorClassOptions');
 const taskForm = document.querySelector('#taskForm');
-const commandParseForm = document.querySelector('#commandParseForm');
-const commandParseMessage = document.querySelector('#commandParseMessage');
 const taskList = document.querySelector('#taskList');
 const taskDetail = document.querySelector('#taskDetail');
 const taskCount = document.querySelector('#taskCount');
@@ -527,7 +525,7 @@ async function pickWithPolicy(policy) {
   }
 }
 
-// One request for the trained-policy list, shared by the policy buttons and the order form.
+// One request for the trained-policy list, shared by the policy buttons and the object labels of orders.
 const policyListRequest = fetch('/api/arm/policies', { cache: 'no-store' }).then(async (response) => {
   const result = await response.json();
   if (!response.ok) throw new Error(apiErrorMessage(result, '정책 목록을 불러오지 못했습니다'));
@@ -551,15 +549,15 @@ async function loadPolicyButtons() {
 }
 loadPolicyButtons();
 
-// ---- 주문 (여러 물체·수량, 핑키 배정) ----
-const orderForm = document.querySelector('#orderForm');
-const orderItems = document.querySelector('#orderItems');
-const orderMessage = document.querySelector('#orderMessage');
+// ---- 주문 표시 공통 (물체 이름, 핑키 배지) ----
 const pinkyNames = { 10: 'P0', 11: 'P1', 12: 'P2' };
-let orderPolicies = [];
+let objectLabels = new Map();  // object_class -> label (사과, 당근…), filled from the policy list
+policyListRequest
+  .then((policies) => { objectLabels = new Map(policies.map((policy) => [policy.object_class, policy.label])); })
+  .catch(() => {});  // the policy buttons already show the error; labels fall back to the class name
 
 function objectLabel(objectClass) {
-  return orderPolicies.find((policy) => policy.object_class === objectClass)?.label || objectClass;
+  return objectLabels.get(objectClass) || objectClass;
 }
 
 function orderSummary(items) {
@@ -570,69 +568,17 @@ function pinkyBadge(pinkyId) {
   return pinkyId ? `<span class="pinky-badge pinky-${escapeHtml(pinkyId)}">${escapeHtml(pinkyNames[pinkyId] || pinkyId)}</span>` : '';
 }
 
-function addOrderRow(objectClass = '', quantity = 1) {
-  const row = document.createElement('div');
-  row.className = 'order-item';
-  const objects = [...new Map(orderPolicies.map((policy) => [policy.object_class, policy.label])).entries()];
-  row.innerHTML = `
-    <label>물체<select name="object_class" required>${objects.map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)} (${escapeHtml(value)})</option>`).join('')}</select></label>
-    <label>수량<input name="quantity" type="number" min="1" max="5" step="1" required value="${Number(quantity) || 1}"></label>
-    <button type="button" class="secondary" data-remove-order-item>삭제</button>`;
-  if (objectClass) row.querySelector('select').value = objectClass;
-  row.querySelector('[data-remove-order-item]').addEventListener('click', () => {
-    row.remove();
-    if (!orderItems.children.length) addOrderRow();
-  });
-  orderItems.append(row);
+// Short notices in the corner (new order, start result, refused control); they disappear by themselves.
+const toastStack = document.querySelector('#toastStack');
+const TOAST_MS = 5000;
+
+function showToast(title, detail = '', kind = 'info') {
+  const toast = document.createElement('div');
+  toast.className = `toast ${kind}`;
+  toast.innerHTML = `<strong>${escapeHtml(title)}</strong>${detail ? `<span>${escapeHtml(detail)}</span>` : ''}`;
+  toastStack.append(toast);
+  window.setTimeout(() => toast.remove(), TOAST_MS);
 }
-
-function setOrderRows(items) {
-  orderItems.replaceChildren();
-  (items.length ? items : [{ object_class: '', quantity: 1 }]).forEach((item) => addOrderRow(item.object_class, item.quantity));
-}
-
-async function loadOrderPolicies() {
-  try {
-    orderPolicies = await policyListRequest;
-    setOrderRows([]);
-  } catch (error) {
-    orderMessage.textContent = `주문할 물체 목록을 불러오지 못했습니다: ${error.message}`;
-  }
-}
-loadOrderPolicies();
-
-document.querySelector('#orderAddItem').addEventListener('click', () => addOrderRow());
-
-orderForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const button = orderForm.querySelector('button[type="submit"]');
-  const items = [...orderItems.querySelectorAll('.order-item')].map((row) => ({
-    object_class: row.querySelector('select').value,
-    quantity: Number(row.querySelector('input').value),
-  }));
-  const pinkyId = orderForm.elements.pinky_id.value;
-  button.disabled = true;
-  try {
-    const response = await fetch('/api/tasks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ order_items: items, ...(pinkyId ? { pinky_id: pinkyId } : {}) }),
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(apiErrorMessage(result, '주문을 등록하지 못했습니다.'));
-    selectedTaskId = result.task.id;
-    const startNow = orderForm.elements.start_now.checked;
-    setOrderRows([]);
-    orderForm.elements.pinky_id.value = '';
-    orderMessage.textContent = `${result.task.id} 등록 · ${orderSummary(result.task.order_items)} · 핑키 ${pinkyNames[result.task.pinky_id] || result.task.pinky_id} 배정.`;
-    if (startNow) await orderControl(result.task.id, 'start');
-    await Promise.all([refreshTasks(), refreshFlow()]);
-  } catch (error) {
-    orderMessage.textContent = error.message;
-  } finally {
-    button.disabled = false;
-  }
-});
 
 // The worker replays the joint pose it taught for the chosen slot; no coordinates are sent.
 const armCommandSlot = document.querySelector('#armCommandSlot');
@@ -1218,39 +1164,6 @@ async function refreshTasks() {
   }
 }
 
-commandParseForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const text = String(new FormData(commandParseForm).get('text') || '').trim();
-  const button = commandParseForm.querySelector('button');
-  button.disabled = true;
-  commandParseMessage.textContent = '명령 초안을 해석하는 중…';
-  try {
-    const response = await fetch('/api/tasks/parse-command', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || '명령 초안을 해석하지 못했습니다.');
-    const draft = result.draft;
-    const parsed = draft.parsed;
-    const order = result.order;
-    if (order?.order_items?.length) setOrderRows(order.order_items);
-    taskForm.elements.target_category.value = parsed.pick_request?.category || '';
-    taskForm.elements.target_color.value = parsed.pick_request?.color || '';
-    taskForm.elements.shelf_level.value = parsed.pick_request?.shelf_level || '';
-    taskForm.elements.destination.value = parsed.destination || '';
-    taskForm.elements.arm_job.value = parsed.arm_job || '';
-    commandParseMessage.textContent = order?.order_items?.length
-      ? `주문 초안: ${orderSummary(order.order_items)}${order.warnings.length ? ` · ${order.warnings.join(' · ')}` : ''} · 확인한 뒤 주문 등록을 누르세요.`
-      : `주문 물체를 찾지 못했습니다${order?.warnings?.length ? ` · ${order.warnings.join(' · ')}` : ''}.`;
-  } catch (error) {
-    commandParseMessage.textContent = error.message;
-  } finally {
-    button.disabled = false;
-  }
-});
-
 taskForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const formData = new FormData(taskForm);
@@ -1394,11 +1307,13 @@ function planChips(order) {
 }
 
 function renderFlowOrders(orders) {
-  if (!orders.length) {
-    flowOrders.innerHTML = '<p class="loading">아직 주문이 없습니다. 위에서 주문을 등록하세요.</p>';
+  // Waiting orders are started or rejected in 주문 접수 above; this list follows them once they run.
+  const started = orders.filter((order) => order.status !== 'PENDING');
+  if (!started.length) {
+    flowOrders.innerHTML = '<p class="loading">시작한 주문이 없습니다. 접수된 주문은 위 주문 접수에서 시작합니다.</p>';
     return;
   }
-  flowOrders.innerHTML = orders.map((order) => `
+  flowOrders.innerHTML = started.map((order) => `
     <article class="order-card pinky-${escapeHtml(order.pinky_id || '')}${order.status === 'FAILED' ? ' failed' : ''}">
       <div class="order-head">
         ${pinkyBadge(order.pinky_id)} <strong>${escapeHtml(orderSummary(order.order_items))}</strong>
@@ -1410,8 +1325,6 @@ function renderFlowOrders(orders) {
       <p class="order-now"><b>지금</b> ${escapeHtml(order.current)}</p>
       ${planChips(order)}
       <div class="order-actions-row">
-        ${order.status === 'PENDING' ? `<button type="button" data-order-action="start" data-order-id="${escapeHtml(order.id)}">주문 시작</button>
-          <button type="button" class="secondary" data-order-action="cancel" data-order-id="${escapeHtml(order.id)}">주문 취소</button>` : ''}
         ${['RUNNING', 'VALIDATING'].includes(order.status) ? `<button type="button" class="secondary" data-order-action="cancel" data-order-id="${escapeHtml(order.id)}">멈추기</button>` : ''}
         <button type="button" class="secondary" data-order-detail="${escapeHtml(order.id)}">단계·기록 보기</button>
       </div>
@@ -1452,7 +1365,7 @@ async function orderControl(taskId, action) {
     const result = await response.json();
     if (!response.ok) throw new Error(apiErrorMessage(result, `주문 ${action} 실패`));
   } catch (error) {
-    orderMessage.textContent = error.message;
+    showToast(`${taskId} 요청 실패`, error.message, 'error');
   }
 }
 
@@ -1491,13 +1404,222 @@ document.querySelector('#mockRestock').addEventListener('click', async () => {
   await refreshFlow();
 });
 
+// ---- 주문 접수: 주문 창(/order)에서 들어와 작업자의 시작을 기다리는 주문 ----
+const intakeOrders = document.querySelector('#intakeOrders');
+const intakeUpdated = document.querySelector('#intakeUpdated');
+const intakeBadge = document.querySelector('#intakeBadge');
+const pageTitle = document.title;
+const intake = {
+  orders: [],               // GET /api/orders, oldest first
+  seenIds: null,            // ids of the previous poll; null until the first load, so old orders raise no toast
+  previews: new Map(),      // order id -> { result } or { error } from GET /api/orders/{id}/assignment
+  previewLoading: new Set(),
+  notes: new Map(),         // order id -> { title, text, verdicts? } left on the card by a refused start or reject
+  busy: new Map(),          // order id -> 'start' | 'reject' while that request is in flight
+};
+const renderedCards = new WeakMap();  // card element -> the HTML it shows
+let intakeRequestSeq = 0;
+
+function itemCount(items) {
+  return (items || []).reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+}
+
+function verdictListHtml(verdicts, chosenId) {
+  return `<ul class="verdict-list">${verdicts.map((verdict) => {
+    const chosen = verdict.pinky_id === chosenId;
+    const label = !verdict.eligible ? '제외' : chosen ? `배정 · ${verdict.rank}순위` : `${verdict.rank}순위`;
+    return `<li class="verdict${chosen ? ' chosen' : ''}${verdict.eligible ? '' : ' excluded'}">
+      ${pinkyBadge(verdict.pinky_id)}<b>${escapeHtml(label)}</b><span>${escapeHtml(verdict.reason)}</span></li>`;
+  }).join('')}</ul>`;
+}
+
+function pinkyPreviewHtml(order, pinky) {
+  if (order.pinky_id) {  // orders made through the older /api/tasks path already carry their Pinky
+    return `<p class="preview-summary">${pinkyBadge(order.pinky_id)} 주문할 때 정한 핑키</p>`;
+  }
+  return `<p class="preview-summary${pinky.pinky_id ? '' : ' blocked'}">${escapeHtml(pinky.summary)}</p>
+    ${verdictListHtml(pinky.verdicts, pinky.pinky_id)}`;
+}
+
+function armPreviewHtml(arms) {
+  if (arms.error) {
+    return `<p class="preview-summary blocked">${escapeHtml(arms.error.message)}</p><small class="preview-code">${escapeHtml(arms.error.code)}</small>`;
+  }
+  return `<p class="preview-summary">${escapeHtml(arms.summary)}</p>
+    <ol class="pick-list">${arms.picks.map((pick) => `
+      <li><span>${escapeHtml(pick.arm_label)} · ${escapeHtml(pick.label)} #${escapeHtml(pick.unit)}</span><small>${escapeHtml(pick.reason)}</small></li>`).join('')}</ol>`;
+}
+
+function previewHtml(order) {
+  const preview = intake.previews.get(order.id);
+  if (!preview) return '<p class="preview-state">배정 미리보기를 계산하는 중…</p>';
+  if (preview.error) return `<p class="preview-state blocked">배정 미리보기 실패 · ${escapeHtml(preview.error)}</p>`;
+  return `<div class="intake-preview">
+      <div class="preview-block"><h4>핑키</h4>${pinkyPreviewHtml(order, preview.result.pinky)}</div>
+      <div class="preview-block"><h4>팔 순서</h4>${armPreviewHtml(preview.result.arms)}</div>
+    </div>`;
+}
+
+function intakeCardHtml(order) {
+  const id = escapeHtml(order.id);
+  const busy = intake.busy.get(order.id);
+  const disabled = busy ? ' disabled' : '';
+  const note = intake.notes.get(order.id);
+  return `
+    <header class="intake-head">
+      <time datetime="${escapeHtml(order.created_at)}">${escapeHtml(formatClock(order.created_at))}</time>
+      <h3 class="intake-id">${id}</h3>
+      <span class="intake-items">${escapeHtml(orderSummary(order.order_items))} · 총 ${itemCount(order.order_items)}개</span>
+      <span class="intake-zone">${escapeHtml(order.destination)}</span>
+      <span class="intake-actions">
+        <button type="button" data-intake-action="start" data-order-id="${id}"${disabled}>${busy === 'start' ? '시작 중…' : '시작'}</button>
+        <button type="button" class="secondary" data-intake-action="reject" data-order-id="${id}"${disabled}>${busy === 'reject' ? '거절 중…' : '거절'}</button>
+      </span>
+    </header>
+    ${previewHtml(order)}
+    ${note ? `<div class="intake-note" role="alert"><strong>${escapeHtml(note.title)}</strong> ${escapeHtml(note.text)}
+      ${note.verdicts ? verdictListHtml(note.verdicts, null) : ''}</div>` : ''}`;
+}
+
+function renderIntake() {
+  const { orders } = intake;
+  intakeBadge.hidden = !orders.length;
+  intakeBadge.textContent = String(orders.length);
+  intakeBadge.title = `기다리는 주문 ${orders.length}건`;
+  document.title = orders.length ? `(${orders.length}) ${pageTitle}` : pageTitle;
+  if (!orders.length) {
+    intakeOrders.innerHTML = '<p class="intake-empty">기다리는 주문이 없습니다 · <a href="/order" target="_blank" rel="noopener">주문 창 열기</a></p>';
+    return;
+  }
+  // Cards are keyed by order id and rewritten only when their HTML changes, so a poll never swaps a button out
+  // from under the pointer.
+  const cards = new Map([...intakeOrders.querySelectorAll('[data-intake-order]')].map((card) => [card.dataset.intakeOrder, card]));
+  intakeOrders.querySelectorAll(':scope > :not([data-intake-order])').forEach((node) => node.remove());
+  orders.forEach((order, index) => {
+    let card = cards.get(order.id);
+    cards.delete(order.id);
+    if (!card) {
+      card = document.createElement('article');
+      card.className = 'intake-card';
+      card.dataset.intakeOrder = order.id;
+    }
+    const html = intakeCardHtml(order);
+    if (renderedCards.get(card) !== html) {
+      card.innerHTML = html;
+      renderedCards.set(card, html);
+    }
+    if (intakeOrders.children[index] !== card) intakeOrders.insertBefore(card, intakeOrders.children[index] || null);
+  });
+  cards.forEach((card) => card.remove());
+}
+
+function announceNewOrders(orders) {
+  if (intake.seenIds) {
+    orders.filter((order) => !intake.seenIds.has(order.id)).forEach((order) => {
+      showToast(`새 주문 ${order.id} 접수`, `${orderSummary(order.order_items)} · ${order.destination}`);
+    });
+  }
+  intake.seenIds = new Set(orders.map((order) => order.id));
+}
+
+function forgetGoneOrders() {
+  const waiting = new Set(intake.orders.map((order) => order.id));
+  [intake.previews, intake.notes].forEach((byOrder) => {
+    [...byOrder.keys()].filter((id) => !waiting.has(id)).forEach((id) => byOrder.delete(id));
+  });
+}
+
+async function loadPreview(orderId) {
+  if (intake.previewLoading.has(orderId)) return;
+  intake.previewLoading.add(orderId);
+  let preview;
+  try {
+    const response = await fetch(`/api/orders/${encodeURIComponent(orderId)}/assignment`, { cache: 'no-store' });
+    const result = await response.json();
+    preview = response.ok ? { result } : { error: apiErrorMessage(result, '배정 미리보기를 불러오지 못했습니다') };
+  } catch {
+    preview = { error: '서버에서 배정 미리보기를 받지 못했습니다' };
+  } finally {
+    intake.previewLoading.delete(orderId);
+  }
+  if (!intake.orders.some((order) => order.id === orderId)) return;  // started or rejected meanwhile
+  intake.previews.set(orderId, preview);
+  renderIntake();
+}
+
+function refreshIntakePreviews() {
+  intake.orders.forEach((order) => loadPreview(order.id));
+}
+
+async function refreshIntake() {
+  const seq = ++intakeRequestSeq;
+  try {
+    const response = await fetch('/api/orders', { cache: 'no-store' });
+    const result = await response.json();
+    if (!response.ok) throw new Error(apiErrorMessage(result, '접수된 주문을 불러오지 못했습니다'));
+    if (seq !== intakeRequestSeq) return;  // a newer poll has been sent; its answer wins
+    announceNewOrders(result.orders);
+    intake.orders = result.orders;
+    forgetGoneOrders();
+    renderIntake();
+    intake.orders.filter((order) => !intake.previews.has(order.id)).forEach((order) => loadPreview(order.id));
+    intakeUpdated.textContent = `갱신 ${clockFormat.format(new Date())}`;
+  } catch (error) {
+    intakeUpdated.textContent = `갱신 실패 · ${error.message}`;
+  }
+}
+
+async function controlIntakeOrder(order, action) {
+  const verb = action === 'start' ? '시작' : '거절';
+  intake.busy.set(order.id, action);
+  intake.notes.delete(order.id);
+  renderIntake();
+  try {
+    const response = await fetch(`/api/orders/${encodeURIComponent(order.id)}/${action}`, { method: 'POST' });
+    const result = await response.json();
+    if (!response.ok) {
+      // PINKY_UNAVAILABLE carries the Pinky verdicts of that moment; keep them on the card next to the reason.
+      intake.notes.set(order.id, {
+        title: `${verb}하지 못함`,
+        text: apiErrorMessage(result, `주문을 ${verb}하지 못했습니다`),
+        verdicts: result.assignment?.verdicts,
+      });
+    } else if (action === 'start') {
+      const pinkyId = result.order.pinky_id;
+      showToast(`${order.id} 시작`, `${orderSummary(order.order_items)} · 핑키 ${pinkyNames[pinkyId] || pinkyId}`);
+    } else {
+      showToast(`${order.id} 거절`, orderSummary(order.order_items));
+    }
+  } catch {
+    // No answer is not a refusal: the order may have changed on the server, so ask for a look instead of retrying.
+    intake.notes.set(order.id, { title: '결과 확인 필요', text: `${verb} 요청의 응답을 받지 못했습니다. 주문 목록에서 상태를 확인하세요.` });
+  } finally {
+    intake.busy.delete(order.id);
+    await Promise.all([refreshIntake(), refreshFlow()]);
+  }
+}
+
+intakeOrders.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-intake-action]');
+  const order = button && intake.orders.find((item) => item.id === button.dataset.orderId);
+  if (!order || intake.busy.has(order.id)) return;
+  const action = button.dataset.intakeAction;
+  if (action === 'reject' && !window.confirm(
+    `${order.id} 주문을 거절할까요?\n${orderSummary(order.order_items)} · ${order.destination}\n거절한 주문은 다시 시작할 수 없습니다.`,
+  )) return;
+  controlIntakeOrder(order, action);
+});
+
 refresh();
 refreshFlow();
+refreshIntake();
 refreshTasks();
 refreshArmCommands();
 loadShelfSlots();
 window.setInterval(refresh, 3000);
 window.setInterval(refreshFlow, 1000);
+window.setInterval(refreshIntake, 2000);
+window.setInterval(refreshIntakePreviews, 3000);
 window.setInterval(refreshTasks, 1000);
 window.setInterval(refreshArmCommands, 1000);
 window.setInterval(pollParkingLive, 500);

@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
   <title>로봇 관제 서버</title>
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
@@ -12,7 +13,7 @@
     <aside class="sidebar">
       <div class="brand"><h1>로봇 관제</h1><p>로컬 제어 서버</p></div>
       <nav class="main-nav" aria-label="주 메뉴">
-        <button type="button" class="nav-item active" data-view="flow" aria-current="page">주문 진행</button>
+        <button type="button" class="nav-item active" data-view="flow" aria-current="page">주문 진행<span id="intakeBadge" class="nav-badge" hidden></span></button>
         <button type="button" class="nav-item" data-view="overview">현황</button>
         <button type="button" class="nav-item" data-view="manual">수동 조작</button>
         <button type="button" class="nav-item" data-view="tasks">작업 이력</button>
@@ -28,6 +29,11 @@
 
       <div class="view" id="view-flow">
     <div id="flowAlerts" class="alert-band" aria-live="polite"></div>
+    <section aria-labelledby="intake-title">
+      <div class="section-heading"><h2 id="intake-title">주문 접수</h2><span id="intakeUpdated" class="updated">불러오는 중</span></div>
+      <div id="intakeOrders" class="intake-list"><p class="loading">접수된 주문을 불러오는 중…</p></div>
+      <p class="note">배정 미리보기는 지금 상태로 계산한 안내이며 아무것도 예약하지 않습니다. 시작을 누르면 그때 핑키를 다시 고르고, 팔 순서는 선반 재고를 확인한 뒤 다시 정합니다.</p>
+    </section>
     <section aria-labelledby="flow-robots-title">
       <div class="section-heading"><h2 id="flow-robots-title">로봇 상태</h2><span id="flowUpdated" class="updated">불러오는 중</span></div>
       <div id="flowRobots" class="robot-strip"><p class="loading">상태를 불러오는 중…</p></div>
@@ -35,24 +41,6 @@
     <section aria-labelledby="flow-orders-title">
       <div class="section-heading"><h2 id="flow-orders-title">주문 목록</h2><span id="flowStation" class="updated"></span></div>
       <div id="flowOrders" class="order-board"><p class="loading">주문을 불러오는 중…</p></div>
-    </section>
-    <section aria-labelledby="flow-new-title">
-      <div class="section-heading"><h2 id="flow-new-title">새 주문</h2></div>
-      <form id="commandParseForm" class="command-parse-form">
-        <label>주문 문장<textarea name="text" rows="2" maxlength="500" required placeholder="예: 당근 1개랑 사과 2개 핑키에 실어줘"></textarea></label>
-        <button type="submit">문장 해석</button>
-      </form>
-      <p id="commandParseMessage" class="note" role="status">학습 정책이 있는 물체 이름(당근·물티슈·사과…)과 수량을 찾아 아래 주문 초안을 채웁니다. 확인한 뒤 주문 등록을 눌러야 저장됩니다.</p>
-      <form id="orderForm" class="order-form">
-        <div class="order-items" id="orderItems"></div>
-        <div class="order-actions">
-          <button type="button" id="orderAddItem" class="secondary">+ 물체 추가</button>
-          <label>핑키<select name="pinky_id" id="orderPinky"><option value="">자동 배정</option><option value="10">P0 (10)</option><option value="11">P1 (11)</option><option value="12">P2 (12)</option></select></label>
-          <label class="inline-check"><input type="checkbox" name="start_now" checked> 등록하면 바로 시작</label>
-          <button type="submit">주문 등록</button>
-        </div>
-      </form>
-      <p id="orderMessage" class="note" role="status">물체마다 종류와 수량(1–5)을 고릅니다. 핑키를 고르지 않으면 진행 중인 주문이 없는 핑키를 P0→P1→P2 순서로 배정합니다. 등록만 하며 로봇 명령은 보내지 않습니다.</p>
     </section>
     <section id="mockPanel" aria-labelledby="mock-title" hidden>
       <div class="section-heading"><h2 id="mock-title">모의 세계 (화면 점검용)</h2><span class="updated">로봇·카메라 없이 흉내 냄</span></div>
@@ -235,5 +223,6 @@
       <footer>로컬 개발 서버 · <code>127.0.0.1</code></footer>
     </main>
   </div>
+  <div id="toastStack" class="toast-stack" role="status" aria-live="polite"></div>
 </body>
 </html>

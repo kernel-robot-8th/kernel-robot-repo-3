@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>주문하기</title>
+  <link rel="stylesheet" href="/order.css">
+  <script src="/order.js" defer></script>
+</head>
+<body>
+  <main class="order-page">
+    <header class="order-header">
+      <h1>주문하기 <span class="mock-tag">목업</span></h1>
+      <p>물건과 수량, 받을 곳을 고르면 관제 작업자에게 주문이 전달됩니다.</p>
+    </header>
+
+    <form id="orderForm" class="order-form" novalidate>
+      <section aria-labelledby="products-title">
+        <div class="section-title"><h2 id="products-title">물건</h2><span class="hint">물건마다 5개까지</span></div>
+        <p id="stockNotice" class="notice" hidden></p>
+        <div id="products" class="product-list"><p class="placeholder">물건 목록을 불러오는 중…</p></div>
+      </section>
+
+      <section aria-labelledby="zones-title">
+        <div class="section-title"><h2 id="zones-title">받을 곳</h2></div>
+        <div id="zones" class="zone-list"></div>
+      </section>
+
+      <div class="cart-bar">
+        <p id="formError" class="form-error" role="alert" hidden></p>
+        <div class="cart-row">
+          <p id="cartSummary" class="cart-summary" aria-live="polite">담은 물건이 없어요</p>
+          <button id="submitOrder" type="submit" class="primary" disabled>주문하기</button>
+        </div>
+      </div>
+    </form>
+
+    <section id="orderDone" class="order-done" aria-labelledby="done-title" hidden>
+      <span class="done-mark" aria-hidden="true">✓</span>
+      <h2 id="done-title" tabindex="-1">주문이 접수됐어요</h2>
+      <dl class="done-details">
+        <div><dt>주문 번호</dt><dd id="doneId"></dd></div>
+        <div><dt>물건</dt><dd><ul id="doneItems" class="done-items"></ul></dd></div>
+        <div><dt>받을 곳</dt><dd id="doneZone"></dd></div>
+        <div><dt>접수 시각</dt><dd id="doneTime"></dd></div>
+      </dl>
+      <p class="hint">작업자가 확인한 뒤 로봇 작업을 시작합니다. 목업 화면이라 진행 상황은 여기에 나오지 않습니다.</p>
+      <button id="newOrder" type="button" class="primary">새 주문</button>
+    </section>
+
+    <footer class="order-footer">목업 화면 · 결제와 로그인은 없습니다</footer>
+  </main>
+</body>
+</html>
