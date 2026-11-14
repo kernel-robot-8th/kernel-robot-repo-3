@@ -41,14 +41,10 @@ def _fresh_topic(robot: dict[str, Any], key: str, field: str) -> float | None:
 def _fresh_battery(robot: dict[str, Any]) -> tuple[float | None, float | None]:
     """(percent, volts) from the dashboard's live topics; None when missing or stale.
 
-    A Pinky that still publishes its sensors is not at 0 %: the robots seen on 2026-11-14 publish
-    `battery/percent` 0.0 next to a 6.6 V reading, i.e. the percentage is not computed. A 0 % beside a live
-    voltage is therefore reported as unknown rather than as an empty battery."""
-    percent = _fresh_topic(robot, "battery_percent", "percent")
-    volts = _fresh_topic(robot, "battery_voltage", "voltage_v")
-    if percent == 0.0 and volts:
-        percent = None
-    return percent, volts
+    The percentage is the Pinky's own (`/battery/percent`, computed from the voltage) and is used as is, including
+    0 %: on 2026-11-14 Pinky C76C read 0 % at a 6.59 V dip and 64-66 % at 7.37 V a few minutes later, so a low
+    reading is the robot saying its battery is low, not a missing value."""
+    return _fresh_topic(robot, "battery_percent", "percent"), _fresh_topic(robot, "battery_voltage", "voltage_v")
 
 
 class PinkyFleetError(RuntimeError):

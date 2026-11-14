@@ -146,10 +146,11 @@ class PinkyFleetClientTests(unittest.TestCase):
 class BatteryReadingTest(unittest.TestCase):
     """Shapes seen from the real dashboard on 2026-11-14 (Pinky C76C, domain 10)."""
 
-    def test_zero_percent_beside_a_live_voltage_is_unknown(self) -> None:
+    def test_the_robots_own_percentage_is_kept_even_at_zero(self) -> None:
+        # 0 % came with a 6.59 V dip: the robot calling its battery low, which must keep it from being assigned.
         robot = {"topics": {"battery_percent": {"fresh": True, "value": {"percent": 0.0}},
                             "battery_voltage": {"fresh": True, "value": {"voltage_v": 6.59249210357666}}}}
-        self.assertEqual(_fresh_battery(robot), (None, 6.59249210357666))
+        self.assertEqual(_fresh_battery(robot), (0.0, 6.59249210357666))
 
     def test_a_real_percentage_and_stale_topics(self) -> None:
         robot = {"topics": {"battery_percent": {"fresh": True, "value": {"percent": 64.0}},
