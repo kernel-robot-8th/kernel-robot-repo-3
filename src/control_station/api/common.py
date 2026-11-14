@@ -13,6 +13,16 @@ if TYPE_CHECKING:
     from control_station.app import ControlStationHandler
 
 
+# Errors that say "not now" rather than "not this": the same request can succeed once a Pinky or a receiving zone is
+# free, or the Pinky has reached the zone. Everything else needs a different request (or a person) to change.
+RETRYABLE_ERROR_CODES = frozenset({"ZONE_BUSY", "PINKY_UNAVAILABLE", "PICKUP_NOT_READY"})
+
+
+def is_retryable(status: int, error_code: str) -> bool:
+    """Whether sending the same request again later can succeed (the `retryable` field of every error answer)."""
+    return status in {408, 429} or status >= 500 or error_code in RETRYABLE_ERROR_CODES
+
+
 def is_cross_origin(handler: ControlStationHandler) -> bool:
     """다른 출처(브라우저) 요청인지"""
     origin = handler.headers.get("Origin")

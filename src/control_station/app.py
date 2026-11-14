@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import uuid
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -12,7 +13,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from control_station.api import routes
-from control_station.api.common import is_cross_origin, read_json_object
+from control_station.api.common import is_cross_origin, is_retryable, read_json_object
 from control_station.act_policies import ActPolicyError, load_act_policies
 from control_station.arm_commands import ARM_ROBOT_IDS, ArmCommandStore
 from control_station.arms import ArmConfigError, load_arms
@@ -57,6 +58,13 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
     def app(self) -> ControlStationServer:
         return self.server  # type: ignore[return-value]
 
+    @property
+    def request_id(self) -> str:
+        """이 요청의 ID: 응답 머리글 X-Request-Id와 오류 본문 request_id로 돌려줘 서버 기록과 맞춰 볼 수 있게"""
+        if getattr(self, "_request_id", None) is None:
+            self._request_id = uuid.uuid4().hex[:12]
+        return self._request_id
+
     def _json(self, status: int, body: dict[str, Any]) -> None:
         """JSON 응답"""
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -64,6 +72,7 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Request-Id", self.request_id)
         self.end_headers()
         self.wfile.write(payload)
 
@@ -72,19 +81,26 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
         status: int,
         error_code: str,
         message: str,
+        *,
+        retryable: bool | None = None,
         **details: object,
     ) -> None:
-        """오류 응답 (error_code, message, error)"""
+        """오류 응답 (error_code, message, error, retryable, request_id)
+
+        retryable: 같은 요청을 나중에 다시 보내면 될 수 있는지(핑키·수령 구역이 비면 등). 기본은 상태 코드와 오류 코드로 판단."""
         body: dict[str, Any] = {
             "error_code": error_code,
             "message": message,
             "error": message,
+            "retryable": is_retryable(status, error_code) if retryable is None else retryable,
+            "request_id": self.request_id,
         }
         body.update(details)
         self._json(status, body)
 
     def do_GET(self) -> None:
         """GET 분배, 맞는 경로가 없으면 웹 화면 파일"""
+        self._request_id = None
         route = urlsplit(self.path).path
         parts = route.strip("/").split("/")
         entry = routes.find(routes.GET_ROUTES, route, parts)
@@ -102,6 +118,7 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         """POST 분배: 다른 출처 거부, JSON 본문 읽기"""
+        self._request_id = None
         route = urlsplit(self.path).path
         parts = route.strip("/").split("/")
         entry = routes.find(routes.POST_ROUTES, route, parts)

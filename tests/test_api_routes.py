@@ -162,9 +162,10 @@ class ApiTestCase(unittest.TestCase):
         raw: bytes | None = None,
         content_type: str | None = "application/json",
         origin: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> tuple[int, object, dict[str, str]]:
         connection = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=10)
-        headers: dict[str, str] = {}
+        headers = dict(headers or {})
         payload = raw if raw is not None else (None if body is None else json.dumps(body).encode())
         if payload is not None and content_type is not None:
             headers["Content-Type"] = content_type
@@ -180,12 +181,19 @@ class ApiTestCase(unittest.TestCase):
         return response.status, data, response_headers
 
     def get(self, path: str) -> tuple[int, object]:
-        status, body, _ = self.request("GET", path)
-        return status, body
+        status, body, headers = self.request("GET", path)
+        return status, self._without_request_id(body, headers)
 
     def post(self, path: str, body: object = None, **options: object) -> tuple[int, object]:
-        status, data, _ = self.request("POST", path, body, **options)  # type: ignore[arg-type]
-        return status, data
+        status, data, headers = self.request("POST", path, body, **options)  # type: ignore[arg-type]
+        return status, self._without_request_id(data, headers)
+
+    def _without_request_id(self, body: object, headers: dict[str, str]) -> object:
+        """Error bodies carry the request's random ID; check it matches X-Request-Id, then compare the rest."""
+        if isinstance(body, dict) and "request_id" in body:
+            body = dict(body)
+            self.assertEqual(body.pop("request_id"), headers.get("x-request-id"))
+        return body
 
     def create_task(self, pick_request: dict[str, object] | None = None) -> str:
         body: dict[str, object] = {"destination": "작업대 A", "arm_job": "상자 이동"}
@@ -196,8 +204,10 @@ class ApiTestCase(unittest.TestCase):
         return data["task"]["id"]  # type: ignore[index]
 
 
-def error(message: str, code: str | None = None, **details: object) -> dict[str, object]:
-    return {"error_code": code, "message": message, "error": message, **details} if code else {"error": message}
+def error(message: str, code: str | None = None, *, retryable: bool = False, **details: object) -> dict[str, object]:
+    if not code:
+        return {"error": message}
+    return {"error_code": code, "message": message, "error": message, "retryable": retryable, **details}
 
 
 class ReadRouteTests(ApiTestCase):
@@ -250,7 +260,7 @@ class ReadRouteTests(ApiTestCase):
         self.assertEqual(self.get("/api/parking-spots/pinky_dock_1/live"), (404, error(
             "이 주차 위치는 실시간 추적 중이 아닙니다 (CONTROL_STATION_PARKING_SPOT)", "PARKING_TRACKING_NOT_CONFIGURED")))
         self.assertEqual(self.get("/api/parking-spots/pinky_dock_1/check"), (503, error(
-            "주차 판정 노드가 설정되지 않았습니다 (CONTROL_STATION_PARKING_SPOT)", "PARKING_NODE_UNAVAILABLE")))
+            "주차 판정 노드가 설정되지 않았습니다 (CONTROL_STATION_PARKING_SPOT)", "PARKING_NODE_UNAVAILABLE", retryable=True)))
 
     def test_streams_and_static_files(self) -> None:
         self.assertEqual(self.get("/streams/nope.mjpg"), (404, error("Camera stream not found")))
@@ -282,7 +292,7 @@ class ParkingRouteTests(ApiTestCase):
         self.assertEqual(self.get("/api/parking-spots/pinky_dock_1/check"), (200, {"observation": {
             "spot_id": "pinky_dock_1", "status": "ARRIVED", "reason": "within tolerance"}}))
         self.fake_parking.error = ParkingObservationError(503, "PARKING_NODE_TIMEOUT", "늦음")
-        self.assertEqual(self.get("/api/parking-spots/pinky_dock_1/check"), (503, error("늦음", "PARKING_NODE_TIMEOUT")))
+        self.assertEqual(self.get("/api/parking-spots/pinky_dock_1/check"), (503, error("늦음", "PARKING_NODE_TIMEOUT", retryable=True)))
 
 
 class RequestBodyTests(ApiTestCase):
