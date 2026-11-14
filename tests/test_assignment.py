@@ -66,6 +66,14 @@ class ChoosePinkyTest(unittest.TestCase):
         self.assertEqual(rested.pinky_id, "11")
         self.assertEqual(choose_pinky([parked("11"), parked("10")]).pinky_id, "10")
 
+    def test_every_check_and_ranking_key_is_reported(self) -> None:
+        result = choose_pinky([parked("10", battery_percent=22), parked("11", trips_today=2)])
+        low = result.verdicts[0]
+        self.assertEqual([(c["rule"], c["ok"]) for c in low.checks],
+                         [("진행 중 주문 없음", True), ("핑키 관제 연결", True), ("주차장 대기", True),
+                          ("운행 준비", True), ("배터리 30% 이상", False)])
+        self.assertEqual(result.verdicts[1].keys, {"battery_band": 80, "trips_today": 2, "last_finished_at": None})
+
     def test_ranks_and_summary(self) -> None:
         result = choose_pinky([parked("10", battery_percent=55), parked("11", battery_percent=85, trips_today=1)])
         self.assertEqual(result.summary, "P1 · 배터리 80%대 · 오늘 1회")
@@ -97,6 +105,14 @@ class PlanArmsTest(unittest.TestCase):
         self.assertEqual((more_left.picks[0].arm_id, more_left.picks[0].reason), ("arm-01", "남은 재고 3 vs 1"))
         tie = self.plan([("apple", 1)], stock)
         self.assertEqual((tie.picks[0].arm_id, tie.picks[0].reason), ("arm-01", "조건이 같아 설정 순서대로"))
+
+    def test_each_pick_carries_the_deciding_rule_and_both_arms(self) -> None:
+        plan = self.plan([("apple", 1)], {"shelf_a": {"apple": 3}, "shelf_b": {"apple": 1}}, missing={("apple", "arm-02")})
+        pick = plan.picks[0]
+        self.assertEqual(pick.rule, "only_option")
+        self.assertEqual([(o["arm_id"], o["possible"], o["why"], o["chosen"]) for o in pick.options],
+                         [("arm-01", True, None, True), ("arm-02", False, "정책 없음", False)])
+        self.assertEqual(pick.options[0]["remaining"], 3)  # stock as it stood before this unit was taken
 
     def test_arms_take_turns_busier_arm_first(self) -> None:
         plan = self.plan([("apple", 1), ("tissue", 2)],

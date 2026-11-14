@@ -45,6 +45,10 @@ class PinkyVerdict:
     eligible: bool
     reason: str
     rank: int | None = None  # 1 = chosen; None when excluded
+    # Every exclusion rule as {rule, ok, detail}, so the screen can show the whole matrix, not only the first miss.
+    checks: tuple[dict[str, Any], ...] = ()
+    # The values the ranking compared, in order: battery band (%), trips today, last finished.
+    keys: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +76,26 @@ def _exclusion(candidate: PinkyCandidate, min_battery: float) -> str | None:
     return None
 
 
+def _checks(candidate: PinkyCandidate, min_battery: float) -> tuple[dict[str, Any], ...]:
+    """Each exclusion rule, passed or not, in the order `_exclusion` applies them."""
+    battery = candidate.battery_percent
+    return (
+        {"rule": "진행 중 주문 없음", "ok": not candidate.holding_order,
+         "detail": f"주문 {candidate.holding_order}" if candidate.holding_order else None},
+        {"rule": "핑키 관제 연결", "ok": candidate.reachable, "detail": None if candidate.reachable else "응답 없음"},
+        {"rule": "주차장 대기", "ok": candidate.phase == "parked", "detail": candidate.phase},
+        {"rule": "운행 준비", "ok": candidate.ready_for_motion is not False, "detail": candidate.readiness_label},
+        {"rule": f"배터리 {min_battery:.0f}% 이상", "ok": battery is None or battery >= min_battery,
+         "detail": None if battery is None else f"{battery:.0f}%"},
+    )
+
+
+def _keys(candidate: PinkyCandidate) -> dict[str, Any]:
+    band = _battery_band(candidate)
+    return {"battery_band": None if band < 0 else band * 10, "trips_today": candidate.trips_today,
+            "last_finished_at": candidate.last_finished_at}
+
+
 def _battery_band(candidate: PinkyCandidate) -> int:
     # 10 % bands so that a 1-2 % difference does not flip the choice; an unknown battery ranks below any known one.
     return -1 if candidate.battery_percent is None else int(candidate.battery_percent // 10)
@@ -96,9 +120,9 @@ def choose_pinky(
     ranked = sorted((c for c in candidates if c.pinky_id not in excluded), key=_preference)
     rank_of = {c.pinky_id: index for index, c in enumerate(ranked, start=1)}
     verdicts = tuple(
-        PinkyVerdict(c.pinky_id, c.name, False, excluded[c.pinky_id])
+        PinkyVerdict(c.pinky_id, c.name, False, excluded[c.pinky_id], None, _checks(c, min_battery), _keys(c))
         if c.pinky_id in excluded
-        else PinkyVerdict(c.pinky_id, c.name, True, _describe(c), rank_of[c.pinky_id])
+        else PinkyVerdict(c.pinky_id, c.name, True, _describe(c), rank_of[c.pinky_id], _checks(c, min_battery), _keys(c))
         for c in candidates
     )
     if not ranked:
@@ -135,6 +159,11 @@ class ArmPick:
     shelf_id: str
     policy_id: str
     reason: str
+    # Which rule decided: only_option, success_rate, balance, stock or config (see plan_arms).
+    rule: str = ""
+    # Every arm as it stood when this unit was placed: {arm_id, arm_label, possible, why, success_rate,
+    # assigned, remaining, chosen}.
+    options: tuple[dict[str, Any], ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -197,13 +226,14 @@ def plan_arms(
         ranked = sorted(options, key=partial(_arm_preference, object_class=object_class, stats=stats,
                                              assigned=assigned, remaining=remaining, order=order))
         arm, policy = ranked[0]
-        reason = _arm_reason(ranked, object_class, stats, remaining, assigned)
+        rule, reason = _arm_reason(ranked, object_class, stats, remaining, assigned)
+        options = _arm_options(arms, object_class, resolve_policy, stats, remaining, assigned, arm["arm_id"])
         remaining[arm["shelf_id"]][object_class] -= 1
         assigned[arm["arm_id"]] += 1
         placed.append((position, ArmPick(
             object_class=object_class, label=label_for(object_class), unit=int(unit["unit"]), of=int(unit["of"]),
             arm_id=arm["arm_id"], arm_label=arm["label"], shelf_id=arm["shelf_id"],
-            policy_id=policy["policy_id"], reason=reason,
+            policy_id=policy["policy_id"], reason=reason, rule=rule, options=options,
         )))
 
     # One arm finishes before the other starts (they share the loading spot): the busier arm goes first, and each
@@ -241,22 +271,45 @@ def _arm_reason(
     stats: PickStats,
     remaining: Mapping[str, Counter],
     assigned: Counter,
-) -> str:
-    """The first rule that separated the chosen arm from the runner-up, in words."""
+) -> tuple[str, str]:
+    """(rule, words): the first rule that separated the chosen arm from the runner-up."""
     (arm, policy), *others = ranked
     if not others:
-        return f"{arm['label']} 쪽에서만 집을 수 있음"
+        return "only_option", f"{arm['label']} 쪽에서만 집을 수 있음"
     other_arm, other_policy = others[0]
     rate = success_rate(stats, policy["policy_id"], arm["arm_id"])
     other_rate = success_rate(stats, other_policy["policy_id"], other_arm["arm_id"])
     if rate != other_rate:
-        return f"성공률 {rate:.2f} vs {other_rate:.2f}"
+        return "success_rate", f"성공률 {rate:.2f} vs {other_rate:.2f}"
     if assigned[arm["arm_id"]] != assigned[other_arm["arm_id"]]:
-        return f"맡은 개수 {assigned[arm['arm_id']]} vs {assigned[other_arm['arm_id']]}"
+        return "balance", f"맡은 개수 {assigned[arm['arm_id']]} vs {assigned[other_arm['arm_id']]}"
     left, right = remaining[arm["shelf_id"]][object_class], remaining[other_arm["shelf_id"]][object_class]
     if left != right:
-        return f"남은 재고 {left} vs {right}"
-    return "조건이 같아 설정 순서대로"
+        return "stock", f"남은 재고 {left} vs {right}"
+    return "config", "조건이 같아 설정 순서대로"
+
+
+def _arm_options(
+    arms: Sequence[Mapping[str, Any]],
+    object_class: str,
+    resolve_policy: PolicyResolver,
+    stats: PickStats,
+    remaining: Mapping[str, Counter],
+    assigned: Counter,
+    chosen_arm_id: str,
+) -> tuple[dict[str, Any], ...]:
+    """Every arm as it stood for this unit: why it could not take it, or the values the rules compared."""
+    options = []
+    for arm in arms:
+        policy = resolve_policy(object_class, arm["arm_id"])
+        left = remaining.get(arm["shelf_id"], Counter())[object_class]
+        why = "정책 없음" if policy is None else ("선반에 없음" if left <= 0 else None)
+        options.append({
+            "arm_id": arm["arm_id"], "arm_label": arm["label"], "possible": why is None, "why": why,
+            "success_rate": None if policy is None else round(success_rate(stats, policy["policy_id"], arm["arm_id"]), 3),
+            "assigned": assigned[arm["arm_id"]], "remaining": left, "chosen": arm["arm_id"] == chosen_arm_id,
+        })
+    return tuple(options)
 
 
 def _no_arm_error(
