@@ -104,7 +104,7 @@ def main() -> None:
                 'filter_info_topic': '/keepout_costmap_filter_info',
                 'transform_tolerance': 0.1,
                 'override_lethal_cost': True,
-                'lethal_override_cost': 252.0,
+                'lethal_override_cost': 252,
             }
     params=yaml.safe_dump(parsed,sort_keys=False)
     (RUNTIME / "bringup_launch.xml").write_text(bringup, encoding="utf-8")
