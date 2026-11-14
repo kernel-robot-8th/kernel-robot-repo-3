@@ -8,6 +8,7 @@ shelf check, so the preview is advice and never a reservation. Nothing here move
 
 from __future__ import annotations
 
+import threading
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -36,6 +37,14 @@ class OrderDeskError(RuntimeError):
         self.details = details
 
 
+def _topic(word: str) -> str:
+    """The word with its Korean topic particle: 은 after a final consonant, 는 otherwise (사과는, 당근은)."""
+    last = word[-1:] if word else ""
+    if "가" <= last <= "힣":
+        return word + ("은" if (ord(last) - ord("가")) % 28 else "는")
+    return word + "은(는)"
+
+
 def _start_of_today() -> str:
     """Local midnight as a UTC ISO time, comparable with the store's timestamps."""
     midnight = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -53,6 +62,10 @@ class OrderDesk:
     pick_stats: Callable[[], PickStats]
     planning: FleetPlanning = field(default_factory=load_fleet_planning)
     today: Callable[[], str] = _start_of_today
+    # The shelf inventory (inventory.InventoryMonitor.snapshot). With it the window sells what is available
+    # (shelves minus open orders) and refuses more; without it the desk reads the shelves directly.
+    inventory: Callable[[], dict[str, Any]] | None = None
+    _intake: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     # ---- the order window ----------------------------------------------------------------------------------
 
@@ -60,6 +73,13 @@ class OrderDesk:
         """What can be ordered (objects with a trained policy), how many the shelves hold, and where to collect."""
         if self.policies is None:
             return {"products": [], "stock_error": "정책 정의 파일이 없어 주문을 받을 수 없습니다", "zones": []}
+        zones = [zone.as_dict() for zone in self.zones.values()]
+        if self.inventory is not None:
+            view = self.inventory()
+            products = [{"object_class": row["object_class"], "label": row["label"], "available": row["available"],
+                         "status": row["status"]} for row in view["products"]]
+            return {"products": products, "stock_error": view["reason"] if view["state"] == "unknown" else None,
+                    "zones": zones}
         stock, stock_error = self._stock()
         on_shelves: Counter = Counter()
         for counts in stock.values():
@@ -85,9 +105,29 @@ class OrderDesk:
             raise OrderDeskError("ORDER_INVALID", str(exc), status=400) from exc
         zone = self._zone(zone_id)
         summary = " · ".join(f"{self._label(item['object_class'])} {item['quantity']}" for item in order_items)
-        return self.store.create_task(
-            zone.label, f"{summary} 적재", order_items=order_items, receiving_zone=zone.zone_id, defer_pinky=True,
-        )
+        # Check and reserve as one step, so two windows cannot both sell the last unit.
+        with self._intake:
+            self._check_available(order_items)
+            return self.store.create_task(
+                zone.label, f"{summary} 적재", order_items=order_items, receiving_zone=zone.zone_id, defer_pinky=True,
+            )
+
+    def _check_available(self, order_items: list[dict[str, Any]]) -> None:
+        """Refuse what the shelves cannot cover after open orders; an unknown stock sells nothing."""
+        if self.inventory is None:
+            return
+        view = self.inventory()
+        if view["state"] == "unknown":
+            raise OrderDeskError("INVENTORY_UNKNOWN", f"재고를 확인할 수 없어 주문을 받지 않습니다: {view['reason']}")
+        rows = {row["object_class"]: row for row in view["products"]}
+        short = []
+        for item in order_items:
+            available = (rows.get(item["object_class"]) or {}).get("available") or 0
+            if item["quantity"] > available:
+                label = self._label(item["object_class"])
+                short.append(f"{_topic(label)} 품절입니다" if available == 0 else f"{_topic(label)} {available}개 남았습니다")
+        if short:
+            raise OrderDeskError("OUT_OF_STOCK", " · ".join(short))
 
     # ---- the operator's intake ---------------------------------------------------------------------------
 

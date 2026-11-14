@@ -59,6 +59,7 @@ GET_ROUTES: tuple[Route, ...] = (
     Route(_path("/api/flow"), flow.get_flow),
     Route(_path("/api/pinky"), pinky.get_pinky),
     Route(_path("/api/catalog"), orders.get_catalog),
+    Route(_path("/api/inventory"), orders.get_inventory),
     Route(_path("/api/orders"), orders.get_orders),
     Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "orders"] and parts[3] == "assignment",
           orders.get_assignment),

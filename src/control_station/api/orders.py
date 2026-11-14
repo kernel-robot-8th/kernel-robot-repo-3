@@ -1,6 +1,7 @@
 """Order window and order intake API: a thin HTTP layer over control_station.order_desk.OrderDesk.
 
-GET  /api/catalog                    what can be ordered, shelf stock, receiving zones (order window)
+GET  /api/catalog                    what can be ordered, how many can still be sold, receiving zones
+GET  /api/inventory                  shelf inventory: on the shelves, reserved, available, recent changes
 POST /api/orders                     {items: [{object_class, quantity}], receiving_zone} -> a waiting order
 GET  /api/orders                     orders waiting in the intake, oldest first
 GET  /api/orders/{id}/assignment     which Pinky and arms would serve it now, and why (changes nothing)
@@ -27,6 +28,11 @@ def _desk_error(h: ControlStationHandler, exc: OrderDeskError) -> None:
 def get_catalog(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
     """주문 창: 주문할 수 있는 물건·남은 수량·수령 구역"""
     h._json(200, h.app.order_desk.catalog())
+
+
+def get_inventory(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
+    """선반 재고: 물건별 선반 수량, 예약, 주문 가능 수량, 품절 여부와 최근 변화"""
+    h._json(200, h.app.inventory.snapshot())
 
 
 def get_orders(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:

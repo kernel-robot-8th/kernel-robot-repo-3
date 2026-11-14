@@ -10,6 +10,7 @@
 | `src/control_station/app.py` | 서버 조립(`main`)과 요청 분배. 경로 표는 `api/routes.py` |
 | `src/control_station/api/` | `tasks.py`(주문·작업 목록·생성·시작·취소, 명령 해석), `flow.py`(주문 진행 화면, 경보 확인, 모의 세계 조작), `cameras.py`(카메라 목록, MJPEG 스트림), `arm.py`(텔레오퍼레이션·정책 한 번 실행, OMX 명령 큐, 선반 칸, 정책 목록), `status.py`(health, 로봇 상태, 주차 `/live`·`/check`), `common.py`(교차 출처 확인, JSON 본문, 작업 조건·주문 물체 검증). 경로별 상태·오류 코드는 `tests/test_api_routes.py`로 고정 |
 | `src/control_station/order_desk.py`, `api/orders.py` | 주문 접수 창구: 주문 창용 catalog, 핑키 없이 접수(`PENDING`), 배정 미리보기, 시작할 때 핑키 확정(`PINKY_ASSIGNED`), 거절. 수령 구역은 `receiving_zones.py`·`config/receiving-zones.json` |
+| `src/control_station/inventory.py` | 선반 재고: 카메라 개수는 같은 값이 3번 연속일 때만 확정하고, 팔이 일하는 동안(적재 자리 사용 중·정책 실행 중)은 마지막 확정값을 유지하며, 10초 넘게 새 값이 없으면 "모름". 우리 집기는 옮김 확인 즉시 장부에서 빼고(카메라는 나중에 확인만), 그 밖의 변화는 `RESTOCKED`·`REMOVED_OUTSIDE`로 기록. 주문 가능 수량 = 선반 수량 − 열린 주문의 예약. 주문 창 catalog와 접수 검사(`OUT_OF_STOCK`, `INVENTORY_UNKNOWN`)가 이 값을 씀. `GET /api/inventory` |
 | `src/control_station/assignment.py` | 핑키·OMX 배정 규칙(순수 함수): 핑키는 제외 조건 뒤 배터리 구간 → 오늘 운행 → 쉰 시간 → 번호, 팔은 제약이 많은 물체부터 성공률 → 남은 재고 → 설정 순서. 고른 이유를 함께 돌려줌 |
 | `src/control_station/order_flow.py` | 주문 단계 실행: 선반 재고 → 배정 규칙으로 팔 배정 → 핑키 도착 대기 → 물체별 집기·옮김 확인 → 총량 → 핑키 관제 신호. 적재 자리 하나를 주문끼리 나눠 씀 |
 | `src/control_station/mock_world.py` | 선반 재고·핑키 위 물건·핑키 임무 단계·팔 집기를 흉내 내는 모의 세계와 사고 주입(모든 결과 `simulated: true`) |

@@ -25,6 +25,7 @@ from control_station.camera_adapters import (
 )
 from control_station.load_check import mock_load_observer_from_env
 from control_station.mock_world import MockWorld
+from control_station.inventory import InventoryMonitor
 from control_station.order_desk import OrderDesk
 from control_station.order_flow import OrderDevices, OrderFlow
 from control_station.receiving_zones import ReceivingZoneError, load_receiving_zones
@@ -302,9 +303,22 @@ def main() -> None:
     except ReceivingZoneError as exc:
         receiving_zones = {}
         print(f"수령 구역 파일을 읽지 못해 주문을 받을 수 없습니다: {exc}", flush=True)
+    def orderable_products() -> list[dict[str, str]]:
+        if act_policies is None:
+            return []
+        labels = {policy["object_class"]: policy["label"] for policy in act_policies.policies.values()}
+        return [{"object_class": name, "label": label} for name, label in labels.items()]
+
+    def arms_at_work() -> bool:
+        # An arm hides the shelf while it picks: the loading spot is held by an order, or a policy run is going.
+        return server.order_flow.station_owner is not None or bool(server.policy_run_supervisor.snapshot()["process_alive"])
+
+    server.inventory = InventoryMonitor(
+        shelf_stock, arms_at_work, orderable_products, task_store.reserved_units, task_store.confirmed_transfers,
+    ).start()
     server.order_desk = OrderDesk(
         task_store, server.task_orchestrator, server.order_devices, server.arms, act_policies,
-        receiving_zones, pick_stats,
+        receiving_zones, pick_stats, inventory=server.inventory.snapshot,
     )
     if real_arm:
         print("작업 흐름의 팔 단계가 실제 팔 명령(PICK_WITH_POLICY)을 보냅니다", flush=True)
@@ -322,6 +336,7 @@ def main() -> None:
         server.arm_supervisor.close()
         server.policy_run_supervisor.close()
         server.task_orchestrator.close()
+        server.inventory.close()
         task_store.close()
         provider.close()
 

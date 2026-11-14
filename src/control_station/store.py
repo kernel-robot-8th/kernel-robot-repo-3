@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -421,6 +423,36 @@ class TaskStore:
                 select(TaskRecord).order_by(TaskRecord.created_at.desc(), TaskRecord.id.desc())
             ).all()
             return [self._present(task) for task in tasks]
+
+    def reserved_units(self) -> Counter:
+        """Units that open orders still need from the shelves: ordered minus already moved onto a Pinky.
+
+        Waiting and running orders reserve; a finished, failed or canceled order releases what it did not take."""
+        open_statuses = [TaskStatus.PENDING.value, TaskStatus.VALIDATING.value, TaskStatus.RUNNING.value,
+                         TaskStatus.CANCELING.value, TaskStatus.NEEDS_INTERVENTION.value]
+        reserved: Counter = Counter()
+        with self._sessions() as session:
+            orders = session.scalars(
+                select(TaskRecord).where(TaskRecord.order_items.is_not(None), TaskRecord.status.in_(open_statuses))
+            ).all()
+            for order in orders:
+                need = Counter({str(item["object_class"]): int(item["quantity"]) for item in order.order_items or []})
+                moved = Counter(
+                    str((step.detail or {}).get("object_class")) for step in order.steps
+                    if step.step_type == "VERIFY_TRANSFER" and step.status == StepStatus.SUCCEEDED.value
+                )
+                reserved.update(need - moved)
+        return reserved
+
+    def confirmed_transfers(self) -> list[tuple[str, str, str]]:
+        """(step id, shelf, object) of every unit the order flow confirmed moved from a shelf onto a Pinky."""
+        with self._sessions() as session:
+            steps = session.scalars(
+                select(TaskStepRecord).where(TaskStepRecord.step_type == "VERIFY_TRANSFER",
+                                             TaskStepRecord.status == StepStatus.SUCCEEDED.value)
+            ).all()
+            return [(step.id, str(step.detail["shelf_id"]), str(step.detail["object_class"]))
+                    for step in steps if (step.detail or {}).get("shelf_id") and (step.detail or {}).get("object_class")]
 
     def pending_orders(self) -> list[dict[str, Any]]:
         """Orders waiting in the intake (not started yet), oldest first."""
