@@ -43,7 +43,7 @@ let selectedTaskId = null;
 let parkingCameraId = null;
 let controlMode = 'unknown';
 
-const viewNames = { flow: '주문 진행', overview: '현황', manual: '수동 조작', tasks: '작업 이력', api: 'API' };
+const viewNames = { flow: '주문 진행', pinky: '핑키', overview: '현황', manual: '수동 조작', tasks: '작업 이력', api: 'API' };
 const controlModeLabels = {
   mock: '모의',
   ros2: 'ROS 2 상태 관측',
@@ -569,15 +569,16 @@ function pinkyBadge(pinkyId) {
 }
 
 // Short notices in the corner (new order, start result, refused control); they disappear by themselves.
+// kind: info | warning | error. A line break in the detail starts a new line.
 const toastStack = document.querySelector('#toastStack');
 const TOAST_MS = 5000;
 
-function showToast(title, detail = '', kind = 'info') {
+function showToast(title, detail = '', kind = 'info', durationMs = TOAST_MS) {
   const toast = document.createElement('div');
   toast.className = `toast ${kind}`;
   toast.innerHTML = `<strong>${escapeHtml(title)}</strong>${detail ? `<span>${escapeHtml(detail)}</span>` : ''}`;
   toastStack.append(toast);
-  window.setTimeout(() => toast.remove(), TOAST_MS);
+  window.setTimeout(() => toast.remove(), durationMs);
 }
 
 // The worker replays the joint pose it taught for the chosen slot; no coordinates are sent.
