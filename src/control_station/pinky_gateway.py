@@ -152,7 +152,9 @@ def _waypoints(robot: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         x, y = _number(point.get("x_m", point.get("x"))), _number(point.get("y_m", point.get("y")))
         if x is not None and y is not None:
-            points.append({"label": str(point.get("label")), "x_m": x, "y_m": y})
+            # The dashboard's id is what POST /api/pinky/{id}/waypoints/{wid}/delete needs (the delete button).
+            points.append({"id": str(point["id"]) if point.get("id") else None,
+                           "label": str(point.get("label")), "x_m": x, "y_m": y})
     return points
 
 
