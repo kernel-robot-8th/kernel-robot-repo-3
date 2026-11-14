@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import math
 import time
 from pathlib import Path
 
@@ -42,7 +41,6 @@ def build_goal(args: argparse.Namespace) -> MoveToSlot.Goal:
     goal.command_id = args.command_id or f"PRACTICE-{time.strftime('%H%M%S')}"
     goal.slot_id = args.slot_id
     goal.slot_map_version = args.slot_map_version or hashlib.sha256(args.slots.read_bytes()).hexdigest()
-    goal.lateral_offset_m = math.nan if args.lateral_offset_m is None else args.lateral_offset_m
     deadline = time.time() + args.valid_for
     goal.valid_until.sec = int(deadline)
     goal.valid_until.nanosec = int((deadline % 1) * 1e9)
@@ -55,7 +53,6 @@ def main() -> int:
     parser.add_argument("--action", default="/omx/move_to_slot")
     parser.add_argument("--slots", type=Path, default=REPOSITORY_ROOT / "config" / "shelf-slots.json")
     parser.add_argument("--slot-map-version", help="send this instead of the SHA-256 of --slots (to practise a rejection)")
-    parser.add_argument("--lateral-offset-m", type=float, help="object left(+)/right(-) of the slot centre line")
     parser.add_argument("--valid-for", type=float, default=30.0, help="seconds until the worker must not start (negative = expired)")
     parser.add_argument("--command-id")
     parser.add_argument("--cancel-after", type=float, help="request cancel this many seconds after the goal is accepted")
@@ -109,8 +106,6 @@ def main() -> int:
             print(f"  사유 {result.reason_code} {result.message}".rstrip())
         if result.joint_names:
             print(f"  최종 {dict(zip(result.joint_names, result.final_ticks))}  최대 오차 {result.max_error_ticks} ticks")
-        if not math.isnan(result.pan_correction_degrees):
-            print(f"  어깨 좌우 보정 {result.pan_correction_degrees:+.1f}°")
         print("  모의 결과 (실물 모터는 움직이지 않음)" if result.simulated else "  실물 모터 결과")
         return 0 if result.outcome == "SUCCEEDED" and result.pose_reached else 1
     finally:
