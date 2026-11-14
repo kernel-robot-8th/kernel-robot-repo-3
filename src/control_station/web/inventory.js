@@ -75,7 +75,8 @@ function renderInventorySummary() {
   setStat(inventoryStatReserved, reserved, { tone: reserved ? 'active' : 'zero' });
   if (!loadError) {
     inventorySummaryTitle.innerHTML = {
-      live: data.simulated ? '모의 세계에서 센 재고예요 <span class="sim-tag">모의</span>' : '카메라로 재고를 확인하고 있어요',
+      live: !data.simulated ? '카메라로 재고를 확인하고 있어요'
+        : devMode ? '모의 세계에서 센 재고예요 <span class="sim-tag">모의</span>' : '재고를 확인하고 있어요',
       held: '팔이 작업 중이라 마지막 확인값을 보여 줘요',
       unknown: '재고를 확인하지 못했어요',
     }[data.state] || escapeHtml(data.state);

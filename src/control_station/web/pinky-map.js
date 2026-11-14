@@ -229,9 +229,15 @@ function drawPinkyMap(svg, empty) {
   const stopping = new Set((pinkyScreen.view?.pinkies || []).filter((pinky) => pinky.stop_pending).map((pinky) => pinky.pinky_id));
   drawMapPinkies(svg.querySelector('.map-pinkies'), data.pinkies || [], frame, stopping);
   const placed = (data.pinkies || []).filter(mapPlaced);
-  svg.setAttribute('aria-label', `핑키 지도${data.simulated ? ' (모의)' : ''}: ${placed.length
+  svg.setAttribute('aria-label', `핑키 지도${data.simulated ? devWord(' (모의)') : ''}: ${placed.length
     ? placed.map((pinky) => `${pinky.name} x ${pinky.x_m.toFixed(2)} m, y ${pinky.y_m.toFixed(2)} m`).join(', ')
     : '위치를 아는 핑키가 없습니다'}`);
+}
+
+// The map's note, except the mock map's own remark outside dev mode.
+function mapNote() {
+  const data = pinkyMapState.data;
+  return !data?.note || (data.simulated && !devMode) ? '' : data.note;
 }
 
 // Receiving zones whose waypoint is not recorded cannot be drawn; they are named beside the map instead.
@@ -255,8 +261,9 @@ function renderMapViewer() {
   drawPinkyMap(mapViewerSvg, mapViewerEmpty);
   const data = pinkyMapState.data;
   mapViewerTag.innerHTML = data?.simulated ? '<span class="sim-tag">모의</span>' : '';
-  mapViewerNote.hidden = !data?.note;
-  mapViewerNote.textContent = data?.note || '';
+  const note = mapNote();
+  mapViewerNote.hidden = !note;
+  mapViewerNote.textContent = note;
   mapViewerOff.innerHTML = mapZoneNotesHtml();
   mapViewerList.innerHTML = (data?.pinkies || []).map((pinky) => `
     <li class="${mapPlaced(pinky) ? '' : 'muted'}">

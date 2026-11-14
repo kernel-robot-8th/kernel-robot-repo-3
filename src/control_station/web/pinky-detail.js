@@ -94,7 +94,7 @@ function detailField(name) {
 function sensorRowsHtml(pinky) {
   const details = pinky.sensor_details || [];
   if (!details.length) {
-    return `<li class="muted">${pinky.simulated ? '모의 핑키는 센서 값이 없어요' : '센서 값을 받지 못했어요'}</li>`;
+    return `<li class="muted">${pinky.simulated && devMode ? '모의 핑키는 센서 값이 없어요' : '센서 값을 받지 못했어요'}</li>`;
   }
   return details.map((sensor) => {
     const age = sensor.age_s == null ? '안 들어옴' : `${sensor.age_s < 1 ? '방금' : `${sensor.age_s.toFixed(1)}초 전`}`;
@@ -145,7 +145,7 @@ function detailLogHtml(pinkyId) {
     return `<li><time>${escapeHtml(formatClock(entry.at))}</time>
       <span>${escapeHtml(pinkyActionLabels[entry.action] || entry.action)}</span>
       <span class="result-chip ${outcome.kind}">${outcome.word}</span>
-      <small>${escapeHtml(entry.message || '')}</small></li>`;
+      <small>${escapeHtml(commandMessage(entry))}</small></li>`;
   }).join('');
 }
 
@@ -156,7 +156,7 @@ function renderPinkyDetail() {
   const id = pinky.pinky_id;
   pinkySheetTitle.innerHTML = `${pinkyBadge(id, { offline: !pinky.connected })} ${escapeHtml(pinky.robot_name || '핑키')}${pinky.simulated ? ' <span class="sim-tag">모의</span>' : ''}`;
   pinkySheet.classList.toggle('offline', !pinky.connected);
-  detailField('identity').textContent = pinky.ip || (pinky.simulated ? '모의 세계' : 'IP 모름');
+  detailField('identity').textContent = pinky.ip || (pinky.simulated && devMode ? '모의 세계' : 'IP 모름');
   detailField('phase').textContent = pinky.connected ? (pinky.phase_label || pinky.phase || '단계 모름') : '단계 알 수 없음';
   setHtmlIfChanged(detailField('chips'), `${readinessChipHtml(pinky)}${markerChipHtml(pinky)}${pinky.stop_pending ? '<span class="ready-chip stopping">정지 적용 중</span>' : ''}`);
   setHtmlIfChanged(detailField('battery'), batteryStatHtml(pinky));

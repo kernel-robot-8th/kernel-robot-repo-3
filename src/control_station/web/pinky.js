@@ -77,7 +77,7 @@ function pinkyName(pinkyId) {
 
 function commandOutcome(entry) {
   if (entry.ok) return { kind: 'ok', word: '접수' };
-  if (entry.simulated) return { kind: 'mock', word: '모의' };
+  if (entry.simulated) return { kind: 'mock', word: devMode ? '모의' : '보내지 않음' };
   if (entry.http_status == null) return { kind: 'unknown', word: '응답 없음' };
   if (entry.http_status === 401) return { kind: 'refused', word: '비밀번호 필요' };
   return { kind: 'refused', word: '거절' };
@@ -85,10 +85,15 @@ function commandOutcome(entry) {
 
 function commandPhrase(entry, label) {
   if (entry.ok) return `${label} 요청 접수`;
-  if (entry.simulated) return `${label} 보내지 않음 (모의)`;
+  if (entry.simulated) return `${label} 보내지 않음${devWord(' (모의)')}`;
   if (entry.http_status == null) return `${label} 결과 모름, 핑키 관제 응답 없음`;
   if (entry.http_status === 401) return `${label} 거절, SSH 비밀번호 필요`;
   return `${label} 거절`;
+}
+
+// The server's own words, except for commands it did not send (mock mode), which say so without the mode word.
+function commandMessage(entry) {
+  return entry.simulated && !devMode ? '핑키 관제에 연결되기 전이라 보내지 않았어요' : entry.message || '';
 }
 
 const pinkyToastKinds = { ok: 'info', mock: 'warning', unknown: 'error', refused: 'error' };
@@ -114,8 +119,10 @@ function renderPinkyLink() {
     const checked = `${formatClock(view.checked_at)}에 확인했어요`;
     if (view.source === 'mock_world') {
       state = 'mock';
-      title = '모의 핑키를 보여 주고 있어요';
-      detail = `핑키 관제 주소가 없어 모의 세계의 핑키를 보여 주며, 명령은 보내지 않습니다. ${checked}`;
+      title = devMode ? '모의 핑키를 보여 주고 있어요' : '핑키 관제에 연결하기 전이에요';
+      detail = devMode
+        ? `핑키 관제 주소가 없어 모의 세계의 핑키를 보여 주며, 명령은 보내지 않습니다. ${checked}`
+        : `핑키 관제 주소가 설정되지 않아 명령은 보내지 않아요. ${checked}`;
     } else if (view.reachable) {
       state = 'ok';
       title = '핑키 관제와 연결돼 있어요';
@@ -156,7 +163,9 @@ function batteryStatHtml(pinky) {
 
 function readinessChipHtml(pinky) {
   if (!pinky.connected) return '<span class="ready-chip offline">연결 끊김</span>';
-  return `<span class="ready-chip ${pinky.ready ? 'ready' : 'not-ready'}">${escapeHtml(pinky.readiness_label || (pinky.ready ? '주행 가능' : '주행 불가'))}</span>`;
+  const fallback = pinky.ready ? '주행 가능' : '주행 불가';
+  const label = pinky.simulated && !devMode ? fallback : pinky.readiness_label || fallback;  // the mock says "모의 핑키"
+  return `<span class="ready-chip ${pinky.ready ? 'ready' : 'not-ready'}">${escapeHtml(label)}</span>`;
 }
 
 // The ArUco marker the Pinky carries, and whether its stopping spot is registered for the arrival check.
@@ -171,7 +180,7 @@ function markerChipHtml(pinky) {
 function lastStopHtml(pinkyId) {
   const lastStop = lastCommandOf(pinkyId, 'stop');
   if (!lastStop) return '';
-  return `<p class="pinky-last-stop ${commandOutcome(lastStop).kind}" title="${escapeHtml(lastStop.message || '')}">
+  return `<p class="pinky-last-stop ${commandOutcome(lastStop).kind}" title="${escapeHtml(commandMessage(lastStop))}">
     <time datetime="${escapeHtml(lastStop.at)}">${escapeHtml(formatClock(lastStop.at))}</time> ${escapeHtml(commandPhrase(lastStop, '정지'))}</p>`;
 }
 
@@ -216,8 +225,9 @@ function renderSmallMap() {
   const data = pinkyMapState.data;
   pinkyMapTag.innerHTML = data?.simulated ? '<span class="sim-tag">모의</span>' : '';
   pinkyMapOff.innerHTML = mapZoneNotesHtml();
-  pinkyMapNote.hidden = !data?.note;
-  pinkyMapNote.textContent = data?.note || '';
+  const note = mapNote();
+  pinkyMapNote.hidden = !note;
+  pinkyMapNote.textContent = note;
 }
 
 // ---- command log ----
@@ -232,7 +242,7 @@ function pinkyLogRowHtml(entry) {
       <time datetime="${escapeHtml(entry.at)}">${escapeHtml(formatClock(entry.at))}</time>
       <span class="pinky-log-what">${escapeHtml(what)}</span>
       <span class="result-chip ${outcome.kind}">${outcome.word}</span>
-      <span class="pinky-log-message">${escapeHtml(entry.message || '')}${status ? ` <small>HTTP ${escapeHtml(status)}</small>` : ''}</span>
+      <span class="pinky-log-message">${escapeHtml(commandMessage(entry))}${status ? ` <small>HTTP ${escapeHtml(status)}</small>` : ''}</span>
     </li>`;
 }
 
@@ -305,7 +315,8 @@ async function sendPinkyCommand(pinkyId, action, { path, body = {}, label }) {
       return null;
     }
     const phrase = commandPhrase(entry, label);
-    showToast(`${name} ${phrase}`, entry.message && entry.message !== phrase ? entry.message : '',
+    const message = commandMessage(entry);
+    showToast(`${name} ${phrase}`, message && message !== phrase ? message : '',
       pinkyToastKinds[commandOutcome(entry).kind], PINKY_COMMAND_TOAST_MS);
     if (entry.http_status === 401) openPasswordPrompt({ reason: `${name} ${label} 요청이 거절됐어요.`, retryLabel: `${name} ${label}`, retry });
     return entry;
@@ -328,7 +339,7 @@ function stopAllSummary(commands) {
   const accepted = commands.filter((entry) => entry.ok).length;
   if (commands.length && accepted === commands.length) return { title: '핑키 전체 정지 요청 접수', kind: 'info' };
   if (commands.length && commands.every((entry) => entry.simulated)) {
-    return { title: '핑키 전체 정지 요청 보내지 않음 (모의)', kind: 'warning' };
+    return { title: `핑키 전체 정지 요청 보내지 않음${devWord(' (모의)')}`, kind: 'warning' };
   }
   return { title: `핑키 전체 정지, ${commands.length}대 중 ${accepted}대 접수`, kind: 'error' };
 }
@@ -336,7 +347,7 @@ function stopAllSummary(commands) {
 function stopAllLine(entry) {
   const phrase = commandPhrase(entry, '정지');
   const showMessage = !entry.ok && !entry.simulated && entry.http_status !== 401 && entry.message;
-  return `${pinkyName(entry.pinky_id)} ${phrase}${showMessage ? `: ${entry.message}` : ''}`;
+  return `${pinkyName(entry.pinky_id)} ${phrase}${showMessage ? `: ${commandMessage(entry)}` : ''}`;
 }
 
 async function stopAllPinkies() {
@@ -348,7 +359,7 @@ async function stopAllPinkies() {
     const commands = result.commands || [];
     const { title, kind } = stopAllSummary(commands);
     const mockOnly = commands.length && commands.every((entry) => entry.simulated);
-    const detail = mockOnly ? commands[0].message : commands.map(stopAllLine).join('\n');
+    const detail = mockOnly ? commandMessage(commands[0]) : commands.map(stopAllLine).join('\n');
     showToast(title, detail || apiErrorMessage(result, '관제 서버가 요청을 받지 않았습니다'), kind, PINKY_COMMAND_TOAST_MS);
     if (commands.some((entry) => entry.http_status === 401)) {
       openPasswordPrompt({ reason: '정지 요청 일부가 거절됐어요.', retryLabel: '핑키 전체 정지', retry: stopAllPinkies });
@@ -403,7 +414,7 @@ async function sendPinkyPassword(event) {
         passwordRetry.focus();
       }
     } else if (entry?.simulated) {
-      setPasswordMessage(entry.message, 'warning');
+      setPasswordMessage(commandMessage(entry), 'warning');
     } else {
       setPasswordMessage(`전달하지 못했어요: ${entry?.message || apiErrorMessage(result, '관제 서버가 요청을 받지 않았습니다')}`, 'error');
     }

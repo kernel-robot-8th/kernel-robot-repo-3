@@ -53,6 +53,16 @@ const controlModeLabels = {
 
 let activeView = 'flow';
 
+// Mock traces (the mock world panel, "모의" tags, mode words) show only with ?dev=1. In everyday use the 종합
+// dashboard alone says which devices are not connected yet.
+const devMode = new URLSearchParams(window.location.search).get('dev') === '1';
+document.body.classList.toggle('dev', devMode);
+
+// A mock word in dev mode, nothing otherwise.
+function devWord(word) {
+  return devMode ? word : '';
+}
+
 // The view lives in the address (#pinky, #inventory…), so a reload or a shared link opens the same view.
 // Other scripts follow the switch through the `viewchange` event instead of listening to the menu.
 function showView(requested) {
@@ -161,7 +171,9 @@ function renderOverviewSummary(health, robots, cameras) {
     setStat(overviewStatCameras, null);
     return;
   }
-  overviewSummaryTitle.textContent = `API 정상, ${controlModeLabels[health.mode] || health.mode} 모드로 실행 중이에요`;
+  overviewSummaryTitle.textContent = health.mode !== 'mock' || devMode
+    ? `API 정상, ${controlModeLabels[health.mode] || health.mode} 모드로 실행 중이에요`
+    : '관제 서버가 정상이에요';
   const reachable = robots.filter((robot) => robot.state === 'available').length;
   const streaming = cameras.filter((camera) => camera.stream_state === 'STREAMING').length;
   setStat(overviewStatRobots, reachable, { total: robots.length, tone: reachable < robots.length ? 'attention' : '' });
@@ -743,7 +755,7 @@ const executionLabels = {
   QUEUED: '워커 대기열', DISPATCHED: '워커가 가져감', REJECTED: '워커 거부', EXPIRED: '만료',
 };
 const stepOutcomeLabels = {
-  SIMULATED_SUCCESS: '모의 완료',
+  SIMULATED_SUCCESS: devMode ? '모의 완료' : '완료',
   CANCEL_CONFIRMED: '취소 확인',
   NOT_EXECUTED_AFTER_CANCEL: '취소 뒤 미실행',
   NOT_EXECUTED_AFTER_FAILURE: '실패 뒤 미실행',
@@ -753,9 +765,9 @@ const stepOutcomeLabels = {
   ARM_HOME_PLACEMENT_LEFT_TO_VERIFY_LOAD: '적재 판단은 적재 확인 단계로',
 };
 const taskEventLabels = {
-  MOCK_SCENARIO_FAILURE: '모의 실패 시나리오 발생',
-  MOCK_EXECUTION_FAILED: '모의 실행 오류',
-  MOCK_TASK_COMPLETED: '모의 작업 완료',
+  MOCK_SCENARIO_FAILURE: `${devWord('모의 ')}실패 시나리오 발생`,
+  MOCK_EXECUTION_FAILED: `${devWord('모의 ')}실행 오류`,
+  MOCK_TASK_COMPLETED: `${devWord('모의 ')}작업 완료`,
   ARRIVAL_NOT_CONFIRMED: '도착 미확인 · 팔 단계 시작 안 함',
   LOAD_NOT_CONFIRMED: '적재 미확인 · 출발하지 않음',
   TARGET_CONFIRMED: '정면 카메라 물체 확인',
@@ -774,7 +786,7 @@ const loadStatusLabels = {
 function formatLoadObservation(payload) {
   const observation = payload.observation || {};
   const observed = observation.observed_count == null ? '개수 없음' : `${observation.observed_count}개`;
-  return `적재 확인 · ${loadStatusLabels[payload.status] || payload.status} · 기대 ${payload.expected_count}개 · 관측 ${observed}${observation.simulated ? ' · 모의 관측(카메라 미사용)' : ''}`;
+  return `적재 확인 · ${loadStatusLabels[payload.status] || payload.status} · 기대 ${payload.expected_count}개 · 관측 ${observed}${observation.simulated ? devWord(' · 모의 관측(카메라 미사용)') : ''}`;
 }
 const parkingStatusLabels = {
   ARRIVED: '도착',
@@ -1170,17 +1182,17 @@ function renderTaskDetail(task) {
     && task.local_execution_owner === 'LOCAL_WORKER_ACTIVE';
   const modeLabel = controlModeLabels[controlMode] || controlMode;
   const modeNote = controlMode === 'mock'
-    ? '모의 모드 · 단계 성공은 진행 시뮬레이션이며 실제 인식/로봇 명령을 의미하지 않습니다.'
-    : `현재 ${escapeHtml(modeLabel)} 모드 · 작업 실행은 모의 모드에서만 제공됩니다.`;
+    ? devWord('모의 모드 · 단계 성공은 진행 시뮬레이션이며 실제 인식/로봇 명령을 의미하지 않습니다.')
+    : `현재 ${escapeHtml(modeLabel)} 모드에서는 이 화면에서 작업을 실행하지 않습니다.`;
   const ownershipNote = task.local_execution_owner === 'NO_LOCAL_WORKER'
     ? '<p class="task-error">저장된 작업은 활성 상태지만 이 서버 프로세스에 실행 worker가 없습니다. 자동 재개나 명령 재전송은 하지 않습니다. 작업 상태를 운영자가 확인해야 합니다.</p>'
     : task.local_execution_owner === 'MODE_NOT_MANAGED'
       ? '<p class="task-error">저장된 작업은 활성 상태지만 현재 모드에는 이 작업을 관리하는 실행 worker가 연결되어 있지 않습니다. 자동 재개나 명령 재전송은 하지 않습니다.</p>'
       : '';
   const action = canStart
-    ? '<button type="button" data-task-action="start">모의 작업 시작</button>'
+    ? '<button type="button" data-task-action="start">작업 시작</button>'
     : canCancel
-      ? '<button type="button" class="secondary" data-task-action="cancel">모의 작업 취소</button>'
+      ? '<button type="button" class="secondary" data-task-action="cancel">작업 취소</button>'
       : '';
   taskDetail.innerHTML = `
     <header class="task-detail-head"><div><h3>${escapeHtml(task.destination)}</h3><small>${escapeHtml(task.id)}</small></div><span class="task-status">${escapeHtml(taskStatusLabels[task.status] || task.status)}</span></header>
@@ -1195,7 +1207,7 @@ function renderTaskDetail(task) {
     <ol class="step-list">${steps.map((step) => {
       const stepLabel = stepLabels[step.step_type] || step.step_type;
       const robotLabel = step.robot_id === 'mobile-01' ? '주행 로봇' : step.robot_id === 'arm-01' ? '로봇팔' : '';
-      return `<li><span>${escapeHtml(stepLabel)}${step.robot_id ? `<small class="step-robot">${robotLabel ? `${robotLabel} · ` : ''}${escapeHtml(step.robot_id)}</small>` : ''}</span><strong>${escapeHtml(executionLabels[step.status] || step.status)}${step.result?.outcome && stepOutcomeLabels[step.result.outcome] ? ` · ${stepOutcomeLabels[step.result.outcome]}` : ''}${step.result?.source === 'mock' ? ' · 모의' : ''}</strong></li>`;
+      return `<li><span>${escapeHtml(stepLabel)}${step.robot_id ? `<small class="step-robot">${robotLabel ? `${robotLabel} · ` : ''}${escapeHtml(step.robot_id)}</small>` : ''}</span><strong>${escapeHtml(executionLabels[step.status] || step.status)}${step.result?.outcome && stepOutcomeLabels[step.result.outcome] ? ` · ${stepOutcomeLabels[step.result.outcome]}` : ''}${step.result?.source === 'mock' ? devWord(' · 모의') : ''}</strong></li>`;
     }).join('')}</ol>
     <h4>이벤트</h4>
     <ol class="event-list">${events.map((event) => {
@@ -1212,7 +1224,7 @@ function renderTaskDetail(task) {
           : eventName === 'PROGRESS' && event.payload?.arm_state
             ? `OMX ${event.payload.arm_command_id} · ${executionLabels[event.payload.arm_state] || event.payload.arm_state}`
           : eventName === 'PROGRESS'
-            ? `${event.payload?.source === 'mock' ? '모의 ' : ''}진행률 ${Number(event.payload?.progress) || 0}% · ${event.payload?.message || '진행 이벤트'}`
+            ? `${event.payload?.source === 'mock' ? devWord('모의 ') : ''}진행률 ${Number(event.payload?.progress) || 0}% · ${event.payload?.message || '진행 이벤트'}`
           : eventName === 'TARGET_CONFIRMED'
             ? `${taskEventLabels[eventName]} · ${event.payload?.message || ''} · 신뢰도 ${event.payload?.confidence ?? '-'}`
           : eventName === 'ARM_COMMAND_CREATED'
@@ -1230,12 +1242,12 @@ function renderTaskDetail(task) {
 }
 
 async function sendTaskAction(taskId, action) {
-  taskMessage.textContent = action === 'start' ? '모의 작업을 시작합니다…' : '모의 작업 취소를 요청합니다…';
+  taskMessage.textContent = action === 'start' ? '작업을 시작합니다…' : '작업 취소를 요청합니다…';
   try {
     const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/${action}`, { method: 'POST' });
     const result = await response.json();
     if (!response.ok) throw new Error(apiErrorMessage(result, '작업 요청에 실패했습니다.'));
-    taskMessage.textContent = `${result.execution_mode || 'mock'} · ${taskStatusLabels[result.task.status] || result.task.status}`;
+    taskMessage.textContent = `${devMode ? `${result.execution_mode || 'mock'} · ` : ''}${taskStatusLabels[result.task.status] || result.task.status}`;
   } catch (error) {
     taskMessage.textContent = error.message;
   } finally {
@@ -1311,7 +1323,8 @@ async function refresh() {
     controlMode = health.mode;
     updateParkingConfig(health.parking);
     serverStatus.className = 'server-status ok';
-    serverStatus.innerHTML = `<span class="dot"></span><span><strong>API 정상</strong><small>${escapeHtml(controlModeLabels[health.mode] || health.mode)} 모드</small></span>`;
+    const modeWords = health.mode !== 'mock' || devMode ? `<small>${escapeHtml(controlModeLabels[health.mode] || health.mode)} 모드</small>` : '';
+    serverStatus.innerHTML = `<span class="dot"></span><span><strong>API 정상</strong>${modeWords}</span>`;
     renderOverviewSummary(health, robotData.robots, cameraData.cameras);
     renderRobots(robotData.robots);
     renderCameras(cameraData.cameras);
@@ -1444,7 +1457,7 @@ function renderFlowOrders(orders) {
 }
 
 function renderMockWorld(world, faultKinds) {
-  mockPanel.hidden = !world;
+  mockPanel.hidden = !world || !devMode;
   if (!world) return;
   if (!mockFaultKind.options.length) {
     mockFaultKind.innerHTML = faultKinds.map((kind) => `<option value="${escapeHtml(kind)}">${escapeHtml(mockFaultLabels[kind] || kind)}</option>`).join('');
