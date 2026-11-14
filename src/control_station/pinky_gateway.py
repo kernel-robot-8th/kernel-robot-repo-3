@@ -157,9 +157,11 @@ def _waypoints(robot: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 class PinkyGateway:
-    def __init__(self, client: PinkyFleetClient | None, mock_status: Callable[[str], dict[str, Any]] | None = None):
+    def __init__(self, client: PinkyFleetClient | None, mock_status: Callable[[str], dict[str, Any]] | None = None,
+                 markers: dict[str, Any] | None = None):
         self.client = client
         self.mock_status = mock_status
+        self.markers = markers or {}  # pinky id -> PinkyMarker (which marker it carries, registered or not)
         self._log: deque[dict[str, Any]] = deque(maxlen=LOG_SIZE)
         self._lock = threading.Lock()
 
@@ -179,6 +181,9 @@ class PinkyGateway:
                 pinkies = [shape_pinky(pid, robots.get(pid) or {}, self.client.fleet_status(pid)) for pid in PINKY_IDS]
             except (PinkyFleetError, OSError) as exc:
                 error = str(exc)
+        for card in pinkies:
+            marker = self.markers.get(card["pinky_id"])
+            card["marker"] = marker.as_dict() if marker is not None else None
         with self._lock:
             log = list(self._log)
         return {"source": self.source, "reachable": error is None, "error": error, "pinkies": pinkies,

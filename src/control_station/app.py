@@ -31,11 +31,12 @@ from control_station.order_flow import OrderDevices, OrderFlow
 from control_station.receiving_zones import ReceivingZoneError, load_receiving_zones
 from control_station.pinky_fleet import PinkyFleetClient
 from control_station.pinky_gateway import PinkyGateway
+from control_station.pinky_markers import PinkyMarkerError, arrival_for, load_pinky_markers
 from control_station.parking_ros import RosParkingSource
 from control_station.robot_adapters import make_status_provider
 from control_station.shelf_slot_map import ShelfSlotMapError, load_shelf_slot_map
 from control_station.shelf_slot_zones import ShelfSlotZones, SlotSelectionError, select_slot_for_class
-from control_station.store import TaskStore
+from control_station.store import PINKY_NAMES, TaskStore
 from control_station.task_orchestrator import MockTaskOrchestrator
 
 
@@ -247,13 +248,21 @@ def main() -> None:
     # every observation it makes says simulated.
     server.mock_world = MockWorld.from_env()
     world = server.mock_world
-    # Pinky arrival for orders: the real ceiling-camera judgment when a parking spot is configured (one registered
-    # spot, the loading spot between the two arms), else the mock. CONTROL_STATION_ORDER_PARKING=mock forces the mock.
+    # Pinky arrival for orders: the real ceiling-camera judgment when the parking node is configured, else the mock
+    # (CONTROL_STATION_ORDER_PARKING=mock forces it). Each Pinky carries its own marker and has its own
+    # registration of the loading spot (config/pinky-markers.json), and the check uses the assigned Pinky's.
+    try:
+        pinky_markers = load_pinky_markers()
+    except PinkyMarkerError as exc:
+        pinky_markers = {}
+        print(f"핑키 마커 파일을 읽지 못했습니다: {exc}", flush=True)
+    server.pinky_markers = pinky_markers
     order_parking = world.parking
-    if arrival_check is not None and os.environ.get("CONTROL_STATION_ORDER_PARKING", "").strip() != "mock":
-        def order_parking(pinky_id: str) -> dict[str, Any]:
-            return arrival_check()
-        print(f"주문 흐름의 핑키 도착 판정: 실제 주차 판정 ({parking_spot_id})", flush=True)
+    if server.parking_check is not None and os.environ.get("CONTROL_STATION_ORDER_PARKING", "").strip() != "mock":
+        order_parking = partial(arrival_for, pinky_markers, server.parking_check)
+        print("주문 흐름의 핑키 도착 판정: 실제 주차 판정, 핑키별 마커 " + ", ".join(
+            f"{PINKY_NAMES[pid]}={m.marker_id}({'등록' if m.registered else '미등록'})" for pid, m in pinky_markers.items()),
+            flush=True)
     # Pinky mission phases and the dock_complete / received signals: the Pinky team's fleet dashboard when its URL
     # is set (e.g. http://<pinky PC>:8765), else the mock world, which also sends the mock Pinky off for each order.
     fleet_url = os.environ.get("CONTROL_STATION_PINKY_FLEET_URL", "").strip()
@@ -268,7 +277,7 @@ def main() -> None:
         dispatch, mission_complete = fleet.dispatch, fleet.mission_complete
         print(f"주문 흐름의 핑키 신호: 핑키 관제 {fleet_url} (주문을 시작하면 실제 핑키가 출발합니다)", flush=True)
     # The Pinky screen reads and commands through the same client, so it shares the client's status cache.
-    server.pinky_gateway = PinkyGateway(fleet, world.fleet_status)
+    server.pinky_gateway = PinkyGateway(fleet, world.fleet_status, markers=pinky_markers)
     # Counting for the stock check and the per-object transfer check: the cameras' YOLO detections when
     # CONTROL_STATION_ORDER_COUNTS=camera (shelf cams with slot zones, the top cam inside the Pinky tray), else the
     # mock world. With camera counts but mock picks, a person has to move each object during the pick step.
