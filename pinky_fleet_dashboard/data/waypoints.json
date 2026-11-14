@@ -1,0 +1,305 @@
+{
+  "10": [
+    {
+      "label": "1",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 0.0,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "id": "3a51389da1e843279cd618e5ca53b69a"
+    },
+    {
+      "label": "2",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 0.0,
+      "yaw_rad": 1.5,
+      "id": "cdc2e2a3731c4478b869429061af62e4"
+    },
+    {
+      "label": "3",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 0.77,
+      "yaw_rad": 1.5,
+      "id": "b87d0d5275d349b7a3f94dae5539e642"
+    },
+    {
+      "label": "4",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 1.64,
+      "yaw_rad": -3.0,
+      "id": "eeb17aa8713647908aacb4f999a85998"
+    },
+    {
+      "label": "5",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 0.39,
+      "y_m": 1.64,
+      "yaw_rad": -3.0,
+      "id": "6df30ed949734a80a56702643e1b1bf0"
+    },
+    {
+      "label": "6",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 0.59,
+      "y_m": 1.24,
+      "yaw_rad": 0.0,
+      "id": "d0de9f23ed094f1498f7a8510d66025a"
+    },
+    {
+      "label": "7",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 1.24,
+      "yaw_rad": -1.5,
+      "id": "7ce4af45afd642aa96f10254a49e4f93"
+    },
+    {
+      "label": "8",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 0.0,
+      "y_m": 0.77,
+      "yaw_rad": -3.0,
+      "id": "eb6aa36a27aa4a5cbd0c7b9ca9a52e1a"
+    },
+    {
+      "label": "9",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 0.77,
+      "yaw_rad": -3.0,
+      "id": "63e88a41ae1441cc825ab57c94202e81"
+    }
+  ],
+  "11": [
+    {
+      "label": "1",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 0.0,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "id": "3a51389da1e843279cd618e5ca53b69a"
+    },
+    {
+      "label": "2",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 0.0,
+      "yaw_rad": 1.5,
+      "id": "cdc2e2a3731c4478b869429061af62e4"
+    },
+    {
+      "label": "3",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 0.77,
+      "yaw_rad": 1.5,
+      "id": "b87d0d5275d349b7a3f94dae5539e642"
+    },
+    {
+      "label": "4",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 1.64,
+      "yaw_rad": -3.0,
+      "id": "eeb17aa8713647908aacb4f999a85998"
+    },
+    {
+      "label": "5",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 0.39,
+      "y_m": 1.64,
+      "yaw_rad": -3.0,
+      "id": "6df30ed949734a80a56702643e1b1bf0"
+    },
+    {
+      "label": "6",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 0.59,
+      "y_m": 1.24,
+      "yaw_rad": 0.0,
+      "id": "d0de9f23ed094f1498f7a8510d66025a"
+    },
+    {
+      "label": "7",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 1.24,
+      "yaw_rad": -1.5,
+      "id": "7ce4af45afd642aa96f10254a49e4f93"
+    },
+    {
+      "label": "8",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 0.0,
+      "y_m": 0.77,
+      "yaw_rad": -3.0,
+      "id": "eb6aa36a27aa4a5cbd0c7b9ca9a52e1a"
+    },
+    {
+      "label": "9",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 0.77,
+      "yaw_rad": -3.0,
+      "id": "63e88a41ae1441cc825ab57c94202e81"
+    }
+  ],
+  "12": [
+    {
+      "label": "1",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 0.0,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "id": "3a51389da1e843279cd618e5ca53b69a"
+    },
+    {
+      "label": "2",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 0.0,
+      "yaw_rad": 1.5,
+      "id": "cdc2e2a3731c4478b869429061af62e4"
+    },
+    {
+      "label": "3",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 0.77,
+      "yaw_rad": 1.5,
+      "id": "b87d0d5275d349b7a3f94dae5539e642"
+    },
+    {
+      "label": "4",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 1.64,
+      "yaw_rad": -3.0,
+      "id": "eeb17aa8713647908aacb4f999a85998"
+    },
+    {
+      "label": "5",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 0.39,
+      "y_m": 1.64,
+      "yaw_rad": -3.0,
+      "id": "6df30ed949734a80a56702643e1b1bf0"
+    },
+    {
+      "label": "6",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 0.59,
+      "y_m": 1.24,
+      "yaw_rad": 0.0,
+      "id": "d0de9f23ed094f1498f7a8510d66025a"
+    },
+    {
+      "label": "7",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 1.24,
+      "yaw_rad": -1.5,
+      "id": "7ce4af45afd642aa96f10254a49e4f93"
+    },
+    {
+      "label": "8",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 0.0,
+      "y_m": 0.77,
+      "yaw_rad": -3.0,
+      "id": "eb6aa36a27aa4a5cbd0c7b9ca9a52e1a"
+    },
+    {
+      "label": "9",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 0.77,
+      "yaw_rad": -3.0,
+      "id": "63e88a41ae1441cc825ab57c94202e81"
+    }
+  ]
+}
