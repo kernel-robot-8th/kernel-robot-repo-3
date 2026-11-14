@@ -61,8 +61,8 @@ HTTP 서버 생존, 카메라 프레임 수신, Nav2 action server 발견, LeRob
 | 관제 UI → HTTP API | 주문·작업 생성·조회, 구조화된 대상 조건, 작업 시작·취소 | HTTP 접수와 작업 ID; 완료/취소는 별도 상태·이벤트 | localhost 구현; 단계별로 무엇이 모의인지는 [구현 현황](../implementation/current-state.md)과 [주문 흐름](../implementation/order-flow.md) |
 | Mock start/cancel API → UI/client | task-control 결과 또는 오류 | 오류는 `error_code`, 사용자용 `message`, 호환용 `error`를 함께 반환 | `TASK_NOT_FOUND`, `TASK_STATE_CONFLICT`, `TASK_NOT_STARTABLE`, `TASK_NOT_CANCELLABLE`, `TASK_WORKER_OWNERSHIP_UNCERTAIN`, `EXECUTION_MODE_UNSUPPORTED`, `MOCK_WORKER_START_FAILED`, `TASK_CONTROL_ERROR`, `CROSS_ORIGIN_REQUEST_REJECTED`; 다른 API는 아직 공통 오류 envelope 적용 전 |
 | Mock 오케스트레이터 → 작업 이력 저장소 | 현재 task/active-step/step/command/robot ID와 mock progress | task가 `VALIDATING`/`RUNNING`이고 같은 step이 `active_step_id` 및 `RUNNING` 상태이며 command ID가 일치할 때만 `PROGRESS` event를 추가; task/step 상태는 유지 | mock 지연 구간의 50% 표시; 장치 feedback이나 실측 작업량 아님; 모든 상관 ID와 상태 선행 조건을 저장소가 확인 |
-| 오케스트레이터 → Pinky 어댑터 | task/step/command ID, 목적지, deadline | 수락/거절, 진행, terminal 성공·실패, 취소 결과 | 공통 의미 확정; ROS 2 action 이름·타입·namespace·frame 미확정 |
-| 오케스트레이터 → OMX 어댑터 | task/step/command ID, 작업 종류·파라미터 | 수락/거절, 진행, 파지·적재 최종 결과 또는 실패 | 공통 의미 확정; 관제 자동 명령은 미연결. 로컬 LeRobot `OmxFollower.send_action()`은 `*.pos` 관절 목표를 쓰지만 task 수락/terminal 파지 결과를 제공하지 않음 |
+| 관제 ↔ 핑키 팀 관제(HTTP) | 핑키 ID, 임무 단계·`mission_token`, 도킹완료·수령 완료 신호 | 202 접수, 409 `PINKY_SIGNAL_REJECTED`, 502 `PINKY_SIGNAL_NOT_DELIVERED`, 무응답 `PINKY_FLEET_UNREACHABLE`. 202는 핑키가 움직였다는 뜻이 아님 | 구현([주문과 핑키 관제 신호](#주문과-핑키-관제-신호-현재-api-2026-11-11)). 주행(Nav2)은 핑키 팀 관제가 맡고 관제는 Nav2 goal을 보내지 않음 |
+| 오케스트레이터 → OMX 워커 | task/step/command ID, 작업 종류·대상 | 수락/거절, 진행, 파지·적재 최종 결과 또는 실패 | HTTP 명령 큐로 구현([OMX 명령 HTTP 인터페이스](../implementation/arm-command-api.md)). 이전 형식 작업은 `CONTROL_STATION_TASK_REAL_ARM=1`일 때 `PICK_WITH_POLICY`를 보내고, 주문의 `PICK_ITEM`은 아직 모의. 워커는 파지·적재를 확인하지 못해 정책 집기의 최선 결과가 `RESULT_UNKNOWN`/`PLACE_NOT_VERIFIED` |
 | 로봇 어댑터 → 이벤트 처리기 | robot/task/step/command ID, 장치 결과 | `ACCEPTED`, `EXECUTION_STARTED`, `PROGRESS`, `SUCCEEDED`, `FAILED`, `CANCELED` 또는 미확정 | 공통 이벤트 의미 확정; 장치별 실제 메시지 미확정 |
 | 천장 카메라 주차 판정 → 관제 | spot·marker ID, 등록 위치 대비 dx·dy·dyaw와 허용 오차·비율, 시야 확인 여부, 프레임 출처 | `ARRIVED`, `MISALIGNED`, 판정 불가(`NOT_FOUND`/`AMBIGUOUS`/`VIEW_UNVERIFIED`); Nav2 결과와 별개의 관측 | 초안: C++ 노드(`/pinky_parking/state`, `/pinky_parking/check`)와 CLI, 관제 GET 관측, `VERIFY_ARRIVAL`·주문 `WAIT_PINKY_ARRIVAL`의 `PARKING_OBSERVED` event·진행 조건 구현 ([주차 정렬 관측](#pinky-주차-정렬-관측-초안)) |
 | Head/Joint Camera → 관제 UI | 카메라별 프레임·연결·스트림·프레임 sequence/해상도·마지막 프레임 시각, closed-set YOLO 또는 선택 YOLO-World의 camera/frame 출처·고정 prompt vocabulary·픽셀 영역 | 카메라별 오류; 다른 카메라나 로봇 상태에 전파하지 않음; 검출 후보는 자동 선택/명령 신호가 아님 | API 관측 필드 구현; 가중치 미포함; 실제 장착 위치·실물 객체별 검출 적합성은 미검증 |
@@ -114,7 +114,7 @@ OMX에는 좌표를 보내지 않습니다(2026-11-11 결정). 팔은 기록한 
 |---|---|---|
 | 카메라 검출 위치 | 이미지 `(u, v)` / `pixel`, 카메라 ID와 프레임 시각 동반 | 픽셀 표현은 개념상 정함; 해상도·원점·crop/resize 보정은 카메라별 확인 필요 |
 | OMX 집기 목표 | 좌표 없음. 칸 ID(`pick_slot_id`) 또는 물체 이름으로 고른 학습 정책 ([OMX 명령 HTTP 인터페이스](../implementation/arm-command-api.md)의 `target`) | 정함 |
-| Pinky 목적지 | Nav2가 요구하는 map frame과 pose 단위 | **미확정**: map/frame, yaw 표현, waypoint/action schema 조사 필요 |
+| Pinky 목적지 | 관제는 좌표를 보내지 않음. 경로와 정차 위치(지금은 5번)는 핑키 팀 관제가 정함 | 핑키 팀 담당 |
 
 
 ### 작업 생성과 대상 명세 (현재 API)
@@ -147,7 +147,7 @@ OMX에는 좌표를 보내지 않습니다(2026-11-11 결정). 팔은 기록한 
 
 ### Pinky 주차 정렬 관측 (초안)
 
-Pinky가 멈춘 뒤 천장 카메라로 "등록된 주차 위치와 얼마나 다른지"를 재서 관제에 올리는 계약 초안입니다. 관제는 이 값을 화면에 보여 주고, 다음 단계를 진행할지 판단하는 입력 중 하나로 씁니다. 판정은 C++ ROS 2 노드(`cpp/parking_vision_ros`)만 하고, 관제는 `CONTROL_STATION_PARKING_SPOT`을 지정했을 때 노드의 결과를 아래 JSON으로 바꿉니다. `GET /api/parking-spots/{spot_id}/check`가 아래 관측 객체를 `{"observation": ...}`로 반환하고, `VERIFY_ARRIVAL`과 주문의 `WAIT_PINKY_ARRIVAL`은 같은 관측을 `PARKING_OBSERVED` event로 남긴 뒤 `ARRIVED`일 때만 진행합니다. 운영 절차와 현장 기록은 [실행 방법](../implementation/runbook.md#천장-카메라-pinky-주차-판정), 노드 내부는 [cpp/README.md](../../cpp/README.md)에 있습니다.
+Pinky가 멈춘 뒤 천장 카메라로 "등록된 주차 위치와 얼마나 다른지"를 재서 관제에 올리는 계약 초안입니다. 관제는 이 값을 화면에 보여 주고, 다음 단계를 진행할지 판단하는 입력 중 하나로 씁니다. 판정은 C++ ROS 2 노드(`cpp/parking_vision_ros`)만 하고, 관제는 `CONTROL_STATION_PARKING_SPOT`을 지정했을 때 노드의 결과를 아래 JSON으로 바꿉니다. `GET /api/parking-spots/{spot_id}/check`가 아래 관측 객체를 `{"observation": ...}`로 반환하고, `VERIFY_ARRIVAL`은 같은 관측을 `PARKING_OBSERVED` event로 남기고 `ARRIVED`일 때만 진행하며, 주문의 `WAIT_PINKY_ARRIVAL`은 `ARRIVED`가 나올 때까지 기다립니다. 운영 절차와 현장 기록은 [실행 방법](../implementation/runbook.md#천장-카메라-pinky-주차-판정), 노드 내부는 [cpp/README.md](../../cpp/README.md)에 있습니다.
 
 천장 카메라는 노드의 캡처 컴포넌트가 열고, 관제 Head Camera는 같은 영상을 `ros:/ceiling_camera/image_raw/compressed`로 받습니다. 결과에는 패널이 보여 주는 관제 feed(`feed_camera_id`, 기본 `head_camera`), 노드가 구독한 영상 토픽(`node_image_topic`), 등록 파일의 보정 카메라(`calibration_camera_id`, `ceiling_camera`)를 함께 기록합니다.
 
@@ -242,7 +242,6 @@ Pinky가 멈춘 뒤 천장 카메라로 "등록된 주차 위치와 얼마나 �
 
 - [ ] 주문 API schema, 인증·전송 방식, 주문/운송 상태 소유자
 - [ ] 한 주문을 여러 운송 작업으로 나누는 조건과 `order_id`-`task_id` 관계
-- [ ] Pinky Nav2 action 계약과 map frame
 - [ ] OMX 작업 명령, READY, 파지·적재 완료와 오류 신호 (전달 방식과 이벤트는 [HTTP 인터페이스](../implementation/arm-command-api.md)로 초안 구현; `reason_code` 목록·READY 신호·실물 워커는 미정)
 - [ ] 핑키 관제 외부 접속 주소·인증과, 관제가 `dock_complete`를 자동으로 보내는 것에 대한 핑키 팀 합의
 - [ ] 장치 이벤트 ID·sequence·시각 제공 여부와 heartbeat 주기

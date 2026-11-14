@@ -124,7 +124,7 @@ CONTROL_STATION_FRONT_CAMERA=/dev/v4l/by-path/pci-0000:00:14.0-usb-0:2:1.0-video
 
 카메라는 기본으로 640×480 MJPEG를 요청합니다. 센서가 4:3 모드에서 시야를 잘라내는 경우 `CONTROL_STATION_HEAD_CAMERA_RESOLUTION=1280x720`처럼 카메라별(`HEAD`, `JOINT`, `FRONT`)로 다른 모드를 요청할 수 있습니다. 해상도를 바꾸면 검출의 픽셀 좌표 기준도 그 해상도로 바뀌고, 처리량이 늘어 프레임률이 낮아질 수 있습니다. 실제 시야가 넓어지는지는 카메라마다 화면으로 확인해야 합니다.
 
-V4L2 장치는 한 프로세스만 영상을 받을 수 있어, 관제가 Front Camera를 열고 있으면 정책 client가 같은 장치를 열지 못합니다. 그래서 정책 시작 요청을 받으면 관제가 Front Camera capture를 먼저 닫고, 닫힌 것을 확인한 뒤 정책 client를 시작합니다. 정책 프로세스가 살아 있는 동안 카드는 `연결 끊김`/`중지`와 사용 중 안내를 표시하고, 프로세스가 끝나면 자동으로 다시 엽니다. 5초 안에 닫힘을 확인하지 못하면 정책을 시작하지 않고 409 오류를 반환합니다. 이 해제는 Front Camera만 대상으로 하며, 정책의 `wrist` 입력과 Joint Camera가 같은 장치인 경우는 처리하지 않습니다.
+V4L2 장치는 한 프로세스만 영상을 받을 수 있어, 관제가 Front Camera를 열고 있으면 정책 client가 같은 장치를 열지 못합니다. 그래서 정책 시작 요청을 받으면 관제가 Front Camera capture를 먼저 닫고, 닫힌 것을 확인한 뒤 정책 client를 시작합니다. 정책 프로세스가 살아 있는 동안 카드는 `연결 끊김`/`중지`와 사용 중 안내를 표시하고, 프로세스가 끝나면 자동으로 다시 엽니다. 5초 안에 닫힘을 확인하지 못하면 정책을 시작하지 않고 409 오류를 반환합니다. 이 해제는 Front Camera feed 하나만 대상으로 하며, 정책이 여는 다른 카메라(위·그리퍼 중 Front Camera가 아닌 쪽)를 관제의 다른 feed가 열고 있으면 처리하지 않습니다.
 
 실제 팔 제어는 운영체제의 장치 권한, LeRobot 의존성 및 사용자별 OMX 지원 코드가 있어야 합니다. 이 구성은 현재 관제 저장소에 포함되지 않습니다. 저장소만 복제한 환경에서는 첫 번째 절차로 대시보드와 API를 실행할 수 있습니다.
 
@@ -148,9 +148,9 @@ CONTROL_STATION_POLICY_MAX_ACTION_STEPS=300 \
 ./run-control-station.sh
 ```
 
-`300`은 설정 예시입니다. 실제 실행 전에 시연 한 회의 길이에 맞게 양의 정수로 바꾸세요. 이는 LeRobot이 로봇에 보낸 총 action 수이며 `actions_per_chunk=100`과는 별개입니다. 기본 프로필은 `neverlish/omx_act_record-test-20261104-1`, task `Pick up Doll`, follower `/dev/omx_follower`, 카메라 `/dev/video7` 및 `/dev/video9`, ACT/CUDA, 30 FPS, chunk 100, threshold 0.7입니다. 설정은 `CONTROL_STATION_POLICY_*` 환경변수로 바꿀 수 있습니다. Python은 기본 `~/Desktop/lerobot/venv/bin/python`을 사용하며 `CONTROL_STATION_LEROBOT_DIR`와 `CONTROL_STATION_LEROBOT_PYTHON`으로 checkout/환경 경로를 지정할 수 있습니다.
+`300`은 설정 예시입니다. 실제 실행 전에 시연 한 회의 길이에 맞게 양의 정수로 바꾸세요. 이는 LeRobot이 로봇에 보낸 총 action 수이며 `actions_per_chunk=100`과는 별개입니다. `profile_id`를 주지 않으면 정책 파일의 첫 정책(지금 `carrot_act_v2`)을 씁니다. 그 밖의 기본값은 follower `/dev/omx_follower`, 위·그리퍼 카메라 `/dev/video7`·`/dev/video9`, CUDA, 30 FPS, chunk 100, threshold 0.7입니다. 설정은 `CONTROL_STATION_POLICY_*` 환경변수로 바꿀 수 있습니다. Python은 기본 `~/Desktop/lerobot/venv/bin/python`을 사용하며 `CONTROL_STATION_LEROBOT_DIR`와 `CONTROL_STATION_LEROBOT_PYTHON`으로 checkout/환경 경로를 지정할 수 있습니다.
 
-관제의 **학습 정책 한 번 실행** 버튼 또는 `POST /api/arm/policy/start?profile_id=apple_pick`가 클라이언트를 시작합니다. 응답과 상태 조회의 `run_id`로 실행을 식별할 수 있습니다. client는 설정된 총 액션 수를 보내면 종료하고 관제 상태를 `LIMIT_REACHED`로 표시합니다. 이는 제한에 도달했다는 뜻이며 물체를 잡거나 놓았다는 결과가 아닙니다. **중단 요청** 또는 `POST /api/arm/policy/stop`은 실행을 멈추도록 요청하고 결과를 `INTERRUPTED`/미확정으로 표시합니다. 텔레오퍼레이션과 정책 client는 동시에 시작할 수 없습니다. 실행 로그는 `.control-station/logs/policy-run-<run_id>.log`에 남으므로 해당 로그와 카메라/실물 상태를 확인하세요. 관제 UI의 프로세스 상태만으로 팔 준비나 Pick & Place 성공을 판단하지 않습니다.
+관제의 **학습 정책 한 번 실행** 버튼 또는 `POST /api/arm/policy/start?profile_id=<정책 ID>`(예: `carrot_act_v2`)가 클라이언트를 시작합니다. 응답과 상태 조회의 `run_id`로 실행을 식별할 수 있습니다. client는 설정된 총 액션 수를 보내면 종료하고 관제 상태를 `LIMIT_REACHED`로 표시합니다. 이는 제한에 도달했다는 뜻이며 물체를 잡거나 놓았다는 결과가 아닙니다. **중단 요청** 또는 `POST /api/arm/policy/stop`은 실행을 멈추도록 요청하고 결과를 `INTERRUPTED`/미확정으로 표시합니다. 텔레오퍼레이션과 정책 client는 동시에 시작할 수 없습니다. 실행 로그는 `.control-station/logs/policy-run-<run_id>.log`에 남으므로 해당 로그와 카메라/실물 상태를 확인하세요. 관제 UI의 프로세스 상태만으로 팔 준비나 Pick & Place 성공을 판단하지 않습니다.
 
 ## OMX 읽기 전용 상태 조회
 
@@ -386,7 +386,7 @@ curl -s http://127.0.0.1:8000/api/parking-spots/pinky_dock_1/check
 
 ### 작업 흐름의 도착 확인 단계
 
-`CONTROL_STATION_PARKING_SPOT`을 지정하면 이전 형식 작업의 `VERIFY_ARRIVAL` 단계와 주문의 `WAIT_PINKY_ARRIVAL` 단계([주문 흐름](order-flow.md))가 위 API와 같은 확정 판정을 씁니다. 판정 결과는 그 단계의 `PARKING_OBSERVED` event로 작업 이력에 남습니다. 아래 표는 `VERIFY_ARRIVAL`입니다.
+`CONTROL_STATION_PARKING_SPOT`을 지정하면 이전 형식 작업의 `VERIFY_ARRIVAL` 단계와 주문의 `WAIT_PINKY_ARRIVAL` 단계([주문 흐름](order-flow.md))가 위 API와 같은 확정 판정을 씁니다. `VERIFY_ARRIVAL`은 판정 결과를 `PARKING_OBSERVED` event로 남기고 아래 표처럼 처리합니다. 주문은 `ARRIVED`가 나올 때까지 위치 이상 경보(`PINKY_POSITION_ABNORMAL`)를 띄우며 기다립니다.
 
 | 판정 | 단계·작업 | 오류 코드 |
 | --- | --- | --- |
