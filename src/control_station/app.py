@@ -29,6 +29,7 @@ from control_station.order_desk import OrderDesk
 from control_station.order_flow import OrderDevices, OrderFlow
 from control_station.receiving_zones import ReceivingZoneError, load_receiving_zones
 from control_station.pinky_fleet import PinkyFleetClient
+from control_station.pinky_gateway import PinkyGateway
 from control_station.parking_ros import RosParkingSource
 from control_station.robot_adapters import make_status_provider
 from control_station.shelf_slot_map import ShelfSlotMapError, load_shelf_slot_map
@@ -256,10 +257,13 @@ def main() -> None:
     # is set (e.g. http://<pinky PC>:8765), else the mock world, which also sends the mock Pinky off for each order.
     fleet_url = os.environ.get("CONTROL_STATION_PINKY_FLEET_URL", "").strip()
     fleet_status, fleet_confirm, dispatch = world.fleet_status, world.fleet_confirm, world.dispatch
+    fleet = None
     if fleet_url:
         fleet = PinkyFleetClient(fleet_url)
         fleet_status, fleet_confirm, dispatch = fleet.fleet_status, fleet.fleet_confirm, None
         print(f"주문 흐름의 핑키 신호: 핑키 관제 {fleet_url}", flush=True)
+    # The Pinky screen reads and commands through the same client, so it shares the client's status cache.
+    server.pinky_gateway = PinkyGateway(fleet, world.fleet_status)
     # Counting for the stock check and the per-object transfer check: the cameras' YOLO detections when
     # CONTROL_STATION_ORDER_COUNTS=camera (shelf cams with slot zones, the top cam inside the Pinky tray), else the
     # mock world. With camera counts but mock picks, a person has to move each object during the pick step.

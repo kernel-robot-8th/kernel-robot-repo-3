@@ -93,6 +93,25 @@ class PinkyFleetClient:
             self._cache = (time.monotonic(), robots)
         return robots
 
+    def robots(self) -> dict[str, Any]:
+        """Pinky id -> the dashboard's own record (route, operational state, live topics), shared for a moment."""
+        return self._robots()
+
+    def stop(self, pinky_id: str) -> tuple[int, dict[str, Any]]:
+        """Ask the dashboard to stop this Pinky: it latches a stop on the robot and cancels its Nav2 goal.
+        202 = accepted (not yet applied), 401 = no SSH password yet, 409 = a stop is still being applied."""
+        return self._send("POST", f"/api/robots/{pinky_id}/route/cancel", {})
+
+    def send_password(self, password: str) -> tuple[int, dict[str, Any]]:
+        """Hand the SSH password to the dashboard, which keeps it in its own memory only."""
+        return self._send("POST", "/api/credentials", {"password": password})
+
+    def _send(self, method: str, path: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        status, answer = self._request(method, path, body)
+        with self._lock:
+            self._cache = None  # the state is about to change
+        return status, answer
+
     def fleet_status(self, pinky_id: str) -> dict[str, Any]:
         """The Pinky's mission phase in the order flow's terms (parked, driving, docking_manual, docked_manual…)."""
         robot = self._robots().get(pinky_id)

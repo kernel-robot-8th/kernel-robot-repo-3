@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
-from control_station.api import arm, cameras, flow, orders, status, tasks
+from control_station.api import arm, cameras, flow, orders, pinky, status, tasks
 
 if TYPE_CHECKING:
     from control_station.app import ControlStationHandler
@@ -57,6 +57,7 @@ GET_ROUTES: tuple[Route, ...] = (
     Route(_prefix_suffix("/api/parking-spots/", "/live"), status.get_parking_live),
     Route(_prefix_suffix("/api/parking-spots/", "/check"), status.get_parking_check),
     Route(_path("/api/flow"), flow.get_flow),
+    Route(_path("/api/pinky"), pinky.get_pinky),
     Route(_path("/api/catalog"), orders.get_catalog),
     Route(_path("/api/orders"), orders.get_orders),
     Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "orders"] and parts[3] == "assignment",
@@ -86,6 +87,11 @@ POST_ROUTES: tuple[Route, ...] = (
         "Cross-origin arm-command request rejected",
     ),
     Route(_path("/api/tasks"), tasks.post_task),
+    Route(_path("/api/pinky/stop-all"), pinky.post_stop_all, "Cross-origin Pinky-stop request rejected",
+          reads_body=False),
+    Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "pinky"] and parts[3] == "stop",
+          pinky.post_stop, "Cross-origin Pinky-stop request rejected", reads_body=False),
+    Route(_path("/api/pinky/credentials"), pinky.post_credentials, "Cross-origin credentials request rejected"),
     # The order window is a page of this server, so a browser order is same-origin like the operator screen.
     Route(_path("/api/orders"), orders.post_order, "Cross-origin order request rejected"),
     Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "orders"] and parts[3] in {"start", "reject"},

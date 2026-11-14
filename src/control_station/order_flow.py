@@ -223,7 +223,7 @@ class OrderFlow:
         except ArmPlanError as exc:
             raise OrderFlowError(exc.error_code, str(exc)) from exc
         units = [pick.as_dict() for pick in plan.picks]
-        for (pick_step, verify_step), unit in zip(pairs, units):
+        for (pick_step, verify_step), unit in zip(pairs, units, strict=True):
             ctx.set_plan(pick_step["id"], unit["arm_id"], unit)
             ctx.set_plan(verify_step["id"], None, unit)
         sequence = [f"{unit['arm_label']} · {unit['label']} #{unit['unit']}" for unit in units]
