@@ -48,7 +48,6 @@ GET_ROUTES: tuple[Route, ...] = (
     Route(_path("/api/health"), status.get_health),
     Route(_path("/api/robots"), status.get_robots),
     Route(_path("/api/cameras"), cameras.get_cameras),
-    Route(_prefix_suffix("/api/cameras/", "/target-observation"), cameras.get_camera_target_observation),
     Route(_path("/api/arm/status"), arm.get_status),
     Route(_path("/api/arm/commands"), arm.get_commands),
     Route(_path("/api/arm/shelf-slots"), arm.get_shelf_slots),

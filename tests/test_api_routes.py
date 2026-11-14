@@ -33,7 +33,7 @@ CAPTURED_AT = "2026-11-03T12:00:00.000+00:00"
 PIXEL_TRANSFORM = "opencv-v4l2-capture-no-app-geometry-v1"
 
 
-def detection(class_name: str, x: int, color: str) -> dict[str, object]:
+def detection(class_name: str, x: int) -> dict[str, object]:
     return {
         "class_name": class_name,
         "confidence": 0.9,
@@ -45,7 +45,6 @@ def detection(class_name: str, x: int, color: str) -> dict[str, object]:
         "pixel_transform_id": PIXEL_TRANSFORM,
         "frame_width": 640,
         "frame_height": 480,
-        "color_hint": {"status": "ESTIMATED", "color": color},
     }
 
 
@@ -66,7 +65,7 @@ def head_camera(**changes: object) -> CameraSnapshot:
         detector_state="ready",
         detector_model_type="YOLO_CLOSED_SET",
         detector_classes=["strawberry", "ball"],
-        detections=[detection("strawberry", 100, "red"), detection("strawberry", 300, "green")],
+        detections=[detection("strawberry", 100), detection("strawberry", 300)],
     )
     values.update(changes)
     return CameraSnapshot(**values)  # type: ignore[arg-type]
@@ -214,30 +213,6 @@ class ReadRouteTests(ApiTestCase):
     def test_cameras(self) -> None:
         # No shelf pose is activated for this camera, so the snapshot passes through without slot_zones.
         self.assertEqual(self.get("/api/cameras"), (200, {"cameras": [json.loads(json.dumps(head_camera().to_dict()))]}))
-
-    def test_camera_target_observation(self) -> None:
-        status, body = self.get("/api/cameras/head_camera/target-observation?class_name=strawberry&color=red")
-        self.assertEqual(status, 200)
-        observation = body["observation"]  # type: ignore[index]
-        self.assertEqual(observation["status"], "AMBIGUOUS")
-        self.assertEqual(observation["candidate_count"], 2)
-        self.assertEqual(observation["color_evaluation"]["status"], "SINGLE_COLOR_HINT_MATCH")
-        self.assertEqual(observation["color_evaluation"]["candidate_indices"], [0])
-        self.assertEqual(observation["decision_scope"], "OBSERVATION_ONLY")
-        self.assertIs(observation["arm_command_sent"], False)
-
-    def test_camera_target_observation_errors(self) -> None:
-        base = "/api/cameras/head_camera/target-observation"
-        once = "class_name is required once; color and shelf_level may be provided once"
-        for query in ("", "?class_name=a&class_name=b", "?class_name=a&other=1", "?class_name=a&color=r&color=g"):
-            with self.subTest(query=query):
-                self.assertEqual(self.get(base + query), (400, error(once)))
-        self.assertEqual(self.get(base + "?class_name=%20"), (400, error("class_name must contain 1 to 80 characters")))
-        self.assertEqual(self.get(base + "?class_name=a&color=%20"), (400, error("color must contain 1 to 40 characters")))
-        status, body = self.get(base + "?class_name=a&shelf_level=0")
-        self.assertEqual(status, 400)
-        self.assertIn("shelf_level must be an integer from 1 to", body["error"])  # type: ignore[index]
-        self.assertEqual(self.get("/api/cameras/nope/target-observation?class_name=a"), (404, error("Camera not found")))
 
     def test_tasks(self) -> None:
         task_id = self.create_task()

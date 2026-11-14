@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
@@ -11,8 +10,6 @@ from control_station.command_parser import MAX_SHELF_LEVEL
 
 if TYPE_CHECKING:
     from control_station.app import ControlStationHandler
-
-SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 def is_cross_origin(handler: ControlStationHandler) -> bool:

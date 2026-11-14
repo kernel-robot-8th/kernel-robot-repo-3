@@ -11,7 +11,6 @@ const policyRunDetail = document.querySelector('#policyRunDetail');
 const policyRunStart = document.querySelector('#policyRunStart');
 const policyRunStop = document.querySelector('#policyRunStop');
 const policyProfile = document.querySelector('#policyProfile');
-const targetObservationForm = document.querySelector('#targetObservationForm');
 const detectorClassOptions = document.querySelector('#detectorClassOptions');
 const taskForm = document.querySelector('#taskForm');
 const commandParseForm = document.querySelector('#commandParseForm');
@@ -45,10 +44,6 @@ const views = [...document.querySelectorAll('.view[id^="view-"]')];
 let selectedTaskId = null;
 let parkingCameraId = null;
 let controlMode = 'unknown';
-let targetObservationClass = '';
-let targetObservationColor = '';
-let targetObservationShelfLevel = '';
-let targetObservationRequest = 0;
 
 const viewNames = { flow: '주문 진행', overview: '현황', manual: '수동 조작', tasks: '작업 이력', api: 'API' };
 const controlModeLabels = {
@@ -135,7 +130,6 @@ function renderCameras(cameras) {
           <div class="camera-detail" data-field="detections-row" hidden><span>YOLO 검출</span><strong data-field="detections"></strong></div>
           <div class="camera-detail" data-field="slot-zones-row" hidden><span>선반 칸 · 표시 전용</span><strong data-field="slot-zones"></strong></div>
           <div class="camera-detail" data-field="detector-provenance-row" hidden><span>YOLO 설정 / 모델</span><strong data-field="detector-provenance"></strong></div>
-          <div class="camera-detail" data-field="target-observation" hidden><span>대상 판정 · 관측 전용</span><strong data-field="target-status"></strong></div>
         </div>
         <p class="note" data-field="error"></p>
       </article>`).join('');
@@ -201,12 +195,6 @@ function renderCameras(cameras) {
     }
     renderSlotZones(card, preview, camera);
   });
-  if (targetObservationClass) {
-    const requestId = ++targetObservationRequest;
-    cameras
-      .filter((camera) => ['HEAD', 'JOINT', 'FRONT'].includes(camera.position))
-      .forEach((camera) => refreshTargetObservation(camera, requestId));
-  }
 }
 
 const slotZoneStatusLabels = {
@@ -273,134 +261,6 @@ function renderSlotZones(card, preview, camera) {
   });
   card.querySelector('[data-field="slot-zones"]').textContent = `보정 적용 · 재투영 ${zones.reprojection_rms_px} px${summary.length ? ` · ${summary.join(', ')}` : ' · 검출 없음'}`;
 }
-
-async function refreshTargetObservation(camera, requestId) {
-  const row = cameraGrid.querySelector(`[data-camera-id="${camera.id}"] [data-field="target-observation"]`);
-  const output = row?.querySelector('[data-field="target-status"]');
-  if (!row || !output) return;
-  row.hidden = false;
-  output.textContent = `${targetObservationClass} 관측 중…`;
-  try {
-    const query = new URLSearchParams({ class_name: targetObservationClass });
-    if (targetObservationColor) query.set('color', targetObservationColor);
-    if (targetObservationShelfLevel) query.set('shelf_level', targetObservationShelfLevel);
-    const response = await fetch(`/api/cameras/${encodeURIComponent(camera.id)}/target-observation?${query}`, { cache: 'no-store' });
-    const result = await response.json();
-    if (requestId !== targetObservationRequest) return;
-    if (!response.ok) throw new Error(apiErrorMessage(result, '관측 요청 실패'));
-    const observation = result.observation;
-    const labels = {
-      DETECTOR_NOT_CONFIGURED: '검출 모델 미설정', DETECTOR_LOADING: '검출 모델 준비 중',
-      DETECTOR_ERROR: '검출 모델 오류', DETECTOR_NOT_READY: '검출기 사용 불가',
-      CLASS_UNKNOWN: '모델에 없는 클래스', PIXEL_TRANSFORM_UNKNOWN: '픽셀 변환 출처 미확인',
-      CAMERA_DISCONNECTED: '카메라 연결 끊김', CAMERA_STREAM_UNAVAILABLE: '카메라 스트림 오류',
-      FRAME_PROVENANCE_UNKNOWN: '프레임 fingerprint 미확인',
-      FRAME_STALE: '프레임 지연 · 결과 폐기', FRAME_UNAVAILABLE: '최신 프레임 없음',
-      TARGET_NOT_FOUND: '대상 후보 없음', SINGLE_CANDIDATE: '단일 후보', AMBIGUOUS: '복수 후보 · 모호',
-    };
-    const candidates = observation.candidates.map(formatDetectionCandidate).join(', ');
-    const colorEvaluation = formatColorEvaluation(observation.color_evaluation);
-    const shelfEvaluation = formatShelfLevelEvaluation(observation.shelf_level_evaluation);
-    output.textContent = `${labels[observation.status] || observation.status}${observation.candidate_count == null ? '' : ` · ${observation.candidate_count}개`}${colorEvaluation ? ` · ${colorEvaluation}` : ''}${shelfEvaluation ? ` · ${shelfEvaluation}` : ''}${candidates ? ` · ${candidates}` : ''}`;
-  } catch (error) {
-    if (requestId === targetObservationRequest) output.textContent = `관측 API 오류 · ${error.message}`;
-  }
-}
-
-function formatDetectionCandidate(item) {
-  const colorLabels = { red: '빨강', blue: '파랑', green: '초록', yellow: '노랑', black: '검정', white: '흰색' };
-  const hint = item.color_hint;
-  const hintStatusLabels = {
-    ESTIMATED: '색상 추정',
-    LOW_COLOR_COVERAGE: '색상 픽셀 비율 낮음',
-    MIXED_COLOR: '색상 혼합',
-    UNAVAILABLE: '색상 힌트 사용 불가',
-  };
-  const hintVersion = typeof hint?.algorithm_version === 'string' && /^[a-z0-9-]{1,80}$/.test(hint.algorithm_version)
-    ? ` · ${hint.algorithm_version}`
-    : '';
-  const hintFraction = Number.isFinite(hint?.pixel_fraction)
-    ? ` · 픽셀 ${Math.round(hint.pixel_fraction * 100)}%`
-    : '';
-  const hintValue = hint?.status === 'ESTIMATED' && colorLabels[hint.color]
-    ? ` ${colorLabels[hint.color]}`
-    : '';
-  const colorHint = hint && hintStatusLabels[hint.status]
-    ? ` · ${hintStatusLabels[hint.status]}${hintValue}${hintFraction}${hintVersion}`
-    : '';
-  return `(${item.center_px.join(', ')}) ${Math.round(item.confidence * 100)}%${colorHint}`;
-}
-
-function formatColorEvaluation(evaluation) {
-  if (!evaluation) return '';
-  const indices = Array.isArray(evaluation.candidate_indices)
-    ? evaluation.candidate_indices.map((index) => `#${index + 1}`).join(', ')
-    : '';
-  const labels = {
-    UNSUPPORTED_REQUEST_COLOR: '지원하지 않는 색상 조건',
-    NO_CANDIDATES: '색상 비교 후보 없음',
-    NO_ESTIMATED_COLOR_HINTS: '색상 힌트 판정 불가',
-    NO_COLOR_HINT_MATCH: '색상 힌트 일치 0개',
-    SINGLE_COLOR_HINT_MATCH: `색상 힌트 일치 ${indices || '1개'}`,
-    MULTIPLE_COLOR_HINT_MATCHES: `색상 힌트 일치 ${indices || `${evaluation.candidate_indices?.length || 0}개`}`,
-  };
-  const algorithm = typeof evaluation.algorithm_version === 'string' && /^[a-z0-9-]{1,80}$/.test(evaluation.algorithm_version)
-    ? ` · 기준 ${evaluation.algorithm_version}`
-    : '';
-  return `${labels[evaluation.status] || evaluation.status}${algorithm} · 검토 필요 · 자동 선택 아님`;
-}
-
-function formatShelfLevelEvaluation(evaluation) {
-  if (!evaluation) return '';
-  const indices = Array.isArray(evaluation.candidate_indices)
-    ? evaluation.candidate_indices.map((index) => `#${index + 1}`).join(', ')
-    : '';
-  const assignmentLabels = {
-    AMBIGUOUS_REGION_ASSIGNMENT: '층 영역 모호',
-    OUTSIDE_REGIONS: '미분류',
-    INVALID_CENTER_PX: '중심 좌표 오류',
-    INVALID_CANDIDATE: '후보 오류',
-  };
-  const assignments = Array.isArray(evaluation.candidate_assignments)
-    ? evaluation.candidate_assignments.map((assignment) => {
-      const candidate = `#${assignment.candidate_index + 1}`;
-      if (Number.isInteger(assignment.shelf_level)) return `${candidate}→${assignment.shelf_level}층`;
-      if (assignment.status === 'AMBIGUOUS_REGION_ASSIGNMENT' && assignment.shelf_levels?.length) {
-        return `${candidate}→모호(${assignment.shelf_levels.join('/')})`;
-      }
-      return `${candidate}→${assignmentLabels[assignment.status] || assignment.status}`;
-    }).join(', ')
-    : '';
-  const labels = {
-    CALIBRATION_NOT_CONFIGURED: '층 영역 초안 미설정',
-    CALIBRATION_UNREADABLE: '층 영역 초안 읽기 실패',
-    CALIBRATION_INVALID: '층 영역 초안 무효',
-    CALIBRATION_CAMERA_MISMATCH: '층 영역 카메라 불일치',
-    CALIBRATION_PIXEL_TRANSFORM_MISMATCH: '픽셀 변환 불일치',
-    CALIBRATION_RESOLUTION_MISMATCH: '영상 해상도 불일치',
-    REQUESTED_LEVEL_NOT_CONFIGURED: '요청 층 영역 미설정',
-    NO_CANDIDATES: '층 비교 후보 없음',
-    NO_REGION_MATCH: '등록 영역 안 후보 없음',
-    NO_SHELF_LEVEL_MATCH: '요청 층 힌트 일치 없음',
-    AMBIGUOUS_REGION_ASSIGNMENT: '층 영역 겹침/경계로 모호',
-    INVALID_CANDIDATE_POSITION: '후보 중심 좌표 오류',
-    SINGLE_SHELF_LEVEL_MATCH: `층 힌트 일치 ${indices || '1개'}`,
-    MULTIPLE_SHELF_LEVEL_MATCHES: `층 힌트 일치 ${indices || '복수'}`,
-  };
-  const artifactHash = /^[0-9a-f]{64}$/.test(evaluation.calibration_artifact_sha256 || '')
-    ? ` · ROI SHA-256 ${evaluation.calibration_artifact_sha256}`
-    : '';
-  return `${labels[evaluation.status] || evaluation.status}${assignments ? ` (${assignments})` : ''}${artifactHash} · 검토 필요 · 자동 선택 아님`;
-}
-
-targetObservationForm.addEventListener('submit', (event) => {
-  event.preventDefault();
-  const formData = new FormData(targetObservationForm);
-  targetObservationClass = String(formData.get('class_name') || '').trim();
-  targetObservationColor = String(formData.get('color') || '').trim();
-  targetObservationShelfLevel = String(formData.get('shelf_level') || '').trim();
-  refresh();
-});
 
 function renderArm(arm) {
   const labels = {

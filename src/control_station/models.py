@@ -79,7 +79,6 @@ class CameraSnapshot:
     detector_inference_image_size: int | None = None
     detector_device: str | None = None
     detector_ultralytics_version: str | None = None
-    detector_inference_frame_sequence: int | None = None
     detections: list[dict[str, object]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:

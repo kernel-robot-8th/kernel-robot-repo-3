@@ -46,28 +46,6 @@ def install_file_exclusive(temporary_path: Path, output_path: Path) -> None:
         raise ValueError(f"output already exists; refusing to overwrite: {output_path}") from exc
 
 
-def event_step_link_matches(
-    task: dict[str, Any], event: dict[str, Any], expected_step_type: str
-) -> bool:
-    """Validate a present workflow-step link; accept legacy events without one."""
-    event_step_id = event.get("step_id")
-    if event_step_id is None:
-        return True
-    steps = task.get("steps")
-    if not isinstance(steps, list):
-        return False
-    matches = [
-        step
-        for step in steps
-        if isinstance(step, dict) and step.get("step_type") == expected_step_type
-    ]
-    return (
-        len(matches) == 1
-        and matches[0].get("id") == event_step_id
-        and matches[0].get("status") == "PENDING"
-    )
-
-
 def ensure_distinct_output_path(output_path: Path, input_paths: Iterable[Path]) -> None:
     """Reject an output path that resolves to any input artifact or source image."""
     try:

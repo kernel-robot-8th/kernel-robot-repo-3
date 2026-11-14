@@ -22,7 +22,6 @@ from control_station.models import (
 
 
 PIXEL_TRANSFORM_ID = "opencv-v4l2-capture-no-app-geometry-v1"
-COLOR_HINT_ALGORITHM_VERSION = "hsv-inner-box-thresholds-v1"
 
 
 def _sha256_file(path: str) -> str:
@@ -31,70 +30,6 @@ def _sha256_file(path: str) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def _estimate_color_hint(image, bbox_xyxy):  # type: ignore[no-untyped-def]
-    """Return an uncalibrated HSV color hint for the inner part of one detection box."""
-    try:
-        import cv2
-        import numpy as np
-
-        x1, y1, x2, y2 = (float(value) for value in bbox_xyxy)
-        height, width = image.shape[:2]
-        if not all(math.isfinite(value) for value in (x1, y1, x2, y2)):
-            raise ValueError("non-finite bbox")
-        left = max(0, min(width, math.floor(x1)))
-        top = max(0, min(height, math.floor(y1)))
-        right = max(0, min(width, math.ceil(x2)))
-        bottom = max(0, min(height, math.ceil(y2)))
-        box_width, box_height = right - left, bottom - top
-        inset_x, inset_y = int(box_width * 0.2), int(box_height * 0.2)
-        crop = image[top + inset_y : bottom - inset_y, left + inset_x : right - inset_x]
-        if crop.size == 0:
-            raise ValueError("bbox crop is empty")
-        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-        hue, saturation, value = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
-        colored = saturation >= 65
-        masks = {
-            "black": value <= 45,
-            "white": (saturation <= 45) & (value >= 200),
-            "red": colored & ((hue <= 10) | (hue >= 170)) & (value >= 50),
-            "yellow": colored & (hue >= 16) & (hue <= 37) & (value >= 50),
-            "green": colored & (hue >= 38) & (hue <= 85) & (value >= 50),
-            "blue": colored & (hue >= 90) & (hue <= 130) & (value >= 50),
-        }
-        total = int(hue.size)
-        counts = {name: int(np.count_nonzero(mask)) for name, mask in masks.items()}
-        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
-        color_name, color_pixels = ranked[0]
-        fraction = color_pixels / total
-        if fraction < 0.2:
-            status, estimate = "LOW_COLOR_COVERAGE", None
-        elif len(ranked) > 1 and (color_pixels - ranked[1][1]) / total < 0.05:
-            status, estimate = "MIXED_COLOR", None
-        else:
-            status, estimate = "ESTIMATED", color_name
-        return {
-            "method": "UNCALIBRATED_HSV_PIXEL_FRACTION",
-            "algorithm_version": COLOR_HINT_ALGORITHM_VERSION,
-            "status": status,
-            "color": estimate,
-            "pixel_fraction": round(fraction, 3),
-            "sampled_pixel_count": total,
-            "review_required": True,
-            "used_for_selection": False,
-        }
-    except Exception:
-        return {
-            "method": "UNCALIBRATED_HSV_PIXEL_FRACTION",
-            "algorithm_version": COLOR_HINT_ALGORITHM_VERSION,
-            "status": "UNAVAILABLE",
-            "color": None,
-            "pixel_fraction": None,
-            "sampled_pixel_count": 0,
-            "review_required": True,
-            "used_for_selection": False,
-        }
 
 
 @dataclass
@@ -130,9 +65,10 @@ class _CameraFeed:
 
 
 class _YoloDetector:
-    """Draw YOLO detections and compute advisory color hints for camera frames.
+    """Run YOLO on camera frames and draw the detections.
 
-    Results are shown on the dashboard and are not used as a robot-control signal.
+    The detections are shown on the dashboard, placed into shelf slots (shelf_slot_zones.py) and counted for the
+    order flow's stock and load checks. They are camera evidence only; they never move a robot by themselves.
     """
 
     def __init__(self, weights: str, env_prefix: str) -> None:
@@ -245,7 +181,6 @@ class _YoloDetector:
                 "confidence": round(float(box.conf.item()), 3),
                 "center_px": [round(value, 1) for value in box.xywh[0][:2].tolist()],
                 "bbox_xyxy_px": [round(value, 1) for value in box.xyxy[0].tolist()],
-                "color_hint": _estimate_color_hint(image, box.xyxy[0].tolist()),
                 "frame_width": int(width),
                 "frame_height": int(height),
             }

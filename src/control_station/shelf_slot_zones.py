@@ -1,12 +1,16 @@
-"""Display-only shelf slot zones on the front camera image and the slot each detection falls in.
+"""Shelf slot zones on the front camera image and the slot each detection falls in.
 
 The zones come from a shelf pose artifact (scripts/calibrate_shelf_pose.py) that an operator activates
 by copying it to `<CONTROL_STATION_SHELF_POSE_DIR>/<camera_id>.json`. A zone is used only when the
 artifact matches the live camera (ID, resolution, pixel transform) and the loaded slot map version.
 A detection's anchor is its bbox bottom-center, where an object meets the deck; it is matched against
 each slot's anchor zone (deck up to just above the front lip), not the whole slot volume, so an
-object on the upper deck cannot land in the lower slot below it. Results are for
-display and review: they do not select targets or create arm commands.
+object on the upper deck cannot land in the lower slot below it.
+
+`ShelfSlotZones.annotate` only adds zones and per-detection slot assignments to a camera snapshot (the
+dashboard draws them, the stock counter counts with them). `select_slot_for_class` is the one place that
+turns them into a choice: it names the single slot holding an object, or refuses, and its record becomes
+the camera evidence of an arm command (POST /api/arm/commands/from-camera, the task flow's arm step).
 """
 
 from __future__ import annotations
@@ -19,7 +23,6 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from control_station.shelf_regions import _point_in_polygon
 from control_station.shelf_slot_map import ShelfSlotMap
 
 
@@ -35,6 +38,28 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise ValueError(f"duplicate JSON key: {key}")
         value[key] = item
     return value
+
+
+def _point_in_polygon(point: tuple[float, float], polygon: list[tuple[float, float]]) -> int:
+    """Return 1 inside, 0 on a boundary, and -1 outside."""
+    x, y = point
+    inside = False
+    for start, end in zip(polygon, polygon[1:] + polygon[:1]):
+        x1, y1 = start
+        x2, y2 = end
+        cross = (x - x1) * (y2 - y1) - (y - y1) * (x2 - x1)
+        scale = max(1.0, abs(x), abs(y), abs(x1), abs(y1), abs(x2), abs(y2))
+        if (
+            abs(cross) <= 1e-9 * scale
+            and min(x1, x2) - 1e-9 <= x <= max(x1, x2) + 1e-9
+            and min(y1, y2) - 1e-9 <= y <= max(y1, y2) + 1e-9
+        ):
+            return 0
+        if (y1 > y) != (y2 > y):
+            crossing_x = x1 + (y - y1) * (x2 - x1) / (y2 - y1)
+            if x < crossing_x:
+                inside = not inside
+    return 1 if inside else -1
 
 
 def _polygon(value: object) -> list[tuple[float, float]] | None:
