@@ -2,7 +2,8 @@
 
 The dashboard owns each Pinky's mission: it starts routes, follows the robot's mission phase and issues a fresh
 mission token per waiting phase. At station 5 the Pinky stops in `docking_manual` and waits for `dock_complete`,
-then holds in `docked_manual` until `received`, after which it drives on. Those two operator signals are the
+re-anchors its map pose at station 5 in `docking_anchor` (up to 18 s, no token; failing it stops the route), then
+holds in `docked_manual` until `received`, after which it backs out (`dock_exit`) and drives on. Those two operator signals are the
 dashboard's POST /api/robots/<id>/operator-confirm {"action", "token"}; the dashboard writes them to the robot
 over SSH, and the robot has no ROS interface for them, so the control station talks to the dashboard, not to the
 robot (decided 2026-11-11).
@@ -27,6 +28,8 @@ from urllib.request import Request, urlopen
 
 # Route states of the dashboard that mean the Pinky is not on a mission.
 _IDLE_ROUTE_STATES = {None, "complete", "cancelled", "failed"}
+# Mission phases in which the Pinky stands on the loading spot at station 5.
+STATION_PHASES = frozenset({"docking_manual", "docking_anchor", "docked_manual"})
 
 
 class PinkyFleetError(RuntimeError):

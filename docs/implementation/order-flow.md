@@ -26,7 +26,7 @@
 | `CHECK_SHELF_STOCK` | 선반별·종류별 재고가 주문 수량 이상인지 | `SHELF_STOCK_SHORT`, `COUNT_*` |
 | `PLAN_ARM_SEQUENCE` | 물체마다 그 물체가 보인 선반 쪽 팔을 배정하고 팔별로 묶어 순서를 정함. 결과는 뒤 단계의 `robot_id`·`detail`과 `PLAN_CREATED` 이벤트 | `POLICY_NOT_FOR_ARM` |
 | `WAIT_PINKY_ARRIVAL` | 핑키가 5번에 정지(`docking_manual`)하고, 적재 자리가 비고, 주차 판정이 `ARRIVED`일 때 통과. 위치가 어긋나 있으면 경보만 띄우고 계속 기다리다가, 정상 위치가 되면 자동으로 다음 단계로 감 | `PINKY_ARRIVAL_TIMEOUT` (기본 600초) |
-| `CONFIRM_DOCKING` | 핑키 관제에 `dock_complete` 전송 → `docked_manual`(정지 유지) 확인 | `PINKY_SIGNAL_REJECTED`, `PINKY_SIGNAL_NOT_DELIVERED`, `PINKY_SIGNAL_NOT_APPLIED` |
+| `CONFIRM_DOCKING` | 핑키 관제에 `dock_complete` 전송 → `docking_anchor`(5번 지도 위치 재설정, 최대 18초)를 거쳐 `docked_manual`(정지 유지) 확인. 기본 30초 안에 안 바뀌면 실패 | `PINKY_SIGNAL_REJECTED`, `PINKY_SIGNAL_NOT_DELIVERED`, `PINKY_SIGNAL_NOT_APPLIED` |
 | `PICK_ITEM` | 배정된 팔이 물체 하나를 집어 핑키 위에 놓음 (**지금은 모의**) | — |
 | `VERIFY_TRANSFER` | 집기 전과 비교해 선반 −1, 핑키 +1인지 확인 | `PICK_FAILED_STILL_ON_SHELF`(선반에 그대로), `ITEM_LOST`(선반에도 핑키에도 없음), `TRANSFER_NOT_VERIFIED` |
 | `VERIFY_LOAD_TOTAL` | 핑키 위 종류별 개수가 주문과 같고 다른 물건이 없는지 | `LOAD_INCOMPLETE`, `LOAD_EXTRA_ITEM`, `LOAD_MISMATCH` |
@@ -63,7 +63,7 @@ ROS가 아니라 HTTP인 이유:
 
 | 핑키 관제 | 관제의 뜻 |
 |---|---|
-| `GET /api/status`의 `robots[].route.phase` | `docking_manual`(5번 정지, 도킹완료 대기), `docked_manual`(정지 유지, 수령 대기), `driving` 등. 경로가 없거나 끝났으면 `parked` |
+| `GET /api/status`의 `robots[].route.phase` | `docking_manual`(5번 정지, 도킹완료 대기), `docking_anchor`(도킹완료 뒤 위치 재설정, 토큰 없음), `docked_manual`(정지 유지, 수령 대기), `dock_exit`(수령 뒤 20 cm 후진), `recovering`(장애물 우회), `driving` 등. 경로가 없거나 끝났으면 `parked` |
 | `POST /api/robots/<id>/operator-confirm` `{"action": "dock_complete"\|"received", "token": <mission_token>}` | 202 받음, 409 `PINKY_SIGNAL_REJECTED`, 502 `PINKY_SIGNAL_NOT_DELIVERED`, 무응답 `PINKY_FLEET_UNREACHABLE` |
 
 핑키 관제는 기본으로 그 PC의 `127.0.0.1:8765`에서만 열려 있습니다. 다른 PC의 관제가 붙으려면 핑키 팀이 접속을 열어 줘야 합니다.

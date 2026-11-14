@@ -135,7 +135,7 @@ OMX에는 좌표를 보내지 않습니다(2026-11-11 결정). 팔은 기록한 
 
 | 관제가 보내거나 읽는 것 | 핑키 관제 | 의미 |
 |---|---|---|
-| 핑키 단계 | `GET /api/status` → `robots[].route.{status, phase, mission_token}` | `docking_manual`=5번 정지·도킹완료 대기, `docked_manual`=정지 유지·수령 대기, 경로 없음·끝남=`parked` |
+| 핑키 단계 | `GET /api/status` → `robots[].route.{status, phase, mission_token}` | `docking_manual`=5번 정지·도킹완료 대기, `docking_anchor`=도킹완료 뒤 위치 재설정(최대 18초, 실패 시 경로 정지), `docked_manual`=정지 유지·수령 대기, `dock_exit`=수령 뒤 후진, 경로 없음·끝남=`parked` |
 | 도킹완료 | `POST /api/robots/<id>/operator-confirm` `{"action":"dock_complete","token":<docking_manual 토큰>}` | 천장 카메라 주차 판정이 `ARRIVED`일 때만 보냄 |
 | 수령 완료 | 같은 경로 `{"action":"received","token":<docked_manual 토큰>}` | 핑키 위 총량이 주문과 같을 때만 보냄 |
 

@@ -27,7 +27,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from control_station.pinky_fleet import PinkyFleetError
+from control_station.pinky_fleet import STATION_PHASES, PinkyFleetError
 from control_station.store import PINKY_NAMES
 
 ORDER_STEP_TYPES = frozenset({
@@ -89,7 +89,8 @@ class OrderFlow:
         dwell_s: float = 0.25,
         poll_s: float = 0.5,
         arrival_timeout_s: float = 600.0,
-        signal_timeout_s: float = 15.0,
+        # dock_complete -> docked_manual passes through docking_anchor, which the Pinky allows up to 18 s.
+        signal_timeout_s: float = 30.0,
     ) -> None:
         self.arms = arms
         self.policies = policies
@@ -274,7 +275,7 @@ class OrderFlow:
                 if held_pinky is not None:
                     # A stopped order's Pinky left the station by itself: the spot is free again.
                     try:
-                        gone = self.devices.fleet_status(held_pinky)["phase"] not in {"docking_manual", "docked_manual"}
+                        gone = self.devices.fleet_status(held_pinky)["phase"] not in STATION_PHASES
                     except (PinkyFleetError, OSError):
                         gone = False
                     if gone:
@@ -326,6 +327,7 @@ class OrderFlow:
         answer = self._confirm(ctx, "dock_complete")
         pinky = self._pinky(ctx)
         deadline = time.monotonic() + self.signal_timeout_s
+        last_phase, last_message = None, None
         while time.monotonic() < deadline:
             if ctx.cancel_event.is_set():
                 return None
@@ -334,13 +336,17 @@ class OrderFlow:
             except (PinkyFleetError, OSError):
                 ctx.cancel_event.wait(self.poll_s)  # a missed poll; the deadline below still applies
                 continue
-            if status["phase"] == "docked_manual":
-                self._tokens[ctx.task["id"]] = status.get("mission_token")
+            if status["phase"] != last_phase:  # e.g. docking_anchor while the Pinky re-anchors at station 5
+                last_phase, last_message = status["phase"], status.get("message")
                 ctx.record("PINKY_STATUS", {"pinky_id": pinky, "phase": status["phase"], "message": status.get("message"),
                                             "location": status.get("location"), "simulated": status.get("simulated", False)})
+            if status["phase"] == "docked_manual":
+                self._tokens[ctx.task["id"]] = status.get("mission_token")
                 return {"source": "pinky_fleet", "outcome": "PINKY_HOLDING", "answer": answer}
             ctx.cancel_event.wait(self.poll_s)
-        raise OrderFlowError("PINKY_SIGNAL_NOT_APPLIED", f"핑키 {self._name(pinky)}가 도킹완료 뒤 정지 유지 단계로 바뀌지 않았습니다", "pinky_fleet")
+        reason = f" (핑키 관제: {last_message})" if last_message else ""
+        raise OrderFlowError("PINKY_SIGNAL_NOT_APPLIED",
+                             f"핑키 {self._name(pinky)}가 도킹완료 뒤 정지 유지 단계로 바뀌지 않았습니다{reason}", "pinky_fleet")
 
     def _counts(self, ctx: StepContext, object_class: str) -> tuple[int, int, dict[str, Any], dict[str, Any]]:
         shelf = self._observe("선반 재고", self.devices.shelf_stock)

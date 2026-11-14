@@ -7,10 +7,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from control_station.pinky_fleet import STATION_PHASES
 from control_station.store import PINKY_NAMES  # noqa: E402  (re-exported for the API)
 PHASE_LABELS = {
     "parked": "주차장 대기", "driving": "이동 중", "docking_manual": "5번 도착 · 정지",
-    "docked_manual": "정지 유지 · 수령 대기", "course_complete": "코스 완주", "returning": "복귀 중",
+    "docking_anchor": "도킹완료 · 위치 재설정 중", "docked_manual": "정지 유지 · 수령 대기",
+    "dock_exit": "도킹 탈출 · 후진", "recovering": "장애물 우회 중",
+    "course_complete": "코스 완주", "returning": "복귀 중",
 }
 # The order pipeline on the screen, each stage made of step types.
 STAGES = (
@@ -149,7 +152,7 @@ def build_flow_view(
         latest = next((order for order in orders if order.get("pinky_id") == pinky_id), None)
         stopped = (
             latest["id"] if holder is None and latest is not None and latest["status"] == "FAILED"
-            and status.get("phase") in {"docking_manual", "docked_manual"} else None
+            and status.get("phase") in STATION_PHASES else None
         )
         pinkies.append({
             "pinky_id": pinky_id, "name": name, "phase": status.get("phase"),
