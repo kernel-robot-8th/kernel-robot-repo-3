@@ -6,6 +6,7 @@
   <link rel="icon" href="data:,">
   <title>로봇 관제 서버</title>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/manual.css">
   <script src="/app.js" defer></script>
   <script src="/route-strip.js" defer></script>
   <script src="/pinky-map.js" defer></script>
@@ -212,49 +213,112 @@
       </div>
 
       <div class="view" id="view-manual" hidden>
-    <section aria-labelledby="arm-title">
-      <div class="section-heading"><h2 id="arm-title">팔 텔레오퍼레이션</h2><span id="armState" class="updated">상태 확인 중</span></div>
-      <div class="arm-control">
-        <div><p id="armDetail" class="arm-detail">프로세스 상태를 불러오는 중…</p><p class="note">프로세스 실행 중 표시는 로봇 준비 완료나 작업 완료를 보장하지 않습니다.</p></div>
-        <div class="arm-actions"><button id="armStart" type="button">텔레오퍼레이션 시작</button><button id="armStop" type="button" class="secondary" disabled>종료 요청</button></div>
+    <section class="manual" aria-labelledby="manual-title">
+      <div class="manual-head">
+        <div>
+          <h2 id="manual-title">팔 수동 조작</h2>
+          <p class="manual-lead">주문 흐름 밖에서 팔을 한 번씩 움직여요. 누르기 전에 팔 주변과 핑키 위를 비워 주세요.</p>
+        </div>
+        <div id="armPicker" class="arm-picker" role="radiogroup" aria-label="움직일 팔"></div>
       </div>
-      <div class="section-heading"><h3>학습 정책 1회 실행</h3><span id="policyRunState" class="updated">상태 확인 중</span></div>
-      <div class="arm-control">
-        <div><label for="policyProfile">실행할 정책</label><select id="policyProfile" disabled><option>불러오는 중…</option></select><p id="policyRunDetail" class="arm-detail">정책 실행 상태를 불러오는 중…</p><p class="note">한 번 실행은 설정된 총 액션 수에서 멈춥니다. 액션 상한 도달은 사과 집기·배치 성공을 뜻하지 않으므로 영상과 실제 로봇 상태를 확인하세요.</p></div>
-        <div class="arm-actions"><button id="policyRunStart" type="button">학습 정책 한 번 실행</button><button id="policyRunStop" type="button" class="secondary" disabled>중단 요청</button></div>
+
+      <div id="manualConfirm" class="manual-confirm" role="alertdialog" aria-modal="false" aria-labelledby="manualConfirmTitle" aria-describedby="manualConfirmDetail" hidden>
+        <div>
+          <strong id="manualConfirmTitle"></strong>
+          <p id="manualConfirmDetail"></p>
+        </div>
+        <div class="manual-confirm-actions">
+          <button type="button" id="manualConfirmCancel" class="secondary">취소</button>
+          <button type="button" id="manualConfirmOk"></button>
+        </div>
+      </div>
+
+      <div class="manual-grid">
+        <article class="manual-card" aria-labelledby="pick-title">
+          <header class="manual-card-head"><h3 id="pick-title">정책으로 집기</h3><span id="armWorkerState" class="worker-state">워커 확인 중</span></header>
+          <p class="manual-hint">물건을 고르면 그 물건만 집도록 학습한 정책이 팔을 움직여 핑키 위에 올려요.</p>
+          <div id="policyButtons" class="pick-tiles"><span class="note">정책 목록 확인 중</span></div>
+          <div class="pick-checklist">
+            <p>누르기 전에</p>
+            <ol>
+              <li>팔이 쉬는 자세이고, 팔 주변에 사람 손이 없어요</li>
+              <li>핑키가 적재 자리에 서 있고 쟁반이 비어 있어요</li>
+              <li>집을 물건이 그 팔 앞 선반에 있어요</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="manual-card manual-now" aria-labelledby="now-title">
+          <header class="manual-card-head"><h3 id="now-title">지금 명령</h3><span id="manualNowArm" class="updated"></span></header>
+          <div id="manualNow" class="manual-now-body" aria-live="polite"><p class="manual-empty">보낸 명령이 없어요</p></div>
+          <p id="armCommandMessage" class="manual-message" role="status"></p>
+        </article>
+
+        <article class="manual-card manual-recover" aria-labelledby="recover-title">
+          <header class="manual-card-head"><h3 id="recover-title">복구</h3></header>
+          <p class="manual-hint">정책이 중간에 멈췄거나 팔이 어색한 자세일 때 기록해 둔 home 자세로 돌려보내요.</p>
+          <button type="button" id="armReturnHome" class="secondary wide">원상복귀</button>
+        </article>
+      </div>
+
+      <details class="manual-log">
+        <summary>명령 기록 <span id="armCommandCount" class="updated"></span></summary>
+        <div class="table-wrap">
+          <table class="arm-command-table">
+            <thead><tr><th>명령</th><th>상태</th><th>대상·칸</th><th>워커·마지막 이벤트</th><th></th></tr></thead>
+            <tbody id="armCommandRows"><tr><td colspan="5" class="loading">명령을 불러오는 중…</td></tr></tbody>
+          </table>
+        </div>
+      </details>
+
+      <details class="manual-help">
+        <summary>어떻게 동작하나요</summary>
+        <ul>
+          <li>명령은 관제 서버의 대기열에 들어가고, 그 팔의 워커(<code>scripts/omx_lerobot_worker.py</code>)가 가져가서 수락해야 팔이 움직여요. 워커가 없으면 명령은 기다리다 만료돼요.</li>
+          <li>정책으로 집기는 먼저 정면 캠에서 그 물건이 한 칸에 보이는지 확인해요. 못 찾으면 이유를 보여 주고, 확인 없이 실행할지 한 번 더 물어요. 정책은 위치를 입력으로 받지 않고 자기 카메라로 물건을 찾으므로, 칸은 물건이 있었다는 근거로만 남아요.</li>
+          <li>정책이 쉬는 자세로 돌아오면 멈추고 home 자세로 맞춰요. 실제로 집어서 놓았는지는 확인하지 않으므로 결과는 <strong>결과 불명</strong>으로 남고, 현장을 보고 <strong>현장 확인 완료</strong>로 닫아요.</li>
+          <li>화면의 정지는 하드웨어 비상 정지를 대신하지 않아요.</li>
+        </ul>
+      </details>
+
+      <div id="manualDirect" class="manual-direct" hidden>
+        <h3 class="manual-subtitle">직접 실행</h3>
+        <p class="manual-hint">워커를 거치지 않고 이 PC에서 LeRobot을 바로 실행해요. 관제 서버를 켤 때 설정한 경우에만 나타나요.</p>
+        <div id="manualTeleop" class="arm-control" hidden>
+          <div>
+            <p class="manual-row-title">텔레오퍼레이션 <span id="armState" class="updated">상태 확인 중</span></p>
+            <p id="armDetail" class="arm-detail">프로세스 상태를 불러오는 중…</p>
+            <p class="note">프로세스 실행 중 표시는 로봇 준비 완료나 작업 완료를 보장하지 않아요.</p>
+          </div>
+          <div class="arm-actions"><button id="armStart" type="button">시작</button><button id="armStop" type="button" class="secondary" disabled>종료 요청</button></div>
+        </div>
+        <div id="manualPolicyRun" class="arm-control" hidden>
+          <div>
+            <p class="manual-row-title">학습 정책 한 번 실행 <span id="policyRunState" class="updated">상태 확인 중</span></p>
+            <label for="policyProfile">실행할 정책</label><select id="policyProfile" disabled><option>불러오는 중…</option></select>
+            <p id="policyRunDetail" class="arm-detail">정책 실행 상태를 불러오는 중…</p>
+            <p class="note">설정한 총 액션 수에서 멈춰요. 액션 상한 도달은 집기·배치 성공을 뜻하지 않으니 영상과 실제 팔을 확인하세요.</p>
+          </div>
+          <div class="arm-actions"><button id="policyRunStart" type="button">한 번 실행</button><button id="policyRunStop" type="button" class="secondary" disabled>중단 요청</button></div>
+        </div>
+      </div>
+
+      <div class="manual-legacy dev-only">
+        <h3 class="manual-subtitle">칸으로 이동 <span class="chip">개발용 · ?dev=1</span></h3>
+        <p class="manual-hint">좌표·칸 방식(2026-11-11에 정책 흐름으로 바꾸며 접음)에서 쓰던 명령이에요. 칸 앞 자세로만 움직이고 집기로 이어지지 않아요.</p>
+        <form id="cameraCommandForm" class="camera-command-form">
+          <label>정면 캠에서 찾을 물건<input id="cameraCommandClass" name="object_class" list="detectorClassOptions" maxlength="80" required placeholder="예: ball"></label>
+          <button type="submit" id="cameraSlotCommand">정면 캠으로 칸 찾아 이동</button>
+        </form>
+        <form id="armCommandForm" class="slot-command-form arm-command-form">
+          <label>대상 종류(기록만)<input name="object_class" maxlength="80" placeholder="예: strawberry"></label>
+          <label>칸<select id="armCommandSlot" name="pick_slot_id" required></select></label>
+          <label>놓을 칸(기록만)<input name="slot_id" maxlength="40" required value="CART_1"></label>
+          <label>유효 시간(초)<input name="valid_for_s" type="number" min="5" max="600" step="1" required value="60"></label>
+          <button type="submit">칸 앞으로 이동</button>
+        </form>
       </div>
     </section>
-
-    <section aria-labelledby="arm-command-title">
-      <div class="section-heading"><h2 id="arm-command-title">OMX 명령 (HTTP 워커)</h2><span id="armWorkerState" class="updated">워커 상태 확인 중</span></div>
-      <div class="policy-pick">
-        <h3>학습 정책으로 집기</h3>
-        <div id="policyButtons" class="policy-buttons"><span class="note">정책 목록 확인 중</span></div>
-      </div>
-      <p class="note">버튼을 누르면 그 물체만 집도록 학습한 LeRobot ACT 정책을 OMX 워커가 실행해 Pinky 위에 올립니다. 먼저 정면 캠에서 그 물체가 한 칸에 보이는지 확인하고, 못 찾으면 이유를 보여 준 뒤 확인 없이 실행할지 묻습니다. 정책은 위치를 입력으로 받지 않고 자기 카메라로 물체를 찾으므로, 칸은 물체가 있다는 근거로만 기록됩니다. 정책이 쉬는 자세로 돌아오면 멈추고 home으로 맞춥니다. 적재 성공은 확인하지 않으므로 결과는 <strong>확인 불가</strong>로 남고, 현장을 보고 <strong>현장 확인 완료</strong>로 닫습니다.</p>
-      <form id="cameraCommandForm" class="camera-command-form">
-        <label>정면 캠에서 찾을 물건<input id="cameraCommandClass" name="object_class" list="detectorClassOptions" maxlength="80" required placeholder="예: ball"></label>
-        <button type="submit" id="cameraSlotCommand">정면 캠으로 칸 찾아 이동</button>
-      </form>
-      <p class="note">정면 캠 검출에서 이 물건이 정확히 한 칸 안에만 보일 때 그 칸으로 이동 명령을 만듭니다. 영상이 오래됐거나, 여러 칸에 있거나, 칸 경계에 걸리면 명령을 만들지 않고 이유를 보여 줍니다. 아래는 칸을 직접 고르는 수동 명령입니다.</p>
-      <form id="armCommandForm" class="slot-command-form arm-command-form">
-        <label>대상 종류<input name="object_class" maxlength="80" placeholder="예: strawberry"></label>
-        <label>칸<select id="armCommandSlot" name="pick_slot_id" required></select></label>
-        <label>놓을 칸<input name="slot_id" maxlength="40" required value="CART_1"></label>
-        <label>유효 시간(초)<input name="valid_for_s" type="number" min="5" max="600" step="1" required value="60"></label>
-        <button type="submit">칸 앞으로 이동</button>
-        <button type="button" id="armReturnHome" class="secondary">원상복귀</button>
-      </form>
-      <p class="note">칸 앞으로 이동은 워커가 그 칸에 기록해 둔 관절 자세를 재생하고, 원상복귀는 기록해 둔 home 자세로 팔을 돌려보냅니다. 워커가 가져가서 ACCEPTED를 보내야 실행됩니다. 연결된 워커가 실물 OMX면 팔이 움직이고, 모의 워커는 움직이지 않습니다.</p>
-      <p id="armCommandMessage" class="note" role="status"></p>
-      <div class="table-wrap">
-        <table class="arm-command-table">
-          <thead><tr><th>명령</th><th>상태</th><th>대상·칸</th><th>워커·마지막 이벤트</th><th></th></tr></thead>
-          <tbody id="armCommandRows"><tr><td colspan="5" class="loading">명령을 불러오는 중…</td></tr></tbody>
-        </table>
-      </div>
-    </section>
-
       </div>
 
       <div class="view" id="view-tasks" hidden>

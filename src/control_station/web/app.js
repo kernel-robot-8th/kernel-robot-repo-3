@@ -375,6 +375,18 @@ function renderArm(arm) {
   armDetail.textContent = arm.detail;
   armStart.disabled = !arm.enabled || arm.process_alive;
   armStop.disabled = !arm.process_alive;
+  showDirectBlock(manualTeleop, arm.enabled || arm.process_alive);
+}
+
+// Teleoperation and the one-off policy run start LeRobot on this PC. They are off unless the server was started
+// with them (run-control-station.sh --arm, CONTROL_STATION_POLICY_ENABLED=1); a switched-off block stays hidden.
+const manualDirect = document.querySelector('#manualDirect');
+const manualTeleop = document.querySelector('#manualTeleop');
+const manualPolicyRun = document.querySelector('#manualPolicyRun');
+
+function showDirectBlock(block, enabled) {
+  block.hidden = !(enabled || devMode);
+  manualDirect.hidden = manualTeleop.hidden && manualPolicyRun.hidden;
 }
 
 function renderPolicyRun(policyRun) {
@@ -404,6 +416,7 @@ function renderPolicyRun(policyRun) {
     : `${policyRun.detail} · CONTROL_STATION_POLICY_MAX_ACTION_STEPS 설정 필요`;
   policyRunStart.disabled = !policyRun.enabled || !policyRun.max_action_steps || policyRun.process_alive;
   policyRunStop.disabled = !policyRun.process_alive;
+  showDirectBlock(manualPolicyRun, policyRun.enabled || policyRun.process_alive);
 }
 
 async function sendArmAction(action) {
@@ -449,86 +462,217 @@ const armCommandForm = document.querySelector('#armCommandForm');
 const armCommandMessage = document.querySelector('#armCommandMessage');
 const armCommandRows = document.querySelector('#armCommandRows');
 const armWorkerState = document.querySelector('#armWorkerState');
+const armPicker = document.querySelector('#armPicker');
+const manualNow = document.querySelector('#manualNow');
+const manualNowArm = document.querySelector('#manualNowArm');
+const armCommandCount = document.querySelector('#armCommandCount');
 const armCommandStateLabels = {
   QUEUED: '대기 (워커 미수신)', DISPATCHED: '워커 수신 · 수락 대기', ACCEPTED: '수락',
   RUNNING: '실행 중', SUCCEEDED: '성공', FAILED: '실패', REJECTED: '워커 거부',
   CANCELED: '취소됨', EXPIRED: '만료', UNKNOWN: '결과 불명 · 현장 확인 필요',
+};
+// Short words for the big state chip of the latest command, and its colour.
+const armCommandStateShort = {
+  QUEUED: ['워커 기다리는 중', 'attention'], DISPATCHED: ['수락 기다리는 중', 'attention'], ACCEPTED: ['수락됨', 'active'],
+  RUNNING: ['움직이는 중', 'active'], SUCCEEDED: ['끝남', 'good'], FAILED: ['실패', 'danger'], REJECTED: ['워커 거부', 'danger'],
+  CANCELED: ['취소됨', ''], EXPIRED: ['만료', ''], UNKNOWN: ['결과 불명', 'attention'],
+};
+const WORKER_LIVE_S = 30;  // a worker that polled within this is treated as attached
+
+const manual = {
+  armId: 'arm-01',   // the arm the buttons send to
+  workers: [],       // from GET /api/arm/commands
+  commands: [],
+  policies: [],      // trained policies, each with the arm it was recorded on (arm_id null = any arm)
+  busy: false,       // a pick or home request is being sent
 };
 
 function formatClock(iso) {
   return iso ? clockFormat.format(new Date(iso)) : '-';
 }
 
-function renderArmWorkers(workers) {
-  const worker = workers.find((item) => item.robot_id === 'arm-01');
+// Arms come from config/arms.json through the flow view; before it answers, the single arm-01 stands in.
+function manualArms() {
+  const arms = flowSummary.flow?.arms;
+  return arms && arms.length ? arms : [{ arm_id: 'arm-01', label: '팔 1' }];
+}
+
+function workerFor(armId) {
+  return manual.workers.find((item) => item.robot_id === armId);
+}
+
+function workerLive(worker) {
+  if (!worker) return false;
+  if (worker.waiting_polls > 0) return true;
+  return (Date.now() - new Date(worker.last_poll_at).getTime()) / 1000 < WORKER_LIVE_S;
+}
+
+// An arm can be chosen once its worker is attached. With no worker anywhere, arm-01 stays choosable so a command
+// can wait in the queue for the worker that is about to start.
+function armSelectable(armId) {
+  const anyLive = manual.workers.some(workerLive);
+  return workerLive(workerFor(armId)) || (!anyLive && armId === 'arm-01');
+}
+
+function renderArmPicker() {
+  const arms = manualArms();
+  if (!armSelectable(manual.armId)) {
+    const first = arms.find((arm) => armSelectable(arm.arm_id));
+    if (first && first.arm_id !== manual.armId) {
+      manual.armId = first.arm_id;
+      renderPolicyTiles();
+    }
+  }
+  const html = arms.map((arm) => {
+    const selectable = armSelectable(arm.arm_id);
+    const chosen = arm.arm_id === manual.armId;
+    const live = workerLive(workerFor(arm.arm_id));
+    return `<button type="button" role="radio" class="arm-choice${chosen ? ' chosen' : ''}" data-arm-id="${escapeHtml(arm.arm_id)}"
+      aria-checked="${chosen}"${selectable ? '' : ' disabled'}>
+      <span>${escapeHtml(arm.label)}</span><small>${live ? '워커 연결됨' : selectable ? '워커 기다리는 중' : '연결 전'}</small></button>`;
+  }).join('');
+  if (armPicker.dataset.html !== html) {
+    armPicker.dataset.html = html;
+    armPicker.innerHTML = html;
+  }
+}
+
+armPicker.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-arm-id]');
+  if (!button || button.disabled || button.dataset.armId === manual.armId) return;
+  manual.armId = button.dataset.armId;
+  armCommandMessage.textContent = '';
+  renderArmPicker();
+  renderPolicyTiles();
+  renderArmWorkers();
+  renderManualNow();
+});
+
+function armLabel(armId) {
+  return manualArms().find((arm) => arm.arm_id === armId)?.label || armId;
+}
+
+function renderArmWorkers() {
+  const worker = workerFor(manual.armId);
+  armWorkerState.className = `worker-state${workerLive(worker) ? ' live' : ''}`;
   if (!worker) {
-    armWorkerState.textContent = '워커 접속 기록 없음';
+    armWorkerState.textContent = '워커 연결 안 됨';
   } else if (worker.waiting_polls > 0) {
     armWorkerState.textContent = `워커 대기 중 · ${worker.worker_id}`;
   } else {
     const seconds = Math.round((Date.now() - new Date(worker.last_poll_at).getTime()) / 1000);
-    armWorkerState.textContent = `워커 마지막 접속 ${seconds}초 전 · ${worker.worker_id}`;
+    armWorkerState.textContent = `워커 ${seconds}초 전 접속 · ${worker.worker_id}`;
+  }
+}
+
+function commandWhat(command) {
+  const target = command.target;
+  return { MOVE_TO_SLOT: '칸 앞으로 이동', RETURN_HOME: '원상복귀' }[command.operation]
+    || (target.policy ? `${escapeHtml(target.policy.label)} 집기` : `${escapeHtml(target.object_class)} → ${escapeHtml(command.place.slot_id)}`);
+}
+
+function commandWhere(command) {
+  const target = command.target;
+  if (target.pick_slot_id) {
+    const camera = command.source?.kind === 'CAMERA'
+      ? ` · 정면 캠 ${escapeHtml(command.source.class_name)} ${Math.round(command.source.confidence * 100)}%`
+      : '';
+    return `칸 ${escapeHtml(target.slot_label || target.pick_slot_id)}${camera}`;
+  }
+  return target.policy ? '정면 캠 확인 없음' : 'home 자세';
+}
+
+function commandAction(command) {
+  const inFlight = ['DISPATCHED', 'ACCEPTED', 'RUNNING'].includes(command.state);
+  const id = escapeHtml(command.command_id);
+  if (command.state === 'QUEUED' || (inFlight && !command.cancel_requested)) {
+    return `<button type="button" class="secondary" data-arm-cancel="${id}">취소</button>`;
+  }
+  if (inFlight) return '<small>취소 요청됨</small>';
+  if (command.state === 'UNKNOWN' && !command.operator_cleared_at) {
+    return `<button type="button" class="secondary" data-arm-clear="${id}">현장 확인 완료</button>`;
+  }
+  return '';
+}
+
+// The most recent command for the chosen arm, with what to do about it, in one place.
+function renderManualNow() {
+  manualNowArm.textContent = armLabel(manual.armId);
+  const command = manual.commands.find((item) => item.robot_id === manual.armId);
+  if (!command) {
+    manualNow.innerHTML = '<p class="manual-empty">이 팔로 보낸 명령이 없어요</p>';
+    manualNow.dataset.html = '';
+    return;
+  }
+  const [word, tone] = armCommandStateShort[command.state] || [command.state, ''];
+  const cleared = command.operator_cleared_at ? ` · 현장 확인 ${escapeHtml(formatClock(command.operator_cleared_at))}` : '';
+  const reason = command.reason_code ? `<small class="manual-reason">${escapeHtml(command.reason_code)}</small>` : '';
+  const simulated = command.result && command.result.simulated ? '<span class="simulated">모의</span>' : '';
+  const html = `
+    <div class="manual-now-row">
+      <span class="chip ${tone}">${escapeHtml(word)}</span>${simulated}
+      <span class="manual-now-action">${commandAction(command)}</span>
+    </div>
+    <p class="manual-now-what">${commandWhat(command)}</p>
+    <p class="manual-now-meta">${commandWhere(command)} · ${escapeHtml(formatClock(command.created_at))} 보냄${cleared}</p>
+    ${reason}`;
+  if (manualNow.dataset.html !== html) {
+    manualNow.dataset.html = html;
+    manualNow.innerHTML = html;
   }
 }
 
 function renderArmCommands(commands) {
+  armCommandCount.textContent = commands.length ? `최근 ${commands.length}건` : '';
   if (!commands.length) {
     armCommandRows.innerHTML = '<tr><td colspan="5" class="loading">보낸 명령이 없습니다.</td></tr>';
     return;
   }
   armCommandRows.innerHTML = commands.map((command) => {
     const target = command.target;
-    const camera = command.source?.kind === 'CAMERA'
-      ? ` · 정면 캠 ${escapeHtml(command.source.class_name)} ${Math.round(command.source.confidence * 100)}%`
-      : '';
-    let where = target.policy ? '카메라 위치 근거 없음' : 'home 자세';
-    if (target.pick_slot_id) {
-      where = `칸 ${escapeHtml(target.slot_label || target.pick_slot_id)} (${escapeHtml(target.pick_slot_id)})${camera}`;
-    }
-    const what = { MOVE_TO_SLOT: '칸 앞으로 이동', RETURN_HOME: '원상복귀' }[command.operation]
-      || (target.policy
-        ? `학습 정책 집기: ${escapeHtml(target.policy.label)}<small>${escapeHtml(target.policy.model)}</small>`
-        : `${escapeHtml(target.object_class)} → ${escapeHtml(command.place.slot_id)}`);
+    const what = target.policy && !['MOVE_TO_SLOT', 'RETURN_HOME'].includes(command.operation)
+      ? `${commandWhat(command)}<small>${escapeHtml(target.policy.model)}</small>`
+      : commandWhat(command);
     const simulated = command.result && command.result.simulated ? '<span class="simulated">모의</span>' : '';
     const reason = command.reason_code ? `<small>${escapeHtml(command.reason_code)}</small>` : '';
     const cleared = command.operator_cleared_at ? `<small>현장 확인 ${escapeHtml(formatClock(command.operator_cleared_at))}</small>` : '';
-    const inFlight = ['DISPATCHED', 'ACCEPTED', 'RUNNING'].includes(command.state);
-    let action = '';
-    if (command.state === 'QUEUED' || (inFlight && !command.cancel_requested)) {
-      action = `<button type="button" class="secondary" data-arm-cancel="${escapeHtml(command.command_id)}">취소</button>`;
-    } else if (inFlight) {
-      action = '<small>취소 요청됨</small>';
-    } else if (command.state === 'UNKNOWN' && !command.operator_cleared_at) {
-      action = `<button type="button" class="secondary" data-arm-clear="${escapeHtml(command.command_id)}">현장 확인 완료</button>`;
-    }
     return `<tr>
-      <td>${escapeHtml(command.command_id)}<small>${escapeHtml(formatClock(command.created_at))}</small></td>
+      <td>${escapeHtml(command.command_id)}<small>${escapeHtml(armLabel(command.robot_id))} · ${escapeHtml(formatClock(command.created_at))}</small></td>
       <td>${escapeHtml(armCommandStateLabels[command.state] || command.state)}${simulated}${reason}${cleared}</td>
-      <td>${what}<small>${where}</small></td>
+      <td>${what}<small>${commandWhere(command)}</small></td>
       <td>${escapeHtml(command.worker_id || '-')}<small>${escapeHtml(formatClock(command.last_event_at || command.dispatched_at))}</small></td>
-      <td>${action}</td>
+      <td>${commandAction(command)}</td>
     </tr>`;
   }).join('');
-  armCommandRows.querySelectorAll('[data-arm-cancel]').forEach((button) => {
-    button.addEventListener('click', () => postArmCommand(`/api/arm/commands/${button.dataset.armCancel}/cancel`, {}));
-  });
-  armCommandRows.querySelectorAll('[data-arm-clear]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const note = window.prompt('팔·물체 상태를 현장에서 확인한 내용을 적어 주세요. 결과는 UNKNOWN으로 남고, 새 명령만 다시 보낼 수 있게 됩니다.');
-      if (note && note.trim()) postArmCommand(`/api/arm/commands/${button.dataset.armClear}/clear-unknown`, { note: note.trim() });
-    });
-  });
 }
+
+// Cancel and "현장 확인 완료" work the same from the latest-command card and the log.
+document.querySelector('#view-manual').addEventListener('click', (event) => {
+  const cancel = event.target.closest('[data-arm-cancel]');
+  if (cancel) {
+    postArmCommand(`/api/arm/commands/${cancel.dataset.armCancel}/cancel`, {});
+    return;
+  }
+  const clear = event.target.closest('[data-arm-clear]');
+  if (clear) {
+    const note = window.prompt('팔·물체 상태를 현장에서 확인한 내용을 적어 주세요. 결과는 결과 불명으로 남고, 새 명령만 다시 보낼 수 있게 됩니다.');
+    if (note && note.trim()) postArmCommand(`/api/arm/commands/${clear.dataset.armClear}/clear-unknown`, { note: note.trim() });
+  }
+});
 
 async function refreshArmCommands() {
   try {
     const response = await fetch('/api/arm/commands', { cache: 'no-store' });
     if (!response.ok) throw new Error();
     const data = await response.json();
-    renderArmWorkers(data.workers);
+    manual.workers = data.workers;
+    manual.commands = data.commands;
+    renderArmPicker();
+    renderArmWorkers();
+    renderManualNow();
     renderArmCommands(data.commands);
   } catch {
-    armWorkerState.textContent = '명령 목록을 불러오지 못했습니다';
+    armWorkerState.textContent = '명령 목록을 불러오지 못했어요';
   }
 }
 
@@ -550,6 +694,33 @@ async function postArmCommand(url, body) {
     await refreshArmCommands();
   }
 }
+
+// One confirm bar for every command that moves the arm. Resolves true only on the confirm button.
+const manualConfirm = document.querySelector('#manualConfirm');
+const manualConfirmOk = document.querySelector('#manualConfirmOk');
+let confirmAnswer = null;
+
+function askConfirm({ title, detail, ok }) {
+  if (confirmAnswer) confirmAnswer(false);
+  document.querySelector('#manualConfirmTitle').textContent = title;
+  document.querySelector('#manualConfirmDetail').textContent = detail;
+  manualConfirmOk.textContent = ok;
+  manualConfirm.hidden = false;
+  manualConfirmOk.focus();
+  return new Promise((resolve) => {
+    confirmAnswer = (answer) => {
+      confirmAnswer = null;
+      manualConfirm.hidden = true;
+      resolve(answer);
+    };
+  });
+}
+
+manualConfirmOk.addEventListener('click', () => confirmAnswer?.(true));
+document.querySelector('#manualConfirmCancel').addEventListener('click', () => confirmAnswer?.(false));
+manualConfirm.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') confirmAnswer?.(false);
+});
 
 const cameraCommandForm = document.querySelector('#cameraCommandForm');
 const policyButtons = document.querySelector('#policyButtons');
@@ -588,13 +759,43 @@ const cameraCheckErrors = new Set([
   'TARGET_NOT_FOUND', 'TARGET_AMBIGUOUS', 'TARGET_MULTIPLE',
 ]);
 
+function setManualBusy(busy) {
+  manual.busy = busy;
+  policyButtons.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
+  document.querySelector('#armReturnHome').disabled = busy;
+}
+
+async function sendPolicyWithoutCamera(policy, armId, why) {
+  const command = await postArmCommand('/api/arm/commands', {
+    robot_id: armId,
+    operation: 'PICK_WITH_POLICY',
+    valid_for_s: 60,
+    target: { object_class: policy.object_class },
+    place: { slot_id: 'CART_1' },
+    source: { kind: 'OPERATOR_INPUT', note: `정면 캠 확인 없이 실행 (${why})` },
+  });
+  if (command) armCommandMessage.textContent = `${policy.label} 집기를 보냈어요 · 정면 캠 확인 없음 · 워커가 가져가면 움직여요`;
+}
+
 async function pickWithPolicy(policy) {
-  // 1) Ask the server to confirm the object in the front camera (the slot becomes evidence in the command).
-  // 2) If the camera cannot confirm it, the operator may send the command without camera evidence.
-  const buttons = policyButtons.querySelectorAll('button');
-  buttons.forEach((button) => { button.disabled = true; });
-  armCommandMessage.textContent = `${policy.label}: 정면 캠에서 확인 중`;
+  // 1) Confirm with the operator: the arm moves. 2) Ask the server to find the object in the front camera (the slot
+  // becomes evidence in the command). 3) If the camera cannot confirm it, ask once more before sending without it.
+  const armId = manual.armId;
+  if (manual.busy) return;
+  const go = await askConfirm({
+    title: `${armLabel(armId)}로 ${policy.label} 집기`,
+    detail: '팔이 움직여요. 팔 주변과 핑키 위가 비어 있는지 확인해 주세요.',
+    ok: '집기 시작',
+  });
+  if (!go) return;
+  setManualBusy(true);
+  armCommandMessage.textContent = `${policy.label}: 정면 캠에서 확인하는 중`;
   try {
+    if (armId !== 'arm-01') {
+      // The server's front-camera check sends to arm-01 only, so the other arm goes without the camera evidence.
+      await sendPolicyWithoutCamera(policy, armId, '정면 캠 확인은 arm-01만 지원');
+      return;
+    }
     const response = await fetch('/api/arm/commands/from-camera', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -603,28 +804,25 @@ async function pickWithPolicy(policy) {
     const result = await response.json();
     if (response.ok) {
       const found = result.selection;
-      armCommandMessage.textContent = `${policy.label} 집기 등록 (${result.command.command_id}) · 정면 캠 ${Math.round(found.confidence * 100)}% @ ${found.slot_label} · 워커가 가져갈 때까지 대기`;
+      armCommandMessage.textContent = `${policy.label} 집기를 보냈어요 · 정면 캠 ${Math.round(found.confidence * 100)}% @ ${found.slot_label} · 워커가 가져가면 움직여요`;
       return;
     }
     const reason = apiErrorMessage(result, '정면 캠 확인 실패');
-    if (!cameraCheckErrors.has(result.error_code)
-      || !window.confirm(`${reason}\n\n정면 캠 확인 없이 ${policy.label} 집기 정책을 실행할까요? 팔이 움직입니다.`)) {
+    if (!cameraCheckErrors.has(result.error_code)) {
       armCommandMessage.textContent = reason;
       return;
     }
-    const command = await postArmCommand('/api/arm/commands', {
-      robot_id: 'arm-01',
-      operation: 'PICK_WITH_POLICY',
-      valid_for_s: 60,
-      target: { object_class: policy.object_class },
-      place: { slot_id: 'CART_1' },
-      source: { kind: 'OPERATOR_INPUT', note: `정면 캠 확인 없이 실행 (${result.error_code})` },
+    const anyway = await askConfirm({
+      title: `정면 캠에서 ${policy.label}을(를) 확인하지 못했어요`,
+      detail: `${reason} 정책은 자기 카메라로 물건을 찾으니 확인 없이 실행할 수도 있어요. 팔이 움직여요.`,
+      ok: '확인 없이 집기',
     });
-    if (command) armCommandMessage.textContent = `${policy.label} 집기 등록 (${command.command_id}) · 정면 캠 확인 없음 · 워커가 가져갈 때까지 대기`;
+    if (anyway) await sendPolicyWithoutCamera(policy, armId, result.error_code);
+    else armCommandMessage.textContent = reason;
   } catch (error) {
     armCommandMessage.textContent = error.message;
   } finally {
-    buttons.forEach((button) => { button.disabled = false; });
+    setManualBusy(false);
     await refreshArmCommands();
   }
 }
@@ -636,19 +834,41 @@ const policyListRequest = fetch('/api/arm/policies', { cache: 'no-store' }).then
   return result.policies;
 });
 
+// A policy runs only on the arm it was recorded on; arm_id null means it is not tied to one arm.
+function renderPolicyTiles() {
+  const policies = manual.policies.filter((policy) => !policy.arm_id || policy.arm_id === manual.armId);
+  if (!policies.length) {
+    const text = manual.policies.length ? `${armLabel(manual.armId)}에서 녹화한 정책이 없어요` : '정책 목록 확인 중';
+    policyButtons.innerHTML = `<p class="manual-empty">${escapeHtml(text)}</p>`;
+    return;
+  }
+  policyButtons.replaceChildren(...policies.map((policy) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'pick-tile';
+    button.disabled = manual.busy;
+    button.title = `${policy.model} (${policy.object_class})`;
+    const mark = document.createElement('span');
+    mark.className = 'pick-mark';
+    mark.setAttribute('aria-hidden', 'true');
+    mark.textContent = [...policy.label][0] || '?';
+    const name = document.createElement('span');
+    name.className = 'pick-name';
+    name.textContent = policy.label;
+    const meta = document.createElement('small');
+    meta.textContent = policy.max_run_s ? `최대 ${policy.max_run_s}초` : policy.object_class;
+    button.append(mark, name, meta);
+    button.addEventListener('click', () => pickWithPolicy(policy));
+    return button;
+  }));
+}
+
 async function loadPolicyButtons() {
   try {
-    const policies = await policyListRequest;
-    policyButtons.replaceChildren(...policies.map((policy) => {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = `${policy.label} 집기`;
-      button.title = `${policy.model} (${policy.object_class})`;
-      button.addEventListener('click', () => pickWithPolicy(policy));
-      return button;
-    }));
+    manual.policies = await policyListRequest;
+    renderPolicyTiles();
   } catch (error) {
-    policyButtons.innerHTML = `<span class="note">${escapeHtml(error.message)}</span>`;
+    policyButtons.innerHTML = `<p class="manual-empty">${escapeHtml(error.message)}</p>`;
   }
 }
 loadPolicyButtons();
@@ -713,7 +933,7 @@ armCommandForm.addEventListener('submit', async (event) => {
   const formData = new FormData(armCommandForm);
   button.disabled = true;
   const command = await postArmCommand('/api/arm/commands', {
-    robot_id: 'arm-01',
+    robot_id: manual.armId,
     operation: 'MOVE_TO_SLOT',
     valid_for_s: Number(formData.get('valid_for_s')),
     target: { object_class: String(formData.get('object_class') || '').trim() || null, pick_slot_id: armCommandSlot.value },
@@ -724,18 +944,25 @@ armCommandForm.addEventListener('submit', async (event) => {
   button.disabled = false;
 });
 
-document.querySelector('#armReturnHome').addEventListener('click', async (event) => {
+document.querySelector('#armReturnHome').addEventListener('click', async () => {
   // No slot or place: the worker moves the arm back to the home pose it recorded.
-  const button = event.currentTarget;
-  button.disabled = true;
+  const armId = manual.armId;
+  if (manual.busy) return;
+  const go = await askConfirm({
+    title: `${armLabel(armId)} 원상복귀`,
+    detail: '기록해 둔 home 자세로 팔이 움직여요. 팔이 물건을 잡고 있으면 떨어질 수 있어요.',
+    ok: '돌려보내기',
+  });
+  if (!go) return;
+  setManualBusy(true);
   const command = await postArmCommand('/api/arm/commands', {
-    robot_id: 'arm-01',
+    robot_id: armId,
     operation: 'RETURN_HOME',
-    valid_for_s: Number(armCommandForm.elements.valid_for_s.value),
+    valid_for_s: 60,
     source: { kind: 'OPERATOR_INPUT' },
   });
-  if (command) armCommandMessage.textContent = `${command.command_id} 원상복귀 등록 · 워커가 가져갈 때까지 대기`;
-  button.disabled = false;
+  if (command) armCommandMessage.textContent = '원상복귀를 보냈어요 · 워커가 가져가면 움직여요';
+  setManualBusy(false);
 });
 
 const taskStatusLabels = {
