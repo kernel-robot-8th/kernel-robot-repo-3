@@ -132,7 +132,7 @@ sequenceDiagram
 | GET | `/api/arm/commands` | 관제 화면 | 최근 20건, 워커 접속 상태, ACK 제한 시간 |
 | GET | `/api/arm/shelf-slots` | 둘 다 | 관제가 불러온 칸 정의 파일 내용과 버전(SHA-256). 파일이 없으면 404 `SHELF_SLOTS_NOT_CONFIGURED` |
 | GET | `/api/arm/policies` | 관제 화면 | 물체별 학습 정책 목록과 정책 파일 버전(SHA-256). 파일이 없으면 404 `ACT_POLICIES_NOT_CONFIGURED` |
-| POST | `/api/arm/commands/from-camera` | 관제 화면 | body `{"object_class": "당근", "operation": "PICK_WITH_POLICY"}`(operation 생략 시 `MOVE_TO_SLOT`). 정면 카메라에서 한 칸에만 보일 때 명령 등록. 정책 없는 물체는 409 `POLICY_NOT_FOUND` |
+| POST | `/api/arm/commands/from-camera` | 관제 화면 | body `{"object_class": "당근", "operation": "PICK_WITH_POLICY", "robot_id": "arm-02"}`(operation 생략 시 `MOVE_TO_SLOT`, robot_id 생략 시 `arm-01`). 정면 카메라에서 한 칸에만 보일 때 그 팔에 명령 등록. 그 팔에 학습된 정책이 없는 물체는 409 `POLICY_NOT_FOUND` |
 | GET | `/api/arm/commands/{command_id}` | 둘 다 | 명령과 전체 이벤트 이력 |
 | POST | `/api/arm/commands/{command_id}/cancel` | 관제 화면 | body `{}`. `QUEUED`면 바로 취소, 실행 중이면 취소 요청 표시 |
 | POST | `/api/arm/commands/{command_id}/clear-unknown` | 관제 화면 | body `{"note": "..."}`. `UNKNOWN` 현장 확인 기록 |
@@ -233,8 +233,8 @@ sequenceDiagram
 
 - 정책 정의: [config/omx-act-policies.json](../../config/omx-act-policies.json). 물체 이름(YOLO 클래스, 한글 이름, 별칭) → 모델(Hugging Face repo), 정책 입력 `front`/`wrist`에 넣을 카메라 역할(`OVERHEAD` 선반을 위에서 봄, `GRIPPER` 그리퍼), 최대 실행 시간. 관제와 워커가 같은 파일을 읽고, 명령에는 파일의 SHA-256(`target.policy.registry_version`)이 고정됩니다. 다르면 워커가 `POLICY_REGISTRY_MISMATCH`로 거부합니다.
 - 명령: `target`은 `object_class`(필수)와 선택적 `pick_slot_id`만 받습니다. 관제가 `target.object_class`를 검출기 클래스 이름으로 바꾸고 `target.policy`(`policy_id`, `label`, `model`, `registry_version`)를 붙입니다. 정책이 없는 물체는 400입니다. `place`는 다른 집기 명령과 같이 필요합니다(화면에서는 `CART_1`).
-- 워커 검사(거부 사유): 가짜·dry-run 팔(`POLICY_NEEDS_REAL_ARM`), 정책 파일 버전·정책 ID(`POLICY_REGISTRY_MISMATCH`, `POLICY_UNKNOWN`), home 미기록(`POSE_NOT_RECORDED`), 만료(`EXPIRED`), 카메라 장치 없음(`CAMERA_UNAVAILABLE`), 다른 프로그램이 카메라 사용 중(`CAMERA_BUSY`), 정책 서버 응답 없음(`POLICY_SERVER_UNAVAILABLE`), 현재 자세가 home에서 400틱 넘게 떨어짐(`NOT_AT_REST`, 정책은 쉬는 자세에서 시작하도록 학습됨).
-- 카메라 넘겨주기: V4L2 카메라는 한 프로그램만 열 수 있습니다. 관제가 정책 카메라(`CONTROL_STATION_ACT_OVERHEAD_CAMERA`, `CONTROL_STATION_JOINT_CAMERA`와 같은 장치)를 화면에 띄우고 있으면, 워커가 정책 명령을 가져가는 순간(`DISPATCHED`) 그 카메라를 닫고 명령이 끝나면(`DISPATCHED`·`ACCEPTED`·`RUNNING`이 아니게 되면) 다시 엽니다. 그동안 화면에는 "학습 정책 실행 중"이 표시됩니다. 워커는 카메라를 열기 전에 다른 프로세스가 장치를 열고 있지 않은지 최대 5초 기다리고, 그래도 열려 있으면 `CAMERA_BUSY`로 거부합니다. 2026-11-07 임시 관제에서 실제 헤드캠(허브 4.4)으로 확인: 명령을 가져가는 응답(0.04초) 안에 닫히고, 명령이 끝난 뒤 다시 `STREAMING`.
+- 워커 검사(거부 사유): 가짜·dry-run 팔(`POLICY_NEEDS_REAL_ARM`), 정책 파일 버전·정책 ID(`POLICY_REGISTRY_MISMATCH`, `POLICY_UNKNOWN`), 다른 팔에서 녹화한 정책이거나 포트가 이 팔의 보드가 아님(`POLICY_WRONG_ARM`), home 미기록(`POSE_NOT_RECORDED`), 만료(`EXPIRED`), 카메라 장치 없음(`CAMERA_UNAVAILABLE`), 다른 프로그램이 카메라 사용 중(`CAMERA_BUSY`), 정책 서버 응답 없음(`POLICY_SERVER_UNAVAILABLE`), 현재 자세가 home에서 400틱 넘게 떨어짐(`NOT_AT_REST`, 정책은 쉬는 자세에서 시작하도록 학습됨).
+- 카메라 넘겨주기: V4L2 카메라는 한 프로그램만 열 수 있습니다. 관제가 그 명령 팔의 정책 카메라(`CONTROL_STATION_ARM01_*_CAMERA`/`ARM02_*`, 예전 단일 팔 설정이면 `CONTROL_STATION_ACT_OVERHEAD_CAMERA`, `CONTROL_STATION_JOINT_CAMERA`와 같은 장치)를 화면에 띄우고 있으면, 워커가 정책 명령을 가져가는 순간(`DISPATCHED`) 그 카메라를 닫고 명령이 끝나면(`DISPATCHED`·`ACCEPTED`·`RUNNING`이 아니게 되면) 다시 엽니다. 그동안 화면에는 "학습 정책 실행 중"이 표시됩니다. 워커는 카메라를 열기 전에 다른 프로세스가 장치를 열고 있지 않은지 최대 5초 기다리고, 그래도 열려 있으면 `CAMERA_BUSY`로 거부합니다. 2026-11-07 임시 관제에서 실제 헤드캠(허브 4.4)으로 확인: 명령을 가져가는 응답(0.04초) 안에 닫히고, 명령이 끝난 뒤 다시 `STREAMING`.
 - 실행: ACCEPTED 뒤 서보 속도 프로파일을 0(학습 때와 같은 전원 기본값)으로 되돌리고, LeRobot `RobotClient`를 워커 프로세스 안에서 돌립니다. LeRobot이 연결하면서 모터 설정을 쓰느라 토크가 잠깐 꺼집니다. 정지할 때는 토크를 유지합니다(`disable_torque_on_disconnect=False`).
 - 멈추는 조건: 정책에는 완료 신호가 없어서, 워커가 정책이 쓴 관절 목표를 보고 정합니다. 어느 관절이든 home에서 300틱 넘게 벗어난 뒤 다섯 관절이 모두 150틱 안으로 돌아와 1.5초 머물면 `RETURNED_TO_REST`입니다(값은 워커 옵션 `--policy-depart-ticks`, `--policy-rest-ticks`, `--policy-settle-s`). 학습 에피소드가 쉬는 자세에서 끝나도록 녹화돼 있어서 이 조건을 씁니다.
 - 결과:

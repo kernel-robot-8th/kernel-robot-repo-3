@@ -19,6 +19,9 @@ The motion itself and its safety checks live in omx_slot_motion.py, shared with 
 PICK_WITH_POLICY runs the LeRobot ACT policy trained for the named object (omx_act_policy_run.py) through the
 policy server on this PC, stops it once the arm is back at rest, then aligns it to the recorded home pose. Whether
 the object was grasped and placed is not checked, so the outcome is RESULT_UNKNOWN / PLACE_NOT_VERIFIED.
+A policy recorded on one arm (arm_id) runs only in that arm's worker (--robot-id) on that arm's board
+(board_serial in config/arms.json). With two arms, run one worker per arm; each takes its port and cameras from
+CONTROL_STATION_ARM01_* / ARM02_* (FOLLOWER_PORT, GRIPPER_CAMERA, OVERHEAD_CAMERA) for its --robot-id.
 Any other operation is rejected (NOT_IMPLEMENTED).
 This does not replace the hardware power cut.
 """
@@ -26,6 +29,7 @@ This does not replace the hardware power cut.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import time
 from dataclasses import asdict
@@ -36,9 +40,23 @@ from mock_omx_worker import Refused, Worker, request_json
 from omx_act_policy_run import (
     DEFAULT_POLICIES, RestWatcher, check_policy_server, load_policies, policy_cameras, run_policy, wait_devices_free,
 )
-from omx_slot_motion import ARM_JOINTS, Outcome, Rejected, SlotMotion, add_motion_arguments
+from omx_slot_motion import ARM_JOINTS, REPOSITORY_ROOT, Outcome, Rejected, SlotMotion, add_motion_arguments, board_serial
 
 DEFAULT_GRIPPER_CAMERA = "/dev/v4l/by-id/usb-Innomaker_Innomaker-U20CAM-720P_SN0001-video-index0"
+
+
+def arm_env(robot_id: str, name: str) -> str:
+    """CONTROL_STATION_ARM01_<name> for arm-01; empty when unset."""
+    return os.environ.get("CONTROL_STATION_" + robot_id.replace("-", "").upper() + "_" + name, "").strip()
+
+
+def arm_board(robot_id: str) -> str | None:
+    """This arm's OpenRB-150 board serial from config/arms.json, if recorded."""
+    try:
+        document = json.loads((REPOSITORY_ROOT / "config" / "arms.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return next((arm.get("board_serial") for arm in document.get("arms", []) if arm.get("arm_id") == robot_id), None)
 
 
 class LeRobotOmxWorker(Worker):
@@ -83,6 +101,13 @@ class LeRobotOmxWorker(Worker):
         policy = self.policies.get(policy_ref.get("policy_id"))
         if policy is None or policy["model"] != policy_ref.get("model"):
             return "POLICY_UNKNOWN", None
+        # A policy recorded on one arm runs only on that arm: this worker's arm id and the board on its port.
+        if policy.get("arm_id") not in (None, settings.robot_id):
+            return "POLICY_WRONG_ARM", None
+        board = arm_board(settings.robot_id)
+        if policy.get("arm_id") and board and board not in board_serial(settings.port):
+            print(f"  {settings.robot_id}의 보드({board})가 아닌 포트입니다: {settings.port}", flush=True)
+            return "POLICY_WRONG_ARM", None
         if "home" not in self.motion.poses["poses"]:
             return "POSE_NOT_RECORDED", None
         if datetime.fromisoformat(command["valid_until"]) <= datetime.now(timezone.utc):
@@ -287,6 +312,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--server", default="http://127.0.0.1:8000")
     parser.add_argument("--robot-id", default="arm-01")
+    robot_id = parser.parse_known_args()[0].robot_id  # the per-arm defaults below depend on it
     parser.add_argument("--worker-id", default="omx-lerobot-worker")
     parser.add_argument("--wait-s", type=float, default=20)
     parser.add_argument("--once", action="store_true", help="exit after one command")
@@ -294,10 +320,14 @@ def main() -> int:
     policy = parser.add_argument_group("PICK_WITH_POLICY (LeRobot ACT)")
     policy.add_argument("--policies", type=Path, default=DEFAULT_POLICIES, help="object -> trained policy file")
     policy.add_argument("--policy-server", default="127.0.0.1:8080", help="lerobot.async_inference.policy_server address")
-    policy.add_argument("--overhead-camera", default=os.environ.get("CONTROL_STATION_ACT_OVERHEAD_CAMERA", ""),
-                        help="camera seeing the shelf from above, as in training (env CONTROL_STATION_ACT_OVERHEAD_CAMERA)")
-    policy.add_argument("--gripper-camera", default=os.environ.get("CONTROL_STATION_JOINT_CAMERA") or DEFAULT_GRIPPER_CAMERA,
-                        help="camera on the gripper (env CONTROL_STATION_JOINT_CAMERA)")
+    policy.add_argument("--overhead-camera",
+                        default=arm_env(robot_id, "OVERHEAD_CAMERA") or os.environ.get("CONTROL_STATION_ACT_OVERHEAD_CAMERA", ""),
+                        help="camera seeing the shelf from above, as in training "
+                             "(env CONTROL_STATION_ARM01_OVERHEAD_CAMERA for arm-01, else CONTROL_STATION_ACT_OVERHEAD_CAMERA)")
+    policy.add_argument("--gripper-camera",
+                        default=arm_env(robot_id, "GRIPPER_CAMERA") or os.environ.get("CONTROL_STATION_JOINT_CAMERA")
+                        or DEFAULT_GRIPPER_CAMERA,
+                        help="camera on the gripper (env CONTROL_STATION_ARM01_GRIPPER_CAMERA, else CONTROL_STATION_JOINT_CAMERA)")
     policy.add_argument("--policy-start-ticks", type=int, default=400,
                         help="refuse to start the policy when a joint is farther than this from home")
     policy.add_argument("--policy-depart-ticks", type=int, default=300, help="a joint this far from home = policy started moving")
@@ -311,6 +341,8 @@ def main() -> int:
                         help="limit each policy goal to present ± this many ticks per 1/30 s step (default: none, "
                              "40 with --policy-any-start)")
     parser.add_argument("--release-torque", action="store_true", help="turn arm torque off and exit (hold the arm first)")
+    if arm_env(robot_id, "FOLLOWER_PORT"):
+        parser.set_defaults(port=arm_env(robot_id, "FOLLOWER_PORT"))
     args = parser.parse_args()
     if args.policy_any_start and args.policy_max_step_ticks is None:
         args.policy_max_step_ticks = 40  # about 1,200 ticks/s at 30 Hz; the first actions from an unseen pose may jump
