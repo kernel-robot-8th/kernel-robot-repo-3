@@ -71,7 +71,7 @@
 
 모의 결과는 이벤트와 결과에 `simulated: true`로 남습니다. 화면에는 "모의" 표시가 붙습니다.
 
-실제 팔로 집을 때(`CONTROL_STATION_ORDER_REAL_ARM=1`) 집기 단계는 계획된 팔에 `PICK_WITH_POLICY`를 보내고, 그 팔에서 녹화한 정책으로 그 팔의 워커가 끝내기를 기다립니다(정책 최대 시간 + 180초). 워커는 팔이 쉬는 자세로 돌아온 것까지만 알 수 있어 명령을 `UNKNOWN`(`PLACE_NOT_VERIFIED`)으로 끝내고, 옮김 확인 단계가 카메라 개수로 선반 −1·핑키 +1을 보면 그 명령을 닫습니다(`arm_pick.py`). 개수가 모의면 팔을 움직이기 전에 `TRANSFER_EVIDENCE_REQUIRED`로 멈춥니다. 옮김을 확인하지 못하면 명령은 `UNKNOWN`으로 남고, 수동 조작 화면에서 현장을 확인하고 닫아야 그 팔이 다음 명령을 받습니다.
+실제 팔로 집을 때(`CONTROL_STATION_ORDER_REAL_ARM=1`) 집기 단계는 계획된 팔에 `PICK_WITH_POLICY`를 보내고, 그 팔에서 녹화한 정책으로 그 팔의 워커가 끝내기를 기다립니다(정책 최대 시간 + 180초). 워커는 팔이 쉬는 자세로 돌아온 것까지만 알 수 있어 명령을 `UNKNOWN`(`PLACE_NOT_VERIFIED`)으로 끝내고, 옮김 확인 단계가 카메라 개수로 선반 −1·핑키 +1을 보면 그 명령을 닫습니다(`arm_pick.py`). 개수가 모의면 팔을 움직이기 전에 `TRANSFER_EVIDENCE_REQUIRED`로 멈춥니다. 명령은 기본으로 그 팔의 HTTP 워커가 가져가고, `CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2`면 관제가 그 팔의 ROS 2 집기 액션(`/arm_0N/pick_object`)으로 보냅니다. 어느 쪽이든 같은 팔 명령 기록과 같은 규칙을 씁니다([ROS 2 집기 액션](arm-command-api.md#ros-2-집기-액션-arm_0npick_object)). 옮김을 확인하지 못하면 명령은 `UNKNOWN`으로 남고, 수동 조작 화면에서 현장을 확인하고 닫아야 그 팔이 다음 명령을 받습니다.
 
 모의 팔에 카메라 개수를 쓸 때는 집기 단계 동안 사람이 물체를 선반에서 핑키 위로 옮겨야 옮김 확인을 통과합니다. 집기 단계 시간은 `CONTROL_STATION_MOCK_PICK_S`(기본 4초)로 늘릴 수 있습니다.
 
