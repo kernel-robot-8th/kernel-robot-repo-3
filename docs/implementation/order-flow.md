@@ -188,7 +188,7 @@ ros2 launch parking_vision_ros ceiling_parking.launch.py repository_root:=$PWD s
 - `CONTROL_STATION_MOCK_PINKY_DRIVE_S`: 모의 핑키 이동 시간, 기본 8초
 - `CONTROL_STATION_MOCK_PICK_S`: 모의 집기 시간, 기본 4초
 - `CONTROL_STATION_ORDER_STEP_DWELL_S`: 빠른 단계를 화면에 잠깐 보여 주는 시간, 기본 0.8초
-- `CONTROL_STATION_MOCK_SHELF_STOCK`: 모의 선반 재고. 예: `shelf_a:carrot=3;shelf_b:apple=2`
+- `CONTROL_STATION_MOCK_SHELF_STOCK`: 모의 선반 재고. 예: `shelf_a:apple=2;shelf_b:carrot=3` (기본 `shelf_a:apple=4,carrot=3,tissue=1;shelf_b:carrot=1,tissue=2`. 사과 정책은 왼쪽 팔 arm-01에서 녹화돼 오른쪽 선반의 사과는 집을 팔이 없습니다)
 
 카메라를 다시 꽂거나 옮겨 주차 판정이 `VIEW_UNVERIFIED`(고정 마커가 등록 때보다 15 px 넘게 이동)가 되면, 핑키를 정차 위치에 세우고 다시 등록합니다. 절차는 [실행 방법](runbook.md#정답-위치-등록)에 있습니다.
 - 2026-11-11에 이 절차로 `pinky_dock_1`을 다시 등록했습니다(마커 21, 70 mm, 고정 마커 1 신뢰, 25 mm / 5°).
