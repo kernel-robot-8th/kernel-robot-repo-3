@@ -247,6 +247,9 @@ class OrderDesk:
         trips = []
         for trip in fleet.trips:  # later trips plan with what the earlier ones leave on the shelves
             entry = trip.as_dict()
+            for unit in entry["units"]:  # what the tray drawing needs: the name and how many slots it takes
+                unit["label"] = self._label(unit["object_class"])
+                unit["size"] = self.planning.size_of(unit["object_class"])
             if stock_error is not None:
                 entry["arms"] = {"error": {"code": "SHELF_STOCK_UNAVAILABLE", "message": stock_error}}
             else:
@@ -265,7 +268,8 @@ class OrderDesk:
         arms = trips[0]["arms"] if len(trips) == 1 else {
             "error": {"code": "MULTI_PINKY", "message": f"{fleet.summary} · 배송별 팔 계획은 fleet에 있습니다"}}
         return {"order_id": order_id, "pinky": pinky.as_dict(), "zone": zone, "arms": arms,
-                "fleet": {"summary": fleet.summary, "complete": fleet.complete, "trips": trips}}
+                "fleet": {"summary": fleet.summary, "complete": fleet.complete,
+                          "capacity": self.planning.pinky_capacity, "trips": trips}}
 
     def start(self, order_id: str) -> tuple[dict[str, Any], bool]:
         """Assign the receiving zone and the Pinky now (where the order has none) and start the order flow.

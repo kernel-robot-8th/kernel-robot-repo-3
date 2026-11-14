@@ -217,6 +217,10 @@ class OrderDeskTest(unittest.TestCase):
         fleet = self.desk.preview(order["id"])["fleet"]
         self.assertEqual(fleet["summary"], "핑키 2대 · P0 3, P1 3")
         self.assertEqual([trip["pinky_id"] for trip in fleet["trips"]], ["10", "11"])
+        # The screen draws each tray: its slot count and, per unit, the name and the slots it takes.
+        self.assertEqual(fleet["capacity"], 4)
+        self.assertEqual({(unit["label"], unit["size"]) for trip in fleet["trips"] for unit in trip["units"]},
+                         {("당근", 1), ("사과", 1)})
         for trip in fleet["trips"]:
             schedule = trip["schedule"]
             self.assertEqual(len(schedule["picks"]), 3)
