@@ -100,6 +100,11 @@ button:disabled { background: var(--fill); color: var(--text-disabled); cursor: 
 .nav-item.active, .nav-item.active:hover { background: var(--blue-soft); color: var(--blue-strong); font-weight: 700; }
 /* Waiting orders need a person to start them: yellow. */
 .nav-badge { min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px; background: var(--yellow); color: var(--text); font-size: 12px; font-weight: 700; line-height: 22px; text-align: center; }
+/* Operator screen by default: developer-only parts appear with ?dev=1 (body.dev). */
+body:not(.dev) [data-dev-only] { display: none !important; }
+.screen-mode-switch { margin-top: auto; padding: 6px 12px; color: var(--text-3); font-size: 13px; text-decoration: none; }
+.screen-mode-switch:hover { color: var(--blue); }
+.screen-mode-switch + .server-status { margin-top: 0; }
 .server-status { display: flex; align-items: center; gap: 10px; margin-top: auto; padding: 12px; border-radius: 14px; background: var(--fill); color: var(--text-2); font-size: 13px; line-height: 1.35; }
 .server-status strong { display: block; color: var(--text); font-weight: 600; }
 .server-status small { color: var(--text-3); font-size: 12px; }
@@ -363,6 +368,8 @@ dl.pinky-facts { display: grid; margin: 0; padding: 0; }
 .map-figure figcaption { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 14px; }
 .map-figure .map-hint { margin-left: auto; }
 .pinky-summary-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.pinky-prepare { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.pinky-prepare small { flex: 1 1 220px; color: var(--text-2); font-size: 13px; line-height: 1.5; }
 .link-button { flex-shrink: 0; min-height: 32px; padding: 4px 10px; background: transparent; color: var(--blue); font-size: 13px; }
 .link-button:hover:not(:disabled) { background: var(--blue-soft); }
 .map-open { display: grid; place-items: center; min-height: 160px; padding: 0; overflow: hidden; border-radius: var(--radius-inner); background: var(--card-muted); color: var(--text-3); cursor: zoom-in; }
@@ -442,9 +449,9 @@ dl.pinky-facts { display: grid; margin: 0; padding: 0; }
 .sheet-waypoint-form input { flex: 1 1 auto; }
 .sheet-waypoint-form button { flex-shrink: 0; }
 .sheet-hint { margin: 8px 0 0; color: var(--text-3); font-size: 12px; }
-.sheet-waypoints, .sensor-list, .sheet-log { margin: 10px 0 0; padding: 0; list-style: none; }
-.sheet-waypoints li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line-soft); font-size: 14px; }
-.sheet-waypoints li span { color: var(--text-3); font-size: 13px; font-variant-numeric: tabular-nums; }
+.sheet-waypoints, .sheet-candidates, .sensor-list, .sheet-log { margin: 10px 0 0; padding: 0; list-style: none; }
+.sheet-waypoints li, .sheet-candidates li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line-soft); font-size: 14px; }
+.sheet-waypoints li span, .sheet-candidates li span { color: var(--text-3); font-size: 13px; font-variant-numeric: tabular-nums; }
 .sheet-waypoints li button { margin-left: auto; }
 button.small { min-height: 30px; padding: 4px 10px; font-size: 12px; }
 .sensor-list li { display: grid; grid-template-columns: 6.5em minmax(0, 1fr) auto; align-items: baseline; gap: 8px; padding: 8px 0; border-top: 1px solid var(--line-soft); font-size: 13px; }

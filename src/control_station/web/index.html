@@ -27,11 +27,12 @@
         <button type="button" class="nav-item" data-view="flow"><span>주문 진행</span><span id="intakeBadge" class="nav-badge" hidden></span></button>
         <button type="button" class="nav-item" data-view="pinky">핑키</button>
         <button type="button" class="nav-item" data-view="inventory">재고</button>
-        <button type="button" class="nav-item" data-view="overview">장비·카메라</button>
-        <button type="button" class="nav-item" data-view="manual">수동 조작</button>
         <button type="button" class="nav-item" data-view="tasks">작업 이력</button>
-        <button type="button" class="nav-item" data-view="api">API</button>
+        <button type="button" class="nav-item" data-view="overview" data-dev-only>장비·카메라</button>
+        <button type="button" class="nav-item" data-view="manual" data-dev-only>수동 조작</button>
+        <button type="button" class="nav-item" data-view="api" data-dev-only>API</button>
       </nav>
+      <a id="screenModeSwitch" class="screen-mode-switch" href="?dev=1">개발자 화면</a>
       <div id="serverStatus" class="server-status" role="status"><span class="dot"></span><span><strong>서버 확인 중</strong></span></div>
     </aside>
 
@@ -137,6 +138,10 @@
             <div class="stat" id="pinkyStatReady"><dt>주행 가능</dt><dd>–</dd></div>
             <div class="stat" id="pinkyStatStopping"><dt>정지 적용 중</dt><dd>–</dd></div>
           </dl>
+          <div class="pinky-prepare">
+            <button type="button" id="pinkyPrepareAll" disabled>주행준비하고 위치 잡기</button>
+            <small id="pinkyPrepareHint">준비 안 된 핑키만 한 대씩 차례로 준비하고, 끝나면 라이다로 각자 지도 위치를 찾아요. 못 찾은 핑키는 상세에서 후보를 골라 주세요.</small>
+          </div>
           <p id="pinkyMapOff" class="route-off"></p>
           <p id="pinkyMapNote" class="gentle-note" hidden></p>
         </div>
@@ -162,7 +167,7 @@
       <p class="note">정지는 핑키 관제를 거쳐 보내는 소프트웨어 정지 요청이며 확인 창 없이 바로 보냅니다. <strong>접수</strong>는 핑키 관제가 요청을 받았다는 뜻일 뿐이니, 핑키가 실제로 멈췄는지는 상세의 안전 감시 상태와 현장에서 확인하세요. 비상정지 스위치를 대신하지 않습니다.</p>
     </section>
     <section aria-labelledby="pinky-log-title">
-      <details class="pinky-log-box">
+      <details class="pinky-log-box" data-dev-only>
         <summary><h2 id="pinky-log-title">최근 명령</h2><span id="pinkyLogCount" class="updated"></span></summary>
         <ol id="pinkyLog" class="pinky-log"><li class="pinky-log-empty">보낸 명령이 없습니다.</li></ol>
         <p class="note">최근 30건이며 관제 서버 메모리에만 있어 다시 켜면 비워집니다.</p>

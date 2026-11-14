@@ -41,9 +41,24 @@ class FakeFleet:
         self.sent.append(("prepare", (pinky_id, map_name)))
         return 202, {"ok": True, "robot": pinky_id}
 
+    def extras(self) -> dict:
+        return {"keepout": None, "traffic": None, "password_set": False, "busy_robot": None}
+
+    def prepare_all(self, map_name: str) -> tuple[int, dict]:
+        self.sent.append(("prepare_all", map_name))
+        return 401, {"error": "SSH 비밀번호를 먼저 입력하세요."}
+
     def initial_pose(self, pinky_id: str) -> tuple[int, dict]:
         self.sent.append(("initial_pose", pinky_id))
         return 409, {"error": "주행준비 완료 후 초기 위치를 설정하세요."}
+
+    def localize(self, pinky_id: str, pose: dict | None = None) -> tuple[int, dict]:
+        self.sent.append(("localize", (pinky_id, pose)))
+        return 202, {"ok": True, "message": "라이다로 위치 찾기를 시작했습니다."}
+
+    def locate(self, pinky_id: str) -> tuple[int, dict]:
+        return 200, {"robot": pinky_id, "match": {"ok": False, "reason": "후보 중 실제 자리를 골라 주세요", "candidates": [
+            {"score": 0.86, "x_m": 0.33, "y_m": 1.66, "yaw_rad": 3.04}, {"score": 0.81, "x_m": 1.23, "y_m": 0.35, "yaw_rad": -0.1}]}}
 
     def nav_restart(self, pinky_id: str) -> tuple[int, dict]:
         self.sent.append(("nav_restart", pinky_id))
@@ -144,6 +159,15 @@ class CommandTest(unittest.TestCase):
         self.assertEqual(fleet.sent, [("password", "s3cret")])
         self.assertNotIn("s3cret", repr(gateway.view()))
 
+    def test_the_screen_knows_whether_the_dashboard_holds_the_password(self) -> None:
+        fleet = FakeFleet()
+        view = PinkyGateway(fleet).view()
+        self.assertEqual((view["password_set"], view["busy"]), (False, None))
+        fleet.extras = lambda: {"password_set": True, "busy_robot": "all"}
+        view = PinkyGateway(fleet).view()
+        self.assertEqual((view["password_set"], view["busy"]), (True, "all"))
+        self.assertIsNone(PinkyGateway(None, MockWorld().fleet_status).view()["password_set"])  # unknown, not "no"
+
     def test_mock_mode_shows_mock_pinkys_and_sends_nothing(self) -> None:
         gateway = PinkyGateway(None, MockWorld().fleet_status)
         view = gateway.view()
@@ -185,6 +209,27 @@ class PinkyApiTest(ApiTestCase):
         self.assertEqual(status, 200)
         self.assertEqual([action for action, _ in self.fleet.sent],
                          ["prepare", "initial_pose", "nav_restart", "waypoint", "waypoint_delete"])
+
+    def test_prepare_all_passes_the_dashboards_refusal_on(self) -> None:
+        status, body, _ = self.request("POST", "/api/pinky/prepare-all", {"map": "map-proto.yaml"})
+        self.assertEqual((status, body["command"]["action"], body["command"]["pinky_id"]), (401, "prepare_all", None))
+        status, body, _ = self.request("POST", "/api/pinky/prepare-all", {"map": "other.yaml"})
+        self.assertEqual((status, body["error_code"]), (400, "PINKY_ACTION_INVALID"))
+        status, _, _ = self.request("POST", "/api/pinky/prepare-all", {}, origin="http://evil.example")
+        self.assertEqual(status, 403)
+        self.assertEqual(self.fleet.sent, [("prepare_all", "map-proto.yaml")])
+
+    def test_lidar_localization_and_its_candidates(self) -> None:
+        status, body, _ = self.request("GET", "/api/pinky/12/locate")
+        self.assertEqual((status, len(body["match"]["candidates"])), (200, 2))
+        status, body, _ = self.request("POST", "/api/pinky/12/localize", {})
+        self.assertEqual((status, body["command"]["action"]), (202, "localize"))
+        pick = {"x_m": 0.33, "y_m": 1.66, "yaw_rad": 3.04}
+        status, _, _ = self.request("POST", "/api/pinky/12/localize", {"pose": pick})
+        self.assertEqual(status, 202)
+        status, body, _ = self.request("POST", "/api/pinky/12/localize", {"pose": {"x_m": "a"}})
+        self.assertEqual((status, body["error_code"]), (400, "PINKY_ACTION_INVALID"))
+        self.assertEqual(self.fleet.sent, [("localize", ("12", None)), ("localize", ("12", pick))])
 
     def test_password_route(self) -> None:
         status, body, _ = self.request("POST", "/api/pinky/credentials", {"password": "s3cret"})

@@ -99,12 +99,13 @@ class PinkyFleetClient:
         self._cache: tuple[float, dict[str, Any]] | None = None
         self._lock = threading.Lock()
 
-    def _request(self, method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+    def _request(self, method: str, path: str, body: dict[str, Any] | None = None,
+                 timeout_s: float | None = None) -> tuple[int, dict[str, Any]]:
         data = None if body is None else json.dumps(body).encode("utf-8")
         request = Request(f"{self.base_url}{path}", data=data, method=method,
                           headers={"Content-Type": "application/json"} if data is not None else {})
         try:
-            with urlopen(request, timeout=self.timeout_s) as response:  # noqa: S310 (configured local URL)
+            with urlopen(request, timeout=timeout_s or self.timeout_s) as response:  # noqa: S310 (configured local URL)
                 status, raw = response.status, response.read()
         except HTTPError as error:
             status, raw = error.code, error.read()
@@ -126,7 +127,8 @@ class PinkyFleetClient:
         robots = {str(robot.get("id")): robot for robot in answer["robots"] if isinstance(robot, dict)}
         with self._lock:
             self._cache = (time.monotonic(), robots)
-            self._extras = {"keepout": answer.get("keepout"), "traffic": answer.get("traffic")}
+            self._extras = {"keepout": answer.get("keepout"), "traffic": answer.get("traffic"),
+                            "password_set": answer.get("password_set"), "busy_robot": answer.get("busy_robot")}
         return robots
 
     def extras(self) -> dict[str, Any]:
@@ -145,12 +147,29 @@ class PinkyFleetClient:
         return self._send("POST", f"/api/robots/{pinky_id}/route/cancel", {})
 
     def prepare(self, pinky_id: str, map_name: str) -> tuple[int, dict[str, Any]]:
-        """Run preparation (주행준비): bringup, Nav2 and the robot-side safety monitor with the chosen map."""
+        """Run preparation (주행준비): bringup, Nav2 and the robot-side safety monitor with the chosen map, then
+        AMCL is given the Pinky's own parking pose (the Pinky must stand there)."""
         return self._send("POST", f"/api/robots/{pinky_id}/ready", {"map": map_name})
+
+    def prepare_all(self, map_name: str) -> tuple[int, dict[str, Any]]:
+        """주행준비 for every Pinky not yet prepared, one after another; each ends by localizing at its parking spot.
+        202 = started (answer lists `robots` and `skipped`), 401 = no SSH password, 409 = busy or nothing to do."""
+        return self._send("POST", "/api/prepare-all", {"map": map_name})
 
     def initial_pose(self, pinky_id: str) -> tuple[int, dict[str, Any]]:
         """Set AMCL's pose to the Pinky's own parking spot; the Pinky must stand there."""
         return self._send("POST", f"/api/robots/{pinky_id}/initial-pose", {})
+
+    def localize(self, pinky_id: str, pose: dict[str, float] | None = None) -> tuple[int, dict[str, Any]]:
+        """Find the Pinky on its map with its LiDAR and give AMCL that pose (no SSH password; Nav2 must run).
+        With `pose` (a candidate from locate), that place is used. 202 = started; the result shows in the robot's
+        `localization` and message."""
+        return self._send("POST", f"/api/robots/{pinky_id}/localize", {} if pose is None else {"pose": pose})
+
+    def locate(self, pinky_id: str) -> tuple[int, dict[str, Any]]:
+        """Read only: where the LiDAR puts the Pinky now and the other places that fit (AMCL is not touched)."""
+        # Matching a scan against the whole map takes about a second, after waiting for a fresh scan.
+        return self._request("GET", f"/api/robots/{pinky_id}/locate", timeout_s=15.0)
 
     def nav_restart(self, pinky_id: str) -> tuple[int, dict[str, Any]]:
         """Restart Nav2 when its action server is missing; refused while a route runs."""

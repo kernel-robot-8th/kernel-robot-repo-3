@@ -4,8 +4,11 @@ GET  /api/pinky                 every Pinky card, whether the fleet dashboard an
 GET  /api/pinky/map             the cell from above in map metres: Nav2 grid, keepout, fixed points, poses
 POST /api/pinky/{id}/stop       stop one Pinky (the dashboard latches a stop and cancels its Nav2 goal)
 POST /api/pinky/stop-all        stop request to every Pinky
+POST /api/pinky/prepare-all {map}  주행준비 for every Pinky not yet prepared, in turn, each localized at its parking spot
 POST /api/pinky/credentials     {password}: passed to the dashboard, never stored or logged here
 POST /api/pinky/{id}/ready {map}, /initial-pose, /nav-restart, /waypoints {label}, /waypoints/{wid}/delete
+POST /api/pinky/{id}/localize {pose?}  LiDAR localization (automatic, or the picked candidate pose)
+GET  /api/pinky/{id}/locate     read only: the LiDAR's candidate places now
 """
 
 from __future__ import annotations
@@ -32,6 +35,19 @@ def get_pinky(h: ControlStationHandler, route: str, parts: list[str], body: None
     h._json(200, h.app.pinky_gateway.view())
 
 
+def get_locate(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
+    """라이다 위치 후보 (읽기만, AMCL은 그대로)"""
+    try:
+        answer = h.app.pinky_gateway.locate(parts[2])
+    except ValueError as exc:
+        h._json_error(404, "PINKY_UNKNOWN", str(exc))
+        return
+    if answer["ok"]:
+        h._json(200, answer)
+    else:
+        h._json_error(409, "PINKY_LOCATE_UNAVAILABLE", answer["error"])
+
+
 def get_map(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
     """핑키 지도: Nav2 격자, 금지 구역, 주차장, 5번, 교차로 7, 웨이포인트, 수령 구역, 핑키 위치(지도 좌표)"""
     zones = [zone.as_dict() for zone in getattr(h.app.order_desk, "zones", {}).values()] if hasattr(h.app, "order_desk") else []
@@ -55,12 +71,24 @@ def post_action(h: ControlStationHandler, route: str, parts: list[str], body: di
             entry = gateway.prepare(pinky_id, body.get("map", "map-proto.yaml"))
         elif action == "initial-pose":
             entry = gateway.initial_pose(pinky_id)
+        elif action == "localize":
+            entry = gateway.localize(pinky_id, body.get("pose"))
         elif action == "nav-restart":
             entry = gateway.nav_restart(pinky_id)
         elif action == "waypoints" and len(parts) == 4:
             entry = gateway.record_waypoint(pinky_id, body.get("label"))
         else:  # /api/pinky/{id}/waypoints/{waypoint id}/delete
             entry = gateway.delete_waypoint(pinky_id, parts[4])
+    except ValueError as exc:
+        h._json_error(400, "PINKY_ACTION_INVALID", str(exc))
+        return
+    _answer(h, entry)
+
+
+def post_prepare_all(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:
+    """주행준비가 안 된 핑키를 차례로 준비하고 각자 주차장 좌표로 위치 잡기"""
+    try:
+        entry = h.app.pinky_gateway.prepare_all(body.get("map", "map-proto.yaml"))
     except ValueError as exc:
         h._json_error(400, "PINKY_ACTION_INVALID", str(exc))
         return

@@ -112,6 +112,8 @@ def shape_pinky(pinky_id: str, robot: dict[str, Any], status: dict[str, Any]) ->
         "stop_pending": bool(route.get("stop_pending")),
         "sensor_details": sensor_details(topics),
         "pose": {key: _number(pose.get(key)) for key in ("x_m", "y_m", "yaw_rad")},  # map frame, for the 3D view
+        # The last LiDAR localization: where it put the Pinky, whether AMCL took it, the places to pick from.
+        "localization": robot.get("localization") if isinstance(robot.get("localization"), dict) else None,
     }
 
 
@@ -126,7 +128,7 @@ def shape_mock_pinky(pinky_id: str, status: dict[str, Any]) -> dict[str, Any]:
         "message": status.get("message"), "route": {"status": None, "current_label": status.get("location"),
                                                     "completed": None, "total": None},
         "safety_state": None, "safety_label": None, "stop_pending": False, "sensor_details": [],
-        "pose": {"x_m": None, "y_m": None, "yaw_rad": None},
+        "pose": {"x_m": None, "y_m": None, "yaw_rad": None}, "localization": None,
     }
 
 
@@ -175,12 +177,14 @@ class PinkyGateway:
         """The Pinky screen: every Pinky card, whether the dashboard answered, and the recent commands."""
         pinkies: list[dict[str, Any]] = []
         error = None
+        fleet: dict[str, Any] = {}  # the dashboard's own state: whether it holds the SSH password, what it is busy with
         if self.client is None:
             pinkies = [shape_mock_pinky(pid, self.mock_status(pid)) for pid in PINKY_IDS] if self.mock_status else []
         else:
             try:
                 robots = self.client.robots()
                 pinkies = [shape_pinky(pid, robots.get(pid) or {}, self.client.fleet_status(pid)) for pid in PINKY_IDS]
+                fleet = self.client.extras()
             except (PinkyFleetError, OSError) as exc:
                 error = str(exc)
         for card in pinkies:
@@ -188,8 +192,11 @@ class PinkyGateway:
             card["marker"] = marker.as_dict() if marker is not None else None
         with self._lock:
             log = list(self._log)
+        password_set = fleet.get("password_set")
         return {"source": self.source, "reachable": error is None, "error": error, "pinkies": pinkies,
-                "log": log[::-1], "checked_at": _now()}
+                # None when unknown (mock, no answer, or a dashboard that does not say)
+                "password_set": password_set if isinstance(password_set, bool) else None,
+                "busy": fleet.get("busy_robot"), "log": log[::-1], "checked_at": _now()}
 
     def map_view(self, zones: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         """Everything to draw the cell from above, in map metres: the Nav2 occupancy grid and keepout mask, the
@@ -277,9 +284,38 @@ class PinkyGateway:
             raise ValueError("지도는 " + ", ".join(self.MAPS) + " 중 하나여야 합니다")
         return self._command("prepare", pinky_id, lambda client: client.prepare(pinky_id, map_name))
 
+    def prepare_all(self, map_name: str = "map-proto.yaml") -> dict[str, Any]:
+        """주행준비 for every Pinky not yet prepared, in turn, each localized at its own parking spot at the end."""
+        if map_name not in self.MAPS:
+            raise ValueError("지도는 " + ", ".join(self.MAPS) + " 중 하나여야 합니다")
+        return self._command("prepare_all", None, lambda client: client.prepare_all(map_name))
+
     def initial_pose(self, pinky_id: str) -> dict[str, Any]:
         self._known(pinky_id)
         return self._command("initial_pose", pinky_id, lambda client: client.initial_pose(pinky_id))
+
+    def localize(self, pinky_id: str, pose: object = None) -> dict[str, Any]:
+        """LiDAR localization; `pose` is a candidate the operator picked ({x_m, y_m, yaw_rad}) or None for automatic."""
+        self._known(pinky_id)
+        if pose is not None:
+            values = [_number(pose.get(key)) if isinstance(pose, dict) else None for key in ("x_m", "y_m", "yaw_rad")]
+            if None in values or not all(math.isfinite(v) for v in values):
+                raise ValueError("고른 후보의 x_m, y_m, yaw_rad가 필요합니다")
+            pose = dict(zip(("x_m", "y_m", "yaw_rad"), values))
+        return self._command("localize", pinky_id, lambda client: client.localize(pinky_id, pose))
+
+    def locate(self, pinky_id: str) -> dict[str, Any]:
+        """Read only: the LiDAR's places for this Pinky now. {ok, match} or {ok: False, error}."""
+        self._known(pinky_id)
+        if self.client is None:
+            return {"ok": False, "simulated": True, "error": "모의 모드라 라이다 위치가 없습니다"}
+        try:
+            status, answer = self.client.locate(pinky_id)
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}
+        if status != 200 or not isinstance(answer.get("match"), dict):
+            return {"ok": False, "error": answer.get("error") or f"HTTP {status}"}
+        return {"ok": True, "match": answer["match"]}
 
     def nav_restart(self, pinky_id: str) -> dict[str, Any]:
         self._known(pinky_id)

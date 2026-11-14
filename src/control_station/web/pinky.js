@@ -21,6 +21,9 @@ const pinkyLinkDetail = document.querySelector('#pinkyLinkDetail');
 const pinkyLog = document.querySelector('#pinkyLog');
 const pinkyLogCount = document.querySelector('#pinkyLogCount');
 const pinkyStopAll = document.querySelector('#pinkyStopAll');
+const pinkyPrepareAll = document.querySelector('#pinkyPrepareAll');
+const pinkyPrepareHint = document.querySelector('#pinkyPrepareHint');
+const pinkyPasswordOpen = document.querySelector('#pinkyPasswordOpen');
 const pinkyStatConnected = document.querySelector('#pinkyStatConnected');
 const pinkyStatReady = document.querySelector('#pinkyStatReady');
 const pinkyStatStopping = document.querySelector('#pinkyStatStopping');
@@ -45,6 +48,7 @@ const pinkyScreen = {
   polling: false,          // a read is in flight; the timer skips instead of piling up requests
   sending: new Set(),      // `${pinky id}:${action}` with a request in flight
   stopAllSending: 0,
+  prepareAllSending: false,
   retry: null,             // { label, run } offered after the password is accepted
   rendered: new WeakMap(), // element -> the HTML it shows, so an unchanged poll leaves the buttons alone
 };
@@ -55,7 +59,8 @@ const pinkyRouteLabels = {
 };
 // The server's log names each action; the screen uses these words for them.
 const pinkyActionLabels = {
-  stop: '정지', password: '비밀번호', prepare: '주행준비', initial_pose: '위치 재설정', nav_restart: 'Nav2 복구',
+  stop: '정지', password: '비밀번호', prepare: '주행준비', prepare_all: '주행준비하고 위치 잡기',
+  initial_pose: '주차장 좌표로 맞추기', localize: '라이다 위치 찾기', nav_restart: 'Nav2 복구',
   waypoint: '웨이포인트 기록', waypoint_delete: '웨이포인트 삭제',
 };
 
@@ -137,6 +142,24 @@ function renderPinkyLink() {
   pinkyLinkTitle.innerHTML = `${escapeHtml(title)}${view?.source === 'mock_world' ? ' <span class="sim-tag">모의</span>' : ''}`;
   pinkyLinkDetail.textContent = detail;
   renderPinkyStats();
+  renderPinkyPrepare();
+}
+
+// The fleet dashboard keeps one SSH password for all three Pinkys, in memory only; it says whether it has one.
+const PREPARE_HINT = '준비 안 된 핑키만 한 대씩 차례로 준비하고, 끝나면 라이다로 각자 지도 위치를 찾아요. 못 찾은 핑키는 상세에서 후보를 골라 주세요.';
+
+function renderPinkyPrepare() {
+  const view = pinkyScreen.view;
+  const live = Boolean(view && view.source !== 'mock_world' && view.reachable && !pinkyScreen.loadError);
+  const busy = live ? view.busy : null;
+  pinkyPasswordOpen.textContent = view?.password_set ? 'SSH 비밀번호 넣음 · 다시 보내기' : 'SSH 비밀번호 넣기';
+  pinkyPrepareAll.disabled = !live || Boolean(busy) || pinkyScreen.prepareAllSending;
+  pinkyPrepareAll.textContent = pinkyScreen.prepareAllSending ? '보내는 중…'
+    : busy === 'all' ? '차례로 준비하는 중…'
+      : busy ? `${pinkyName(busy)} 작업이 끝나면 누를 수 있어요` : '주행준비하고 위치 잡기';
+  pinkyPrepareHint.textContent = live && view.password_set === false
+    ? 'SSH 비밀번호가 아직 없어요. 누르면 먼저 물어보고, 세 대 모두 같은 비밀번호로 접속해요.'
+    : PREPARE_HINT;
 }
 
 function renderPinkyStats() {
@@ -376,6 +399,35 @@ async function stopAllPinkies() {
   }
 }
 
+// 주행준비 for every Pinky the dashboard has not prepared yet, one after another; each ends by giving AMCL its own
+// parking pose. Accepted means the dashboard started; each card then shows how its Pinky got on.
+async function prepareAllPinkies({ afterPassword = false } = {}) {
+  const label = '주행준비하고 위치 잡기';
+  const retry = () => prepareAllPinkies({ afterPassword: true });
+  // Right after the password went in, the last status may still say "none"; the dashboard answers 401 if so.
+  if (!afterPassword && pinkyScreen.view?.password_set === false) {
+    openPasswordPrompt({ reason: '주행준비는 핑키에 SSH로 접속해서 해요.', retryLabel: label, retry });
+    return;
+  }
+  pinkyScreen.prepareAllSending = true;
+  renderPinkyPrepare();
+  try {
+    const { result } = await postPinky('/api/pinky/prepare-all', { map: 'map-proto.yaml' });
+    const entry = result.command;
+    if (!entry) {
+      showToast(`${label} 거절`, apiErrorMessage(result, '관제 서버가 요청을 받지 않았습니다'), 'error', PINKY_COMMAND_TOAST_MS);
+      return;
+    }
+    showToast(commandPhrase(entry, label), commandMessage(entry), pinkyToastKinds[commandOutcome(entry).kind], PINKY_COMMAND_TOAST_MS);
+    if (entry.http_status === 401) openPasswordPrompt({ reason: `${label} 요청이 거절됐어요.`, retryLabel: label, retry });
+  } catch {
+    showToast(`${label} 결과 모름`, '관제 서버의 답을 받지 못했습니다. 핑키 카드에서 준비 상태를 확인하세요.', 'error', PINKY_COMMAND_TOAST_MS);
+  } finally {
+    pinkyScreen.prepareAllSending = false;
+    refreshPinky({ force: true });
+  }
+}
+
 // ---- SSH password: asked for only when the fleet dashboard needs it ----
 
 function setPasswordMessage(text, tone = '') {
@@ -438,6 +490,7 @@ passwordPrompt.addEventListener('overlayclose', () => { pinkyPassword.value = ''
 // ---- wiring ----
 
 pinkyStopAll.addEventListener('click', stopAllPinkies);
+pinkyPrepareAll.addEventListener('click', () => prepareAllPinkies());
 pinkyCards.addEventListener('click', (event) => {
   const stop = event.target.closest('[data-pinky-stop]');
   if (stop) {
@@ -448,7 +501,7 @@ pinkyCards.addEventListener('click', (event) => {
   if (card) openPinkyDetail(card.dataset.pinky, event.target.closest('button') || card.querySelector('[data-pinky-open]'));
 });
 document.querySelector('#pinkyMapOpen').addEventListener('click', (event) => openMapViewer(event.currentTarget));
-document.querySelector('#pinkyPasswordOpen').addEventListener('click', () => openPasswordPrompt());
+pinkyPasswordOpen.addEventListener('click', () => openPasswordPrompt());
 pinkyPasswordForm.addEventListener('submit', sendPinkyPassword);
 document.addEventListener('pinkymap', renderSmallMap);
 document.addEventListener('viewchange', () => refreshPinky());

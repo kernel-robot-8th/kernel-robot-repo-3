@@ -59,6 +59,7 @@ GET_ROUTES: tuple[Route, ...] = (
     Route(_path("/api/flow"), flow.get_flow),
     Route(_path("/api/pinky"), pinky.get_pinky),
     Route(_path("/api/pinky/map"), pinky.get_map),
+    Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "pinky"] and parts[3] == "locate", pinky.get_locate),
     Route(_path("/api/catalog"), orders.get_catalog),
     Route(_path("/api/inventory"), orders.get_inventory),
     Route(_path("/api/orders"), orders.get_orders),
@@ -96,8 +97,9 @@ POST_ROUTES: tuple[Route, ...] = (
     Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "pinky"] and parts[3] == "stop",
           pinky.post_stop, "Cross-origin Pinky-stop request rejected", reads_body=False),
     Route(_path("/api/pinky/credentials"), pinky.post_credentials, "Cross-origin credentials request rejected"),
+    Route(_path("/api/pinky/prepare-all"), pinky.post_prepare_all, "Cross-origin Pinky request rejected"),
     Route(lambda route, parts: parts[:2] == ["api", "pinky"] and (
-              (len(parts) == 4 and parts[3] in {"ready", "initial-pose", "nav-restart", "waypoints"})
+              (len(parts) == 4 and parts[3] in {"ready", "initial-pose", "localize", "nav-restart", "waypoints"})
               or (len(parts) == 6 and parts[3] == "waypoints" and parts[5] == "delete")),
           pinky.post_action, "Cross-origin Pinky request rejected"),
     Route(lambda route, parts: len(parts) == 3 and parts[:2] == ["api", "inventory"],

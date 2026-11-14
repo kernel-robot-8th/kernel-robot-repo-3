@@ -62,6 +62,19 @@ function isDevView() {
 const devMode = isDevView();
 document.body.classList.toggle('dev', devMode);
 
+// The switch between the operator and the developer screen keeps the current view in the address.
+const screenModeSwitch = document.querySelector('#screenModeSwitch');
+function updateScreenModeSwitch() {
+  const params = new URLSearchParams(window.location.search);
+  if (devMode) params.delete('dev'); else params.set('dev', '1');
+  const query = params.toString();
+  screenModeSwitch.href = `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`;
+  screenModeSwitch.textContent = devMode ? '운영 화면으로' : '개발자 화면';
+}
+updateScreenModeSwitch();
+window.addEventListener('hashchange', updateScreenModeSwitch);
+document.addEventListener('viewchange', updateScreenModeSwitch);
+
 // A mock word in dev mode, nothing otherwise.
 function devWord(word) {
   return devMode ? word : '';
@@ -69,8 +82,11 @@ function devWord(word) {
 
 // The view lives in the address (#pinky, #inventory…), so a reload or a shared link opens the same view.
 // Other scripts follow the switch through the `viewchange` event instead of listening to the menu.
+// The operator screen (default) leaves out the equipment, manual control and API views; ?dev=1 shows everything.
+const DEV_ONLY_VIEWS = new Set(['overview', 'manual', 'api']);
+
 function showView(requested) {
-  const selected = viewNames[requested] ? requested : 'dashboard';
+  const selected = viewNames[requested] && (devMode || !DEV_ONLY_VIEWS.has(requested)) ? requested : 'dashboard';
   activeView = selected;
   document.body.dataset.view = selected;
   closeAllOverlays();
