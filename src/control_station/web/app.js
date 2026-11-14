@@ -197,7 +197,9 @@ function renderRobots(robots) {
 }
 
 function renderCameras(cameras) {
-  const names = { HEAD: 'Head Camera', JOINT: 'Joint Camera', FRONT: 'Front Camera', SHELF: '선반 카메라 (정면)' };
+  const names = { HEAD: '천장 카메라', JOINT: '조인트 카메라', FRONT: '정면 카메라', SHELF: '선반 카메라 (정면)' };
+  // The server names each camera by its job ("왼쪽 팔 탑 캠 (ACT 정책)"); the table above is for older servers.
+  const cameraName = (camera) => camera.role || names[camera.position] || camera.id;
   const connectionLabel = {
     CONNECTED: '연결됨', DISCONNECTED: '연결 끊김', UNKNOWN: '확인 필요',
   };
@@ -226,7 +228,7 @@ function renderCameras(cameras) {
     cameraGrid.dataset.cameraIds = cameraIds;
     cameraGrid.innerHTML = cameras.map((camera) => `
       <article class="camera-card" data-camera-id="${escapeHtml(camera.id)}">
-        <header class="camera-head"><h3>${escapeHtml(names[camera.position] || camera.id)}</h3><span class="camera-position">${escapeHtml(camera.position)}</span></header>
+        <header class="camera-head"><h3>${escapeHtml(cameraName(camera))}</h3><span class="camera-position">${escapeHtml(camera.position)}</span></header>
         <div class="camera-preview" data-field="preview"><span>영상 스트림 미연결</span></div>
         <div class="camera-details">
           <div class="camera-detail"><span>연결</span><strong data-field="connection"></strong></div>
@@ -292,7 +294,7 @@ function renderCameras(cameras) {
     if (camera.stream_url && !preview.querySelector('img')) {
       const image = document.createElement('img');
       image.src = camera.stream_url;
-      image.alt = `${names[camera.position] || camera.id} 영상`;
+      image.alt = `${cameraName(camera)} 영상`;
       image.addEventListener('error', () => {
         if (!image.isConnected) return;
         preview.replaceChildren(document.createTextNode('영상 스트림 연결 대기 중'));
