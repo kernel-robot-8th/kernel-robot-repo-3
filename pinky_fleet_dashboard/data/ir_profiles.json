@@ -1,0 +1,120 @@
+{
+  "10": {
+    "enabled": true,
+    "floor": [
+      2332.5,
+      2583.0,
+      3011.0
+    ],
+    "line": [
+      4095.0,
+      261.0,
+      4095.0
+    ],
+    "floor_noise": [
+      2.2239,
+      1.4826,
+      1.4826
+    ],
+    "line_noise": [
+      0.0,
+      1.4826,
+      0.0
+    ],
+    "channel_order": [
+      0,
+      1,
+      2
+    ],
+    "mapping_confirmed": true,
+    "revision": "3295044d430f4e87b960457cf4ab078c",
+    "mode": "calibrated",
+    "geometry": {
+      "sensor_pitch_m": 0.01,
+      "sensor_span_m": 0.02,
+      "white_width_m": 0.02,
+      "black_left_width_m": 0.02,
+      "black_right_width_m": 0.02
+    },
+    "manual_line_override": {
+      "channel": "CH2",
+      "value": 287.0
+    }
+  },
+  "11": {
+    "enabled": true,
+    "floor": [
+      2500.0,
+      2998.0,
+      2372.0
+    ],
+    "line": [
+      4095.0,
+      287.0,
+      4095.0
+    ],
+    "floor_noise": [
+      1.4826,
+      1.4826,
+      1.4826
+    ],
+    "line_noise": [
+      0.0,
+      1.4826,
+      0.0
+    ],
+    "channel_order": [
+      0,
+      1,
+      2
+    ],
+    "mapping_confirmed": true,
+    "revision": "79ec831f71314cd9a1d31f75387cb448",
+    "mode": "calibrated",
+    "geometry": {
+      "sensor_pitch_m": 0.01,
+      "sensor_span_m": 0.02,
+      "white_width_m": 0.02,
+      "black_left_width_m": 0.02,
+      "black_right_width_m": 0.02
+    }
+  },
+  "12": {
+    "enabled": false,
+    "floor": [
+      2555.0,
+      2662.5,
+      2676.0
+    ],
+    "line": [
+      4095.0,
+      231.0,
+      4095.0
+    ],
+    "floor_noise": [
+      1.4826,
+      2.2239,
+      1.4826
+    ],
+    "line_noise": [
+      0.0,
+      1.4826,
+      0.0
+    ],
+    "channel_order": [
+      0,
+      1,
+      2
+    ],
+    "mapping_confirmed": true,
+    "revision": "8d62ecfc7d294a7db5ef9ab6594f393c",
+    "mode": "calibrated",
+    "geometry": {
+      "sensor_pitch_m": 0.01,
+      "sensor_span_m": 0.02,
+      "white_width_m": 0.02,
+      "black_left_width_m": 0.02,
+      "black_right_width_m": 0.02
+    }
+  }
+}
