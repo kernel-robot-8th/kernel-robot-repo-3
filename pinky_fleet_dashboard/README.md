@@ -208,3 +208,13 @@ Center-first policy: CH2 is the line reference. With only CH2 on the line, small
 - 경로는 `5 (0.39,1.64) → 도킹 탈출 (0.59,1.64) → 6 (0.59,1.24)`입니다. 세 기체의 저장된 6번 좌표와 10cm 경로 미리보기/CSV가 함께 변경되었습니다. 후진 중에도 도킹 구역 예약과 독립 최종 충돌 감시를 유지합니다. 후방 장애물이나 오래된 센서 데이터가 있으면 후진하지 않습니다.
 - 새 소스 적용 여부는 `topics.line_control.value.dock_protocol == sponge_v1`로 확인하며, 이전 감시기로는 경로를 시작할 수 없습니다. 연결 후 각 기체의 주행준비 또는 Nav2 복구를 실행해야 합니다.
 - 통합 지도는 `config/keepout/keepout_mask.yaml`의 원점·해상도·회전과 PGM의 상하 방향을 반영해 금지 셀을 보라색 사선으로 표시합니다. 노란 웨이포인트, 청록색 도킹 후진 경로와 구분합니다. 이 표시는 마스크 파일의 표시이며 로봇 Nav2 필터의 실행 상태를 뜻하지 않습니다. 파일 변경은 다음 관제 갱신에 반영됩니다.
+
+
+### 네트워크 재연결 후 PC에서만 scan/odom이 안 보일 때
+
+로봇의 직접 DDS 샘플이 모두 정상인데 PC 관제의 센서가 전부 미수신이면 로봇 bringup보다 PC 수신 상태를 먼저 확인합니다. 오래 실행된 DDS 참여자는 네트워크 재연결 후 재시작이 필요할 수 있습니다. 다른 기체의 진행 중인 임무가 없는 상태에서 `systemctl --user restart pinky-fleet.service`를 실행한 후 SSH 연결 설정과 주행준비를 다시 실행합니다. 브라우저 새로고침만으로는 DDS 프로세스가 갱신되지 않습니다.
+
+
+### 목표 즉시 거부 / SSH 종료 코드 5
+
+2026-11-14 수정: keepout `lethal_override_cost`는 ROS 정수 파라미터이므로 `252`로 생성합니다. 실수 `252.0`은 local_costmap 활성화를 실패시키고 BT 액션을 inactive 상태로 남깁니다. 준비 확인은 액션 목록뿐 아니라 map_server/amcl/controller_server/planner_server/bt_navigator/behavior_server의 GetState가 모두 active인지 확인합니다. Nav2 정리 시 설치 패키지 launch와 캐시 경로 launch를 모두 종료합니다. 주행 준비 확인 과정에서는 이동 목표를 전송하지 않습니다.

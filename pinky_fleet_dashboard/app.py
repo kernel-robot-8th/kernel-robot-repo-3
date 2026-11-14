@@ -702,17 +702,17 @@ def _nav_diagnostics_command(robot_id: str) -> str:
 
 
 def _nav_action_ready(robot_id: str) -> tuple[bool, str]:
+    # An action can be discoverable while its lifecycle node is inactive.
+    # Read lifecycle services; never submit a motion goal as a readiness probe.
+    encoded = base64.b64encode((ROOT / 'scripts/nav_readiness.py').read_bytes()).decode('ascii')
+    program = "import base64;exec(compile(base64.b64decode(" + repr(encoded) + "),'nav_readiness.py','exec'))"
     command = (
         "source /opt/ros/jazzy/setup.bash && "
         "source /home/pinky/pinky_pro/install/setup.bash && "
         f"export ROS_DOMAIN_ID={ROBOTS[robot_id]['domain']} && "
-        "for attempt in $(seq 1 30); do "
-        "actions=$(timeout 2s ros2 action list -t 2>&1 || true); "
-        "if printf '%s\\n' \"$actions\" | grep -Fq '/navigate_to_pose [nav2_msgs/action/NavigateToPose]'; then "
-        "echo NAV_ACTION_READY; exit 0; fi; "
-        "sleep 1; done; echo NAV_ACTION_MISSING; printf '%s\\n' \"$actions\"; exit 1"
+        "python3 -c " + shlex.quote(program)
     )
-    return _ssh_run(robot_id, command, timeout_seconds=100.0)
+    return _ssh_run(robot_id, command, timeout_seconds=90.0)
 
 
 def _stop_tracked_navigation(robot_id: str) -> tuple[bool, str]:
@@ -740,19 +740,21 @@ def _stop_existing_navigation(robot_id: str) -> tuple[bool, str]:
         "pid=$(cat \"$pidfile\"); case \"$pid\" in ''|*[!0-9]*) ;; *) "
         "if kill -0 \"$pid\" 2>/dev/null; then "
         "cmdline=$(tr '\\0' ' ' < \"/proc/$pid/cmdline\" 2>/dev/null || true); "
-        "case \"$cmdline\" in *'ros2 launch pinky_navigation bringup_launch.xml'*) "
+        "case \"$cmdline\" in *'ros2 launch pinky_navigation bringup_launch.xml'*|*'ros2 launch /home/pinky/.cache/pinky-fleet/nav2/bringup_launch.xml'*) "
         "kill -INT \"$pid\" 2>/dev/null || true; "
         "for n in 1 2 3 4 5; do kill -0 \"$pid\" 2>/dev/null || break; sleep 1; done; "
         "if kill -0 \"$pid\" 2>/dev/null; then kill -TERM \"$pid\" 2>/dev/null || true; fi;; esac; "
         "fi;; esac; rm -f \"$pidfile\"; fi; "
         "for pattern in '[r]os2 launch pinky_navigation bringup_launch.xml' "
+        "'[r]os2 launch /home/pinky/.cache/pinky-fleet/nav2/bringup_launch.xml' "
         "'[n]av2_' '[r]clcpp_components/component_container'; do "
         "for pid in $(pgrep -f \"$pattern\" 2>/dev/null || true); do "
         "[ \"$pid\" = \"$$\" ] && continue; kill -INT \"$pid\" 2>/dev/null || true; done; done; "
         "for n in 1 2 3 4 5; do "
-        "pgrep -f '[r]os2 launch pinky_navigation bringup_launch.xml|[n]av2_|[r]clcpp_components/component_container' >/dev/null || break; "
+        "pgrep -f '[r]os2 launch (pinky_navigation|/home/pinky/.cache/pinky-fleet/nav2/bringup_launch.xml)|[n]av2_|[r]clcpp_components/component_container' >/dev/null || break; "
         "sleep 1; done; "
         "for pattern in '[r]os2 launch pinky_navigation bringup_launch.xml' "
+        "'[r]os2 launch /home/pinky/.cache/pinky-fleet/nav2/bringup_launch.xml' "
         "'[n]av2_' '[r]clcpp_components/component_container'; do "
         "for pid in $(pgrep -f \"$pattern\" 2>/dev/null || true); do "
         "[ \"$pid\" = \"$$\" ] && continue; kill -KILL \"$pid\" 2>/dev/null || true; done; done; "
@@ -1143,7 +1145,14 @@ def _prepare_robot(robot_id: str, map_name: str, release_busy: bool = True) -> N
                     names = ", ".join(missing)
                     _, diagnostics = _ssh_run(robot_id, _base_diagnostics_command(robot_id))
                     detail = diagnostics.strip()
-                    raise RuntimeError(f"{label} 데이터가 브릿지로 들어오지 않습니다 ({names})." + ("\n" + detail[-1400:] if detail else ""))
+                    if 'SCAN_SAMPLE_OK' in detail and 'ODOM_SAMPLE_OK' in detail:
+                        raise RuntimeError(
+                            f"로봇 내부 /scan·/odom 발행은 정상이나 PC 관제의 DDS 수신이 끊겼습니다 ({names}). "
+                            "유선/Wi-Fi 재연결 후 기존 DDS 연결이 남아 있을 수 있습니다. "
+                            "다른 기체의 주행이 모두 정지한 상태에서 PC 관제 서비스를 재시작한 뒤 연결 설정·주행준비를 다시 실행하세요. "
+                            "명령: systemctl --user restart pinky-fleet.service"
+                            + ("\n" + detail[-1400:] if detail else ""))
+                    raise RuntimeError(f"{label} 데이터가 PC 관제에 수신되지 않습니다 ({names})." + ("\n" + detail[-1400:] if detail else ""))
 
         required_sensors = ("ir", "ultrasonic", "imu", "battery_percent", "battery_voltage")
         ready, missing = _topic_ready(robot_id, required_sensors)
