@@ -7,12 +7,13 @@ chosen from the shelf where the stock check saw it, not from the object type.
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from control_station.json_files import load_json_file
 
 DEFAULT_ARMS_PATH = Path(__file__).resolve().parents[2] / "config" / "arms.json"
 MAX_ARMS_BYTES = 16 * 1024
@@ -39,15 +40,6 @@ class ArmRegistry:
         return next((arm for arm in self.arms if arm["shelf_id"] == shelf_id), None)
 
 
-def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    value: dict[str, Any] = {}
-    for key, item in pairs:
-        if key in value:
-            raise ArmConfigError(f"duplicate JSON key: {key}")
-        value[key] = item
-    return value
-
-
 def _arm(raw: object) -> dict[str, Any]:
     if not isinstance(raw, dict) or set(raw) != {"arm_id", "label", "shelf_id", "stock_camera_id"}:
         raise ArmConfigError("each arm needs exactly arm_id, label, shelf_id and stock_camera_id")
@@ -65,18 +57,7 @@ def _arm(raw: object) -> dict[str, Any]:
 
 def load_arms(path: str | Path | None = None) -> ArmRegistry:
     arms_path = Path(path or os.environ.get("CONTROL_STATION_ARMS") or DEFAULT_ARMS_PATH)
-    try:
-        if arms_path.is_symlink() or not arms_path.is_file():
-            raise ArmConfigError(f"팔 설정 파일이 없습니다: {arms_path}")
-        raw = arms_path.read_bytes()
-    except OSError as exc:
-        raise ArmConfigError(f"팔 설정 파일을 읽지 못했습니다: {exc}") from exc
-    if len(raw) > MAX_ARMS_BYTES:
-        raise ArmConfigError(f"팔 설정 파일이 {MAX_ARMS_BYTES} bytes보다 큽니다")
-    try:
-        document = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ArmConfigError(f"팔 설정 파일이 올바른 JSON이 아닙니다: {exc}") from exc
+    _, document = load_json_file(arms_path, MAX_ARMS_BYTES, "팔 설정 파일", ArmConfigError)
     if not isinstance(document, dict) or document.get("schema_version") != 1 or isinstance(document.get("schema_version"), bool):
         raise ArmConfigError("팔 설정 파일의 schema_version은 1이어야 합니다")
     if not isinstance(document.get("arms"), list) or not document["arms"]:

@@ -8,12 +8,13 @@ against a different slot map than the one its taught poses belong to.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from control_station.json_files import load_json_file
 
 
 DEFAULT_SLOT_MAP_PATH = Path(__file__).resolve().parents[2] / "config" / "shelf-slots.json"
@@ -33,29 +34,9 @@ class ShelfSlotMap:
     active_slots: dict[str, dict[str, Any]] = field(repr=False)
 
 
-def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    value: dict[str, Any] = {}
-    for key, item in pairs:
-        if key in value:
-            raise ShelfSlotMapError(f"duplicate JSON key: {key}")
-        value[key] = item
-    return value
-
-
 def load_shelf_slot_map(path: str | Path | None = None) -> ShelfSlotMap:
     slot_path = Path(path or os.environ.get("CONTROL_STATION_SHELF_SLOTS") or DEFAULT_SLOT_MAP_PATH)
-    try:
-        if slot_path.is_symlink() or not slot_path.is_file():
-            raise ShelfSlotMapError(f"칸 정의 파일이 없습니다: {slot_path}")
-        raw = slot_path.read_bytes()
-    except OSError as exc:
-        raise ShelfSlotMapError(f"칸 정의 파일을 읽지 못했습니다: {exc}") from exc
-    if len(raw) > MAX_SLOT_MAP_BYTES:
-        raise ShelfSlotMapError(f"칸 정의 파일이 {MAX_SLOT_MAP_BYTES} bytes보다 큽니다")
-    try:
-        document = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ShelfSlotMapError(f"칸 정의 파일이 올바른 JSON이 아닙니다: {exc}") from exc
+    raw, document = load_json_file(slot_path, MAX_SLOT_MAP_BYTES, "칸 정의 파일", ShelfSlotMapError)
     if not isinstance(document, dict) or document.get("schema_version") != 1:
         raise ShelfSlotMapError("칸 정의 파일은 schema_version 1이어야 합니다")
     frame = document.get("frame")

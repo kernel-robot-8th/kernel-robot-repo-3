@@ -711,33 +711,6 @@ class TaskStore:
         step_definitions: list[tuple[str, str | None, dict[str, object] | None]] = [
             (step_type, robot_id, None) for step_type, robot_id in DEFAULT_TASK_STEPS
         ]
-        task.steps = [
-            TaskStepRecord(
-                id=f"STEP-{uuid.uuid4().hex[:12].upper()}",
-                sequence=sequence,
-                step_type=step_type,
-                robot_id=robot_id,
-                status="PENDING",
-                detail=detail,
-            )
-            for sequence, (step_type, robot_id, detail) in enumerate(step_definitions, start=1)
-        ]
-        task.events = [
-            TaskEventRecord(
-                id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
-                event_type="TASK_CREATED",
-                previous_status=None,
-                new_status=TaskStatus.PENDING.value,
-                occurred_at=created_at,
-                received_at=created_at,
-                payload={
-                    "step_ids": [step.id for step in task.steps],
-                    "pick_request": pick_request,
-                    "order_items": order_items,
-                },
-            )
-        ]
-
         # The claim lock also serializes Pinky assignment inside this single server process.
         with self._claim_lock, self._sessions.begin() as session:
             if order_items is not None:
@@ -752,24 +725,36 @@ class TaskStore:
                         raise PinkyUnavailable("모든 핑키에 끝나지 않은 주문이 있습니다")
                     task.pinky_id = free[0]
                 # An order runs its own step list, made once the Pinky is known.
-                task.steps = [
-                    TaskStepRecord(
-                        id=f"STEP-{uuid.uuid4().hex[:12].upper()}",
-                        sequence=sequence,
-                        step_type=step_type,
-                        robot_id=robot_id,
-                        status="PENDING",
-                        detail=detail,
-                    )
-                    for sequence, (step_type, robot_id, detail) in enumerate(
-                        order_step_definitions(order_items, task.pinky_id), start=1
-                    )
-                ]
-                task.events[0].payload = {
-                    **task.events[0].payload,
-                    "pinky_id": task.pinky_id,
-                    "step_ids": [step.id for step in task.steps],
-                }
+                step_definitions = order_step_definitions(order_items, task.pinky_id)
+            task.steps = [
+                TaskStepRecord(
+                    id=f"STEP-{uuid.uuid4().hex[:12].upper()}",
+                    sequence=sequence,
+                    step_type=step_type,
+                    robot_id=robot_id,
+                    status="PENDING",
+                    detail=detail,
+                )
+                for sequence, (step_type, robot_id, detail) in enumerate(step_definitions, start=1)
+            ]
+            payload: dict[str, object] = {
+                "step_ids": [step.id for step in task.steps],
+                "pick_request": pick_request,
+                "order_items": order_items,
+            }
+            if order_items is not None:
+                payload["pinky_id"] = task.pinky_id
+            task.events = [
+                TaskEventRecord(
+                    id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
+                    event_type="TASK_CREATED",
+                    previous_status=None,
+                    new_status=TaskStatus.PENDING.value,
+                    occurred_at=created_at,
+                    received_at=created_at,
+                    payload=payload,
+                )
+            ]
             session.add(task)
             session.flush()
             return self._present_with_history(task)

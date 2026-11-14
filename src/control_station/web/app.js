@@ -76,6 +76,8 @@ function apiErrorMessage(result, fallback) {
   return result.error_code ? `${result.error_code} · ${message}` : message;
 }
 
+const clockFormat = new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+
 function renderRobots(robots) {
   if (!robots.length) {
     robotRows.innerHTML = '<tr><td colspan="3" class="loading">등록된 로봇이 없습니다.</td></tr>';
@@ -352,7 +354,7 @@ const armCommandStateLabels = {
 };
 
 function formatClock(iso) {
-  return iso ? new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(iso)) : '-';
+  return iso ? clockFormat.format(new Date(iso)) : '-';
 }
 
 function renderArmWorkers(workers) {
@@ -525,12 +527,17 @@ async function pickWithPolicy(policy) {
   }
 }
 
+// One request for the trained-policy list, shared by the policy buttons and the order form.
+const policyListRequest = fetch('/api/arm/policies', { cache: 'no-store' }).then(async (response) => {
+  const result = await response.json();
+  if (!response.ok) throw new Error(apiErrorMessage(result, '정책 목록을 불러오지 못했습니다'));
+  return result.policies;
+});
+
 async function loadPolicyButtons() {
   try {
-    const response = await fetch('/api/arm/policies', { cache: 'no-store' });
-    const result = await response.json();
-    if (!response.ok) throw new Error(apiErrorMessage(result, '정책 목록을 불러오지 못했습니다'));
-    policyButtons.replaceChildren(...result.policies.map((policy) => {
+    const policies = await policyListRequest;
+    policyButtons.replaceChildren(...policies.map((policy) => {
       const button = document.createElement('button');
       button.type = 'button';
       button.textContent = `${policy.label} 집기`;
@@ -586,10 +593,7 @@ function setOrderRows(items) {
 
 async function loadOrderPolicies() {
   try {
-    const response = await fetch('/api/arm/policies', { cache: 'no-store' });
-    const result = await response.json();
-    if (!response.ok) throw new Error(apiErrorMessage(result, '정책 목록을 불러오지 못했습니다'));
-    orderPolicies = result.policies;
+    orderPolicies = await policyListRequest;
     setOrderRows([]);
   } catch (error) {
     orderMessage.textContent = `주문할 물체 목록을 불러오지 못했습니다: ${error.message}`;
@@ -765,7 +769,6 @@ let parkingLiveBusy = false;
 let parkingLive = false;
 let parkingStreamCamera = null;
 let parkingLiveOk = false;  // the last /live poll succeeded, so the panel shows live state
-const clockFormat = new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 const parkingColors = { within: '#2f8f4e', near: '#c98a1a', far: '#bd4242', moving: '#3478cb', unknown: '#7a838d' };
 const parkingOverlayColors = { within: '#3fbf6a', near: '#f0a830', far: '#f05a5a', moving: '#5aa2f0', unknown: '#c3c9cf' };
 const parkingLiveTitles = {
@@ -1190,10 +1193,7 @@ async function sendTaskAction(taskId, action) {
   try {
     const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/${action}`, { method: 'POST' });
     const result = await response.json();
-    if (!response.ok) {
-      const message = result.message || result.error || '작업 요청에 실패했습니다.';
-      throw new Error(result.error_code ? `${result.error_code} · ${message}` : message);
-    }
+    if (!response.ok) throw new Error(apiErrorMessage(result, '작업 요청에 실패했습니다.'));
     taskMessage.textContent = `${result.execution_mode || 'mock'} · ${taskStatusLabels[result.task.status] || result.task.status}`;
   } catch (error) {
     taskMessage.textContent = error.message;
@@ -1308,7 +1308,7 @@ async function refresh() {
     renderCameras(cameraData.cameras);
     renderArm(armData.arm);
     renderPolicyRun(armData.policy_run);
-    updatedAt.textContent = `갱신 ${new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date())}`;
+    updatedAt.textContent = `갱신 ${clockFormat.format(new Date())}`;
   } catch {
     serverStatus.className = 'server-status error';
     serverStatus.innerHTML = '<span class="dot"></span> 서버 연결 실패';
@@ -1467,7 +1467,7 @@ async function refreshFlow() {
     renderMockWorld(view.mock_world, view.mock_fault_kinds);
     flowStation.textContent = !view.station_owner ? '적재 자리 비어 있음'
       : view.station_held_by_stopped ? `적재 자리 막힘 · 멈춘 주문 ${view.station_owner} (경보 확인 필요)` : `적재 자리 사용 중 · ${view.station_owner}`;
-    flowUpdated.textContent = `갱신 ${new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date())}`;
+    flowUpdated.textContent = `갱신 ${clockFormat.format(new Date())}`;
   } catch (error) {
     flowUpdated.textContent = `갱신 실패 · ${error.message}`;
   }

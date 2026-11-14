@@ -23,21 +23,13 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from control_station.json_files import unique_keys
 from control_station.shelf_slot_map import ShelfSlotMap
 
 
 DEFAULT_POSE_DIR = Path(__file__).resolve().parents[2] / ".control-station" / "shelf-pose-calibrations"
 MAX_POSE_BYTES = 1_000_000
 _CAMERA_ID = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
-
-
-def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    value: dict[str, Any] = {}
-    for key, item in pairs:
-        if key in value:
-            raise ValueError(f"duplicate JSON key: {key}")
-        value[key] = item
-    return value
 
 
 def _point_in_polygon(point: tuple[float, float], polygon: list[tuple[float, float]]) -> int:
@@ -176,7 +168,7 @@ class ShelfSlotZones:
             raw = path.read_bytes()
             if len(raw) > MAX_POSE_BYTES:
                 raise ValueError("artifact is larger than 1 MB")
-            artifact = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
+            artifact = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_keys)
             if not isinstance(artifact, dict) or artifact.get("schema_version") != 1:
                 raise ValueError("unsupported shelf pose schema_version")
             if artifact.get("status") != "DRAFT_ONLY" or artifact.get("usable_for_robot_control") is not False:

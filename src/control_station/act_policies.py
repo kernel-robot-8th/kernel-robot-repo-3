@@ -11,12 +11,13 @@ policy per arm; a policy without `arm_id` is used on any arm.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from control_station.json_files import load_json_file
 
 DEFAULT_POLICIES_PATH = Path(__file__).resolve().parents[2] / "config" / "omx-act-policies.json"
 MAX_POLICIES_BYTES = 64 * 1024
@@ -60,15 +61,6 @@ class ActPolicyRegistry:
             {key: policy[key] for key in ("policy_id", "object_class", "label", "aliases", "model", "max_run_s", "arm_id")}
             for policy in self.policies.values()
         ]
-
-
-def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    value: dict[str, Any] = {}
-    for key, item in pairs:
-        if key in value:
-            raise ActPolicyError(f"duplicate JSON key: {key}")
-        value[key] = item
-    return value
 
 
 def _text(policy: dict[str, Any], key: str, maximum: int = 80) -> str:
@@ -117,18 +109,7 @@ def _policy(raw: object) -> dict[str, Any]:
 
 def load_act_policies(path: str | Path | None = None) -> ActPolicyRegistry:
     policy_path = Path(path or os.environ.get("CONTROL_STATION_ACT_POLICIES") or DEFAULT_POLICIES_PATH)
-    try:
-        if policy_path.is_symlink() or not policy_path.is_file():
-            raise ActPolicyError(f"정책 정의 파일이 없습니다: {policy_path}")
-        raw = policy_path.read_bytes()
-    except OSError as exc:
-        raise ActPolicyError(f"정책 정의 파일을 읽지 못했습니다: {exc}") from exc
-    if len(raw) > MAX_POLICIES_BYTES:
-        raise ActPolicyError(f"정책 정의 파일이 {MAX_POLICIES_BYTES} bytes보다 큽니다")
-    try:
-        document = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ActPolicyError(f"정책 정의 파일이 올바른 JSON이 아닙니다: {exc}") from exc
+    raw, document = load_json_file(policy_path, MAX_POLICIES_BYTES, "정책 정의 파일", ActPolicyError)
     if not isinstance(document, dict) or document.get("schema_version") != 1 or isinstance(document.get("schema_version"), bool):
         raise ActPolicyError("정책 정의 파일의 schema_version은 1이어야 합니다")
     if not isinstance(document.get("policies"), list) or not document["policies"]:

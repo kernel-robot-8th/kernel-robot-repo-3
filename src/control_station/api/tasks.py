@@ -32,6 +32,21 @@ def get_task(h: ControlStationHandler, route: str, parts: list[str], body: None)
         h._json(200, {"task": task})
 
 
+_TEXT_LIMITS = (("destination", 40), ("arm_job", 120))
+
+
+def _task_texts(h: ControlStationHandler, destination: object, arm_job: object) -> tuple[str, str] | None:
+    """목적지·팔 작업 문구의 앞뒤 공백을 빼고 길이 확인, 틀리면 400 응답 후 None"""
+    texts: list[str] = []
+    for (name, maximum), value in zip(_TEXT_LIMITS, (destination, arm_job)):
+        text = value.strip() if isinstance(value, str) else ""
+        if not text or len(text) > maximum:
+            h._json(400, {"error": f"{name} must contain 1 to {maximum} characters"})
+            return None
+        texts.append(text)
+    return texts[0], texts[1]
+
+
 def post_task(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:
     """작업 생성: 주문(order_items, 선택 pinky_id) 또는 이전 형식(선택 pick_request)"""
     unsupported_fields = set(body) - {"destination", "arm_job", "pick_request", "order_items", "pinky_id"}
@@ -44,18 +59,13 @@ def post_task(h: ControlStationHandler, route: str, parts: list[str], body: dict
     if "pinky_id" in body:
         h._json(400, {"error": "pinky_id is only accepted with order_items"})
         return
-    destination = body.get("destination")
-    arm_job = body.get("arm_job")
-    if not isinstance(destination, str) or not isinstance(arm_job, str):
+    if not isinstance(body.get("destination"), str) or not isinstance(body.get("arm_job"), str):
         h._json(400, {"error": "destination and arm_job must be strings"})
         return
-    destination, arm_job = destination.strip(), arm_job.strip()
-    if not destination or len(destination) > 40:
-        h._json(400, {"error": "destination must contain 1 to 40 characters"})
+    texts = _task_texts(h, body["destination"], body["arm_job"])
+    if texts is None:
         return
-    if not arm_job or len(arm_job) > 120:
-        h._json(400, {"error": "arm_job must contain 1 to 120 characters"})
-        return
+    destination, arm_job = texts
     try:
         pick_request = validate_pick_request(body.get("pick_request"))
     except ValueError as exc:
@@ -82,18 +92,11 @@ def _post_order(h: ControlStationHandler, body: dict[str, Any]) -> None:
         return
     labels = {policy["object_class"]: policy["label"] for policy in policies.policies.values()}
     summary = " · ".join(f"{labels.get(item['object_class'], item['object_class'])} {item['quantity']}" for item in order_items)
-    destination = body.get("destination", "핑키 적재 위치")
-    arm_job = body.get("arm_job", f"{summary} 적재")
-    if not isinstance(destination, str) or not destination.strip() or len(destination.strip()) > 40:
-        h._json(400, {"error": "destination must contain 1 to 40 characters"})
-        return
-    if not isinstance(arm_job, str) or not arm_job.strip() or len(arm_job.strip()) > 120:
-        h._json(400, {"error": "arm_job must contain 1 to 120 characters"})
+    texts = _task_texts(h, body.get("destination", "핑키 적재 위치"), body.get("arm_job", f"{summary} 적재"))
+    if texts is None:
         return
     try:
-        task = h.app.task_store.create_task(
-            destination.strip(), arm_job.strip(), order_items=order_items, pinky_id=pinky_id
-        )
+        task = h.app.task_store.create_task(*texts, order_items=order_items, pinky_id=pinky_id)
     except PinkyUnavailable as exc:
         h._json_error(409, "PINKY_UNAVAILABLE", str(exc))
         return
