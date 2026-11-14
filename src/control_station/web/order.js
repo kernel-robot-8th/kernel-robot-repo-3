@@ -16,11 +16,11 @@ const orderDone = document.querySelector('#orderDone');
 const state = {
   catalogLoaded: false,
   catalogFailed: false,  // the latest refresh failed; the last good catalog stays on screen
-  products: [],          // [{object_class, label, available}] in catalog order; available is null when unknown
-  stockError: null,
+  products: [],          // [{object_class, label, available, status, notice}] in catalog order
+  notice: null,          // why some objects cannot be ordered now (stock unknown), from the catalog
   zones: [],             // [{zone_id, label}]
   cart: new Map(),       // object_class -> quantity, only quantities above 0
-  adjusted: new Set(),   // object classes lowered to the stock left by a refresh
+  adjusted: new Map(),   // object class -> 'lowered' (to the stock left) | 'removed' (closed or sold out) by a refresh
   zoneId: null,
   sending: false,
 };
@@ -35,7 +35,19 @@ function element(tag, attributes = {}, ...children) {
   return node;
 }
 
+// Status words for objects that cannot be ordered now. The catalog's own notice is shown when it says more.
+const closedStatus = {
+  sold_out: { chip: '품절', className: 'sold-out' },
+  unknown: { chip: '주문 닫힘', className: 'unknown' },
+  closed: { chip: '판매 중지', className: 'closed' },
+};
+
+function orderable(product) {
+  return !product.status || product.status === 'available';  // an older server sends no status
+}
+
 function maxQuantity(product) {
+  if (!orderable(product)) return 0;
   return product.available == null ? MAX_PER_PRODUCT : Math.min(MAX_PER_PRODUCT, product.available);
 }
 
@@ -60,16 +72,16 @@ function setQuantity(product, quantity) {
 
 function applyCatalog(catalog) {
   state.products = catalog.products;
-  state.stockError = catalog.stock_error;
+  state.notice = catalog.notice ?? catalog.stock_error ?? null;
   state.zones = catalog.zones;
-  // Stock can drop while the customer is choosing: lower the cart to what is left and say so on the card.
+  // Stock can drop or close while the customer is choosing: lower the cart to what is left and say so on the card.
   for (const [objectClass, quantity] of state.cart) {
     const product = state.products.find((item) => item.object_class === objectClass);
     const max = product ? maxQuantity(product) : 0;
     if (quantity <= max) continue;
     if (max) state.cart.set(objectClass, max);
     else state.cart.delete(objectClass);
-    state.adjusted.add(objectClass);
+    state.adjusted.set(objectClass, max ? 'lowered' : 'removed');
   }
   if (!state.zones.some((zone) => zone.zone_id === state.zoneId)) {
     state.zoneId = state.zones.length === 1 ? state.zones[0].zone_id : null;
@@ -99,9 +111,9 @@ function renderNotice() {
     message = state.catalogLoaded
       ? '남은 수량을 새로 불러오지 못했어요. 잠시 뒤 다시 확인합니다.'
       : '물건 목록을 불러오지 못했어요. 잠시 뒤 다시 시도합니다.';
-  } else if (state.stockError) {
-    message = state.products.length ? '지금은 남은 수량을 확인할 수 없어요. 수량은 작업자가 확인합니다.' : '지금은 주문을 받을 수 없어요.';
-    detail = state.stockError;
+  } else if (state.notice) {
+    message = state.products.length ? state.notice : '지금은 주문을 받을 수 없어요.';
+    detail = state.products.length ? null : state.notice;
   }
   stockNotice.hidden = !message;
   stockNotice.classList.toggle('error', state.catalogFailed || !state.products.length);
@@ -115,7 +127,7 @@ function productCard(product) {
     element('div', { class: 'product-info' },
       element('h3', { class: 'product-name' }, name),
       element('p', { class: 'product-stock' }),
-      element('p', { class: 'product-adjusted', hidden: '' }, '남은 수량에 맞춰 줄였어요')),
+      element('p', { class: 'product-adjusted', hidden: '' })),
     element('div', { class: 'stepper', role: 'group', 'aria-label': `${name} 수량` },
       element('button', { type: 'button', class: 'step', 'data-step': '-1', 'aria-label': `${name} 하나 빼기` }, '−'),
       element('output', { class: 'step-value', 'aria-live': 'polite' }, '0'),
@@ -126,19 +138,26 @@ function updateProductCard(card, product) {
   const quantity = state.cart.get(product.object_class) || 0;
   const max = maxQuantity(product);
   const stock = card.querySelector('.product-stock');
-  if (product.available == null) {
-    stock.textContent = '재고 확인 불가';
-    stock.className = 'product-stock unknown';
+  const closed = orderable(product) ? null : (closedStatus[product.status] || { chip: '주문 닫힘', className: 'unknown' });
+  if (closed) {
+    const notice = product.notice && product.notice !== closed.chip ? product.notice : '';
+    stock.replaceChildren(element('span', { class: `status-chip ${closed.className}` }, closed.chip), ...(notice ? [notice] : []));
+    stock.className = 'product-stock closed';
+  } else if (product.available == null) {
+    stock.textContent = '남은 수량은 작업자가 확인해요';
   } else if (product.available === 0) {
-    stock.textContent = '품절';
-    stock.className = 'product-stock sold-out';
+    stock.replaceChildren(element('span', { class: 'status-chip sold-out' }, '품절'));
+    stock.className = 'product-stock closed';
   } else {
     stock.textContent = `${product.available}개 남았어요`;
     stock.className = 'product-stock';
   }
   card.classList.toggle('selected', quantity > 0);
-  card.classList.toggle('sold-out', max === 0);
-  card.querySelector('.product-adjusted').hidden = !state.adjusted.has(product.object_class);
+  card.classList.toggle('unavailable', max === 0);
+  const adjusted = state.adjusted.get(product.object_class);
+  const adjustedNote = card.querySelector('.product-adjusted');
+  adjustedNote.hidden = !adjusted;
+  adjustedNote.textContent = adjusted === 'removed' ? '지금은 주문할 수 없어서 담은 물건에서 뺐어요' : '남은 수량에 맞춰 줄였어요';
   card.querySelector('.step-value').textContent = String(quantity);
   card.querySelector('[data-step="-1"]').disabled = state.sending || quantity === 0;
   card.querySelector('[data-step="1"]').disabled = state.sending || quantity >= max;
@@ -209,8 +228,8 @@ function render() {
   renderCart();
 }
 
-function showError(message, code) {
-  formError.replaceChildren(message, ...(code ? [element('small', {}, code)] : []));
+function showError(message) {
+  formError.textContent = message;
   formError.hidden = false;
 }
 
@@ -266,7 +285,9 @@ orderForm.addEventListener('submit', async (event) => {
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
-      showError(result.message || result.error || '주문을 접수하지 못했어요.', result.error_code);
+      // OUT_OF_STOCK and ITEM_CLOSED name every refused object in one message; refresh so the cards agree.
+      showError(result.message || result.error || '주문을 접수하지 못했어요.');
+      if (['OUT_OF_STOCK', 'ITEM_CLOSED'].includes(result.error_code)) loadCatalog();
       return;
     }
     state.cart.clear();

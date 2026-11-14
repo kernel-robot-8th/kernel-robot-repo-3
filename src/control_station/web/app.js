@@ -43,7 +43,9 @@ let selectedTaskId = null;
 let parkingCameraId = null;
 let controlMode = 'unknown';
 
-const viewNames = { flow: '주문 진행', pinky: '핑키', overview: '현황', manual: '수동 조작', tasks: '작업 이력', api: 'API' };
+const viewNames = {
+  flow: '주문 진행', pinky: '핑키', inventory: '재고', overview: '현황', manual: '수동 조작', tasks: '작업 이력', api: 'API',
+};
 const controlModeLabels = {
   mock: '모의',
   ros2: 'ROS 2 상태 관측',
