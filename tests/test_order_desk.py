@@ -46,6 +46,7 @@ def make_desk(store: TaskStore, *, zones=ZONES) -> tuple[OrderDesk, MockWorld, M
     orchestrator = MockTaskOrchestrator(store, order_flow=flow)
     desk = OrderDesk(store, orchestrator, devices(world), load_arms(), load_act_policies(), zones,
                      pick_stats=lambda: store.pick_success_stats(simulated=True), pickup=flow.confirm_pickup)
+    flow.choose_shipment_pinky = desk.assign_next_shipment  # as app.py wires it
     desk.flow_waiting = lambda order_id: order_id in flow._pickups  # test helper: is the step waiting yet
     return desk, world, orchestrator
 
@@ -211,13 +212,25 @@ class OrderDeskTest(unittest.TestCase):
         with self.assertRaises(TaskExecutionConflict):
             self.desk.orchestrator.start(order["id"])
 
-    def test_large_order_is_planned_over_two_pinkys_but_not_started(self) -> None:
-        # Tray capacity 4 (config/fleet-planning.json): six units go as two trips of three.
-        order = self.desk.receive([{"object_class": "carrot", "quantity": 3}, {"object_class": "apple", "quantity": 3}],
-                                  "zone_a")
+    def large_order(self) -> dict:
+        # Tray capacity 4 (config/fleet-planning.json): six units go as two shipments of three.
+        return self.desk.receive([{"object_class": "carrot", "quantity": 3}, {"object_class": "apple", "quantity": 3}])
+
+    @staticmethod
+    def steps_of(order: dict, step_type: str) -> list[dict]:
+        return [step for step in order["steps"] if step["step_type"] == step_type]
+
+    def test_large_order_is_planned_as_shipments_one_after_another(self) -> None:
+        order = self.large_order()
+        self.assertEqual(len(self.steps_of(order, "START_SHIPMENT")), 1)
+        self.assertEqual([step["detail"]["shipment"] for step in self.steps_of(order, "WAIT_PINKY_ARRIVAL")], [1, 2])
         fleet = self.desk.preview(order["id"])["fleet"]
-        self.assertEqual(fleet["summary"], "핑키 2대 · P0 3, P1 3")
-        self.assertEqual([trip["pinky_id"] for trip in fleet["trips"]], ["10", "11"])
+        self.assertTrue(fleet["sequential"])
+        # One Pinky drives at a time, so each later shipment is chosen again when it starts; the preview guesses
+        # with the earlier trip counted. The mock P0 has the most battery, so it is the guess both times.
+        self.assertEqual([trip["pinky_id"] for trip in fleet["trips"]], ["10", "10"])
+        self.assertTrue(fleet["summary"].startswith("운송 2번으로 나눠 차례로"))
+        self.assertIn("앞 운송이 끝나면 다시 고름", fleet["trips"][1]["reason"])
         # The screen draws each tray: its slot count and, per unit, the name and the slots it takes.
         self.assertEqual(fleet["capacity"], 4)
         self.assertEqual({(unit["label"], unit["size"]) for trip in fleet["trips"] for unit in trip["units"]},
@@ -227,10 +240,72 @@ class OrderDeskTest(unittest.TestCase):
             self.assertEqual(len(schedule["picks"]), 3)
             # ACT runs grasp -> place -> rest in one go, so overlap is off: one whole pick after another.
             self.assertEqual((schedule["overlap"], schedule["total_s"]), (False, schedule["one_arm_at_a_time_s"]))
+
+    def test_shipments_run_in_turn_each_picked_up_on_its_own(self) -> None:
+        order = self.large_order()
+        self.desk.start(order["id"])
+        tracks: dict[str, dict] = {}
+        zone_refusal = None
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            current = self.store.get_task(order["id"])
+            if current["status"] in TERMINAL:
+                break
+            active = next((step for step in current["steps"] if step["id"] == current.get("active_step_id")), None)
+            kind = active["step_type"] if active else None
+            if kind == "CONFIRM_PICKUP" and self.desk.flow_waiting(order["id"]):
+                tracks[f"arrived{active['detail']['shipment']}"] = self.desk.track(order["id"])
+                self.desk.confirm_pickup(order["id"])
+            elif kind in {"WAIT_PINKY_PARKED", "START_SHIPMENT"} and active["detail"]["shipment"] in {1, 2} \
+                    and "between" not in tracks and (kind == "START_SHIPMENT" or active["detail"]["shipment"] == 1):
+                tracks["between"] = self.desk.track(order["id"])
+                # The order keeps its receiving zone between its shipments: another order cannot take it.
+                other = self.desk.receive([{"object_class": "tissue", "quantity": 1}])
+                try:
+                    self.desk.start(other["id"])
+                except OrderDeskError as exc:
+                    zone_refusal = exc.error_code
+            time.sleep(0.01)
+        done = self.store.get_task(order["id"])
+        self.assertEqual(done["status"], "SUCCEEDED", done.get("error"))
+        self.assertEqual(zone_refusal, "ZONE_BUSY")
+        # Shipment 2 opened only after shipment 1's Pinky was picked up and back in its parking spot.
+        parked_1 = self.steps_of(done, "WAIT_PINKY_PARKED")[0]
+        opened_2 = self.steps_of(done, "START_SHIPMENT")[0]
+        self.assertGreaterEqual(opened_2["started_at"], parked_1["finished_at"])
+        assigned = [event["payload"] for event in done["events"] if event["event_type"] == "PINKY_ASSIGNED"]
+        self.assertEqual([(entry["shipment"], entry["pinky_id"]) for entry in assigned], [(1, "10"), (2, "10")])
+        # Each Pinky carried exactly its own shipment.
+        totals = [step["result"]["loaded"] for step in self.steps_of(done, "VERIFY_LOAD_TOTAL")]
+        self.assertEqual([sum(loaded.values()) for loaded in totals], [3, 3])
+        # The customer saw each shipment arrive and could confirm it, and the gap between them.
+        first, gap, second = tracks["arrived1"], tracks["between"], tracks["arrived2"]
+        self.assertEqual((first["shipment"], first["shipments"], first["stage"], first["can_confirm_pickup"]),
+                         (1, 2, "arrived", True))
+        self.assertEqual(sum(item["quantity"] for item in first["shipment_items"]), 3)
+        self.assertEqual((gap["shipment"], gap["stage"], gap["title"], gap["can_confirm_pickup"]),
+                         (2, "pinky_coming", "남은 물건을 가지러 가요", False))
+        self.assertEqual((second["shipment"], second["stage"], second["loaded"], second["total"]), (2, "arrived", 3, 3))
+        final = self.desk.track(order["id"])
+        self.assertEqual((final["stage"], final["shipment"], final["shipments"]), ("done", 2, 2))
+
+    def test_a_stopped_shipment_leaves_the_rest_unstarted(self) -> None:
+        self.world.inject("PICK_FAILED", "carrot")  # the first carrot pick, in shipment 1
+        order = self.large_order()
+        self.desk.start(order["id"])
+        done = finish(self.desk, self.store, order["id"])
+        self.assertEqual((done["status"], done["error"]["code"]), ("FAILED", "PICK_FAILED_STILL_ON_SHELF"))
+        self.assertNotEqual(self.steps_of(done, "START_SHIPMENT")[0]["status"], "SUCCEEDED")
+        self.assertEqual([event["payload"]["shipment"] for event in done["events"] if event["event_type"] == "PINKY_ASSIGNED"],
+                         [1])
+
+    def test_an_order_received_unsplit_is_not_started_overloaded(self) -> None:
+        items = [{"object_class": "carrot", "quantity": 3}, {"object_class": "apple", "quantity": 3}]
+        old = self.store.create_task("수령 구역 (시작 때 배정)", "적재", order_items=items, defer_pinky=True, zone_steps=True)
         with self.assertRaises(OrderDeskError) as error:
-            self.desk.start(order["id"])
-        self.assertEqual(error.exception.error_code, "MULTI_PINKY_NOT_SUPPORTED")
-        self.assertIsNone(self.store.get_task(order["id"])["pinky_id"])
+            self.desk.start(old["id"])
+        self.assertEqual(error.exception.error_code, "ORDER_NEEDS_SHIPMENTS")
+        self.assertIsNone(self.store.get_task(old["id"])["pinky_id"])
 
     def test_the_window_sells_only_what_is_available(self) -> None:
         def inventory(apple_status: str = "available", apples: int | None = 2) -> dict:

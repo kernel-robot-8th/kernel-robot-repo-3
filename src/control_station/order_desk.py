@@ -14,7 +14,7 @@ import json
 import threading
 from collections import Counter
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -27,7 +27,9 @@ from control_station.fleet_planning import FleetPlanning, load_fleet_planning
 from control_station.order_flow import OrderDevices
 from control_station.pinky_fleet import PinkyFleetError
 from control_station.receiving_zones import ReceivingZone
-from control_station.store import PINKY_IDS, PINKY_NAMES, PinkyUnavailable, TaskStore, ZoneUnavailable
+from control_station.store import (
+    PINKY_IDS, PINKY_NAMES, InvalidStateTransition, PinkyUnavailable, TaskStore, ZoneUnavailable, shipment_of,
+)
 
 
 class OrderDeskError(RuntimeError):
@@ -191,12 +193,22 @@ class OrderDesk:
             zone = None if zone_id is None else self._zone(zone_id)
             summary = " · ".join(f"{self._label(item['object_class'])} {item['quantity']}" for item in order_items)
             self._check_available(order_items)
+            shipments = self._shipments({"order_items": order_items})
             order = self.store.create_task(
                 zone.label if zone else ZONE_PENDING_LABEL, f"{summary} 적재", order_items=order_items,
                 receiving_zone=zone.zone_id if zone else None, defer_pinky=True, zone_steps=True,
                 idempotency=None if idempotency_key is None else (idempotency_key, request_hash),
+                shipments=[list(shipment.units) for shipment in shipments] if len(shipments) > 1 else None,
             )
             return order, True
+
+    def _shipments(self, order: dict[str, Any]) -> tuple[Any, ...]:
+        """The order's Pinky loads (tray capacity and sizes from config/fleet-planning.json), heaviest first."""
+        try:
+            return split_into_shipments(self._units(order), self.planning.pinky_capacity, self.planning.size_of,
+                                        self._label)
+        except ShipmentError as exc:
+            raise OrderDeskError(exc.error_code, str(exc), status=400) from exc
 
     def _check_available(self, order_items: list[dict[str, Any]]) -> None:
         """Refuse what cannot be sold now: an object closed (stock unknown, or by the operator), or more than the
@@ -226,9 +238,10 @@ class OrderDesk:
     def preview(self, order_id: str) -> dict[str, Any]:
         """Who would serve this order if it started now, and why. Changes nothing.
 
-        `pinky` and `arms` describe a one-Pinky order; `fleet` splits a larger order over Pinkys (tray capacity
-        from config/fleet-planning.json) and, per trip, plans the arms and times the loading with both arms
-        overlapping at their shelves and taking turns over the Pinky."""
+        `pinky` and `arms` describe a one-Pinky order; `fleet` splits a larger order into shipments (tray capacity
+        from config/fleet-planning.json) that run one after another and, per shipment, plans the arms and times the
+        loading. The first shipment's Pinky is the one `start` would choose; a later one is chosen again when that
+        shipment starts, so the preview shows the best guess with the earlier trips counted."""
         order = self._pending_order(order_id)
         units = self._units(order)
         candidates = self.pinky_candidates()
@@ -242,11 +255,16 @@ class OrderDesk:
                     "fleet": {"error": error}}
         fleet = assign_fleet(shipments, candidates)
         stock, stock_error = self._stock()
+        guesses = self._later_pinkys(candidates, len(shipments))
         arm_ids = [arm["arm_id"] for arm in self.arms.arms]
         stats = self.pick_stats()
         trips = []
-        for trip in fleet.trips:  # later trips plan with what the earlier ones leave on the shelves
+        for index, trip in enumerate(fleet.trips):  # later trips plan with what the earlier ones leave on the shelves
             entry = trip.as_dict()
+            if len(fleet.trips) > 1:  # shipments run one after another: the Pinky of each is chosen as it starts
+                guess = guesses[index]
+                entry.update(pinky_id=guess.pinky_id, pinky_name=PINKY_NAMES.get(guess.pinky_id or ""),
+                             reason=guess.summary if index == 0 else f"앞 운송이 끝나면 다시 고름 · 지금 기준 {guess.summary}")
             for unit in entry["units"]:  # what the tray drawing needs: the name and how many slots it takes
                 unit["label"] = self._label(unit["object_class"])
                 unit["size"] = self.planning.size_of(unit["object_class"])
@@ -265,11 +283,15 @@ class OrderDesk:
                     entry["schedule"] = schedule_loading(plan.picks, self.planning.timing, arm_ids,
                                                          overlap=self.planning.arms_overlap).as_dict()
             trips.append(entry)
-        arms = trips[0]["arms"] if len(trips) == 1 else {
-            "error": {"code": "MULTI_PINKY", "message": f"{fleet.summary} · 배송별 팔 계획은 fleet에 있습니다"}}
+        sequential = len(trips) > 1
+        summary = (f"운송 {len(trips)}번으로 나눠 차례로 · " + ", ".join(
+            f"{index}. {trip['pinky_name'] or '핑키 대기'} {trip['load']}칸" for index, trip in enumerate(trips, start=1))
+                   if sequential else fleet.summary)
+        arms = trips[0]["arms"] if not sequential else {
+            "error": {"code": "MULTI_SHIPMENT", "message": f"{summary} · 운송별 팔 계획은 fleet에 있습니다"}}
         return {"order_id": order_id, "pinky": pinky.as_dict(), "zone": zone, "arms": arms,
-                "fleet": {"summary": fleet.summary, "complete": fleet.complete,
-                          "capacity": self.planning.pinky_capacity, "trips": trips}}
+                "fleet": {"summary": summary, "complete": all(trip["pinky_id"] for trip in trips),
+                          "capacity": self.planning.pinky_capacity, "trips": trips, "sequential": sequential}}
 
     def start(self, order_id: str) -> tuple[dict[str, Any], bool]:
         """Assign the receiving zone and the Pinky now (where the order has none) and start the order flow.
@@ -277,8 +299,7 @@ class OrderDesk:
         Both are checked before either is written, so a refusal leaves the order as it was."""
         order = self._pending_order(order_id, allow_started=True)
         if order["status"] == "PENDING":
-            if order["pinky_id"] is None:
-                self._refuse_multi_pinky(order)
+            self._refuse_unsplit(order)
             zone = self.zone_plan(order)
             if zone.zone_id is None:
                 raise OrderDeskError("ZONE_BUSY", zone.summary, zone=zone.as_dict())
@@ -297,19 +318,48 @@ class OrderDesk:
                     raise OrderDeskError("ZONE_BUSY", f"수령 구역이 모두 사용 중이에요: {exc}") from exc
         return self.orchestrator.start(order_id)
 
-    def _refuse_multi_pinky(self, order: dict[str, Any]) -> None:
-        """An order larger than one tray is planned (preview) but not run yet: one order runs with one Pinky."""
-        try:
-            shipments = split_into_shipments(self._units(order), self.planning.pinky_capacity,
-                                             self.planning.size_of, self._label)
-        except ShipmentError as exc:
-            raise OrderDeskError(exc.error_code, str(exc)) from exc
-        if len(shipments) > 1:
+    @staticmethod
+    def _later_pinkys(candidates: list[PinkyCandidate], count: int) -> list[Any]:
+        """The Pinky choice for each shipment if they ran now one after another: the Pinky of each earlier
+        shipment counts one more trip today and has just finished."""
+        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        pool = list(candidates)
+        choices = []
+        for _ in range(count):
+            choice = choose_pinky(pool)
+            choices.append(choice)
+            pool = [replace(c, trips_today=c.trips_today + 1, last_finished_at=now) if c.pinky_id == choice.pinky_id
+                    else c for c in pool]
+        return choices
+
+    def _refuse_unsplit(self, order: dict[str, Any]) -> None:
+        """An order received before shipments existed (or by the older /api/tasks path) has one load's steps; if it
+        no longer fits one tray it cannot run as it is."""
+        needed = len(self._shipments(order))
+        have = max((shipment_of(step) for step in order["steps"]), default=1)
+        if needed > have:
             raise OrderDeskError(
-                "MULTI_PINKY_NOT_SUPPORTED",
-                f"이 주문은 핑키 {len(shipments)}대가 필요합니다(쟁반 용량 {self.planning.pinky_capacity}). "
-                "여러 핑키로 나눠 실행하는 단계는 아직 없어서 주문을 나눠 넣어야 합니다",
+                "ORDER_NEEDS_SHIPMENTS",
+                f"이 주문은 핑키 쟁반 {self.planning.pinky_capacity}칸에 다 실리지 않아 운송 {needed}번이 필요한데, "
+                "나누지 않은 채로 접수돼 있습니다. 거절하고 다시 주문해 주세요",
             )
+
+    def assign_next_shipment(self, order_id: str, shipment: int) -> dict[str, Any]:
+        """The Pinky for a later shipment of a running order, chosen now and written on the order.
+
+        The order's own Pinky of the previous shipment is parked again by now and may go again; the ranking (battery,
+        trips today, last finished) usually sends another one. No free Pinky: {"pinky_id": None} and the flow waits."""
+        candidates = [replace(candidate, holding_order=None) if candidate.holding_order == order_id else candidate
+                      for candidate in self.pinky_candidates()]
+        assignment = choose_pinky(candidates)
+        if assignment.pinky_id is None:
+            return {"pinky_id": None, "summary": assignment.summary, "assignment": assignment.as_dict()}
+        try:
+            self.store.assign_shipment_pinky(order_id, shipment, assignment.pinky_id,
+                                             {**assignment.as_dict(), "shipment": shipment})
+        except (PinkyUnavailable, InvalidStateTransition) as exc:
+            return {"pinky_id": None, "summary": str(exc), "assignment": assignment.as_dict()}
+        return {"pinky_id": assignment.pinky_id, "summary": assignment.summary, "assignment": assignment.as_dict()}
 
     def confirm_pickup(self, order_id: str) -> dict[str, Any]:
         """The customer took the order at the receiving zone; the flow then sends the Pinky home."""
@@ -325,25 +375,45 @@ class OrderDesk:
         order = self.store.get_task(order_id)
         if order is None or order.get("order_items") is None:
             raise OrderDeskError("ORDER_NOT_FOUND", f"주문 {order_id}이 없습니다", status=404)
-        active = next((step for step in order["steps"] if step["id"] == order.get("active_step_id")), None)
+        steps = order["steps"]
+        active = next((step for step in steps if step["id"] == order.get("active_step_id")), None)
         stage = _customer_stage(order["status"], active["step_type"] if active else None)
+        count = max((int((step.get("detail") or {}).get("shipments") or 1) for step in steps), default=1)
+        current = shipment_of(active) if active else (count if order["status"] == "SUCCEEDED" else 1)
+        between = False
+        if count > 1 and active is not None and order["status"] in {"RUNNING", "VALIDATING"}:
+            if active["step_type"] == "WAIT_PINKY_PARKED" and current < count:
+                current, between = current + 1, True  # this load was picked up; the next one is on its way
+            elif active["step_type"] == "START_SHIPMENT":
+                between = True
+            if between:
+                stage = "pinky_coming"
         zone_id = order.get("receiving_zone")
         known = self.zones.get(zone_id or "")
         zone_label = (known.label if known else order.get("destination")) if zone_id else None
         zone = zone_label or "수령 구역"
-        moved = sum(1 for step in order["steps"] if step["step_type"] == "VERIFY_TRANSFER" and step["status"] == "SUCCEEDED")
-        total = sum(1 for step in order["steps"] if step["step_type"] == "VERIFY_TRANSFER")
+        mine = [step for step in steps if shipment_of(step) == current]
+        moved = sum(1 for step in mine if step["step_type"] == "VERIFY_TRANSFER" and step["status"] == "SUCCEEDED")
+        total = sum(1 for step in mine if step["step_type"] == "VERIFY_TRANSFER")
         title, detail = _CUSTOMER_TEXT[stage]
+        title, detail = title.format(zone=zone), detail.format(zone=zone, moved=moved, total=total)
+        if between:
+            title, detail = "남은 물건을 가지러 가요", f"{current - 1}/{count}번째 운송을 받았어요 · 다음 운송을 준비해요"
+        load = Counter(step["detail"]["object_class"] for step in mine if step["step_type"] == "PICK_ITEM")
         return {
             "order_id": order_id, "status": order["status"], "stage": stage,
             "stages": [{"key": key, "label": label, "state": "done" if index < _STAGE_INDEX.get(stage, -1)
                         else "current" if key == stage else "todo"}
                        for index, (key, label) in enumerate(_CUSTOMER_STAGES)],
-            "title": title.format(zone=zone), "detail": detail.format(zone=zone, moved=moved, total=total),
+            "title": title, "detail": detail,
             "items": [{"label": self._label(item["object_class"]), "quantity": item["quantity"]} for item in order["order_items"]],
             "zone": zone_label, "zone_note": None if zone_label else ZONE_PENDING_NOTE,
             "pinky": PINKY_NAMES.get(order.get("pinky_id") or ""),
             "loaded": moved, "total": total, "can_confirm_pickup": stage == "arrived",
+            # A larger order comes in several loads, one after another; each one is picked up on its own.
+            "shipment": current, "shipments": count,
+            "shipment_items": ([{"label": self._label(name), "quantity": quantity} for name, quantity in load.items()]
+                               if count > 1 else None),
             "created_at": order.get("created_at"), "finished_at": order.get("finished_at"),
         }
 

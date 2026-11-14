@@ -380,6 +380,8 @@ def main() -> None:
         task_store, server.task_orchestrator, server.order_devices, server.arms, act_policies,
         receiving_zones, pick_stats, inventory=server.inventory.snapshot, pickup=server.order_flow.confirm_pickup,
     )
+    # A larger order runs as shipments; each later one gets its Pinky from the desk when it starts.
+    server.order_flow.choose_shipment_pinky = server.order_desk.assign_next_shipment
     if real_arm:
         print("작업 흐름의 팔 단계가 실제 팔 명령(PICK_WITH_POLICY)을 보냅니다", flush=True)
     mode_label = {"mock": "모의", "ros2": "ROS 2"}[mode]
