@@ -77,11 +77,12 @@ class OrderFlowTests(unittest.TestCase):
         self.assertEqual(task["status"], "SUCCEEDED", task["error"])
         plan = self.step(task, "PLAN_ARM_SEQUENCE")["result"]["sequence"]
         # Default mock stock: left shelf carrot 3 / apple 1, right shelf apple 3 / carrot 1. The carrot goes where
-        # more carrots are left (left arm); both apples go right, which keeps the left shelf's only apple. The
-        # busier arm goes first and finishes before the other starts.
+        # more carrots are left (left arm); the first apple goes to the arm with fewer units (right), the second to
+        # the shelf with more apples left (right again), which keeps the left shelf's only apple. The busier arm
+        # goes first and finishes before the other starts.
         self.assertEqual([(unit["arm_id"], unit["object_class"]) for unit in plan],
                          [("arm-02", "apple"), ("arm-02", "apple"), ("arm-01", "carrot")])
-        self.assertEqual([unit["reason"] for unit in plan], ["남은 재고 3 vs 1", "남은 재고 2 vs 1", "남은 재고 3 vs 1"])
+        self.assertEqual([unit["reason"] for unit in plan], ["맡은 개수 0 vs 1", "남은 재고 2 vs 1", "남은 재고 3 vs 1"])
         picks = [step for step in task["steps"] if step["step_type"] == "PICK_ITEM"]
         self.assertEqual([step["robot_id"] for step in picks], ["arm-02", "arm-02", "arm-01"])
         self.assertEqual(Counter(self.world.loads["10"]), Counter({"carrot": 1, "apple": 2}))

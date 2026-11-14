@@ -10,12 +10,16 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
 from control_station.api.common import validate_order_items
-from control_station.assignment import ArmPlanError, PickStats, PinkyCandidate, choose_pinky, plan_arms
+from control_station.assignment import (
+    ArmPlanError, PickStats, PinkyCandidate, ShipmentError, assign_fleet, choose_pinky, plan_arms, schedule_loading,
+    split_into_shipments,
+)
+from control_station.fleet_planning import FleetPlanning, load_fleet_planning
 from control_station.order_flow import OrderDevices
 from control_station.pinky_fleet import PinkyFleetError
 from control_station.receiving_zones import ReceivingZone
@@ -47,6 +51,7 @@ class OrderDesk:
     policies: Any  # control_station.act_policies registry
     zones: Mapping[str, ReceivingZone]
     pick_stats: Callable[[], PickStats]
+    planning: FleetPlanning = field(default_factory=load_fleet_planning)
     today: Callable[[], str] = _start_of_today
 
     # ---- the order window ----------------------------------------------------------------------------------
@@ -91,27 +96,51 @@ class OrderDesk:
         return self.store.pending_orders()
 
     def preview(self, order_id: str) -> dict[str, Any]:
-        """Who would serve this order if it started now. Changes nothing."""
+        """Who would serve this order if it started now, and why. Changes nothing.
+
+        `pinky` and `arms` describe a one-Pinky order; `fleet` splits a larger order over Pinkys (tray capacity
+        from config/fleet-planning.json) and, per trip, plans the arms and times the loading with both arms
+        overlapping at their shelves and taking turns over the Pinky."""
         order = self._pending_order(order_id)
-        pinky = choose_pinky(self.pinky_candidates())
+        units = self._units(order)
+        candidates = self.pinky_candidates()
+        pinky = choose_pinky(candidates)
+        try:
+            shipments = split_into_shipments(units, self.planning.pinky_capacity, self.planning.size_of, self._label)
+        except ShipmentError as exc:
+            error = {"code": exc.error_code, "message": str(exc)}
+            return {"order_id": order_id, "pinky": pinky.as_dict(), "arms": {"error": error}, "fleet": {"error": error}}
+        fleet = assign_fleet(shipments, candidates)
         stock, stock_error = self._stock()
-        arms: dict[str, Any]
-        if stock_error is not None:
-            arms = {"error": {"code": "SHELF_STOCK_UNAVAILABLE", "message": stock_error}}
-        else:
-            units = [{"object_class": item["object_class"], "unit": index, "of": item["quantity"]}
-                     for item in order["order_items"] for index in range(1, int(item["quantity"]) + 1)]
-            try:
-                arms = plan_arms(units, stock, self.arms.arms, self.policies.resolve, self._label,
-                                 self.pick_stats()).as_dict()
-            except ArmPlanError as exc:
-                arms = {"error": {"code": exc.error_code, "message": str(exc)}}
-        return {"order_id": order_id, "pinky": pinky.as_dict(), "arms": arms}
+        arm_ids = [arm["arm_id"] for arm in self.arms.arms]
+        stats = self.pick_stats()
+        trips = []
+        for trip in fleet.trips:  # later trips plan with what the earlier ones leave on the shelves
+            entry = trip.as_dict()
+            if stock_error is not None:
+                entry["arms"] = {"error": {"code": "SHELF_STOCK_UNAVAILABLE", "message": stock_error}}
+            else:
+                try:
+                    plan = plan_arms(trip.shipment.units, stock, self.arms.arms, self.policies.resolve,
+                                     self._label, stats)
+                except ArmPlanError as exc:
+                    entry["arms"] = {"error": {"code": exc.error_code, "message": str(exc)}}
+                else:
+                    for pick in plan.picks:
+                        stock[pick.shelf_id][pick.object_class] -= 1
+                    entry["arms"] = plan.as_dict()
+                    entry["schedule"] = schedule_loading(plan.picks, self.planning.timing, arm_ids).as_dict()
+            trips.append(entry)
+        arms = trips[0]["arms"] if len(trips) == 1 else {
+            "error": {"code": "MULTI_PINKY", "message": f"{fleet.summary} · 배송별 팔 계획은 fleet에 있습니다"}}
+        return {"order_id": order_id, "pinky": pinky.as_dict(), "arms": arms,
+                "fleet": {"summary": fleet.summary, "complete": fleet.complete, "trips": trips}}
 
     def start(self, order_id: str) -> tuple[dict[str, Any], bool]:
         """Assign the Pinky now (if the order has none) and start the order flow."""
         order = self._pending_order(order_id, allow_started=True)
         if order["status"] == "PENDING" and order["pinky_id"] is None:
+            self._refuse_multi_pinky(order)
             assignment = choose_pinky(self.pinky_candidates())
             if assignment.pinky_id is None:
                 raise OrderDeskError("PINKY_UNAVAILABLE", assignment.summary, assignment=assignment.as_dict())
@@ -120,6 +149,20 @@ class OrderDesk:
             except PinkyUnavailable as exc:  # taken by another order between the choice and the write
                 raise OrderDeskError("PINKY_UNAVAILABLE", str(exc)) from exc
         return self.orchestrator.start(order_id)
+
+    def _refuse_multi_pinky(self, order: dict[str, Any]) -> None:
+        """An order larger than one tray is planned (preview) but not run yet: one order runs with one Pinky."""
+        try:
+            shipments = split_into_shipments(self._units(order), self.planning.pinky_capacity,
+                                             self.planning.size_of, self._label)
+        except ShipmentError as exc:
+            raise OrderDeskError(exc.error_code, str(exc)) from exc
+        if len(shipments) > 1:
+            raise OrderDeskError(
+                "MULTI_PINKY_NOT_SUPPORTED",
+                f"이 주문은 핑키 {len(shipments)}대가 필요합니다(쟁반 용량 {self.planning.pinky_capacity}). "
+                "여러 핑키로 나눠 실행하는 단계는 아직 없어서 주문을 나눠 넣어야 합니다",
+            )
 
     def reject(self, order_id: str) -> dict[str, Any]:
         """Turn down an order that has not started; no device was involved yet."""
@@ -157,6 +200,11 @@ class OrderDesk:
         except Exception as exc:  # camera not ready, no frame, node down: the window says why
             return {}, f"선반 재고를 읽지 못했습니다: {exc}"
         return {shelf: Counter(counts) for shelf, counts in shelves.items()}, None
+
+    @staticmethod
+    def _units(order: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{"object_class": item["object_class"], "unit": index, "of": item["quantity"]}
+                for item in order["order_items"] for index in range(1, int(item["quantity"]) + 1)]
 
     def _zone(self, zone_id: object) -> ReceivingZone:
         if zone_id is None and len(self.zones) == 1:

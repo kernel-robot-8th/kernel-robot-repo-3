@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import unittest
 
-from control_station.assignment import ArmPlanError, PinkyCandidate, choose_pinky, plan_arms, success_rate
+from control_station.assignment import (
+    ArmPick, ArmPlanError, PickTiming, PinkyCandidate, ShipmentError, assign_fleet, choose_pinky, plan_arms,
+    schedule_loading, split_into_shipments, success_rate,
+)
 
 ARMS = [
     {"arm_id": "arm-01", "label": "왼쪽 팔", "shelf_id": "shelf_a"},
@@ -113,6 +116,70 @@ class PlanArmsTest(unittest.TestCase):
     def test_success_rate_is_smoothed(self) -> None:
         self.assertEqual(success_rate({}, "p", "arm-01"), 0.5)
         self.assertAlmostEqual(success_rate({("p", "arm-01"): (1, 1)}, "p", "arm-01"), 2 / 3)
+
+
+def sizes(**overrides: int):
+    return lambda object_class: overrides.get(object_class, 1)
+
+
+class SplitIntoShipmentsTest(unittest.TestCase):
+    def test_fewest_pinkys_with_even_loads(self) -> None:
+        shipments = split_into_shipments(units(("apple", 4), ("carrot", 3)), 3, sizes(), LABELS.get)
+        self.assertEqual([shipment.load for shipment in shipments], [3, 2, 2])  # not 3, 3, 1
+        self.assertEqual(sum(len(shipment.units) for shipment in shipments), 7)
+
+    def test_sizes_count_against_the_tray(self) -> None:
+        shipments = split_into_shipments(units(("tissue", 2), ("apple", 2)), 3, sizes(tissue=2), LABELS.get)
+        self.assertEqual([sorted(u["object_class"] for u in s.units) for s in shipments],
+                         [["apple", "tissue"], ["apple", "tissue"]])
+
+    def test_a_pinky_is_added_when_a_unit_fits_nowhere(self) -> None:
+        # Total 8 fits two trays of 4 on paper, but 3 + 3 + 2 cannot: a third Pinky is needed.
+        shipments = split_into_shipments(units(("tissue", 2), ("apple", 1)), 4, sizes(tissue=3, apple=2), LABELS.get)
+        self.assertEqual([shipment.load for shipment in shipments], [3, 3, 2])
+
+    def test_a_unit_bigger_than_the_tray_is_refused(self) -> None:
+        with self.assertRaises(ShipmentError) as error:
+            split_into_shipments(units(("tissue", 1)), 2, sizes(tissue=3), LABELS.get)
+        self.assertEqual(error.exception.error_code, "ITEM_TOO_BIG_FOR_PINKY")
+
+
+class AssignFleetTest(unittest.TestCase):
+    def test_heaviest_shipment_goes_to_the_best_pinky(self) -> None:
+        shipments = split_into_shipments(units(("apple", 5)), 3, sizes(), LABELS.get)
+        plan = assign_fleet(shipments, [parked("10", battery_percent=55), parked("11", battery_percent=95)])
+        self.assertEqual([(trip.pinky_id, trip.shipment.load) for trip in plan.trips], [("11", 3), ("10", 2)])
+        self.assertEqual(plan.summary, "핑키 2대 · P1 3, P0 2")
+        self.assertTrue(plan.complete)
+
+    def test_shipments_beyond_the_free_pinkys_wait(self) -> None:
+        shipments = split_into_shipments(units(("apple", 7)), 3, sizes(), LABELS.get)
+        plan = assign_fleet(shipments, [parked("10"), parked("11"), parked("12", holding_order="TASK-9")])
+        self.assertEqual([trip.pinky_id for trip in plan.trips], ["10", "11", None])
+        self.assertEqual(plan.trips[-1].reason, "빈 핑키를 기다림")
+        self.assertEqual(plan.summary, "핑키 3대 필요 · 지금 2대 가능")
+        self.assertFalse(plan.complete)
+
+
+def arm_pick(arm_id: str, object_class: str, unit: int) -> ArmPick:
+    return ArmPick(object_class, LABELS[object_class], unit, 2, arm_id, arm_id, "shelf", f"{object_class}_act", "")
+
+
+class ScheduleLoadingTest(unittest.TestCase):
+    TIMING = staticmethod(lambda pick: PickTiming(shelf_s=8, place_s=5))
+
+    def test_arms_overlap_and_take_turns_over_the_pinky(self) -> None:
+        picks = [arm_pick("arm-01", "apple", 1), arm_pick("arm-01", "apple", 2), arm_pick("arm-02", "carrot", 1)]
+        schedule = schedule_loading(picks, self.TIMING, ["arm-01", "arm-02"])
+        self.assertEqual([(p.pick.arm_id, p.place_start_s, p.place_end_s) for p in schedule.picks],
+                         [("arm-01", 8, 13), ("arm-02", 13, 18), ("arm-01", 21, 26)])
+        self.assertEqual(schedule.picks[1].waited_s, 5)  # the right arm held the carrot while the left one placed
+        self.assertEqual((schedule.total_s, schedule.one_arm_at_a_time_s), (26, 39))
+
+    def test_one_arm_gains_nothing(self) -> None:
+        picks = [arm_pick("arm-01", "apple", 1), arm_pick("arm-01", "apple", 2)]
+        schedule = schedule_loading(picks, self.TIMING, ["arm-01", "arm-02"])
+        self.assertEqual((schedule.total_s, schedule.one_arm_at_a_time_s), (26, 26))
 
 
 if __name__ == "__main__":

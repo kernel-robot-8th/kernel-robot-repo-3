@@ -112,6 +112,22 @@ class OrderDeskTest(unittest.TestCase):
         with self.assertRaises(TaskExecutionConflict):
             self.desk.orchestrator.start(order["id"])
 
+    def test_large_order_is_planned_over_two_pinkys_but_not_started(self) -> None:
+        # Tray capacity 4 (config/fleet-planning.json): six units go as two trips of three.
+        order = self.desk.receive([{"object_class": "carrot", "quantity": 3}, {"object_class": "apple", "quantity": 3}],
+                                  "zone_a")
+        fleet = self.desk.preview(order["id"])["fleet"]
+        self.assertEqual(fleet["summary"], "핑키 2대 · P0 3, P1 3")
+        self.assertEqual([trip["pinky_id"] for trip in fleet["trips"]], ["10", "11"])
+        for trip in fleet["trips"]:
+            schedule = trip["schedule"]
+            self.assertEqual(len(schedule["picks"]), 3)
+            self.assertLess(schedule["total_s"], schedule["one_arm_at_a_time_s"])  # the arms overlap
+        with self.assertRaises(OrderDeskError) as error:
+            self.desk.start(order["id"])
+        self.assertEqual(error.exception.error_code, "MULTI_PINKY_NOT_SUPPORTED")
+        self.assertIsNone(self.store.get_task(order["id"])["pinky_id"])
+
     def test_reject_only_waiting_orders(self) -> None:
         order = self.desk.receive(CARROT_APPLE, "zone_a")
         self.assertEqual(self.desk.reject(order["id"])["status"], "CANCELED")

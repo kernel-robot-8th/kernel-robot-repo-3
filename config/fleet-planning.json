@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "notes": "주문을 핑키 여러 대로 나누고 두 팔의 적재 시간을 미리 계산할 때 쓰는 값. 2026-11-14 기준 모두 가정값이라 실측해서 바꿔야 한다. pinky_capacity: 핑키 쟁반에 싣는 양(크기 단위). unit_sizes: 물체 크기(없으면 1). pick_timing_s: 녹화 에피소드 약 15초를 선반 구간(집어서 대기 자세까지)과 적재 구간(핑키 위에 놓고 빠지기)으로 나눈 가정.",
+  "pinky_capacity": 4,
+  "unit_sizes": {},
+  "pick_timing_s": {"shelf": 9, "place": 6}
+}
