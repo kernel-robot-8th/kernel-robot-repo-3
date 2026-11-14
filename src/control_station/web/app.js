@@ -53,9 +53,13 @@ const controlModeLabels = {
 
 let activeView = 'flow';
 
-// Mock traces (the mock world panel, "모의" tags, mode words) show only with ?dev=1. In everyday use the 종합
-// dashboard alone says which devices are not connected yet.
-const devMode = new URLSearchParams(window.location.search).get('dev') === '1';
+// Mock traces (the mock world panel, "모의" tags, mode words) show only with ?dev=1. Every script asks this one
+// function, so the rule stays in one place.
+function isDevView() {
+  return new URLSearchParams(window.location.search).get('dev') === '1';
+}
+
+const devMode = isDevView();
 document.body.classList.toggle('dev', devMode);
 
 // A mock word in dev mode, nothing otherwise.
