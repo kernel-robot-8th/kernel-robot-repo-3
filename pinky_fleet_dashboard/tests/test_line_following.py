@@ -18,7 +18,7 @@ def calibrated():
 class LineTests(unittest.TestCase):
     def decide(self, raw, **overrides):
         args = dict(linear=.048, angular=0., raw=raw, profile=calibrated(),
-                    now=1., ir_fresh=True, scan_fresh=True, scan_points=[])
+                    now=1., ir_fresh=True, scan_fresh=True, scan_points=[], heading_yaw=0.)
         args.update(overrides)
         return LineAssist().decide(**args)
 
@@ -35,20 +35,23 @@ class LineTests(unittest.TestCase):
     def test_two_active_sensors_at_corners_are_valid(self):
         for raw in ([300, 400, 2600], [3000, 400, 500]):
             d = self.decide(raw, angular=.08)
-            self.assertEqual((d.state, d.angular, d.linear), ('nav2_corner', .08, .048))
+            self.assertEqual(d.state, 'tracking')
+            self.assertLessEqual(abs(d.angular), .12)
+            self.assertLessEqual(d.linear, .036)
         d = self.decide([300, 2800, 500])
-        self.assertEqual(d.state, 'nav2_ambiguous')
+        self.assertEqual(d.linear, 0.)
+        self.assertEqual(d.state, 'line_search')
 
     def test_center_hysteresis_avoids_chatter(self):
         assist = LineAssist()
         def decide(raw, now):
-            return assist.decide(.048, .0, raw, calibrated(), now, True, True, [])
+            return assist.decide(.048, .0, raw, calibrated(), now, True, True, [], heading_yaw=0.)
         self.assertEqual(decide([3000, 400, 2600], 1.).state, 'centered')
         # Center strength 0.4 remains centered after a strong center sample.
         self.assertEqual(decide([3000, 1840, 2600], 1.05).state, 'centered')
         # Center strength 0.3 drops the center latch.
-        self.assertEqual(decide([3000, 2080, 2600], 1.10).state, 'nav2_line_lost')
-        self.assertEqual(decide([3000, 1840, 2600], 1.15).state, 'nav2_line_lost')
+        self.assertEqual(decide([3000, 2080, 2600], 1.10).state, 'line_search')
+        self.assertEqual(decide([3000, 1840, 2600], 1.15).state, 'line_search')
         self.assertEqual(decide([3000, 400, 2600], 1.20).state, 'centered')
 
     def test_left_and_right_signs_and_speed_bounds(self):
@@ -70,18 +73,20 @@ class LineTests(unittest.TestCase):
         for raw in ([1, 2], [math.nan, 2, 3], [5000, 2, 3]):
             self.assertEqual(self.decide(raw).linear, 0.)
 
-    def test_goal_rotation_reverse_and_lidar_avoidance_unchanged(self):
-        for v, w in ((0., .2), (-.03, 0.), (.02, .18)):
-            d = self.decide([300, 2800, 2600], linear=v, angular=w)
-            self.assertEqual((d.linear, d.angular), (v, w))
+    def test_reverse_corner_and_lidar_avoidance(self):
+        d = self.decide([300, 2800, 2600], linear=-.03)
+        self.assertEqual((d.linear, d.angular), (-.03, 0.))
+        d = self.decide([300, 2800, 2600], linear=0., angular=.2, route_corner=True)
+        self.assertEqual((d.linear, d.angular), (0., .2))
         d = self.decide([300, 2800, 2600], scan_points=[(.2, .05)])
         self.assertEqual(d.state, 'nav2_avoidance')
-        self.assertEqual((d.linear, d.angular), (.048, 0.))
+        self.assertEqual((d.linear, d.angular), (.024, 0.))
 
-    def test_node_and_lost_line_hand_back_to_nav_without_blind_motion(self):
-        for raw, state in (([300, 400, 500], 'marker_unclassified'), ([3000, 2800, 2600], 'nav2_line_lost')):
-            d = self.decide(raw)
-            self.assertEqual((d.linear, d.angular, d.state), (.048, 0., state))
+    def test_unknown_surface_stops_forward_and_searches(self):
+        d = self.decide([3000, 2800, 2600])
+        self.assertEqual((d.linear, d.state), (0., 'line_search'))
+        d = self.decide([300, 400, 500])
+        self.assertEqual(d.state, 'centered')
 
     def test_collision_on_corrected_path_stops(self):
         # Lateral obstacle outside the Nav2 bypass cone but inside robot footprint.
@@ -90,11 +95,12 @@ class LineTests(unittest.TestCase):
         self.assertTrue(swept_clear([(.5, .5)], .048, .15))
         self.assertFalse(swept_clear([(.09, 0)], .048, 0.))
 
-    def test_opposite_polarity_and_channel_mapping(self):
-        p = calibrated(); p['floor'], p['line'] = p['line'], p['floor']
-        self.assertEqual(normalize([3000, 400, 500], p), [1., 0., 0.])
+    def test_black_outer_references_are_not_white(self):
+        p = calibrated(); p['line'] = [4095, 400, 4095]
+        self.assertEqual(normalize([4095, 400, 4095], p), [0., 1., 0.])
+        self.assertEqual(normalize([300, 2800, 4095], p), [1., 0., 0.])
         p['channel_order'] = [2, 1, 0]
-        self.assertEqual(normalize([3000, 400, 500], p), [0., 0., 1.])
+        self.assertEqual(normalize([300, 2800, 4095], p), [0., 0., 1.])
 
     def test_capture_requires_stopped_stable_multi_sample_data(self):
         p = default_profile()

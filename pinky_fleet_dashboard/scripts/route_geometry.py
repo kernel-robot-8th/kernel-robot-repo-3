@@ -9,7 +9,17 @@ def build_dense_route(anchors, labels=ROUTE_LABELS, spacing=CHECKPOINT_SPACING_M
     if not math.isfinite(spacing) or spacing <= 0:
         raise ValueError('Invalid checkpoint spacing')
     by_label = {p['label']: p for p in anchors}
-    selected = [by_label[label] for label in labels]
+    selected = []
+    for label in labels:
+        if label == '6' and selected and selected[-1]['label'] == '5':
+            dock = selected[-1]
+            previous = selected[-2] if len(selected) > 1 else None
+            heading = (math.atan2(dock['y_m']-previous['y_m'], dock['x_m']-previous['x_m'])
+                       if previous else dock['yaw_rad'])
+            selected.append(dict(dock, label='도킹 탈출',
+                x_m=dock['x_m']-.20*math.cos(heading), y_m=dock['y_m']-.20*math.sin(heading),
+                yaw_rad=heading, arrival_yaw_rad=heading, dock_exit=True, reverse=True))
+        selected.append(by_label[label])
     result = []
     for index, end in enumerate(selected):
         if index:
@@ -22,8 +32,8 @@ def build_dense_route(anchors, labels=ROUTE_LABELS, spacing=CHECKPOINT_SPACING_M
             for step in range(1, steps):
                 result.append(dict(label=f"{start['label']}→{end['label']}:{step:02d}",
                     map=end['map'], frame_id='map', x_m=start['x_m'] + dx*step/steps,
-                    y_m=start['y_m'] + dy*step/steps, yaw_rad=heading,
-                    anchor=False, segment_index=index))
+                    y_m=start['y_m'] + dy*step/steps, yaw_rad=end.get('arrival_yaw_rad', heading) if end.get('dock_exit') else heading,
+                    anchor=False, segment_index=index, reverse=bool(end.get("dock_exit"))))
         point = {key: end[key] for key in ('label', 'map', 'frame_id', 'x_m', 'y_m', 'yaw_rad')}
         if not all(math.isfinite(float(point[k])) for k in ('x_m','y_m','yaw_rad')):
             raise ValueError('Non-finite waypoint coordinate')
@@ -45,6 +55,12 @@ def build_dense_route(anchors, labels=ROUTE_LABELS, spacing=CHECKPOINT_SPACING_M
                     break
         if heading is not None:
             point["yaw_rad"] = heading
+        if end['label'] == '5' and index and index+1 < len(selected) and selected[index+1].get('dock_exit'):
+            previous = selected[index-1]
+            point['yaw_rad'] = math.atan2(end['y_m']-previous['y_m'],end['x_m']-previous['x_m'])
+        if end.get('dock_exit'):
+            point.update(dock_exit=True, reverse=True, arrival_yaw_rad=end['arrival_yaw_rad'])
+            point['yaw_rad'] = end['arrival_yaw_rad']
         point.update(anchor=True, segment_index=index)
         result.append(point)
     if len(result) > 500:

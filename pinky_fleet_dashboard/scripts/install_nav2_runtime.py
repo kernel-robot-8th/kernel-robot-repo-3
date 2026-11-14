@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 import hashlib
 import json
+import yaml
 
 
 SHARE = Path("/home/pinky/pinky_pro/install/pinky_navigation/share/pinky_navigation")
@@ -21,6 +22,8 @@ def replace_once(text: str, old: str, new: str, expected: int = 1) -> str:
 
 def main() -> None:
     RUNTIME.mkdir(parents=True, exist_ok=True)
+    runtime_config = json.loads((RUNTIME / "runtime_config.json").read_text(encoding="utf-8"))
+    keepout_enabled = runtime_config.get("keepout_enabled", False)
 
     bringup = (SHARE / "launch/bringup_launch.xml").read_text(encoding="utf-8")
     bringup = replace_once(
@@ -51,6 +54,20 @@ def main() -> None:
     )
     navigation = prefix + behavior_start + behavior_block + "</node>" + suffix
 
+    if keepout_enabled:
+        keepout_nodes = '''
+    <node pkg="nav2_map_server" exec="map_server" name="keepout_filter_mask_server" output="screen">
+        <param from="/home/pinky/.cache/pinky-fleet/nav2/keepout_servers.yaml"/>
+    </node>
+    <node pkg="nav2_map_server" exec="costmap_filter_info_server" name="keepout_costmap_filter_info_server" output="screen">
+        <param from="/home/pinky/.cache/pinky-fleet/nav2/keepout_servers.yaml"/>
+    </node>
+    <node pkg="nav2_lifecycle_manager" exec="lifecycle_manager" name="lifecycle_manager_keepout" output="screen">
+        <param from="/home/pinky/.cache/pinky-fleet/nav2/keepout_servers.yaml"/>
+    </node>
+'''
+        navigation = replace_once(navigation, "</launch>", keepout_nodes + "</launch>")
+
     params = (SHARE / "params/nav2_params.yaml").read_text(encoding="utf-8")
     updates = [
         ("desired_linear_vel: 0.2", "desired_linear_vel: 0.1152", 1),
@@ -72,6 +89,24 @@ def main() -> None:
     for old, new, expected in updates:
         params = replace_once(params, old, new, expected)
 
+    dimensions=runtime_config['geometry']
+    parsed=yaml.safe_load(params)
+    x,y=dimensions['half_length_m'],dimensions['half_width_m']
+    for name in ('local_costmap','global_costmap'):
+        section=parsed[name][name]['ros__parameters']
+        section['footprint']=json.dumps([[x,y],[x,-y],[-x,-y],[-x,y]])
+        section['footprint_padding']=dimensions['padding_m']
+        if keepout_enabled:
+            section['filters'] = ['keepout_filter']
+            section['keepout_filter'] = {
+                'plugin': 'nav2_costmap_2d::KeepoutFilter',
+                'enabled': True,
+                'filter_info_topic': '/keepout_costmap_filter_info',
+                'transform_tolerance': 0.1,
+                'override_lethal_cost': True,
+                'lethal_override_cost': 252.0,
+            }
+    params=yaml.safe_dump(parsed,sort_keys=False)
     (RUNTIME / "bringup_launch.xml").write_text(bringup, encoding="utf-8")
     (RUNTIME / "navigation_launch.xml").write_text(navigation, encoding="utf-8")
     (RUNTIME / "localization_launch.xml").write_text(
@@ -79,13 +114,57 @@ def main() -> None:
         encoding="utf-8",
     )
     (RUNTIME / "nav2_params.yaml").write_text(params, encoding="utf-8")
+    if keepout_enabled:
+        keepout_servers = {
+            'keepout_filter_mask_server': {
+                'ros__parameters': {
+                    'topic_name': '/keepout_filter_mask',
+                    'yaml_filename': str(RUNTIME / 'keepout_mask.yaml'),
+                    'frame_id': 'map',
+                    'use_sim_time': False,
+                },
+            },
+            'keepout_costmap_filter_info_server': {
+                'ros__parameters': {
+                    'type': 0,
+                    'filter_info_topic': '/keepout_costmap_filter_info',
+                    'mask_topic': '/keepout_filter_mask',
+                    'base': 0.0,
+                    'multiplier': 1.0,
+                    'use_sim_time': False,
+                },
+            },
+            'lifecycle_manager_keepout': {
+                'ros__parameters': {
+                    'autostart': True,
+                    'node_names': [
+                        'keepout_filter_mask_server',
+                        'keepout_costmap_filter_info_server',
+                    ],
+                    'use_sim_time': False,
+                },
+            },
+        }
+        (RUNTIME / 'keepout_servers.yaml').write_text(
+            yaml.safe_dump(keepout_servers, sort_keys=False), encoding='utf-8'
+        )
     sources = {
         'installer': RUNTIME.parent / 'install_nav2_runtime.py',
         'route': RUNTIME.parent / 'navigate_route.py',
         'ir': RUNTIME / 'line_following.py',
         'safety': RUNTIME / 'ultrasonic_safety.py',
         'mission': RUNTIME / 'mission_behaviors.py',
+        'final_guard': RUNTIME / 'velocity_guard.py',
+        'geometry': RUNTIME / 'runtime_config.json',
+        'motion_gate': RUNTIME / 'motion_gate.py',
+        'traffic': RUNTIME / 'traffic.py',
     }
+    if keepout_enabled:
+        sources.update({
+            'keepout_mask': RUNTIME / 'keepout_mask.pgm',
+            'keepout_metadata': RUNTIME / 'keepout_mask.yaml',
+            'keepout_servers': RUNTIME / 'keepout_servers.yaml',
+        })
     manifest = {name: hashlib.sha256(path.read_bytes()).hexdigest()
                 for name, path in sources.items()}
     temporary = RUNTIME / 'source_manifest.json.tmp'
