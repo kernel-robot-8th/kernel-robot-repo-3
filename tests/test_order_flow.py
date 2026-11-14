@@ -76,15 +76,15 @@ class OrderFlowTests(unittest.TestCase):
         task = self.wait(self.order())
         self.assertEqual(task["status"], "SUCCEEDED", task["error"])
         plan = self.step(task, "PLAN_ARM_SEQUENCE")["result"]["sequence"]
-        # Default mock stock: left shelf carrot 3 / apple 1, right shelf apple 3 / carrot 1. The carrot goes where
-        # more carrots are left (left arm); the first apple goes to the arm with fewer units (right), the second to
-        # the shelf with more apples left (right again), which keeps the left shelf's only apple. The busier arm
-        # goes first and finishes before the other starts.
+        # Default mock stock: left shelf apple 4 / carrot 3 / tissue 1, right shelf carrot 1 / tissue 2. The apple
+        # policy was recorded on the left arm, so both apples are the left arm's (its only option); the carrot then
+        # goes to the arm with fewer units (right). The busier arm goes first and finishes before the other starts.
         self.assertEqual([(unit["arm_id"], unit["object_class"]) for unit in plan],
-                         [("arm-02", "apple"), ("arm-02", "apple"), ("arm-01", "carrot")])
-        self.assertEqual([unit["reason"] for unit in plan], ["맡은 개수 0 vs 1", "남은 재고 2 vs 1", "남은 재고 3 vs 1"])
+                         [("arm-01", "apple"), ("arm-01", "apple"), ("arm-02", "carrot")])
+        self.assertEqual([unit["reason"] for unit in plan],
+                         ["왼쪽 팔 쪽에서만 집을 수 있음", "왼쪽 팔 쪽에서만 집을 수 있음", "맡은 개수 0 vs 2"])
         picks = [step for step in task["steps"] if step["step_type"] == "PICK_ITEM"]
-        self.assertEqual([step["robot_id"] for step in picks], ["arm-02", "arm-02", "arm-01"])
+        self.assertEqual([step["robot_id"] for step in picks], ["arm-01", "arm-01", "arm-02"])
         self.assertEqual(Counter(self.world.loads["10"]), Counter({"carrot": 1, "apple": 2}))
         self.assertEqual([event["payload"]["action"] for event in self.events(task, "PINKY_SIGNAL_SENT")],
                          ["dock_complete", "received"])

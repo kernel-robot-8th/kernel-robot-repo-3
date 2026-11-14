@@ -115,7 +115,8 @@ class OrderDeskTest(unittest.TestCase):
         preview = self.desk.preview(order["id"])
         self.assertEqual(preview["pinky"]["pinky_id"], "10")  # mock batteries: P0 92 %, P1 78 %, P2 64 %
         self.assertEqual(preview["pinky"]["summary"], "P0 · 배터리 90%대 · 오늘 0회")
-        self.assertEqual(preview["arms"]["summary"], "오른쪽 팔 2개 → 왼쪽 팔 1개")
+        # The apple policy is the left arm's, so the two apples go left and the carrot right.
+        self.assertEqual(preview["arms"]["summary"], "왼쪽 팔 2개 → 오른쪽 팔 1개")
         self.assertIsNone(self.store.get_task(order["id"])["pinky_id"])
 
     def use_two_zones(self) -> None:

@@ -28,7 +28,8 @@ from typing import Any, Callable
 from control_station.pinky_fleet import PinkyFleetError
 
 FAULT_KINDS = frozenset({"STOCK_SHORT", "PICK_FAILED", "ITEM_LOST", "EXTRA_ON_PINKY", "PINKY_MISALIGNED", "FLEET_REJECT"})
-DEFAULT_STOCK = "shelf_a:carrot=3,tissue=2,apple=1;shelf_b:apple=3,carrot=1,tissue=1"
+# The apple policy was recorded on the left arm (arm-01), so apples stand on the left shelf only.
+DEFAULT_STOCK = "shelf_a:apple=4,carrot=3,tissue=1;shelf_b:carrot=1,tissue=2"
 PINKY_HOMES = {"10": "주차장 P0", "11": "주차장 P1", "12": "주차장 P2"}
 # Simulated battery levels, different on purpose so the Pinky assignment has something to rank.
 MOCK_BATTERY = {"10": 92.0, "11": 78.0, "12": 64.0}
