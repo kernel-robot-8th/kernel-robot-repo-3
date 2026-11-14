@@ -11,6 +11,7 @@ Without a dashboard URL the gateway shows the mock world's Pinkys, marked simula
 
 from __future__ import annotations
 
+import math
 import threading
 from collections import deque
 from collections.abc import Callable
@@ -43,12 +44,45 @@ def _number(value: object) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
+def _fmt(value: object, digits: int = 2) -> str | None:
+    number = _number(value)
+    return None if number is None else f"{number:.{digits}f}"
+
+
+def sensor_details(topics: dict[str, Any]) -> list[dict[str, Any]]:
+    """Each live feed with its age and its reading in words (the dashboard's topic values, as of 2026-11-14)."""
+    def value(key: str) -> dict[str, Any]:
+        return (topics.get(key) or {}).get("value") or {}
+
+    scan, sonar, ir, odom = value("scan"), value("ultrasonic"), value("ir"), value("odom")
+    pose, imu, battery, control = value("tf_pose"), value("imu"), value("battery_voltage"), value("line_control")
+    yaw = _number(pose.get("yaw_rad"))
+    accel = (imu.get("linear_acceleration") or {}).get("z")
+    texts = {
+        "scan": f"앞 가장 가까운 물체 {_fmt(scan.get('front_min_m'))} m · {scan.get('samples')}점" if scan else None,
+        "ultrasonic": f"{_fmt(sonar.get('range_m'))} m (측정 {_fmt(sonar.get('min_m'))}~{_fmt(sonar.get('max_m'), 1)} m)" if sonar else None,
+        "ir": " · ".join(str(channel) for channel in ir.get("channels", [])) or None,
+        "odom": f"{_fmt(odom.get('linear_mps'))} m/s · 회전 {_fmt(odom.get('angular_rps'))} rad/s" if odom else None,
+        "map": "지도 받음" if (topics.get("map") or {}).get("fresh") else None,
+        "tf_pose": (f"x {_fmt(pose.get('x_m'))} · y {_fmt(pose.get('y_m'))} m · {math.degrees(yaw):.0f}°"
+                    if pose and yaw is not None else None),
+        "line_control": control.get("line_algorithm"),
+        "safety_status": SAFETY_LABELS.get(value("safety_status").get("state"), value("safety_status").get("state")),
+        "imu": f"수직 가속 {_fmt(accel)} m/s²" if accel is not None else None,
+        "battery_voltage": f"{_fmt(battery.get('voltage_v'))} V" if battery else None,
+    }
+    labels = {**SENSOR_LABELS, "imu": "IMU", "battery_voltage": "배터리 전압"}
+    return [{"key": key, "label": labels[key], "fresh": bool((topics.get(key) or {}).get("fresh")),
+             "age_s": _number((topics.get(key) or {}).get("age_s")), "text": texts[key]} for key in texts]
+
+
 def shape_pinky(pinky_id: str, robot: dict[str, Any], status: dict[str, Any]) -> dict[str, Any]:
     """One Pinky card: the dashboard's record (`robot`) plus the client's reading of it (`status`)."""
     topics = robot.get("topics") or {}
     route = robot.get("route") or {}
     safety = (topics.get("safety_status") or {}).get("value") or {}
     sensors = {key: bool((topics.get(key) or {}).get("fresh")) for key in SENSOR_LABELS}
+    pose = (topics.get("tf_pose") or {}).get("value") or {}
     labels = route.get("labels") if isinstance(route.get("labels"), list) else []
     connected = bool(status.get("connected"))
     return {
@@ -76,6 +110,8 @@ def shape_pinky(pinky_id: str, robot: dict[str, Any], status: dict[str, Any]) ->
         "safety_state": safety.get("state"),
         "safety_label": SAFETY_LABELS.get(safety.get("state"), safety.get("state")),
         "stop_pending": bool(route.get("stop_pending")),
+        "sensor_details": sensor_details(topics),
+        "pose": {key: _number(pose.get(key)) for key in ("x_m", "y_m", "yaw_rad")},  # map frame, for the 3D view
     }
 
 
@@ -89,7 +125,8 @@ def shape_mock_pinky(pinky_id: str, status: dict[str, Any]) -> dict[str, Any]:
         "phase": status.get("phase"), "phase_label": PHASE_LABELS.get(status.get("phase"), status.get("phase")),
         "message": status.get("message"), "route": {"status": None, "current_label": status.get("location"),
                                                     "completed": None, "total": None},
-        "safety_state": None, "safety_label": None, "stop_pending": False,
+        "safety_state": None, "safety_label": None, "stop_pending": False, "sensor_details": [],
+        "pose": {"x_m": None, "y_m": None, "yaw_rad": None},
     }
 
 

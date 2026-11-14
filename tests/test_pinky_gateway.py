@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 
 from control_station.mock_world import MockWorld
-from control_station.pinky_gateway import PinkyGateway, shape_pinky
+from control_station.pinky_gateway import PinkyGateway, sensor_details, shape_pinky
 from test_api_routes import ApiTestCase
 
 FRESH = {"fresh": True, "value": {}}
@@ -58,6 +58,25 @@ class ShapeTest(unittest.TestCase):
         self.assertEqual(card["phase_label"], "연결 끊김")
         self.assertEqual(len(card["missing"]), 8)
         self.assertIn("안전 감시기", card["missing"])
+
+
+class SensorDetailTest(unittest.TestCase):
+    def test_readings_in_words_from_the_dashboards_topic_values(self) -> None:
+        topics = {
+            "scan": {"fresh": True, "age_s": 0.1, "value": {"samples": 720, "front_min_m": 0.481}},
+            "ultrasonic": {"fresh": True, "value": {"range_m": 0.9697, "min_m": 0.02, "max_m": 3.0}},
+            "ir": {"fresh": True, "value": {"channels": [2784, 2355, 3351]}},
+            "odom": {"fresh": True, "value": {"linear_mps": 0.0, "angular_rps": 0.0}},
+            "tf_pose": {"fresh": True, "value": {"x_m": 0.4206, "y_m": 0.3977, "yaw_rad": 3.1268, "frame_id": "map"}},
+        }
+        texts = {d["key"]: d["text"] for d in sensor_details(topics)}
+        self.assertEqual(texts["scan"], "앞 가장 가까운 물체 0.48 m · 720점")
+        self.assertEqual(texts["ultrasonic"], "0.97 m (측정 0.02~3.0 m)")
+        self.assertEqual(texts["ir"], "2784 · 2355 · 3351")
+        self.assertEqual(texts["tf_pose"], "x 0.42 · y 0.40 m · 179°")
+        self.assertIsNone(texts["map"])  # no map topic: nothing to say
+        card = shape_pinky("10", {"topics": topics}, {"connected": True})
+        self.assertAlmostEqual(card["pose"]["x_m"], 0.4206)
 
 
 class CommandTest(unittest.TestCase):
