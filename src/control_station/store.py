@@ -1013,20 +1013,43 @@ class TaskStore:
             return self._present_with_history(task)
 
     def pinky_usage(self, since: str) -> dict[str, dict[str, object]]:
-        """Per Pinky: orders it started since `since` (ISO time) and when its last order ended."""
+        """Per Pinky: trips it started since `since` (ISO time) and when its last trip ended.
+
+        A trip is one PINKY_ASSIGNED event: a big order sends one per shipment, possibly with different Pinkys. A
+        shipment's trip ends when the next shipment takes its Pinky, the last one when the order ends. Tasks made
+        before these events (a Pinky given at creation) count once by their own start and end."""
         usage: dict[str, dict[str, object]] = {pinky: {"trips": 0, "last_finished_at": None} for pinky in PINKY_IDS}
-        with self._sessions() as session:
-            rows = session.execute(
-                select(TaskRecord.pinky_id, TaskRecord.started_at, TaskRecord.finished_at).where(
-                    TaskRecord.pinky_id.is_not(None), TaskRecord.order_items.is_not(None)
-                )
-            ).all()
-        for pinky_id, started_at, finished_at in rows:
+
+        def count(pinky_id: str, started_at: str | None, ended_at: str | None) -> None:
             entry = usage.setdefault(pinky_id, {"trips": 0, "last_finished_at": None})
             if started_at is not None and started_at >= since:
                 entry["trips"] = int(entry["trips"]) + 1  # type: ignore[call-overload]
-            if finished_at is not None and (entry["last_finished_at"] is None or finished_at > entry["last_finished_at"]):
-                entry["last_finished_at"] = finished_at
+            if ended_at is not None and (entry["last_finished_at"] is None or ended_at > entry["last_finished_at"]):
+                entry["last_finished_at"] = ended_at
+
+        with self._sessions() as session:
+            tasks = session.execute(
+                select(TaskRecord.id, TaskRecord.pinky_id, TaskRecord.started_at, TaskRecord.finished_at).where(
+                    TaskRecord.pinky_id.is_not(None), TaskRecord.order_items.is_not(None)
+                )
+            ).all()
+            assigned: dict[str, list[tuple[str, str]]] = {}
+            for task_id, payload, occurred_at in session.execute(
+                select(TaskEventRecord.task_id, TaskEventRecord.payload, TaskEventRecord.occurred_at)
+                .where(TaskEventRecord.event_type == "PINKY_ASSIGNED")
+                .order_by(TaskEventRecord.occurred_at, TaskEventRecord.id)
+            ).all():
+                pinky_id = (payload or {}).get("pinky_id")
+                if pinky_id:
+                    assigned.setdefault(task_id, []).append((str(pinky_id), occurred_at))
+        for task_id, pinky_id, started_at, finished_at in tasks:
+            trips = assigned.get(task_id)
+            if not trips:
+                count(pinky_id, started_at, finished_at)
+                continue
+            for index, (trip_pinky, trip_started) in enumerate(trips):
+                ended = trips[index + 1][1] if index + 1 < len(trips) else finished_at
+                count(trip_pinky, trip_started, ended)
         return usage
 
     def pick_success_stats(self, *, simulated: bool) -> dict[tuple[str, str], tuple[int, int]]:
