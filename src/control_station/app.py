@@ -16,7 +16,8 @@ from control_station.api import routes
 from control_station.api.common import is_cross_origin, is_retryable, read_json_object
 from control_station.act_policies import ActPolicyError, load_act_policies
 from control_station.arm_commands import ARM_ROBOT_IDS, ArmCommandStore
-from control_station.arm_pick import ArmQueuePick
+from control_station.arm_action_ros import RosPickTransport
+from control_station.arm_pick import ArmActionPick, ArmQueuePick
 from control_station.arms import ArmConfigError, load_arms
 from control_station.arm_supervisor import ArmTeleopSupervisor
 from control_station.policy_run_supervisor import PolicyRunSupervisor
@@ -317,16 +318,30 @@ def main() -> None:
         pinky_load = load_counter
         print(f"주문 흐름의 개수 세기: 카메라 YOLO (핑키 쟁반 {load_counter.camera_id} {load_counter.region_or_none()})",
               flush=True)
-    # Real picks in orders (CONTROL_STATION_ORDER_REAL_ARM=1): PICK_WITH_POLICY for the planned arm through the arm
-    # command queue (one worker per arm). Each transfer is then judged by camera counts; with mock counts the
-    # order stops before the arm moves (TRANSFER_EVIDENCE_REQUIRED).
+    # Real picks in orders (CONTROL_STATION_ORDER_REAL_ARM=1): PICK_WITH_POLICY for the planned arm, through the
+    # arm command queue to one HTTP worker per arm, or with CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2 as a goal to
+    # one PickObject action server per arm (/arm_01/pick_object; domain CONTROL_STATION_ARM_ACTION_DOMAIN, else
+    # ROS_DOMAIN_ID). Each transfer is then judged by camera counts; with mock counts the order stops before the
+    # arm moves (TRANSFER_EVIDENCE_REQUIRED).
     order_real_arm = os.environ.get("CONTROL_STATION_ORDER_REAL_ARM", "").strip() == "1"
+    arm_transport = os.environ.get("CONTROL_STATION_ORDER_ARM_TRANSPORT", "http").strip().lower() or "http"
+    if arm_transport not in {"http", "ros2"}:
+        raise RuntimeError("CONTROL_STATION_ORDER_ARM_TRANSPORT는 http 또는 ros2여야 합니다.")
     order_pick: Any = world.pick
     pick_hooks: dict[str, Any] = {}
-    if order_real_arm:
+    if order_real_arm and arm_transport == "ros2":
+        raw_arm_domain = os.environ.get("CONTROL_STATION_ARM_ACTION_DOMAIN") or os.environ.get("ROS_DOMAIN_ID") or "0"
+        server.arm_action_transport = RosPickTransport(int(raw_arm_domain), sorted(ARM_ROBOT_IDS))
+        order_pick = ArmActionPick(server.arm_commands, server.arm_action_transport)
+        print(f"주문 흐름의 집기: 실제 팔, ROS 2 액션 /arm_0N/pick_object (domain {raw_arm_domain})", flush=True)
+    elif order_real_arm:
         order_pick = ArmQueuePick(server.arm_commands)
+        print("주문 흐름의 집기: 실제 팔 (PICK_WITH_POLICY, 팔마다 HTTP 워커 필요)", flush=True)
+    elif arm_transport == "ros2":
+        print("CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2는 CONTROL_STATION_ORDER_REAL_ARM=1일 때만 씁니다 (지금은 모의 집기)",
+              flush=True)
+    if order_real_arm:
         pick_hooks = {"pick_is_real": True, "pick_settle": order_pick.settle}
-        print("주문 흐름의 집기: 실제 팔 (PICK_WITH_POLICY, 팔마다 워커 필요)", flush=True)
     server.order_devices = OrderDevices(
         shelf_stock, pinky_load, fleet_status, fleet_confirm, order_parking, order_pick, dispatch, mission_complete,
         **pick_hooks,

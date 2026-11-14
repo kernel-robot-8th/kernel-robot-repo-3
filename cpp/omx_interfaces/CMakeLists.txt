@@ -7,6 +7,7 @@ find_package(builtin_interfaces REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   action/MoveToSlot.action
+  action/PickObject.action
   DEPENDENCIES builtin_interfaces)
 
 ament_export_dependencies(rosidl_default_runtime)

@@ -279,6 +279,50 @@ ros2 action send_goal --feedback /omx/move_to_slot omx_interfaces/action/MoveToS
 
 2026-11-04 확인 (`--fake-follower`만, 팔 미연결): `slot_a_2_1` 이동 `SUCCEEDED`(`simulated: true`)를 확인했습니다. 기록 안 된 칸, 만료, 칸 정의 다름, 유효 시각 없음, 다른 좌표계(이 확인은 2026-11-14에 목표의 좌표 필드와 함께 지움)는 `REJECTED`였고 진행 메시지 없이 끝났습니다. 이동 중 두 번째 목표는 ROS가 거부했고, 이동 중 취소는 그 자리에 멈춘 뒤 `CANCELED`였습니다. 같은 날 HTTP 워커도 공용 모듈로 바꾼 뒤 `--fake-follower`로 임시 관제에 붙여 `POSE_NOT_RECORDED` 거부와 `SUCCEEDED`를 다시 확인했습니다. **실물 팔과 관제 action 클라이언트는 아직 시험하지 않았습니다.**
 
+## ROS 2 집기 액션 (`/arm_0N/pick_object`)
+
+주문의 집기(`PICK_WITH_POLICY`)를 HTTP 워커 대신 ROS 2 action으로 보낼 수 있습니다. 관제를 `CONTROL_STATION_ORDER_REAL_ARM=1`, `CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2`로 켜면 관제가 action 클라이언트([arm_action_ros.py](../../src/control_station/arm_action_ros.py))가 되고, 팔마다 [omx_pick_action_server.py](../../scripts/omx_pick_action_server.py)가 서버입니다. 메시지 정의는 [PickObject.action](../../cpp/omx_interfaces/action/PickObject.action)입니다.
+
+**왜 action인가.** 집기 한 번은 수십 초 걸리고, 그동안 진행을 보고 싶고(어디까지 왔나), 중간에 멈출 수 있어야 하며(취소), 끝나면 성공·실패·모름을 받아야 합니다. ROS 2 action은 이 세 가지(feedback·cancel·result)를 표준으로 줍니다. 서비스는 끝날 때까지 기다리기만 하고, 토픽은 한 목표의 결과를 짝지어 주지 않습니다.
+
+- **서버:** 팔마다 하나(`/arm_01/pick_object`, `/arm_02/pick_object`). 검사·정책 실행·home 정렬은 HTTP 워커와 같은 [omx_policy_pick.py](../../scripts/omx_policy_pick.py)라서 규칙이 같습니다. 녹화한 팔·보드가 아니면 `POLICY_WRONG_ARM`, 정책 파일 SHA·모델이 다르면 `POLICY_REGISTRY_MISMATCH`·`POLICY_UNKNOWN`, 쉬는 자세가 아니면 `NOT_AT_REST`입니다. 취소하면 그 자리에서 멈추고 토크를 유지합니다.
+- **목표:** `command_id`, `arm_id`, `object_class`, `policy_id`, `policy_model`, `policy_registry_version`, `valid_until`. 좌표는 없습니다.
+- **진행:** `CHECKING` → `STARTING_POLICY`(여기부터 팔이 움직일 수 있음) → `RUNNING_POLICY` → `RETURNING_HOME`, 경과 시간, `simulated`.
+- **결과:** `HOME_REACHED_PLACE_NOT_VERIFIED`(home 복귀, 놓였는지는 모름 = 정상 끝), `FAILED`, `RESULT_UNKNOWN`, `CANCELED`, `REJECTED`(검사 거부, 움직이지 않음). 그 밖에 `reason_code`, `message`, `pose_reached`, `simulated`, `run_s`. ROS 상태는 정상 끝만 succeeded, 취소는 canceled, 나머지는 aborted입니다.
+- 한 번에 목표 하나. 실행 중에 온 목표는 ROS 단계에서 받지 않습니다.
+
+**팔 명령 기록과의 관계.** 전송 방식이 달라도 기록은 하나입니다. 관제는 먼저 HTTP와 같은 팔 명령을 만들고, 자기 이름(`ros2-action.arm-0N`)으로 직접 가져간 뒤(`DISPATCHED`) 목표를 보냅니다. action의 진행과 결과는 같은 기록에 워커 이벤트로 남깁니다.
+
+| action | 팔 명령 기록 |
+|---|---|
+| 서버가 목표를 안 받음 / 서버 없음 | `REJECTED` (`ACTION_GOAL_REJECTED` / `ACTION_SERVER_UNAVAILABLE`) |
+| `STARTING_POLICY` | `ACCEPTED` |
+| `RUNNING_POLICY` | `PROGRESS` (`APPROACH_TARGET`) |
+| `HOME_REACHED_PLACE_NOT_VERIFIED` | `RESULT_UNKNOWN` `PLACE_NOT_VERIFIED`, `pose_reached` true |
+| `FAILED` / `RESULT_UNKNOWN` / `CANCELED` / `REJECTED` | 같은 이름의 이벤트 |
+
+그래서 화면의 명령 기록, 취소 버튼, `UNKNOWN`이면 확인 전까지 다음 명령을 막는 규칙, 카메라로 옮김을 확인하면 닫는 규칙이 HTTP와 똑같이 통합니다. 화면에서 취소하면 관제가 goal을 취소합니다. HTTP 워커가 먼저 가져간 명령은 action으로 보내지 않고 그 워커의 결과만 따라갑니다(두 번 실행 없음). 그래도 한 팔에는 HTTP 워커와 action 서버 중 하나만 켜는 것이 맞습니다.
+
+HTTP에서는 워커가 `ACCEPTED`를 보내 관제가 200으로 답해야 움직이지만, action에서는 서버가 검사를 마치면 스스로 시작합니다. 그 차이를 메우려고 목표의 `valid_until`을 기록의 ACK 기한(`CONTROL_STATION_ARM_ACK_TIMEOUT_S`, 기본 10초, 1초 여유) 안으로 잘라 보냅니다. 서버는 정책을 시작하기 직전에 다시 확인하므로, 이미 만료된 기록으로 팔이 움직이지 않습니다. 그래도 `STARTING_POLICY`를 받았을 때 기록이 취소·만료돼 있으면 관제가 곧바로 취소를 보냅니다.
+
+```bash
+cd cpp && colcon build --packages-select omx_interfaces && cd ..   # PickObject 추가 뒤 한 번
+source /opt/ros/jazzy/setup.bash && source cpp/install/setup.bash
+export ROS_DOMAIN_ID=87 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+
+# 팔마다 서버 하나 (팔 포트·카메라는 CONTROL_STATION_ARM0N_* 설정에서)
+sg dialout -c "~/lerobot-venv/bin/python scripts/omx_pick_action_server.py --robot-id arm-01"   # 실물 팔
+~/lerobot-venv/bin/python scripts/omx_pick_action_server.py --robot-id arm-01 --fake-follower    # 팔 없이 (모의)
+
+# 관제 (같은 source/export 뒤)
+CONTROL_STATION_ORDER_REAL_ARM=1 CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2 \
+CONTROL_STATION_ORDER_COUNTS=camera ./run-control-station.sh
+```
+
+`--fake-follower`(팔 없음)와 `--dry-run`(실물 팔을 읽기만)은 정책·카메라·정책 서버 없이 `--simulated-run-s`(기본 3초) 동안 기다린 뒤 home 정렬만 하고, 결과마다 `simulated: true`를 붙입니다.
+
+2026-11-14 확인 (`--fake-follower`만, 팔·카메라 미연결, domain 142 localhost): 관제 `ArmActionPick` → `/arm_01/pick_object`로 사과 집기 → 진행 `CHECKING`·`STARTING_POLICY`·`RUNNING_POLICY`·`RETURNING_HOME` → `HOME_REACHED_PLACE_NOT_VERIFIED`(모의). 팔 명령 기록은 `CREATED`·`DISPATCHED`·`ACCEPTED`·`PROGRESS`·`RESULT_UNKNOWN`이고, 카메라 확인으로 닫은 뒤 다음 명령을 막지 않았습니다. 서버가 없는 팔은 `ACTION_SERVER_UNAVAILABLE`, 정책 파일 SHA가 다르면 `REJECTED`(`POLICY_REGISTRY_MISMATCH`), 실행 중 주문 취소는 1.7초 뒤 `CANCELED`였습니다. **실물 팔·실제 정책 실행은 아직 시험하지 않았습니다.**
+
 ## 실물 워커를 만들 때 (OMX 팀)
 
 [mock_omx_worker.py](../../scripts/mock_omx_worker.py)가 틀입니다. 표준 라이브러리만 쓰므로 LeRobot 가상환경에서 그대로 실행됩니다.

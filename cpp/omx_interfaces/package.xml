@@ -2,7 +2,7 @@
 <package format="3">
   <name>omx_interfaces</name>
   <version>0.1.0</version>
-  <description>MoveToSlot action: the control station asks the OMX worker to bring the follower to the joint pose taught for a shelf slot.</description>
+  <description>OMX actions: MoveToSlot (bring the follower to the joint pose taught for a shelf slot) and PickObject (pick one object with the ACT policy recorded on this arm and put it on the Pinky).</description>
   <maintainer email="maintainer@example.com">Kernel Robotics</maintainer>
   <license>Apache-2.0</license>
 

@@ -27,7 +27,7 @@
 | `parking_vision` | ROS 의존성 없는 C++ 라이브러리 (ament_cmake). 검출과 평면 투영 판정·고정 마커 시야 확인(`parking_check`), 요청 이후 프레임 수집(`ParkingObservationCollector`), 화면 표시용 상태 기계(`ParkingTracker`), 주차 위치 파일 재로딩(`SpotReloader`), 등록(`build_registration`), `spot_id` 규칙. 스레드, 시계, 카메라 feed는 호출하는 쪽이 맡습니다. 등록·판정 CLI `pinky_parking`(`ros2 run parking_vision pinky_parking`)도 이 패키지에 있습니다. |
 | `parking_vision_interfaces` | `ParkingState.msg`, `CheckParking.srv`. 필드는 관제 JSON 계약(`/live`, `/check`의 `judgment_fields`·`image_overlay`)과 1:1입니다. JSON에서 `null`인 값은 `has_*` 플래그로 표시합니다. |
 | `parking_vision_ros` | `rclcpp_components` 컴포넌트 두 개: 판정 `parking_vision_ros::ParkingVisionNode`(단독 실행 파일 `parking_vision_node`)와 천장 카메라 캡처 `parking_vision_ros::CeilingCameraNode`(단독 실행 파일 `ceiling_camera_node`). launch는 판정 노드만 띄우는 `parking_vision.launch.py`와 캡처·판정을 한 컨테이너에 올리는 `ceiling_parking.launch.py`입니다. |
-| `omx_interfaces` | `MoveToSlot.action`. OMX 워커 `scripts/omx_ros_worker.py`가 `/omx/move_to_slot` action 서버로 씁니다. 관제는 이 action을 쓰지 않고 HTTP 명령 큐를 씁니다([OMX 명령 HTTP 인터페이스](../docs/implementation/arm-command-api.md#ros-2-action-워커-omxmove_to_slot)). |
+| `omx_interfaces` | `MoveToSlot.action`: OMX 워커 `scripts/omx_ros_worker.py`가 `/omx/move_to_slot` action 서버로 씁니다(관제는 쓰지 않음). `PickObject.action`: 팔마다 `scripts/omx_pick_action_server.py`가 `/arm_0N/pick_object` 서버로 쓰고, 관제는 `CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2`일 때 주문의 집기를 이 action으로 보냅니다([설명](../docs/implementation/arm-command-api.md#ros-2-집기-액션-arm_0npick_object)). |
 
 ### 노드 인터페이스 (노드 이름 `pinky_parking`)
 
