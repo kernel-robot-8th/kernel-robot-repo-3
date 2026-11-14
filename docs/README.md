@@ -7,14 +7,14 @@
 - [시스템 명세](spec/system-spec.md): 범위, 작업 규칙, 상태 및 카메라 요구사항
 - [데이터·인터페이스 계약 초안](spec/interface-contracts.md): 주문·작업·로봇 상태, 메시지 경계와 미확정 항목
 - [목표 데이터 흐름](spec/data-flow.md): 완성 목표의 컴포넌트와 메시지 흐름
-- [원본 제어 흐름 요구사항](../robot-control-flow.md): 사용자가 관리하는 상세 요구사항
+- [원본 제어 흐름 요구사항](../robot-control-flow.md): 초기 요구사항 기록(이동 로봇 1대·팔 1대·좌표 전제)
 
 ## 현재 코드
 
 - [구현 현황](implementation/current-state.md): API, 코드 위치, 구현된 기능과 미구현 기능
 - [주문 흐름](implementation/order-flow.md): 주문 → 선반 확인 → 팔 배정 → 핑키 도착 → 적재 → 확인 → 핑키 완료 신호, 모의/실제 경계, 핑키 관제 HTTP, 카메라 개수 세기, 주문 진행 화면
 - 제한 규칙 기반 자연어 해석은 [실행 방법](implementation/runbook.md)의 작업 이력 절차를 참고하세요. 결과는 task 등록 전 검토가 필요한 초안입니다.
-- [ROS 2·관제 인터페이스 조사](implementation/ros2-inventory.md): 현재 workspace와 관제 경계, 정적 토픽/action 목록 및 확인되지 않은 runtime 정보
+- [ROS 2 인터페이스 목록](implementation/ros2-inventory.md): `cpp/` 패키지, 토픽·서비스·액션, 관제가 ROS에 붙는 방식
 - [정면 카메라 선반 위치 보정](implementation/shelf-pose-calibration.md): 선반 모서리를 찍어 solvePnP로 정면 카메라 위치를 구하고 6칸 영역을 화면에 투영하는 도구
 - [OMX 명령 HTTP 인터페이스](implementation/arm-command-api.md): 관제가 OMX 명령(칸 자세, 원상복귀, 학습 정책)을 넘기고 OMX 워커가 long-poll로 받아 결과를 보고하는 계약, 모의 워커 실행 방법
 - [카메라 내부 보정](implementation/camera-intrinsic-calibration.md): 체커보드로 카메라 내부 파라미터를 구하는 오프라인 도구 (천장 카메라 주차 판정과 정면 카메라 선반 위치 보정에 사용)

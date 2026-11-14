@@ -1,5 +1,7 @@
 # Robot Control & Monitoring System
 
+> 초기 요구사항 기록입니다(이동 로봇 1대, 로봇팔 1대, 좌표 기반 팔 제어를 전제로 작성). 지금 설계와 구현은 [구현 현황](docs/implementation/current-state.md)과 [주문 흐름](docs/implementation/order-flow.md)을 기준으로 합니다.
+
 ## 1. 프로젝트 개요
 
 ### 1.1 목적
