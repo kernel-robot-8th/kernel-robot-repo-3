@@ -72,7 +72,11 @@
     const chips = [];
     const trips = plan.fleet?.trips || [];
     if (order.pinky_id) chips.push(`<span class="plan-chip">${pinkyBadge(order.pinky_id)} 주문할 때 정한 핑키</span>`);
-    else if (trips.length > 1) chips.push(chip(`핑키 ${trips.length}대에 나눠 싣기`, 'warn'));
+    else if (trips.length > 1) {
+      // Shipments run one after another; each later one picks its Pinky when it starts (the trips show the guess).
+      chips.push(chip(`운송 ${trips.length}번으로 나눠 차례로`, 'strong'));
+      if (trips[0].pinky_id) chips.push(`<span class="plan-chip">${pinkyBadge(trips[0].pinky_id)} 먼저 출발</span>`);
+    }
     else if (plan.pinky?.pinky_id) chips.push(`<span class="plan-chip strong">${pinkyBadge(plan.pinky.pinky_id)} 배정</span>`);
     else chips.push(chip('배정할 핑키 없음', 'bad'));
     if (plan.zone) chips.push(chip(plan.zone.zone_id ? plan.zone.summary.split(' · ')[0] : '수령 구역 모두 사용 중', plan.zone.zone_id ? '' : 'bad'));
@@ -80,7 +84,6 @@
     if (trips.length === 1 && first.arms && !first.arms.error) chips.push(chip(first.arms.summary));
     const total = trips.reduce((sum, trip) => sum + (trip.schedule?.total_s || 0), 0);
     if (total) chips.push(chip(`적재 약 ${seconds(total)}`));
-    if (trips.length > 1) chips.push(chip('지금은 한 대씩만 실행돼요 · 시작하면 거절', 'warn'));
     return `<p class="plan-summary">${chips.join('')}</p>`;
   }
 
@@ -153,7 +156,7 @@
     const capacity = fleet.capacity || 4;
     return `<div class="plan-trips">${fleet.trips.map((trip, index) => `
         <div class="plan-trip">
-          ${fleet.trips.length > 1 ? `<span class="trip-index">배송 ${index + 1}</span>` : ''}
+          ${fleet.trips.length > 1 ? `<span class="trip-index">운송 ${index + 1}</span>` : ''}
           ${trayHtml(trip, capacity)}
           ${timelineHtml(trip)}
         </div>`).join('')}</div>`;
@@ -170,7 +173,8 @@
     const verdicts = plan.pinky?.verdicts || [];
     if (!verdicts.length) return '';
     const trips = plan.fleet?.trips || [];
-    const tripOf = new Map(trips.map((trip, index) => [trip.pinky_id, index + 1]));
+    const tripOf = new Map();  // a Pinky may carry more than one shipment (they run one after another)
+    trips.forEach((trip, index) => { if (trip.pinky_id) tripOf.set(trip.pinky_id, [...(tripOf.get(trip.pinky_id) || []), index + 1]); });
     const decider = pinkyDecider(verdicts);
     const head = (key, label) => `<th class="${decider === key ? 'decider' : ''}">${esc(label)}${decider === key ? '<em>결정</em>' : ''}</th>`;
     const rows = [...verdicts].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99)).map((verdict) => {
@@ -178,7 +182,7 @@
       const battery = batteryOf(verdict);
       const chosen = trips.length > 1 ? tripOf.has(verdict.pinky_id) : verdict.pinky_id === plan.pinky.pinky_id;
       const result = !verdict.eligible ? `<span class="bad">${esc(verdict.reason)}</span>`
-        : chosen ? `<b class="good">${trips.length > 1 ? `배송 ${tripOf.get(verdict.pinky_id)}` : '배정'}</b> · ${verdict.rank}순위`
+        : chosen ? `<b class="good">${trips.length > 1 ? `운송 ${tripOf.get(verdict.pinky_id).join('·')}` : '배정'}</b> · ${verdict.rank}순위`
           : `${verdict.rank}순위`;
       return `<tr class="${chosen ? 'chosen' : ''}${verdict.eligible ? '' : ' excluded'}">
           <td>${pinkyBadge(verdict.pinky_id)}</td><td>${result}</td>
@@ -234,7 +238,7 @@
             <td><b class="good">${esc(pick.arm_label)}</b></td>
             <td>${chip(RULE_WORDS[pick.rule] || pick.rule || '규칙', 'rule')}<small>${esc(pick.reason)}</small></td>${cells}</tr>`;
       }).join('');
-      return `${trips.length > 1 ? `<h6>배송 ${index + 1}${trip.pinky_name ? ` · ${esc(trip.pinky_name)}` : ''}</h6>` : ''}
+      return `${trips.length > 1 ? `<h6>운송 ${index + 1}${trip.pinky_name ? ` · ${esc(trip.pinky_name)}` : ''}</h6>` : ''}
         <div class="plan-table-wrap"><table class="plan-table arms"><thead><tr><th>순서</th><th>물건</th><th>고른 팔</th><th>정한 이유</th>
           ${arms.map((arm) => `<th>${esc(arm.label)}<small>성공률 · 맡은 수 · 재고</small></th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
     }).join('');

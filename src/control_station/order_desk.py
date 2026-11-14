@@ -398,7 +398,8 @@ class OrderDesk:
         title, detail = _CUSTOMER_TEXT[stage]
         title, detail = title.format(zone=zone), detail.format(zone=zone, moved=moved, total=total)
         if between:
-            title, detail = "남은 물건을 가지러 가요", f"{current - 1}/{count}번째 운송을 받았어요 · 다음 운송을 준비해요"
+            done_count = {1: "첫", 2: "두", 3: "세", 4: "네"}.get(current - 1, str(current - 1))
+            title, detail = "남은 물건을 가지러 가요", f"{done_count} 번째 운송을 받았어요 · 남은 물건을 준비해요"
         load = Counter(step["detail"]["object_class"] for step in mine if step["step_type"] == "PICK_ITEM")
         return {
             "order_id": order_id, "status": order["status"], "stage": stage,

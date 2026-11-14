@@ -111,7 +111,8 @@ button:focus-visible { outline: 3px solid rgba(49, 130, 246, .35); outline-offse
 
 /* ---- tracking: one order, from 접수 to 완료 ---- */
 .tracking { margin-top: 28px; padding: 28px 24px 24px; border-radius: 24px; background: var(--card); box-shadow: var(--shadow); }
-.track-eyebrow { min-height: 22px; color: var(--blue); font-size: 15px; font-weight: 600; }
+.track-eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 22px; color: var(--blue); font-size: 15px; font-weight: 600; }
+.track-shipment { padding: 2px 10px; border-radius: 999px; background: var(--blue-soft); color: var(--blue-strong); font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .track-title { margin-top: 6px; font-size: 26px; font-weight: 700; letter-spacing: -.03em; line-height: 1.35; outline: none; }
 .track-detail { margin-top: 6px; color: var(--text-2); font-size: 16px; }
 .tracking[data-stage="arrived"] .track-eyebrow, .tracking[data-stage="done"] .track-eyebrow { color: var(--green-ink); }
