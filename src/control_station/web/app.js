@@ -44,14 +44,14 @@ let parkingCameraId = null;
 let controlMode = 'unknown';
 
 const viewNames = {
-  flow: '주문 진행', pinky: '핑키', inventory: '재고', overview: '현황', manual: '수동 조작', tasks: '작업 이력', api: 'API',
+  dashboard: '종합', flow: '주문 진행', pinky: '핑키', inventory: '재고', overview: '장비·카메라', manual: '수동 조작', tasks: '작업 이력', api: 'API',
 };
 const controlModeLabels = {
   mock: '모의',
   ros2: 'ROS 2 상태 관측',
 };
 
-let activeView = 'flow';
+let activeView = 'dashboard';
 
 // Mock traces (the mock world panel, "모의" tags, mode words) show only with ?dev=1. Every script asks this one
 // function, so the rule stays in one place.
@@ -70,7 +70,7 @@ function devWord(word) {
 // The view lives in the address (#pinky, #inventory…), so a reload or a shared link opens the same view.
 // Other scripts follow the switch through the `viewchange` event instead of listening to the menu.
 function showView(requested) {
-  const selected = viewNames[requested] ? requested : 'flow';
+  const selected = viewNames[requested] ? requested : 'dashboard';
   activeView = selected;
   document.body.dataset.view = selected;
   closeAllOverlays();
