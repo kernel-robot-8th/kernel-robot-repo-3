@@ -1,7 +1,8 @@
 // 핑키 화면: the three Pinkys as the fleet dashboard reports them, a stop per Pinky, a stop for all of them in the
 // header of every view, and the SSH password the dashboard needs before it can reach a Pinky.
 //
-// Loaded after app.js and uses its helpers: escapeHtml, apiErrorMessage, formatClock, showToast, pinkyNames.
+// Loaded after app.js and uses its helpers: escapeHtml, apiErrorMessage, formatClock, showToast, setStat, pinkyBadge,
+// pinkyNames.
 //
 // "Accepted" (202) only means the fleet dashboard took the stop request; whether the Pinky stopped shows up later in
 // its card (safety monitor, stop pending). Stops go out at once without a confirm dialog, and nothing here resends a
@@ -22,6 +23,9 @@ const pinkyPasswordForm = document.querySelector('#pinkyPasswordForm');
 const pinkyPassword = document.querySelector('#pinkyPassword');
 const pinkyPasswordMessage = document.querySelector('#pinkyPasswordMessage');
 const pinkyStopAll = document.querySelector('#pinkyStopAll');
+const pinkyStatConnected = document.querySelector('#pinkyStatConnected');
+const pinkyStatReady = document.querySelector('#pinkyStatReady');
+const pinkyStatStopping = document.querySelector('#pinkyStatStopping');
 
 const pinkyScreen = {
   view: null,              // last GET /api/pinky answer
@@ -70,11 +74,14 @@ const pinkyToastKinds = { ok: 'info', mock: 'warning', unknown: 'error', refused
 
 // ---- 표시 ----
 
-function batteryText(pinky) {
-  const parts = [];
-  if (pinky.battery_percent != null) parts.push(`${Math.round(pinky.battery_percent)}%`);
-  if (pinky.battery_volts != null) parts.push(`${Number(pinky.battery_volts).toFixed(2)} V`);
-  return parts.join(' · ');
+// The battery as one big number; the voltage, when the dashboard reports it, goes in the small label under it.
+function batteryStatHtml(pinky) {
+  const percent = pinky.battery_percent == null ? null : Math.round(pinky.battery_percent);
+  const volts = pinky.battery_volts == null ? '' : ` ${Number(pinky.battery_volts).toFixed(2)} V`;
+  const label = percent == null && !volts ? '배터리 정보 없음' : `배터리${volts}`;
+  const tone = percent != null && percent < 20 ? ' danger' : '';
+  return `<dl class="pinky-battery"><div class="stat${tone}"><dt>${escapeHtml(label)}</dt>
+    <dd>${percent == null ? '–' : `${percent}<small>%</small>`}</dd></div></dl>`;
 }
 
 function routeText(route) {
@@ -82,7 +89,7 @@ function routeText(route) {
   const parts = [pinkyRouteLabels[route.status] || route.status];
   if (route.current_label) parts.push(`웨이포인트 ${route.current_label}`);
   if (route.total) parts.push(`${route.completed ?? 0}/${route.total}`);
-  return parts.join(' · ');
+  return parts.join(', ');
 }
 
 function factHtml(label, value, tone = '') {
@@ -98,7 +105,6 @@ function pinkyCardHtml(pinky) {
   const name = escapeHtml(pinky.name);
   const readiness = !pinky.connected ? 'offline' : pinky.ready ? 'ready' : 'not-ready';
   const sensorTotal = Object.keys(pinky.sensors || {}).length;
-  const battery = batteryText(pinky);
   const message = pinky.message && pinky.message !== pinky.phase_label ? pinky.message : '';
   const lastStop = lastStopOf(pinky.pinky_id);
   const lastStopOutcome = lastStop && commandOutcome(lastStop);
@@ -107,7 +113,7 @@ function pinkyCardHtml(pinky) {
     <article class="pinky-card ${readiness}" data-pinky="${id}" aria-label="핑키 ${name}">
       <header class="pinky-card-head">
         <div>
-          <h3><span class="pinky-badge pinky-${id}">${name}</span>${escapeHtml(pinky.robot_name || '핑키')}</h3>
+          <h3>${pinkyBadge(pinky.pinky_id, { offline: !pinky.connected })}${escapeHtml(pinky.robot_name || '핑키')}</h3>
           <small>${escapeHtml(pinky.ip || (pinky.simulated ? '모의 세계' : 'IP 모름'))}</small>
         </div>
         <div class="pinky-card-tags">
@@ -115,14 +121,16 @@ function pinkyCardHtml(pinky) {
           <span class="ready-chip ${readiness}">${escapeHtml(pinky.readiness_label || (pinky.ready ? '주행 가능' : '주행 불가'))}</span>
         </div>
       </header>
-      <div class="pinky-phase">
-        <strong>${escapeHtml(pinky.connected ? (pinky.phase_label || pinky.phase || '단계 모름') : '단계 알 수 없음')}</strong>
-        ${pinky.stop_pending ? '<span class="ready-chip stopping">정지 적용 중</span>' : ''}
+      <div class="pinky-body">
+        <div class="pinky-phase">
+          <strong>${escapeHtml(pinky.connected ? (pinky.phase_label || pinky.phase || '단계 모름') : '단계 알 수 없음')}</strong>
+          ${pinky.stop_pending ? '<span class="ready-chip stopping">정지 적용 중</span>' : ''}
+        </div>
+        ${batteryStatHtml(pinky)}
       </div>
       <dl class="pinky-facts">
-        ${factHtml('배터리', battery || '배터리 정보 없음', battery ? '' : 'muted')}
         ${pinky.missing.length
-          ? factHtml('센서', `${pinky.missing.length}/${sensorTotal} 안 들어옴 · ${pinky.missing.join(', ')}`, 'bad')
+          ? factHtml('센서', `${pinky.missing.length}/${sensorTotal} 안 들어옴: ${pinky.missing.join(', ')}`, 'bad')
           : factHtml('센서', '센서 모두 수신', 'good')}
         ${factHtml('경로', routeText(pinky.route))}
         ${factHtml('안전 감시', pinky.safety_label || '정보 없음', pinky.safety_label ? '' : 'muted')}
@@ -143,31 +151,41 @@ function renderPinkyLink() {
   let detail;
   if (pinkyScreen.loadError) {
     state = 'error';
-    title = '핑키 상태를 읽지 못함';
-    detail = `${pinkyScreen.loadError}${view ? ` · 아래는 ${formatClock(view.checked_at)}에 받은 상태` : ''}`;
+    title = '핑키 상태를 읽지 못했어요';
+    detail = `${pinkyScreen.loadError}${view ? `. 아래는 ${formatClock(view.checked_at)}에 받은 상태예요` : ''}`;
   } else if (!view) {
     return;
   } else {
-    const connected = view.pinkies.filter((pinky) => pinky.connected).length;
-    const ready = view.pinkies.filter((pinky) => pinky.connected && pinky.ready).length;
-    const summary = `연결 ${connected}/${view.pinkies.length}대 · 주행 가능 ${ready}대 · 확인 ${formatClock(view.checked_at)}`;
+    const checked = `${formatClock(view.checked_at)}에 확인했어요`;
     if (view.source === 'mock_world') {
       state = 'mock';
-      title = '모의 핑키';
-      detail = `핑키 관제 주소가 없어 모의 세계의 핑키를 보여 주며, 명령은 보내지 않습니다 · ${summary}`;
+      title = '모의 핑키를 보여 주고 있어요';
+      detail = `핑키 관제 주소가 없어 모의 세계의 핑키를 보여 주며, 명령은 보내지 않습니다. ${checked}`;
     } else if (view.reachable) {
       state = 'ok';
-      title = '핑키 관제 연결됨';
-      detail = summary;
+      title = '핑키 관제와 연결돼 있어요';
+      detail = checked;
     } else {
       state = 'error';
-      title = '핑키 관제 응답 없음';
-      detail = `${view.error || '응답이 없습니다'} · 확인 ${formatClock(view.checked_at)}`;
+      title = '핑키 관제가 응답하지 않아요';
+      detail = `${view.error || '응답이 없습니다'}. ${checked}`;
     }
   }
   pinkyLink.className = `pinky-link ${state}`;
   pinkyLinkTitle.innerHTML = `${escapeHtml(title)}${view?.source === 'mock_world' ? ' <span class="sim-tag">모의</span>' : ''}`;
   pinkyLinkDetail.textContent = detail;
+  renderPinkyStats();
+}
+
+function renderPinkyStats() {
+  const pinkies = pinkyScreen.view?.pinkies;
+  if (!pinkies) return;
+  const connected = pinkies.filter((pinky) => pinky.connected).length;
+  const ready = pinkies.filter((pinky) => pinky.connected && pinky.ready).length;
+  const stopping = pinkies.filter((pinky) => pinky.stop_pending).length;
+  setStat(pinkyStatConnected, connected, { total: pinkies.length, tone: connected < pinkies.length ? 'attention' : '' });
+  setStat(pinkyStatReady, ready, { tone: ready ? '' : 'zero' });
+  setStat(pinkyStatStopping, stopping, { tone: stopping ? 'danger' : 'zero' });
 }
 
 function renderPinkyCards() {
@@ -339,7 +357,8 @@ pinkyCards.addEventListener('click', (event) => {
   if (button) stopPinky(button.dataset.pinkyStop);
 });
 pinkyPasswordForm.addEventListener('submit', sendPinkyPassword);
-// app.js shows the view on the same click first, so this look already counts as "on screen".
-document.querySelector('.nav-item[data-view="pinky"]').addEventListener('click', () => refreshPinky());
+// app.js has already shown the view when it announces the switch, so this look counts as "on screen".
+document.addEventListener('viewchange', (event) => { if (event.detail.view === 'pinky') refreshPinky(); });
 document.addEventListener('visibilitychange', () => refreshPinky());
 window.setInterval(refreshPinky, PINKY_POLL_MS);
+refreshPinky();

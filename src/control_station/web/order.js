@@ -111,6 +111,7 @@ function renderNotice() {
 function productCard(product) {
   const name = product.label;
   return element('article', { class: 'product', 'data-object-class': product.object_class },
+    element('span', { class: 'product-mark', 'aria-hidden': 'true' }, [...name][0] || '?'),
     element('div', { class: 'product-info' },
       element('h3', { class: 'product-name' }, name),
       element('p', { class: 'product-stock' }),
@@ -132,7 +133,7 @@ function updateProductCard(card, product) {
     stock.textContent = '품절';
     stock.className = 'product-stock sold-out';
   } else {
-    stock.textContent = `남은 수량 ${product.available}`;
+    stock.textContent = `${product.available}개 남았어요`;
     stock.className = 'product-stock';
   }
   card.classList.toggle('selected', quantity > 0);
@@ -192,8 +193,8 @@ function renderCart() {
   const total = items.reduce((sum, item) => sum + item.quantity, 0);
   let summary = '담은 물건이 없어요';
   if (total) {
-    summary = `${items.map((item) => `${item.label} ${item.quantity}`).join(' · ')} · 총 ${total}개`;
-    if (!state.zoneId && state.zones.length) summary += ' · 받을 곳을 골라 주세요';
+    summary = `${items.map((item) => `${item.label} ${item.quantity}개`).join(', ')}, 모두 ${total}개`;
+    if (!state.zoneId && state.zones.length) summary += '. 받을 곳을 골라 주세요';
   }
   cartSummary.textContent = summary;
   cartSummary.classList.toggle('filled', total > 0);

@@ -49,19 +49,32 @@ const controlModeLabels = {
   ros2: 'ROS 2 상태 관측',
 };
 
-navItems.forEach((item) => {
-  item.addEventListener('click', () => {
-    const selectedView = item.dataset.view;
-    views.forEach((view) => { view.hidden = view.id !== `view-${selectedView}`; });
-    navItems.forEach((navItem) => {
-      const active = navItem === item;
-      navItem.classList.toggle('active', active);
-      if (active) navItem.setAttribute('aria-current', 'page');
-      else navItem.removeAttribute('aria-current');
-    });
-    viewTitle.textContent = viewNames[selectedView] || '현황';
+// The view lives in the address (#pinky, #inventory…), so a reload or a shared link opens the same view.
+// Other scripts follow the switch through the `viewchange` event instead of listening to the menu.
+function showView(requested) {
+  const selected = viewNames[requested] ? requested : 'flow';
+  views.forEach((view) => { view.hidden = view.id !== `view-${selected}`; });
+  navItems.forEach((item) => {
+    const active = item.dataset.view === selected;
+    item.classList.toggle('active', active);
+    if (active) item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
+    if (active) keepInNavView(item);
   });
-});
+  viewTitle.textContent = viewNames[selected];
+  if (window.location.hash !== `#${selected}`) window.history.replaceState(null, '', `#${selected}`);
+  document.dispatchEvent(new CustomEvent('viewchange', { detail: { view: selected } }));
+}
+
+// At phone width the menu is one scrolling row; keep the current item in sight without moving the page.
+function keepInNavView(item) {
+  const nav = item.parentElement;
+  if (nav.scrollWidth <= nav.clientWidth) return;
+  nav.scrollLeft = item.offsetLeft - (nav.clientWidth - item.offsetWidth) / 2;
+}
+
+navItems.forEach((item) => item.addEventListener('click', () => showView(item.dataset.view)));
+window.addEventListener('hashchange', () => showView(window.location.hash.slice(1)));
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -75,6 +88,31 @@ function apiErrorMessage(result, fallback) {
 }
 
 const clockFormat = new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+
+// One big number of a summary card. tone: attention (a person must act) | danger | active | zero.
+function setStat(stat, value, { total = null, tone = '' } = {}) {
+  const shown = value == null ? '–' : escapeHtml(value);
+  stat.querySelector('dd').innerHTML = total == null ? shown : `${shown}<small>/${escapeHtml(total)}</small>`;
+  stat.className = `stat${tone ? ` ${tone}` : ''}`;
+}
+
+const overviewSummaryTitle = document.querySelector('#overviewSummaryTitle');
+const overviewStatRobots = document.querySelector('#overviewStatRobots');
+const overviewStatCameras = document.querySelector('#overviewStatCameras');
+
+function renderOverviewSummary(health, robots, cameras) {
+  if (!health) {
+    overviewSummaryTitle.textContent = '관제 서버에 연결하지 못했어요';
+    setStat(overviewStatRobots, null);
+    setStat(overviewStatCameras, null);
+    return;
+  }
+  overviewSummaryTitle.textContent = `API 정상, ${controlModeLabels[health.mode] || health.mode} 모드로 실행 중이에요`;
+  const reachable = robots.filter((robot) => robot.state === 'available').length;
+  const streaming = cameras.filter((camera) => camera.stream_state === 'STREAMING').length;
+  setStat(overviewStatRobots, reachable, { total: robots.length, tone: reachable < robots.length ? 'attention' : '' });
+  setStat(overviewStatCameras, streaming, { total: cameras.length, tone: streaming < cameras.length ? 'attention' : '' });
+}
 
 function renderRobots(robots) {
   if (!robots.length) {
@@ -561,11 +599,13 @@ function objectLabel(objectClass) {
 }
 
 function orderSummary(items) {
-  return (items || []).map((item) => `${objectLabel(item.object_class)} ${item.quantity}`).join(' · ');
+  return (items || []).map((item) => `${objectLabel(item.object_class)} ${item.quantity}`).join(', ');
 }
 
-function pinkyBadge(pinkyId) {
-  return pinkyId ? `<span class="pinky-badge pinky-${escapeHtml(pinkyId)}">${escapeHtml(pinkyNames[pinkyId] || pinkyId)}</span>` : '';
+// P0–P2 mark: blue while the Pinky answers, grey when it does not.
+function pinkyBadge(pinkyId, { offline = false } = {}) {
+  if (!pinkyId) return '';
+  return `<span class="pinky-badge${offline ? ' offline' : ''}">${escapeHtml(pinkyNames[pinkyId] || pinkyId)}</span>`;
 }
 
 // Short notices in the corner (new order, start result, refused control); they disappear by themselves.
@@ -1217,7 +1257,8 @@ async function refresh() {
     controlMode = health.mode;
     updateParkingConfig(health.parking);
     serverStatus.className = 'server-status ok';
-    serverStatus.innerHTML = `<span class="dot"></span> API 정상 · ${escapeHtml(controlModeLabels[health.mode] || health.mode)} 모드`;
+    serverStatus.innerHTML = `<span class="dot"></span><span><strong>API 정상</strong><small>${escapeHtml(controlModeLabels[health.mode] || health.mode)} 모드</small></span>`;
+    renderOverviewSummary(health, robotData.robots, cameraData.cameras);
     renderRobots(robotData.robots);
     renderCameras(cameraData.cameras);
     renderArm(armData.arm);
@@ -1225,7 +1266,8 @@ async function refresh() {
     updatedAt.textContent = `갱신 ${clockFormat.format(new Date())}`;
   } catch {
     serverStatus.className = 'server-status error';
-    serverStatus.innerHTML = '<span class="dot"></span> 서버 연결 실패';
+    serverStatus.innerHTML = '<span class="dot"></span><span><strong>서버 연결 실패</strong><small>다시 연결하는 중</small></span>';
+    renderOverviewSummary(null);
     robotRows.innerHTML = '<tr><td colspan="3" class="error-row">서버 API에 연결할 수 없습니다.</td></tr>';
     cameraGrid.innerHTML = '<p class="error-row">서버 API에 연결할 수 없습니다.</p>';
     cameraGrid.dataset.cameraIds = '';
@@ -1261,10 +1303,11 @@ function elapsed(fromIso, toIso) {
 function renderFlowAlerts(alerts) {
   flowAlerts.innerHTML = alerts.map((alert) => `
     <div class="alert-card ${alert.level}" role="alert">
-      <span class="alert-icon" aria-hidden="true">${alert.level === 'error' ? '⛔' : '⚠️'}</span>
+      <span class="alert-icon" aria-hidden="true">!</span>
       <div><strong>${escapeHtml(alert.title || '확인 필요')}</strong>
         <div>${escapeHtml(alert.message || '')}</div>
-        <small>${alert.pinky_name ? `핑키 ${escapeHtml(alert.pinky_name)} · ` : ''}${escapeHtml(alert.task_id)}${alert.code ? ` · ${escapeHtml(alert.code)}` : ''}</small></div>
+        <small class="alert-meta">${[alert.pinky_name ? `핑키 ${alert.pinky_name}` : '', alert.task_id, alert.code]
+          .filter(Boolean).map((part) => `<span>${escapeHtml(part)}</span>`).join('')}</small></div>
       ${alert.acknowledgeable ? `<button type="button" class="secondary" data-ack-alert="${escapeHtml(alert.task_id)}">확인</button>` : '<span></span>'}
     </div>`).join('');
   flowAlerts.querySelectorAll('[data-ack-alert]').forEach((button) => {
@@ -1280,12 +1323,12 @@ function renderFlowAlerts(alerts) {
 
 function renderFlowRobots(view) {
   const pinkies = view.pinkies.map((pinky) => `
-    <article class="robot-card pinky-${escapeHtml(pinky.pinky_id)}${pinky.reachable ? '' : ' unreachable'}${pinky.stopped_order_id ? ' stopped' : ''}">
-      <h3><span>핑키 ${escapeHtml(pinky.name)}</span><span>${pinky.order_id && pinky.order_id === view.station_owner ? '<span class="spot-tag">적재 자리</span> ' : ''}${pinky.simulated ? '<span class="sim-tag">모의</span>' : ''}</span></h3>
+    <article class="robot-card${pinky.reachable ? '' : ' unreachable'}${pinky.stopped_order_id ? ' stopped' : ''}">
+      <h3>${pinkyBadge(pinky.pinky_id, { offline: !pinky.reachable })}<span>${pinky.order_id && pinky.order_id === view.station_owner ? '<span class="spot-tag">적재 자리</span> ' : ''}${pinky.simulated ? '<span class="sim-tag">모의</span>' : ''}</span></h3>
       <div class="robot-state">${escapeHtml(pinky.reachable ? pinky.phase_label : '연결 안 됨')}</div>
-      <p>${escapeHtml(pinky.message || '')}</p>
+      ${pinky.message && pinky.message !== pinky.phase_label ? `<p>${escapeHtml(pinky.message)}</p>` : ''}
       <p>${pinky.order_id ? `주문 ${escapeHtml(pinky.order_id)}`
-        : pinky.stopped_order_id ? `<strong class="stopped-note">멈춘 주문 ${escapeHtml(pinky.stopped_order_id)} · 현장 확인 필요</strong>` : '배정된 진행 주문 없음'}</p>
+        : pinky.stopped_order_id ? `<strong class="stopped-note">멈춘 주문 ${escapeHtml(pinky.stopped_order_id)}, 현장 확인 필요</strong>` : '배정된 진행 주문 없음'}</p>
     </article>`);
   const arms = view.arms.map((arm) => `
     <article class="robot-card arm${arm.state === 'busy' ? ' busy' : ''}">
@@ -1303,7 +1346,7 @@ function planChips(order) {
     const state = index < order.loaded ? 'done'
       : index === order.loaded && order.status === 'FAILED' && order.stages.find((stage) => stage.key === 'LOAD').state === 'failed' ? 'failed'
         : index === order.loaded && order.active_step && ['PICK_ITEM', 'VERIFY_TRANSFER'].includes(order.active_step) ? 'doing' : '';
-    return `<span class="plan-chip ${state}">${escapeHtml(unit.arm_label)} · ${escapeHtml(unit.label)} #${unit.unit}</span>`;
+    return `<span class="plan-chip ${state}">${escapeHtml(unit.arm_label)} ${escapeHtml(unit.label)} #${unit.unit}</span>`;
   }).join('<span aria-hidden="true">→</span>')}</div>`;
 }
 
@@ -1315,12 +1358,12 @@ function renderFlowOrders(orders) {
     return;
   }
   flowOrders.innerHTML = started.map((order) => `
-    <article class="order-card pinky-${escapeHtml(order.pinky_id || '')}${order.status === 'FAILED' ? ' failed' : ''}">
+    <article class="order-card${order.status === 'FAILED' ? ' failed' : ''}">
       <div class="order-head">
         ${pinkyBadge(order.pinky_id)} <strong>${escapeHtml(orderSummary(order.order_items))}</strong>
         <span class="status-chip ${escapeHtml(order.status)}">${escapeHtml(orderStatusLabels[order.status] || order.status)}</span>
         ${order.simulated ? '<span class="sim-tag">모의</span>' : ''}
-        <span class="order-meta">${escapeHtml(order.id)}${order.started_at ? ` · ${elapsed(order.started_at, order.finished_at)}` : ''}</span>
+        <span class="order-meta"><span>${escapeHtml(order.id)}</span>${order.started_at ? `<time>${elapsed(order.started_at, order.finished_at)}</time>` : ''}</span>
       </div>
       <ol class="pipeline">${order.stages.map((stage) => `<li class="${stage.state}">${escapeHtml(stage.label)}</li>`).join('')}</ol>
       <p class="order-now"><b>지금</b> ${escapeHtml(order.current)}</p>
@@ -1370,20 +1413,45 @@ async function orderControl(taskId, action) {
   }
 }
 
+// ---- 주문 진행 요약: waiting orders come from the intake poll, the rest from /api/flow ----
+const flowSummaryTitle = document.querySelector('#flowSummaryTitle');
+const flowStatWaiting = document.querySelector('#flowStatWaiting');
+const flowStatRunning = document.querySelector('#flowStatRunning');
+const flowStatStopped = document.querySelector('#flowStatStopped');
+const flowStatPinkies = document.querySelector('#flowStatPinkies');
+const flowSummary = { waiting: null, flow: null };
+
+function renderFlowSummary() {
+  const { waiting, flow } = flowSummary;
+  const running = flow ? flow.orders.filter((order) => ['VALIDATING', 'RUNNING', 'CANCELING'].includes(order.status)).length : null;
+  const stopped = flow ? flow.alerts.filter((alert) => alert.level === 'error').length : null;
+  const reachable = flow ? flow.pinkies.filter((pinky) => pinky.reachable).length : null;
+  setStat(flowStatWaiting, waiting, { tone: waiting ? 'attention' : 'zero' });
+  setStat(flowStatRunning, running, { tone: running ? 'active' : 'zero' });
+  setStat(flowStatStopped, stopped, { tone: stopped ? 'danger' : 'zero' });
+  setStat(flowStatPinkies, reachable, { total: flow?.pinkies.length, tone: flow && reachable < flow.pinkies.length ? 'attention' : '' });
+  if (stopped) flowSummaryTitle.textContent = `멈춘 주문이 ${stopped}건 있어요. 경보를 확인해 주세요`;
+  else if (waiting) flowSummaryTitle.textContent = `주문 ${waiting}건이 시작을 기다리고 있어요`;
+  else if (running) flowSummaryTitle.textContent = `주문 ${running}건을 처리하고 있어요`;
+  else if (waiting === 0 && flow) flowSummaryTitle.textContent = '기다리는 주문이 없어요';
+}
+
 async function refreshFlow() {
   try {
     const response = await fetch('/api/flow', { cache: 'no-store' });
     const view = await response.json();
     if (!response.ok) throw new Error(apiErrorMessage(view, '진행 상황을 불러오지 못했습니다'));
+    flowSummary.flow = view;
+    renderFlowSummary();
     renderFlowAlerts(view.alerts);
     renderFlowRobots(view);
     renderFlowOrders(view.orders);
     renderMockWorld(view.mock_world, view.mock_fault_kinds);
     flowStation.textContent = !view.station_owner ? '적재 자리 비어 있음'
-      : view.station_held_by_stopped ? `적재 자리 막힘 · 멈춘 주문 ${view.station_owner} (경보 확인 필요)` : `적재 자리 사용 중 · ${view.station_owner}`;
+      : view.station_held_by_stopped ? `적재 자리 막힘, 멈춘 주문 ${view.station_owner} (경보 확인 필요)` : `적재 자리 사용 중, ${view.station_owner}`;
     flowUpdated.textContent = `갱신 ${clockFormat.format(new Date())}`;
   } catch (error) {
-    flowUpdated.textContent = `갱신 실패 · ${error.message}`;
+    flowUpdated.textContent = `갱신 실패: ${error.message}`;
   }
 }
 
@@ -1470,7 +1538,7 @@ function intakeCardHtml(order) {
     <header class="intake-head">
       <time datetime="${escapeHtml(order.created_at)}">${escapeHtml(formatClock(order.created_at))}</time>
       <h3 class="intake-id">${id}</h3>
-      <span class="intake-items">${escapeHtml(orderSummary(order.order_items))} · 총 ${itemCount(order.order_items)}개</span>
+      <span class="intake-items">${escapeHtml(orderSummary(order.order_items))}, 총 ${itemCount(order.order_items)}개</span>
       <span class="intake-zone">${escapeHtml(order.destination)}</span>
       <span class="intake-actions">
         <button type="button" data-intake-action="start" data-order-id="${id}"${disabled}>${busy === 'start' ? '시작 중…' : '시작'}</button>
@@ -1484,12 +1552,14 @@ function intakeCardHtml(order) {
 
 function renderIntake() {
   const { orders } = intake;
+  flowSummary.waiting = orders.length;
+  renderFlowSummary();
   intakeBadge.hidden = !orders.length;
   intakeBadge.textContent = String(orders.length);
   intakeBadge.title = `기다리는 주문 ${orders.length}건`;
   document.title = orders.length ? `(${orders.length}) ${pageTitle}` : pageTitle;
   if (!orders.length) {
-    intakeOrders.innerHTML = '<p class="intake-empty">기다리는 주문이 없습니다 · <a href="/order" target="_blank" rel="noopener">주문 창 열기</a></p>';
+    intakeOrders.innerHTML = '<p class="intake-empty">기다리는 주문이 없어요.<a href="/order" target="_blank" rel="noopener">주문 창 열기</a></p>';
     return;
   }
   // Cards are keyed by order id and rewritten only when their HTML changes, so a poll never swaps a button out
@@ -1517,7 +1587,7 @@ function renderIntake() {
 function announceNewOrders(orders) {
   if (intake.seenIds) {
     orders.filter((order) => !intake.seenIds.has(order.id)).forEach((order) => {
-      showToast(`새 주문 ${order.id} 접수`, `${orderSummary(order.order_items)} · ${order.destination}`);
+      showToast(`새 주문 ${order.id} 접수`, `${orderSummary(order.order_items)}, ${order.destination}`);
     });
   }
   intake.seenIds = new Set(orders.map((order) => order.id));
@@ -1566,7 +1636,7 @@ async function refreshIntake() {
     intake.orders.filter((order) => !intake.previews.has(order.id)).forEach((order) => loadPreview(order.id));
     intakeUpdated.textContent = `갱신 ${clockFormat.format(new Date())}`;
   } catch (error) {
-    intakeUpdated.textContent = `갱신 실패 · ${error.message}`;
+    intakeUpdated.textContent = `갱신 실패: ${error.message}`;
   }
 }
 
@@ -1587,7 +1657,7 @@ async function controlIntakeOrder(order, action) {
       });
     } else if (action === 'start') {
       const pinkyId = result.order.pinky_id;
-      showToast(`${order.id} 시작`, `${orderSummary(order.order_items)} · 핑키 ${pinkyNames[pinkyId] || pinkyId}`);
+      showToast(`${order.id} 시작`, `${orderSummary(order.order_items)}, 핑키 ${pinkyNames[pinkyId] || pinkyId}`);
     } else {
       showToast(`${order.id} 거절`, orderSummary(order.order_items));
     }
@@ -1606,11 +1676,12 @@ intakeOrders.addEventListener('click', (event) => {
   if (!order || intake.busy.has(order.id)) return;
   const action = button.dataset.intakeAction;
   if (action === 'reject' && !window.confirm(
-    `${order.id} 주문을 거절할까요?\n${orderSummary(order.order_items)} · ${order.destination}\n거절한 주문은 다시 시작할 수 없습니다.`,
+    `${order.id} 주문을 거절할까요?\n${orderSummary(order.order_items)}, ${order.destination}\n거절한 주문은 다시 시작할 수 없습니다.`,
   )) return;
   controlIntakeOrder(order, action);
 });
 
+showView(window.location.hash.slice(1));
 refresh();
 refreshFlow();
 refreshIntake();
