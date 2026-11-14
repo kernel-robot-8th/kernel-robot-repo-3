@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import math
-import json
 import os
-import re
 import signal
-import stat
 import subprocess
 import threading
 import uuid
@@ -15,9 +12,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from control_station.act_policies import ActPolicyError, load_act_policies
+
 
 ACTION_LIMIT_EXIT_CODE = 75
-MAX_POLICY_PROFILE_CONFIG_BYTES = 256 * 1024
 
 
 def _now() -> str:
@@ -34,51 +32,19 @@ def _env_int(name: str, default: int | None = None) -> int | None:
         raise ValueError(f"{name} must be an integer") from exc
 
 
-def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"duplicate JSON key: {key}")
-        result[key] = value
-    return result
-
-
-def _load_policy_profiles(path: Path) -> dict[str, dict[str, str]]:
+def _policy_profiles(path: str | None) -> dict[str, dict[str, Any]]:
+    """The run profiles: one per policy in config/omx-act-policies.json, the same list the order flow uses."""
     try:
-        file_stat = path.lstat()
-    except OSError as exc:
-        raise ValueError(f"policy profile file is unavailable: {path}") from exc
-    if stat.S_ISLNK(file_stat.st_mode) or not stat.S_ISREG(file_stat.st_mode):
-        raise ValueError("policy profile path must be a regular non-symlink file")
-    if file_stat.st_size > MAX_POLICY_PROFILE_CONFIG_BYTES:
-        raise ValueError("policy profile file exceeds 256 KiB")
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_json_object)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-        raise ValueError(f"policy profile JSON is invalid: {exc}") from exc
-    if not isinstance(payload, dict) or set(payload) != {"schema_version", "profiles"}:
-        raise ValueError("policy profile JSON must contain schema_version and profiles only")
-    if payload["schema_version"] != 1 or isinstance(payload["schema_version"], bool):
-        raise ValueError("policy profile schema_version must be 1")
-    entries = payload["profiles"]
-    if not isinstance(entries, list) or not entries:
-        raise ValueError("policy profiles must be a non-empty array")
-    profiles: dict[str, dict[str, str]] = {}
-    required_fields = {"id", "name", "policy_type", "model", "task"}
-    for entry in entries:
-        if not isinstance(entry, dict) or set(entry) != required_fields:
-            raise ValueError("each policy profile must contain id, name, policy_type, model, and task only")
-        profile_id = entry["id"]
-        if not isinstance(profile_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", profile_id):
-            raise ValueError("policy profile id must use lowercase letters, digits, '_' or '-' (max 64 chars)")
-        if profile_id in profiles:
-            raise ValueError(f"duplicate policy profile id: {profile_id}")
-        for field in ("name", "policy_type", "model", "task"):
-            value = entry[field]
-            if not isinstance(value, str) or not value.strip() or len(value) > 512:
-                raise ValueError(f"policy profile {field} must be a non-empty string up to 512 characters")
-        profiles[profile_id] = {key: str(value).strip() for key, value in entry.items()}
-    return profiles
+        registry = load_act_policies(path)
+    except ActPolicyError as exc:
+        raise ValueError(str(exc)) from exc
+    return {
+        policy["policy_id"]: {
+            "id": policy["policy_id"], "name": policy["label"], "policy_type": policy["policy_type"],
+            "model": policy["model"], "task": policy["task"], "cameras": dict(policy["cameras"]),
+        }
+        for policy in registry.policies.values()
+    }
 
 
 class PolicyRunSupervisor:
@@ -107,18 +73,19 @@ class PolicyRunSupervisor:
         ).expanduser()
         self.max_action_steps = _env_int("CONTROL_STATION_POLICY_MAX_ACTION_STEPS")
         self.server_address = os.environ.get("CONTROL_STATION_POLICY_SERVER_ADDRESS", "127.0.0.1:8080")
-        profile_path = Path(
-            os.environ.get(
-                "CONTROL_STATION_POLICY_PROFILES",
-                str(Path(__file__).resolve().parents[2] / "config" / "policy_profiles.json"),
-            )
-        ).expanduser()
-        self.policy_profiles = _load_policy_profiles(profile_path)
+        self.policy_profiles = _policy_profiles(os.environ.get("CONTROL_STATION_ACT_POLICIES"))
         self.current_profile_id = next(iter(self.policy_profiles))
         self.robot_port = os.environ.get("CONTROL_STATION_POLICY_ROBOT_PORT", "/dev/omx_follower")
         self.robot_id = os.environ.get("CONTROL_STATION_POLICY_ROBOT_ID", "omx_follower_arm")
-        self.front_camera = os.environ.get("CONTROL_STATION_POLICY_FRONT_CAMERA", "/dev/video7")
-        self.wrist_camera = os.environ.get("CONTROL_STATION_POLICY_WRIST_CAMERA", "/dev/video9")
+        # Devices by camera role. Each policy says which role feeds its `front` and `wrist` inputs (some were
+        # recorded with the two swapped), so the device is chosen per policy in _command.
+        # FRONT/WRIST are the older names of these settings: front was the overhead camera, wrist the gripper one.
+        self.camera_devices = {
+            "OVERHEAD": os.environ.get("CONTROL_STATION_POLICY_OVERHEAD_CAMERA")
+            or os.environ.get("CONTROL_STATION_POLICY_FRONT_CAMERA", "/dev/video7"),
+            "GRIPPER": os.environ.get("CONTROL_STATION_POLICY_GRIPPER_CAMERA")
+            or os.environ.get("CONTROL_STATION_POLICY_WRIST_CAMERA", "/dev/video9"),
+        }
         self.policy_device = os.environ.get("CONTROL_STATION_POLICY_DEVICE", "cuda")
         self.fps = _env_int("CONTROL_STATION_POLICY_FPS", 30)
         self.actions_per_chunk = _env_int("CONTROL_STATION_POLICY_ACTIONS_PER_CHUNK", 100)
@@ -162,11 +129,13 @@ class PolicyRunSupervisor:
             raise RuntimeError(f"LeRobot Python 실행 파일을 찾을 수 없습니다: {self.python}")
         if not self.lerobot_dir.is_dir():
             raise RuntimeError(f"LeRobot 디렉터리를 찾을 수 없습니다: {self.lerobot_dir}")
+        front = self.camera_devices[profile["cameras"]["front"]]
+        wrist = self.camera_devices[profile["cameras"]["wrist"]]
         cameras = (
             "{ front: {type: opencv, index_or_path: "
-            f"{self.front_camera}, width: 640, height: 480, fps: {self.fps}, fourcc: MJPG}}, "
+            f"{front}, width: 640, height: 480, fps: {self.fps}, fourcc: MJPG}}, "
             "wrist: {type: opencv, index_or_path: "
-            f"{self.wrist_camera}, width: 640, height: 480, fps: {self.fps}, fourcc: MJPG}} }}"
+            f"{wrist}, width: 640, height: 480, fps: {self.fps}, fourcc: MJPG}} }}"
         )
         return [
             str(self.python),
@@ -180,6 +149,8 @@ class PolicyRunSupervisor:
             f"--robot.port={self.robot_port}",
             f"--robot.id={self.robot_id}",
             f"--robot.cameras={cameras}",
+            # LeRobot's default turns torque off on disconnect, which drops the arm when the client ends.
+            "--robot.disable_torque_on_disconnect=false",
             f"--task={profile['task']}",
             f"--server_address={self.server_address}",
             f"--policy_type={profile['policy_type']}",
@@ -190,7 +161,8 @@ class PolicyRunSupervisor:
             f"--max_action_steps={self.max_action_steps}",
             f"--chunk_size_threshold={self.chunk_size_threshold}",
             f"--aggregate_fn_name={self.aggregate_fn_name}",
-            "--debug_visualize_queue_size=True",
+            # True opens a matplotlib window at exit that keeps the process alive until it is closed.
+            "--debug_visualize_queue_size=false",
         ]
 
     def _refresh_locked(self) -> None:

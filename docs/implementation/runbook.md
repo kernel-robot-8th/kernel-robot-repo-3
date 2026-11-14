@@ -149,7 +149,7 @@ python -m lerobot.async_inference.policy_server --host=127.0.0.1 --port=8080 \
   --fps=30 --inference_latency=0.033 --obs_queue_timeout=1
 ```
 
-LeRobot client에 `--max_action_steps` 옵션이 포함되도록 `~/Desktop/lerobot/src/lerobot` checkout을 사용합니다. 관제 서버는 `opencv`와 `omx_follower` config를 client보다 먼저 import합니다. 정책 프로필은 저장소의 `config/policy_profiles.json`에서 읽습니다. 현재 **사과 집기**는 모델 `neverlish/omx_act_record-test-20261104-1`과 학습 당시 task 문자열 `Pick up Doll`을 사용합니다. 표시 이름과 학습 조건 문자열은 서로 다른 용도입니다. 서버를 다시 시작하지 않고 프로필 항목을 추가하려면 `CONTROL_STATION_POLICY_PROFILES`로 지정한 JSON 파일을 편집한 뒤 서버를 재시작하세요. 각 항목은 고유한 `id`, 화면 표시용 `name`, LeRobot `policy_type`, `model`, 학습 task 문자열 `task`를 가집니다. 프로필 선택 UI와 API는 이 목록을 읽어 실행하므로 코드 변경 없이 추가 정책을 등록할 수 있습니다. 관제 서버를 시작할 때 정책 실행을 활성화하고, 한 번의 시연에 맞는 총 액션 상한을 지정합니다.
+LeRobot client에 `--max_action_steps` 옵션이 포함되도록 `~/Desktop/lerobot/src/lerobot` checkout을 사용합니다. 관제 서버는 `opencv`와 `omx_follower` config를 client보다 먼저 import합니다. 실행할 정책 목록은 주문 흐름과 같은 `config/omx-act-policies.json`에서 읽습니다(`CONTROL_STATION_ACT_POLICIES`로 바꿀 수 있음). 화면에는 각 정책의 `label`이 보이고, 실행에는 `model`·`task`·`cameras`를 씁니다. 카메라는 역할별 장치 `CONTROL_STATION_POLICY_OVERHEAD_CAMERA`(선반을 위에서 본 카메라)와 `CONTROL_STATION_POLICY_GRIPPER_CAMERA`(그리퍼 카메라)로 지정하고, 정책의 `cameras`가 그중 어느 장치를 `front`/`wrist`에 넣을지 정합니다. 예전 이름 `CONTROL_STATION_POLICY_FRONT_CAMERA`/`_WRIST_CAMERA`는 각각 위·그리퍼 카메라로 읽습니다. 정책 클라이언트는 `--robot.disable_torque_on_disconnect=false`로 실행해 끝나도 팔 토크를 유지합니다. 관제 서버를 시작할 때 정책 실행을 활성화하고, 한 번의 시연에 맞는 총 액션 상한을 지정합니다.
 
 ```bash
 cd /경로/kernel-robot-repo-3
