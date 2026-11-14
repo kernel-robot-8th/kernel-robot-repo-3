@@ -174,6 +174,26 @@ class PinkyFleetClient:
             "battery_volts": battery_volts,
         }
 
+    def dispatch(self, pinky_id: str, route_labels: list[str] | None) -> dict[str, Any]:
+        """Start the Pinky's route (the dashboard prepends its parking spot): POST /api/robots/<id>/route.
+        202 means the dashboard accepted the start, not that the Pinky moved; the flow follows its phase."""
+        if not route_labels:
+            raise PinkyFleetError("RECEIVING_ZONE_MISSING", "수령 구역 경로가 없는 주문은 실제 핑키를 출발시킬 수 없습니다")
+        status, answer = self._send("POST", f"/api/robots/{pinky_id}/route", {"labels": list(route_labels)})
+        if status == 202 and answer.get("ok"):
+            return {"accepted": True, "simulated": False, "http_status": status, "labels": answer.get("labels")}
+        raise PinkyFleetError("PINKY_DISPATCH_REJECTED", answer.get("error") or answer.get("message") or f"HTTP {status}")
+
+    def mission_complete(self, pinky_id: str, token: str | None) -> dict[str, Any]:
+        """Pickup confirmed at the receiving zone: POST /api/robots/<id>/mission-complete {token}; the Pinky
+        returns to its own parking spot."""
+        status, answer = self._send("POST", f"/api/robots/{pinky_id}/mission-complete", {"token": token})
+        if status == 202 and answer.get("ok"):
+            return {"accepted": True, "simulated": False, "http_status": status, "message": answer.get("message")}
+        if status == 409:
+            raise PinkyFleetError("PINKY_SIGNAL_REJECTED", answer.get("error") or "코스 완주 단계·토큰과 맞지 않습니다")
+        raise PinkyFleetError("PINKY_SIGNAL_NOT_DELIVERED", answer.get("message") or answer.get("error") or f"HTTP {status}")
+
     def fleet_confirm(self, pinky_id: str, action: str, token: str | None) -> dict[str, Any]:
         status, answer = self._request(
             "POST", f"/api/robots/{pinky_id}/operator-confirm", {"action": action, "token": token}

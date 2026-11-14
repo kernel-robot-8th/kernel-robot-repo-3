@@ -8,6 +8,8 @@ GET  /api/orders                     orders waiting in the intake, oldest first
 GET  /api/orders/{id}/assignment     which Pinky and arms would serve it now, and why (changes nothing)
 POST /api/orders/{id}/start          assign the Pinky and start the order flow
 POST /api/orders/{id}/reject         turn down a waiting order
+GET  /api/orders/{id}/track          the customer's view: stage in plain words, whether pickup can be confirmed
+POST /api/orders/{id}/pickup-confirm the customer took the order at the receiving zone; the Pinky goes home
 """
 
 from __future__ import annotations
@@ -76,11 +78,21 @@ def post_order(h: ControlStationHandler, route: str, parts: list[str], body: dic
     h._json(201, {"order": order})
 
 
+def get_track(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
+    """고객 앱: 내 주문이 어디쯤인지와 수령 확인 가능 여부"""
+    try:
+        h._json(200, h.app.order_desk.track(parts[2]))
+    except OrderDeskError as exc:
+        _desk_error(h, exc)
+
+
 def post_order_action(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
-    """주문 시작·거절"""
+    """주문 시작·거절·수령 확인"""
     order_id, action = parts[2], parts[3]
     try:
-        if action == "start":
+        if action == "pickup-confirm":
+            h._json(202, h.app.order_desk.confirm_pickup(order_id))
+        elif action == "start":
             order, changed = h.app.order_desk.start(order_id)
             h._json(202 if changed else 200, {"order": order})
         else:

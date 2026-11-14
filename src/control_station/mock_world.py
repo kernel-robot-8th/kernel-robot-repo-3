@@ -146,13 +146,25 @@ class MockWorld:
             }
 
     # ---- Pinky fleet dashboard (mission phases and operator signals) ----
-    def dispatch(self, pinky_id: str) -> None:
-        """Mock only: the Pinky leaves its parking spot for station 5 (the Pinky team starts real routes)."""
+    def dispatch(self, pinky_id: str, route_labels: list[str] | None = None) -> dict[str, Any]:
+        """The Pinky leaves its parking spot for station 5. With a route (an order with a receiving zone) it goes
+        on to the end of that route after loading and waits there in course_complete, like the real fleet."""
         with self._lock:
             pinky = self.pinkies[pinky_id]
             if pinky["phase"] == "parked":
                 pinky.update(phase="driving", token=None, message="5번 정류장으로 이동 중", location="이동 중",
-                             until=self.clock() + self.drive_s, leg="to_station")
+                             until=self.clock() + self.drive_s, leg="to_station", route=list(route_labels or []))
+            return {"accepted": True, "simulated": True, "message": "모의: 핑키가 적재 위치로 출발"}
+
+    def mission_complete(self, pinky_id: str, token: str | None) -> dict[str, Any]:
+        """The receiving zone confirmed pickup: the Pinky drives back to its own parking spot."""
+        with self._lock:
+            pinky = self.pinkies[pinky_id]
+            if pinky["phase"] != "course_complete" or not token or token != pinky["token"]:
+                raise PinkyFleetError("PINKY_SIGNAL_REJECTED", "코스 완주 후 현재 임무의 주행완료 신호만 처리할 수 있습니다.")
+            pinky.update(phase="driving", token=None, message="주행완료 · 주차장으로 복귀", location="이동 중",
+                         until=self.clock() + self.drive_s, leg="to_home")
+            return {"accepted": True, "simulated": True, "message": "주행완료 신호를 보냈습니다. (모의)"}
 
     def fleet_status(self, pinky_id: str) -> dict[str, Any]:
         with self._lock:
@@ -164,10 +176,13 @@ class MockWorld:
                     extra = self._take_fault("EXTRA_ON_PINKY")
                     if extra:
                         self.loads[pinky_id][extra] += 1
+                elif pinky.get("leg") == "to_zone":
+                    pinky.update(phase="course_complete", token=uuid.uuid4().hex[:12], until=None,
+                                 message="코스 완주 · 정지 · 주행완료 신호 대기", location="수령 구역")
                 else:
                     self.loads[pinky_id].clear()  # unloaded at the destination in this simulation
                     pinky.update(phase="parked", token=None, until=None, message="주차장 대기",
-                                 location=PINKY_HOMES[pinky_id])
+                                 location=PINKY_HOMES[pinky_id], route=[])
             return {
                 "source": "mock_world", "simulated": True, "pinky_id": pinky_id, "phase": pinky["phase"],
                 "mission_token": pinky["token"], "message": pinky["message"], "location": pinky["location"],
@@ -188,8 +203,11 @@ class MockWorld:
                 pinky.update(phase="docked_manual", token=uuid.uuid4().hex[:12],
                              message="도킹완료 · 정지 유지 · 물건 수령 완료 대기")
             else:
+                # With a route the Pinky carries the load on to the receiving zone; without one (older orders) it
+                # goes home and is unloaded there, as before.
+                leg = "to_zone" if pinky.get("route") else "to_home"
                 pinky.update(phase="driving", token=None, message="물건 수령 완료 · 경로 재개", location="이동 중",
-                             until=self.clock() + self.drive_s, leg="to_home")
+                             until=self.clock() + self.drive_s, leg=leg)
             return {"accepted": True, "simulated": True, "message": "현재 단계 확인 신호를 보냈습니다. (모의)"}
 
     # ---- parking judgment (ceiling camera) ----

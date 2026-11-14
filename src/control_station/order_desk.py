@@ -37,6 +37,42 @@ class OrderDeskError(RuntimeError):
         self.details = details
 
 
+# The customer's stages of one order, and which order-flow steps belong to each.
+_CUSTOMER_STAGES = (("received", "접수"), ("preparing", "준비"), ("pinky_coming", "핑키 출발"),
+                    ("loading", "싣는 중"), ("delivering", "가는 중"), ("arrived", "도착"), ("done", "완료"))
+_STAGE_INDEX = {key: index for index, (key, _) in enumerate(_CUSTOMER_STAGES)}
+_STEP_STAGE = {
+    "VALIDATE_ORDER": "preparing", "CHECK_SHELF_STOCK": "preparing", "PLAN_ARM_SEQUENCE": "preparing",
+    "WAIT_PINKY_ARRIVAL": "pinky_coming", "CONFIRM_DOCKING": "loading", "PICK_ITEM": "loading",
+    "VERIFY_TRANSFER": "loading", "VERIFY_LOAD_TOTAL": "loading", "NOTIFY_PINKY_RECEIVED": "delivering",
+    "WAIT_AT_RECEIVING_ZONE": "delivering", "CONFIRM_PICKUP": "arrived", "WAIT_PINKY_PARKED": "done",
+    "FINALIZE_TASK": "done",
+}
+_CUSTOMER_TEXT = {
+    "received": ("주문을 받았어요", "곧 준비를 시작해요"),
+    "preparing": ("주문을 준비하고 있어요", "선반 재고를 확인하고 로봇을 배정해요"),
+    "pinky_coming": ("핑키가 물건을 실으러 가고 있어요", "적재 자리에 도착하면 로봇 팔이 실어요"),
+    "loading": ("로봇 팔이 물건을 싣고 있어요", "{moved}/{total}개 실었어요"),
+    "delivering": ("핑키가 {zone}로 가고 있어요", "도착하면 알려 드릴게요"),
+    "arrived": ("{zone}에 도착했어요", "물건을 받은 뒤 아래 버튼을 눌러 주세요"),
+    "done": ("주문이 끝났어요", "이용해 주셔서 감사해요"),
+    "canceled": ("주문이 취소됐어요", "다시 주문할 수 있어요"),
+    "problem": ("주문 처리에 문제가 생겼어요", "직원이 확인하고 있어요"),
+}
+
+
+def _customer_stage(status: str, step_type: str | None) -> str:
+    if status == "PENDING":
+        return "received"
+    if status == "CANCELED":
+        return "canceled"
+    if status == "FAILED":
+        return "problem"
+    if status == "SUCCEEDED":
+        return "done"
+    return _STEP_STAGE.get(step_type or "", "preparing")
+
+
 # What the order window says under a product that cannot be ordered as usual.
 _PRODUCT_NOTICE = {"unknown": "재고 확인 중이라 주문을 닫았습니다", "closed": "판매 중지", "sold_out": "품절"}
 
@@ -69,6 +105,8 @@ class OrderDesk:
     # The shelf inventory (inventory.InventoryMonitor.snapshot). With it the window sells what is available
     # (shelves minus open orders) and refuses more; without it the desk reads the shelves directly.
     inventory: Callable[[], dict[str, Any]] | None = None
+    # OrderFlow.confirm_pickup: True when the order's Pinky was waiting at its receiving zone.
+    pickup: Callable[[str], bool] | None = None
     _intake: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     # ---- the order window ----------------------------------------------------------------------------------
@@ -213,6 +251,38 @@ class OrderDesk:
                 f"이 주문은 핑키 {len(shipments)}대가 필요합니다(쟁반 용량 {self.planning.pinky_capacity}). "
                 "여러 핑키로 나눠 실행하는 단계는 아직 없어서 주문을 나눠 넣어야 합니다",
             )
+
+    def confirm_pickup(self, order_id: str) -> dict[str, Any]:
+        """The customer took the order at the receiving zone; the flow then sends the Pinky home."""
+        order = self.store.get_task(order_id)
+        if order is None or order.get("order_items") is None:
+            raise OrderDeskError("ORDER_NOT_FOUND", f"주문 {order_id}이 없습니다", status=404)
+        if self.pickup is None or not self.pickup(order_id):
+            raise OrderDeskError("PICKUP_NOT_READY", "핑키가 아직 수령 구역에서 기다리고 있지 않습니다")
+        return {"order_id": order_id, "accepted": True, "message": "수령 확인을 받았습니다. 핑키가 주차장으로 돌아갑니다"}
+
+    def track(self, order_id: str) -> dict[str, Any]:
+        """The customer's view of one order: where it is, in plain words, and whether pickup can be confirmed."""
+        order = self.store.get_task(order_id)
+        if order is None or order.get("order_items") is None:
+            raise OrderDeskError("ORDER_NOT_FOUND", f"주문 {order_id}이 없습니다", status=404)
+        active = next((step for step in order["steps"] if step["id"] == order.get("active_step_id")), None)
+        stage = _customer_stage(order["status"], active["step_type"] if active else None)
+        zone = order.get("destination") or "수령 구역"
+        moved = sum(1 for step in order["steps"] if step["step_type"] == "VERIFY_TRANSFER" and step["status"] == "SUCCEEDED")
+        total = sum(1 for step in order["steps"] if step["step_type"] == "VERIFY_TRANSFER")
+        title, detail = _CUSTOMER_TEXT[stage]
+        return {
+            "order_id": order_id, "status": order["status"], "stage": stage,
+            "stages": [{"key": key, "label": label, "state": "done" if index < _STAGE_INDEX.get(stage, -1)
+                        else "current" if key == stage else "todo"}
+                       for index, (key, label) in enumerate(_CUSTOMER_STAGES)],
+            "title": title.format(zone=zone), "detail": detail.format(zone=zone, moved=moved, total=total),
+            "items": [{"label": self._label(item["object_class"]), "quantity": item["quantity"]} for item in order["order_items"]],
+            "zone": zone, "pinky": PINKY_NAMES.get(order.get("pinky_id") or ""),
+            "loaded": moved, "total": total, "can_confirm_pickup": stage == "arrived",
+            "created_at": order.get("created_at"), "finished_at": order.get("finished_at"),
+        }
 
     def reject(self, order_id: str) -> dict[str, Any]:
         """Turn down an order that has not started; no device was involved yet."""

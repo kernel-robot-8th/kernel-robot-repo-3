@@ -52,7 +52,8 @@ DEFAULT_TASK_STEPS = (
 )
 
 # Order steps carried out by (and so tagged with) the order's Pinky.
-PINKY_STEP_TYPES = frozenset({"WAIT_PINKY_ARRIVAL", "CONFIRM_DOCKING", "NOTIFY_PINKY_RECEIVED"})
+PINKY_STEP_TYPES = frozenset({"WAIT_PINKY_ARRIVAL", "CONFIRM_DOCKING", "NOTIFY_PINKY_RECEIVED",
+                              "WAIT_AT_RECEIVING_ZONE", "CONFIRM_PICKUP", "WAIT_PINKY_PARKED"})
 
 
 def pinky_robot_id(pinky_id: str | None) -> str | None:
@@ -60,7 +61,7 @@ def pinky_robot_id(pinky_id: str | None) -> str | None:
 
 
 def order_step_definitions(
-    order_items: list[dict[str, object]], pinky_id: str | None
+    order_items: list[dict[str, object]], pinky_id: str | None, *, receiving_zone: bool = False
 ) -> list[tuple[str, str | None, dict[str, object] | None]]:
     """Steps of one order: (step_type, robot_id, detail). One PICK_ITEM + VERIFY_TRANSFER pair per object unit;
     the arm of each pair is filled in by PLAN_ARM_SEQUENCE after the shelf stock check. Without a Pinky yet (an
@@ -84,8 +85,12 @@ def order_step_definitions(
     steps += [
         ("VERIFY_LOAD_TOTAL", None, None),
         ("NOTIFY_PINKY_RECEIVED", pinky, None),
-        ("FINALIZE_TASK", None, None),
     ]
+    if receiving_zone:
+        # The Pinky carries the order on to the receiving zone, waits for the customer, then returns home.
+        steps += [("WAIT_AT_RECEIVING_ZONE", pinky, None), ("CONFIRM_PICKUP", pinky, None),
+                  ("WAIT_PINKY_PARKED", pinky, None)]
+    steps.append(("FINALIZE_TASK", None, None))
     return steps
 
 
@@ -787,7 +792,8 @@ class TaskStore:
                     task.pinky_id = free[0]
             if order_items is not None:
                 # An order runs its own step list; its Pinky steps are tagged once the Pinky is known.
-                step_definitions = order_step_definitions(order_items, task.pinky_id)
+                step_definitions = order_step_definitions(order_items, task.pinky_id,
+                                                          receiving_zone=receiving_zone is not None)
             task.steps = [
                 TaskStepRecord(
                     id=f"STEP-{uuid.uuid4().hex[:12].upper()}",

@@ -26,7 +26,7 @@ CARROT_APPLE = [{"object_class": "carrot", "quantity": 1}, {"object_class": "app
 
 def devices(world: MockWorld) -> OrderDevices:
     return OrderDevices(world.shelf_stock, world.pinky_load, world.fleet_status, world.fleet_confirm, world.parking,
-                        world.pick, world.dispatch)
+                        world.pick, world.dispatch, world.mission_complete)
 
 
 class OrderFlowTests(unittest.TestCase):

@@ -34,6 +34,7 @@ from control_station.store import PINKY_NAMES
 ORDER_STEP_TYPES = frozenset({
     "VALIDATE_ORDER", "CHECK_SHELF_STOCK", "PLAN_ARM_SEQUENCE", "WAIT_PINKY_ARRIVAL", "CONFIRM_DOCKING",
     "PICK_ITEM", "VERIFY_TRANSFER", "VERIFY_LOAD_TOTAL", "NOTIFY_PINKY_RECEIVED",
+    "WAIT_AT_RECEIVING_ZONE", "CONFIRM_PICKUP", "WAIT_PINKY_PARKED",
 })
 # Objects the load camera sees that are not cargo (YOLO calls Pinky itself a car).
 NOT_CARGO = frozenset({"car"})
@@ -69,7 +70,10 @@ class OrderDevices:
     fleet_confirm: Callable[[str, str, str | None], dict[str, Any]]
     parking: Callable[[str], dict[str, Any]]
     pick: Callable[..., dict[str, Any] | None]
-    dispatch: Callable[[str], None] | None = None  # mock only
+    # Start the Pinky's route (pinky id, waypoint labels up to the receiving zone); None leaves it to the fleet.
+    dispatch: Callable[[str, list[str] | None], Any] | None = None
+    # Pickup confirmed at the receiving zone: tell the Pinky to drive home (pinky id, mission token).
+    mission_complete: Callable[[str, str | None], dict[str, Any]] | None = None
 
 
 def _label(policies: Any, object_class: str) -> str:
@@ -93,8 +97,15 @@ class OrderFlow:
         # dock_complete -> docked_manual passes through docking_anchor, which the Pinky allows up to 18 s.
         signal_timeout_s: float = 30.0,
         pick_stats: Callable[[], PickStats] | None = None,
+        route_for: Callable[[str | None], list[str] | None] | None = None,
+        pickup_timeout_s: float = 1800.0,
     ) -> None:
         self.arms = arms
+        # Waypoint labels from parking to an order's receiving zone (config/receiving-zones.json).
+        self.route_for = route_for or (lambda zone_id: None)
+        self.pickup_timeout_s = pickup_timeout_s
+        # Orders whose Pinky waits at the receiving zone: order id -> set when the customer confirms pickup.
+        self._pickups: dict[str, threading.Event] = {}
         # Past pick results per (policy, arm) for the arm choice; none -> every arm starts at the same rate.
         self.pick_stats = pick_stats or dict
         self.policies = policies
@@ -187,10 +198,23 @@ class OrderFlow:
         if missing:
             raise OrderFlowError("ORDER_POLICY_NOT_FOUND", f"학습된 정책이 없는 물체: {', '.join(missing)}")
         if self.devices.dispatch is not None:
-            self.devices.dispatch(self._pinky(ctx))
-            ctx.record("PINKY_DISPATCHED", {"pinky_id": self._pinky(ctx), "simulated": True,
-                                            "message": "모의: 핑키가 적재 위치로 출발"})
+            self._dispatch(ctx)
         return {"source": "control_station", "outcome": "ORDER_VALID", "order_items": ctx.task["order_items"]}
+
+    def _dispatch(self, ctx: StepContext) -> None:
+        """Send the Pinky off on its route: parking -> station 5 -> the order's receiving zone."""
+        pinky, zone = self._pinky(ctx), ctx.task.get("receiving_zone")
+        labels = self.route_for(zone)
+        try:
+            answer = self.devices.dispatch(pinky, labels) or {}
+        except PinkyFleetError as exc:
+            raise OrderFlowError(exc.error_code, f"핑키 {self._name(pinky)} 출발 실패: {exc}", "pinky_fleet") from exc
+        except OSError as exc:
+            raise OrderFlowError("PINKY_FLEET_UNREACHABLE", f"핑키 관제에 연결하지 못했습니다: {exc}", "pinky_fleet") from exc
+        simulated = bool(answer.get("simulated"))
+        where = f"5번을 거쳐 {zone}까지" if labels else "5번으로"
+        ctx.record("PINKY_DISPATCHED", {"pinky_id": pinky, "route": labels, "simulated": simulated,
+                                        "message": ("모의: " if simulated else "") + f"핑키 {self._name(pinky)} 출발, {where}"})
 
     def _check_shelf_stock(self, ctx: StepContext) -> dict[str, Any]:
         observation = self._observe("선반 재고", self.devices.shelf_stock)
@@ -396,6 +420,86 @@ class OrderFlow:
             raise OrderFlowError(code, f"핑키 위 물건이 주문과 다릅니다 · 부족 {missing or '없음'} · 초과 {extra or '없음'}", "cameras")
         return {"source": load.get("source"), "outcome": "LOAD_CONFIRMED", "loaded": dict(seen),
                 "simulated": load.get("simulated", False)}
+
+    def confirm_pickup(self, task_id: str) -> bool:
+        """The customer (or the operator) confirmed pickup at the receiving zone; False if the order's Pinky is
+        not waiting there yet."""
+        with self._guard:
+            waiting = self._pickups.get(task_id)
+        if waiting is None:
+            return False
+        waiting.set()
+        return True
+
+    def _wait_phase(self, ctx: StepContext, wanted: str, timeout_s: float, timeout_code: str,
+                    timeout_message: str) -> dict[str, Any] | None:
+        """Poll the Pinky's mission phase until `wanted`; records each phase change. None when canceled."""
+        pinky = self._pinky(ctx)
+        deadline = time.monotonic() + timeout_s
+        last_phase = None
+        while time.monotonic() < deadline:
+            if ctx.cancel_event.is_set():
+                return None
+            try:
+                status = self.devices.fleet_status(pinky)
+            except (PinkyFleetError, OSError):
+                ctx.cancel_event.wait(self.poll_s)  # a missed poll; the deadline still applies
+                continue
+            if status["phase"] != last_phase:
+                last_phase = status["phase"]
+                ctx.record("PINKY_STATUS", {"pinky_id": pinky, "phase": status["phase"], "message": status.get("message"),
+                                            "location": status.get("location"), "simulated": status.get("simulated", False)})
+            if status["phase"] == wanted:
+                return status
+            ctx.cancel_event.wait(self.poll_s)
+        raise OrderFlowError(timeout_code, timeout_message, "pinky_fleet")
+
+    def _wait_at_receiving_zone(self, ctx: StepContext) -> dict[str, Any] | None:
+        status = self._wait_phase(ctx, "course_complete", self.arrival_timeout_s, "PINKY_ZONE_TIMEOUT",
+                                  f"핑키 {self._name(self._pinky(ctx))}가 수령 구역에 도착하지 않았습니다")
+        if status is None:
+            return None
+        self._tokens[ctx.task["id"]] = status.get("mission_token")
+        return {"source": "pinky_fleet", "outcome": "AT_RECEIVING_ZONE", "zone": ctx.task.get("receiving_zone"),
+                "simulated": status.get("simulated", False)}
+
+    def _confirm_pickup(self, ctx: StepContext) -> dict[str, Any] | None:
+        """Wait for the customer's pickup confirmation, then send mission-complete so the Pinky goes home."""
+        task_id, pinky = ctx.task["id"], self._pinky(ctx)
+        waiting = threading.Event()
+        with self._guard:
+            self._pickups[task_id] = waiting
+        ctx.record("PICKUP_WAITING", {"pinky_id": pinky, "zone": ctx.task.get("receiving_zone"),
+                                      "message": f"{ctx.task.get('destination')} 도착 · 손님 수령 확인을 기다립니다"})
+        try:
+            deadline = time.monotonic() + self.pickup_timeout_s
+            while not waiting.wait(self.poll_s):
+                if ctx.cancel_event.is_set():
+                    return None
+                if time.monotonic() > deadline:
+                    raise OrderFlowError("PICKUP_TIMEOUT", "손님 수령 확인이 오지 않았습니다. 수령 구역을 확인하세요")
+        finally:
+            with self._guard:
+                self._pickups.pop(task_id, None)
+        if self.devices.mission_complete is None:
+            raise OrderFlowError("PINKY_RETURN_NOT_CONFIGURED", "핑키에 주행완료를 보낼 수 없습니다", "pinky_fleet")
+        token = self._tokens.get(task_id)
+        try:
+            answer = self.devices.mission_complete(pinky, token)
+        except PinkyFleetError as exc:
+            raise OrderFlowError(exc.error_code, f"핑키 {self._name(pinky)} 주행완료 신호 실패: {exc}", "pinky_fleet") from exc
+        except OSError as exc:
+            raise OrderFlowError("PINKY_FLEET_UNREACHABLE", f"핑키 관제에 연결하지 못했습니다: {exc}", "pinky_fleet") from exc
+        ctx.record("PINKY_SIGNAL_SENT", {"pinky_id": pinky, "action": "mission-complete", "answer": answer,
+                                         "message": "수령 확인 · 핑키 관제에 주행완료 전달"})
+        return {"source": "control_station", "outcome": "PICKUP_CONFIRMED", "answer": answer}
+
+    def _wait_pinky_parked(self, ctx: StepContext) -> dict[str, Any] | None:
+        status = self._wait_phase(ctx, "parked", self.arrival_timeout_s, "PINKY_RETURN_TIMEOUT",
+                                  f"핑키 {self._name(self._pinky(ctx))}가 주차장으로 돌아오지 않았습니다")
+        if status is None:
+            return None
+        return {"source": "pinky_fleet", "outcome": "PINKY_PARKED", "simulated": status.get("simulated", False)}
 
     def _notify_pinky_received(self, ctx: StepContext) -> dict[str, Any]:
         answer = self._confirm(ctx, "received")

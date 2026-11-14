@@ -24,6 +24,8 @@ STAGES = (
     ("LOAD", "적재", ("PICK_ITEM", "VERIFY_TRANSFER")),
     ("TOTAL", "총량 확인", ("VERIFY_LOAD_TOTAL",)),
     ("SIGNAL", "완료 신호", ("NOTIFY_PINKY_RECEIVED", "FINALIZE_TASK")),
+    # Only orders with a receiving zone have these steps; for the others the stage is left out.
+    ("DELIVER", "수령", ("WAIT_AT_RECEIVING_ZONE", "CONFIRM_PICKUP", "WAIT_PINKY_PARKED")),
 )
 ACTIVE_STEP = frozenset({"COMMAND_SENT", "ACCEPTED", "RUNNING"})
 ALERT_EVENTS = frozenset({"PINKY_POSITION_ABNORMAL", "PINKY_FLEET_UNREACHABLE"})
@@ -83,6 +85,8 @@ def _current_text(order: dict[str, Any], step: dict[str, Any] | None, events: li
         "PLAN_ARM_SEQUENCE": "물체별 팔 배정 중", "WAIT_PINKY_ARRIVAL": "핑키 도착 대기",
         "CONFIRM_DOCKING": "핑키에 도킹완료 전달 중", "VERIFY_LOAD_TOTAL": "핑키 위 총량 확인 중",
         "NOTIFY_PINKY_RECEIVED": "핑키에 수령 완료 전달 중", "FINALIZE_TASK": "마무리 중",
+        "WAIT_AT_RECEIVING_ZONE": "핑키가 수령 구역으로 가는 중", "CONFIRM_PICKUP": "수령 구역 도착 · 손님 수령 확인 대기",
+        "WAIT_PINKY_PARKED": "핑키 복귀 중",
     }
     return latest_message or defaults.get(kind, kind)
 
@@ -95,6 +99,8 @@ def summarize_order(order: dict[str, Any]) -> dict[str, Any]:
     stages = []
     for key, label, types in STAGES:
         stage_steps = [step for kind in types for step in by_type.get(kind, [])]
+        if key == "DELIVER" and not stage_steps:
+            continue
         stages.append({"key": key, "label": label, "state": _stage_state(stage_steps)})
     verified = [step for step in by_type.get("VERIFY_TRANSFER", []) if step["status"] == "SUCCEEDED"]
     total = len(by_type.get("VERIFY_TRANSFER", []))
@@ -115,6 +121,12 @@ def summarize_order(order: dict[str, Any]) -> dict[str, Any]:
                 alert = {"level": "warning", "code": event["event_type"], "message": event["payload"].get("message"),
                          "at": event["received_at"], "task_id": order["id"], "title": title}
                 break
+    if alert is None and active is not None and active["step_type"] == "CONFIRM_PICKUP":
+        # Not a fault: a person has to confirm the pickup (the customer's app, or the operator for them).
+        waiting = next((event for event in reversed(events) if event["event_type"] == "PICKUP_WAITING"), None)
+        alert = {"level": "action", "code": "PICKUP_WAITING", "title": "수령 확인 대기",
+                 "message": (waiting or {}).get("payload", {}).get("message") or "손님 수령 확인을 기다립니다",
+                 "at": (waiting or {}).get("received_at"), "task_id": order["id"], "pickup": True}
     acknowledged = any(event["event_type"] == "ALERT_ACKNOWLEDGED" for event in events)
     if order["status"] == "FAILED" and not acknowledged:
         error = order.get("error") or {}

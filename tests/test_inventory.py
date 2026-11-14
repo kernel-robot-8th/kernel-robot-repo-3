@@ -14,7 +14,7 @@ from control_station.inventory import InventoryBook, InventoryMonitor, Inventory
 from control_station.mock_world import MockWorld
 from control_station.store import TaskStore
 from test_api_routes import ApiTestCase
-from test_order_desk import make_desk
+from test_order_desk import finish, make_desk
 from test_order_flow import CARROT_APPLE, TERMINAL
 
 APPLE = [{"object_class": "apple", "label": "사과"}]
@@ -132,10 +132,7 @@ class InventoryWithOrdersTest(unittest.TestCase):
             monitor.read_once()
         self.assertEqual(monitor.snapshot()["products"][0]["available"], 2)  # 4 apples, 2 reserved
         self.desk.start(order["id"])
-        deadline = time.monotonic() + 15
-        while self.store.get_task(order["id"])["status"] not in TERMINAL and time.monotonic() < deadline:
-            time.sleep(0.02)
-        self.assertEqual(self.store.get_task(order["id"])["status"], "SUCCEEDED")
+        self.assertEqual(finish(self.desk, self.store, order["id"])["status"], "SUCCEEDED")
         self.assertEqual(self.store.reserved_units(), {})
         self.assertEqual(sorted(name for _, _, name in self.store.confirmed_transfers()), ["apple", "apple", "carrot"])
         monitor.read_once()  # books the three moves; the mock shelves already show them

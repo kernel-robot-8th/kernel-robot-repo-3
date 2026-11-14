@@ -23,13 +23,29 @@ from test_order_flow import CARROT_APPLE, TERMINAL, devices
 ZONES = {"zone_a": ReceivingZone("zone_a", "수령 구역 A", ("1", "5", "9"))}
 
 
+def finish(desk: OrderDesk, store: TaskStore, order_id: str, *, pickup: bool = True) -> dict:
+    """Run an order to its end, confirming pickup when its Pinky waits at the receiving zone."""
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        order = store.get_task(order_id)
+        if order["status"] in TERMINAL:
+            return order
+        active = next((step for step in order["steps"] if step["id"] == order.get("active_step_id")), None)
+        if pickup and active is not None and active["step_type"] == "CONFIRM_PICKUP" and desk.flow_waiting(order_id):
+            desk.confirm_pickup(order_id)
+        time.sleep(0.02)
+    raise AssertionError(f"order did not finish: {store.get_task(order_id)['status']}")
+
+
 def make_desk(store: TaskStore, *, zones=ZONES) -> tuple[OrderDesk, MockWorld, MockTaskOrchestrator]:
     world = MockWorld(drive_s=0.2, pick_s=0.05)
     flow = OrderFlow(load_arms(), load_act_policies(), devices(world), dwell_s=0.0, poll_s=0.02,
-                     arrival_timeout_s=10.0, signal_timeout_s=2.0)
+                     arrival_timeout_s=10.0, signal_timeout_s=2.0,
+                     route_for=lambda zone_id: list(zones[zone_id].route_labels) if zone_id in zones else None)
     orchestrator = MockTaskOrchestrator(store, order_flow=flow)
     desk = OrderDesk(store, orchestrator, devices(world), load_arms(), load_act_policies(), zones,
-                     pick_stats=lambda: store.pick_success_stats(simulated=True))
+                     pick_stats=lambda: store.pick_success_stats(simulated=True), pickup=flow.confirm_pickup)
+    desk.flow_waiting = lambda order_id: order_id in flow._pickups  # test helper: is the step waiting yet
     return desk, world, orchestrator
 
 
@@ -89,13 +105,34 @@ class OrderDeskTest(unittest.TestCase):
         second = self.desk.receive([{"object_class": "carrot", "quantity": 1}], "zone_a")
         self.desk.start(first["id"])
         self.desk.start(second["id"])  # P0 is held by the first order now
-        done = self.wait(first["id"])
+        done = finish(self.desk, self.store, first["id"])
         self.assertEqual((done["status"], done["pinky_id"]), ("SUCCEEDED", "10"))
         assigned = [event for event in done["events"] if event["event_type"] == "PINKY_ASSIGNED"]
         self.assertEqual(assigned[0]["payload"]["assignment"]["pinky_id"], "10")
         self.assertEqual({step["robot_id"] for step in done["steps"] if step["step_type"] == "CONFIRM_DOCKING"},
                          {"pinky-10"})
-        self.assertEqual(self.wait(second["id"])["pinky_id"], "11")
+        self.assertEqual(finish(self.desk, self.store, second["id"])["pinky_id"], "11")
+
+    def test_the_pinky_goes_to_the_receiving_zone_and_home_after_pickup(self) -> None:
+        order = self.desk.receive([{"object_class": "carrot", "quantity": 1}], "zone_a")
+        with self.assertRaises(OrderDeskError) as early:
+            self.desk.confirm_pickup(order["id"])
+        self.assertEqual(early.exception.error_code, "PICKUP_NOT_READY")
+        self.desk.start(order["id"])
+        deadline = time.monotonic() + 15
+        while not self.desk.flow_waiting(order["id"]) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        track = self.desk.track(order["id"])
+        self.assertEqual((track["stage"], track["can_confirm_pickup"], track["title"]),
+                         ("arrived", True, "수령 구역 A에 도착했어요"))
+        self.assertEqual(self.world.fleet_status("10")["phase"], "course_complete")
+        self.desk.confirm_pickup(order["id"])
+        done = finish(self.desk, self.store, order["id"], pickup=False)
+        self.assertEqual(done["status"], "SUCCEEDED")
+        self.assertEqual(self.world.fleet_status("10")["phase"], "parked")
+        actions = [e["payload"]["action"] for e in done["events"] if e["event_type"] == "PINKY_SIGNAL_SENT"]
+        self.assertEqual(actions, ["dock_complete", "received", "mission-complete"])
+        self.assertEqual(self.desk.track(order["id"])["stage"], "done")
 
     def test_no_free_pinky_keeps_the_order_waiting(self) -> None:
         for pinky_id in ("10", "11", "12"):

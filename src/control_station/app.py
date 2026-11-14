@@ -257,12 +257,16 @@ def main() -> None:
     # Pinky mission phases and the dock_complete / received signals: the Pinky team's fleet dashboard when its URL
     # is set (e.g. http://<pinky PC>:8765), else the mock world, which also sends the mock Pinky off for each order.
     fleet_url = os.environ.get("CONTROL_STATION_PINKY_FLEET_URL", "").strip()
-    fleet_status, fleet_confirm, dispatch = world.fleet_status, world.fleet_confirm, world.dispatch
+    # Starting an order starts the Pinky's route (parking -> station 5 -> the order's receiving zone); the
+    # receiving zone's pickup confirmation sends mission-complete so it drives home.
+    fleet_status, fleet_confirm = world.fleet_status, world.fleet_confirm
+    dispatch, mission_complete = world.dispatch, world.mission_complete
     fleet = None
     if fleet_url:
         fleet = PinkyFleetClient(fleet_url)
-        fleet_status, fleet_confirm, dispatch = fleet.fleet_status, fleet.fleet_confirm, None
-        print(f"주문 흐름의 핑키 신호: 핑키 관제 {fleet_url}", flush=True)
+        fleet_status, fleet_confirm = fleet.fleet_status, fleet.fleet_confirm
+        dispatch, mission_complete = fleet.dispatch, fleet.mission_complete
+        print(f"주문 흐름의 핑키 신호: 핑키 관제 {fleet_url} (주문을 시작하면 실제 핑키가 출발합니다)", flush=True)
     # The Pinky screen reads and commands through the same client, so it shares the client's status cache.
     server.pinky_gateway = PinkyGateway(fleet, world.fleet_status)
     # Counting for the stock check and the per-object transfer check: the cameras' YOLO detections when
@@ -277,8 +281,17 @@ def main() -> None:
         print(f"주문 흐름의 개수 세기: 카메라 YOLO (핑키 쟁반 {load_counter.camera_id} {load_counter.region_or_none()})",
               flush=True)
     server.order_devices = OrderDevices(
-        shelf_stock, pinky_load, fleet_status, fleet_confirm, order_parking, world.pick, dispatch,
+        shelf_stock, pinky_load, fleet_status, fleet_confirm, order_parking, world.pick, dispatch, mission_complete,
     )
+    try:
+        receiving_zones = load_receiving_zones()
+    except ReceivingZoneError as exc:
+        receiving_zones = {}
+        print(f"수령 구역 파일을 읽지 못해 주문을 받을 수 없습니다: {exc}", flush=True)
+
+    def route_for(zone_id: str | None) -> list[str] | None:
+        zone = receiving_zones.get(zone_id or "")
+        return list(zone.route_labels) if zone else None
     try:
         arrival_timeout_s = float(os.environ.get("CONTROL_STATION_ARRIVAL_TIMEOUT_S", "600"))
     except ValueError:
@@ -291,6 +304,7 @@ def main() -> None:
         dwell_s=float(os.environ.get("CONTROL_STATION_ORDER_STEP_DWELL_S", "0.8") or 0.8),
         arrival_timeout_s=arrival_timeout_s,
         pick_stats=pick_stats,
+        route_for=route_for,
     )
     server.task_orchestrator = MockTaskOrchestrator(
         task_store, mode=mode, arrival_check=arrival_check, load_check=load_check,
@@ -298,11 +312,7 @@ def main() -> None:
         target_evidence=partial(front_camera_evidence, server) if real_arm else None,
         order_flow=server.order_flow,
     )
-    try:
-        receiving_zones = load_receiving_zones()
-    except ReceivingZoneError as exc:
-        receiving_zones = {}
-        print(f"수령 구역 파일을 읽지 못해 주문을 받을 수 없습니다: {exc}", flush=True)
+
     def orderable_products() -> list[dict[str, str]]:
         if act_policies is None:
             return []
@@ -321,7 +331,7 @@ def main() -> None:
     ).start()
     server.order_desk = OrderDesk(
         task_store, server.task_orchestrator, server.order_devices, server.arms, act_policies,
-        receiving_zones, pick_stats, inventory=server.inventory.snapshot,
+        receiving_zones, pick_stats, inventory=server.inventory.snapshot, pickup=server.order_flow.confirm_pickup,
     )
     if real_arm:
         print("작업 흐름의 팔 단계가 실제 팔 명령(PICK_WITH_POLICY)을 보냅니다", flush=True)
