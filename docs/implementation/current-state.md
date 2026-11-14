@@ -9,7 +9,9 @@
 | `run-control-station.sh` | 관제 실행. `--arm`이면 LeRobot 텔레오퍼레이션 시작 API를 켬. 주차 위치나 `ros:` 카메라를 설정하면 ROS 2와 `cpp/install`을 source. 세션 로그는 `.control-station/logs/` |
 | `src/control_station/app.py` | 서버 조립(`main`)과 요청 분배. 경로 표는 `api/routes.py` |
 | `src/control_station/api/` | `tasks.py`(주문·작업 목록·생성·시작·취소, 명령 해석), `flow.py`(주문 진행 화면, 경보 확인, 모의 세계 조작), `cameras.py`(카메라 목록, MJPEG 스트림), `arm.py`(텔레오퍼레이션·정책 한 번 실행, OMX 명령 큐, 선반 칸, 정책 목록), `status.py`(health, 로봇 상태, 주차 `/live`·`/check`), `common.py`(교차 출처 확인, JSON 본문, 작업 조건·주문 물체 검증). 경로별 상태·오류 코드는 `tests/test_api_routes.py`로 고정 |
-| `src/control_station/order_flow.py` | 주문 단계 실행: 선반 재고 → 선반 위치로 팔 배정 → 핑키 도착 대기 → 물체별 집기·옮김 확인 → 총량 → 핑키 관제 신호. 적재 자리 하나를 주문끼리 나눠 씀 |
+| `src/control_station/order_desk.py`, `api/orders.py` | 주문 접수 창구: 주문 창용 catalog, 핑키 없이 접수(`PENDING`), 배정 미리보기, 시작할 때 핑키 확정(`PINKY_ASSIGNED`), 거절. 수령 구역은 `receiving_zones.py`·`config/receiving-zones.json` |
+| `src/control_station/assignment.py` | 핑키·OMX 배정 규칙(순수 함수): 핑키는 제외 조건 뒤 배터리 구간 → 오늘 운행 → 쉰 시간 → 번호, 팔은 제약이 많은 물체부터 성공률 → 남은 재고 → 설정 순서. 고른 이유를 함께 돌려줌 |
+| `src/control_station/order_flow.py` | 주문 단계 실행: 선반 재고 → 배정 규칙으로 팔 배정 → 핑키 도착 대기 → 물체별 집기·옮김 확인 → 총량 → 핑키 관제 신호. 적재 자리 하나를 주문끼리 나눠 씀 |
 | `src/control_station/mock_world.py` | 선반 재고·핑키 위 물건·핑키 임무 단계·팔 집기를 흉내 내는 모의 세계와 사고 주입(모든 결과 `simulated: true`) |
 | `src/control_station/pinky_fleet.py` | 핑키 팀 관제(`pinky_fleet_dashboard`) HTTP 클라이언트: 임무 단계 읽기, `dock_complete`·`received` 신호 |
 | `src/control_station/camera_counts.py` | 선반 캠(칸 영역 안)과 탑 캠(핑키 쟁반 영역 안)의 YOLO 검출로 종류별 개수 세기(새 프레임 5장 중앙값) |
@@ -29,7 +31,7 @@
 | `src/control_station/json_files.py` | 설정 파일과 요청 본문의 JSON 읽기(중복 키 거부, 크기 제한 일반 파일만) |
 | `src/control_station/command_parser.py` | 제한 문법 초안 parser: 집기 조건(물체·색상·선반 층·목적지)과 주문 문장("당근 1개랑 사과 두 개") |
 | `models.py`, `database.py`, `store.py`, `migrations/` | 상태 어휘, SQLAlchemy ORM·SQLite, 작업·단계·이벤트 저장, Alembic revision |
-| `src/control_station/web/` | 화면 탭: 주문 진행, 현황, 수동 조작, 작업 이력, API |
+| `src/control_station/web/` | 관제 화면 탭: 주문 진행(맨 위 주문 접수), 현황, 수동 조작, 작업 이력, API. 손님용 주문 창(목업) `/order` |
 | `cpp/` | Pinky 주차 판정의 유일한 구현(C++ 라이브러리·CLI `pinky_parking`·ROS 2 노드)과 `omx_interfaces`. [cpp/README.md](../../cpp/README.md) |
 | `scripts/` | 보정(`calibrate_camera_intrinsics.py`, `calibrate_shelf_pose.py`, 공용 `calibration_artifacts.py`), OMX 워커(`mock_omx_worker.py`, `omx_lerobot_worker.py`, `omx_ros_worker.py`), 정책 도우미(`omx_act_policy_test.sh`, `omx_act_policy_run.py`), `record_omx_pose.py`, `probe_omx_readonly.py`, `check_setup.sh` |
 | `simulation/ros2_ws/src/toktak_warehouse/` | Gazebo Harmonic 창고 asset과 bridge ([ROS 2 인터페이스 목록](ros2-inventory.md)) |

@@ -26,7 +26,7 @@ ros2 launch parking_vision_ros ceiling_parking.launch.py repository_root:=$PWD s
 ./run-control-station.sh
 ```
 
-브라우저의 **주문 진행** 탭에서 주문을 등록하면 바로 시작합니다. 관련 설정:
+주문은 주문 창(`http://<관제 주소>/order`)에서 넣고, 관제의 **주문 진행** 탭 맨 위 **주문 접수**에서 배정 미리보기를 본 뒤 **시작**합니다. 핑키는 시작할 때 정해집니다. 관련 설정:
 
 | 설정 | 뜻 |
 |---|---|
