@@ -64,7 +64,7 @@ HTTP 서버 생존, 카메라 프레임 수신, Nav2 action server 발견, LeRob
 | 오케스트레이터 → Pinky 어댑터 | task/step/command ID, 목적지, deadline | 수락/거절, 진행, terminal 성공·실패, 취소 결과 | 공통 의미 확정; ROS 2 action 이름·타입·namespace·frame 미확정 |
 | 오케스트레이터 → OMX 어댑터 | task/step/command ID, 작업 종류·파라미터 | 수락/거절, 진행, 파지·적재 최종 결과 또는 실패 | 공통 의미 확정; 관제 자동 명령은 미연결. 로컬 LeRobot `OmxFollower.send_action()`은 `*.pos` 관절 목표를 쓰지만 task 수락/terminal 파지 결과를 제공하지 않음 |
 | 로봇 어댑터 → 이벤트 처리기 | robot/task/step/command ID, 장치 결과 | `ACCEPTED`, `EXECUTION_STARTED`, `PROGRESS`, `SUCCEEDED`, `FAILED`, `CANCELED` 또는 미확정 | 공통 이벤트 의미 확정; 장치별 실제 메시지 미확정 |
-| 천장 카메라 주차 판정 → 관제 | spot·marker ID, 등록 위치 대비 dx·dy·dyaw와 허용 오차·비율, 시야 확인 여부, 프레임 출처 | `ARRIVED`, `MISALIGNED`, 판정 불가(`NOT_FOUND`/`AMBIGUOUS`/`VIEW_UNVERIFIED`); Nav2 결과와 별개의 관측 | 초안: CLI, 관제 GET 관측, 모의 작업 `VERIFY_ARRIVAL`의 `PARKING_OBSERVED` event·팔 단계 조건·이력 화면 구현 ([주차 정렬 관측](#pinky-주차-정렬-관측-초안)) |
+| 천장 카메라 주차 판정 → 관제 | spot·marker ID, 등록 위치 대비 dx·dy·dyaw와 허용 오차·비율, 시야 확인 여부, 프레임 출처 | `ARRIVED`, `MISALIGNED`, 판정 불가(`NOT_FOUND`/`AMBIGUOUS`/`VIEW_UNVERIFIED`); Nav2 결과와 별개의 관측 | 초안: C++ 노드(`/pinky_parking/state`, `/pinky_parking/check`)와 CLI, 관제 GET 관측, `VERIFY_ARRIVAL`·주문 `WAIT_PINKY_ARRIVAL`의 `PARKING_OBSERVED` event·진행 조건 구현 ([주차 정렬 관측](#pinky-주차-정렬-관측-초안)) |
 | Head/Joint Camera → 관제 UI | 카메라별 프레임·연결·스트림·프레임 sequence/해상도·마지막 프레임 시각, closed-set YOLO 또는 선택 YOLO-World의 camera/frame 출처·고정 prompt vocabulary·픽셀 영역 | 카메라별 오류; 다른 카메라나 로봇 상태에 전파하지 않음; 검출 후보는 자동 선택/명령 신호가 아님 | API 관측 필드 구현; 가중치 미포함; 실제 장착 위치·실물 객체별 검출 적합성은 미검증 |
 
 ## 4. 명령·이벤트 공통 envelope
@@ -147,9 +147,9 @@ OMX에는 좌표를 보내지 않습니다(2026-11-11 결정). 팔은 기록한 
 
 ### Pinky 주차 정렬 관측 (초안)
 
-Pinky가 멈춘 뒤 천장 카메라로 "등록된 주차 위치와 얼마나 다른지"를 재서 관제에 올리는 계약 초안입니다. 관제는 이 값을 화면에 보여 주고, 다음 단계를 진행할지 판단하는 입력 중 하나로 씁니다. `GET /api/parking-spots/{spot_id}/check`가 아래 관측 객체를 `{"observation": ...}`로 반환하도록 구현돼 있습니다(관제가 `CONTROL_STATION_PARKING_CAMERA`로 feed를 연 경우). `CONTROL_STATION_PARKING_SPOT`을 지정하면 모의 작업의 `VERIFY_ARRIVAL` 단계가 같은 관측을 `PARKING_OBSERVED` event로 남기고 `ARRIVED`일 때만 팔 단계로 진행하며, 작업 이력 화면에 결과를 표시합니다. 측정 방식과 현장 기록은 [실행 방법](../implementation/runbook.md#천장-카메라-pinky-주차-판정)에 있습니다.
+Pinky가 멈춘 뒤 천장 카메라로 "등록된 주차 위치와 얼마나 다른지"를 재서 관제에 올리는 계약 초안입니다. 관제는 이 값을 화면에 보여 주고, 다음 단계를 진행할지 판단하는 입력 중 하나로 씁니다. 판정은 C++ ROS 2 노드(`cpp/parking_vision_ros`)만 하고, 관제는 `CONTROL_STATION_PARKING_SPOT`을 지정했을 때 노드의 결과를 아래 JSON으로 바꿉니다. `GET /api/parking-spots/{spot_id}/check`가 아래 관측 객체를 `{"observation": ...}`로 반환하고, `VERIFY_ARRIVAL`과 주문의 `WAIT_PINKY_ARRIVAL`은 같은 관측을 `PARKING_OBSERVED` event로 남긴 뒤 `ARRIVED`일 때만 진행합니다. 운영 절차와 현장 기록은 [실행 방법](../implementation/runbook.md#천장-카메라-pinky-주차-판정), 노드 내부는 [cpp/README.md](../../cpp/README.md)에 있습니다.
 
-천장 카메라는 관제 Head Camera와 같은 실물 카메라입니다. 관제 구현에서는 별도 장치를 열지 않고 Head Camera feed의 프레임을 씁니다. 주차 위치 등록 파일의 보정 `camera_id`(`ceiling_camera`)와 관제 feed ID(`head_camera`)가 다르므로, 결과에 둘을 함께 기록합니다.
+천장 카메라는 노드의 캡처 컴포넌트가 열고, 관제 Head Camera는 같은 영상을 `ros:/ceiling_camera/image_raw/compressed`로 받습니다. 결과에는 패널이 보여 주는 관제 feed(`feed_camera_id`, 기본 `head_camera`), 노드가 구독한 영상 토픽(`node_image_topic`), 등록 파일의 보정 카메라(`calibration_camera_id`, `ceiling_camera`)를 함께 기록합니다.
 
 관측 객체 예시입니다.
 
@@ -178,6 +178,7 @@ Pinky가 멈춘 뒤 천장 카메라로 "등록된 주차 위치와 얼마나 �
   "view_shift_px": null,
   "frames_used": 15,
   "feed_camera_id": "head_camera",
+  "node_image_topic": "/ceiling_camera/image_raw",
   "calibration_camera_id": "ceiling_camera",
   "frame_sequence_range": [10234, 10248],
   "captured_from": "2026-11-02T11:05:01.120Z",
@@ -186,9 +187,11 @@ Pinky가 멈춘 뒤 천장 카메라로 "등록된 주차 위치와 얼마나 �
   "frames_examined": 15,
   "spot_registration_sha256": "…",
   "intrinsic_calibration_sha256": "…",
-  "opencv_version": "4.14.0",
+  "opencv_version": "4.6.0",
   "registration_opencv_version": "4.6.0",
-  "usable_for_robot_control": false
+  "image_overlay": { "...": "화면에 그릴 픽셀 좌표" },
+  "usable_for_robot_control": false,
+  "judgment_source": "ros:/pinky_parking/check"
 }
 ```
 
@@ -201,7 +204,8 @@ Pinky가 멈춘 뒤 천장 카메라로 "등록된 주차 위치와 얼마나 �
 | `deviation_level` | 두 비율 중 큰 값 r로 정하는 등급. `WITHIN`(r ≤ 1, `ARRIVED`와 같음), `NEAR`(1 < r ≤ 2, 조금 벗어남), `FAR`(r > 2, 많이 벗어남). 경계 2는 초안 값이며 허용 오차와 함께 조정 |
 | `view_check` | `ON`이면 바닥 고정 마커로 카메라 시야를 확인한 결과, `OFF`이면 확인하지 않은 결과. 화면에 항상 표시 |
 | `frames_used`, `frames_examined`, `frame_sequence_range`, `captured_from`/`captured_until` | 판정에 쓴(중앙값에 들어간) 프레임 수, 살펴본 요청 이후 프레임 수와 그 출처 |
-| `opencv_version`, `registration_opencv_version` | 판정·등록에 쓴 OpenCV 버전. 2026-11-02 같은 화면에서 4.6과 4.14의 모서리 검출 차이로 약 1 mm·0.2°·0.8 px가 났음. 등록 파일에 없으면 `null` |
+| `opencv_version`, `registration_opencv_version` | 판정·등록에 쓴 OpenCV 버전(버전이 다르면 결과가 조금 달라짐, [cpp/README.md](../../cpp/README.md)). 등록 파일에 없으면 `null` |
+| `image_overlay`, `judgment_source` | 영상 위에 그릴 등록 위치·마커 픽셀(표시 전용)과 결과를 낸 노드 경로(`ros:/pinky_parking/check`, `/live`는 `ros:/pinky_parking/state`) |
 | `spot_registration_sha256`, `intrinsic_calibration_sha256` | 어떤 등록·보정 파일로 판정했는지 나타내는 provenance |
 
 규칙 초안:
@@ -216,10 +220,10 @@ Pinky가 멈춘 뒤 천장 카메라로 "등록된 주차 위치와 얼마나 �
    | `MISALIGNED` + `FAR` | 많이 벗어남. 다른 위치에 섰거나 이동이 잘못됐을 수 있습니다. 처리는 `NEAR`와 같고, 화면에서 더 눈에 띄게 구분합니다. |
    | `NOT_FOUND`, `AMBIGUOUS`, `VIEW_UNVERIFIED` | 판정 불가입니다. 팔 단계를 시작하지 않고, "어긋남"과 구분해 "확인 못 함"으로 표시합니다. |
 
-3. **관측을 시작하지 못한 경우**는 관측 객체 대신 오류로 반환하고 task event를 남기지 않습니다. `spot_id` 형식이 틀리면 `PARKING_SPOT_ID_INVALID`(400), 등록 파일이 없으면 `PARKING_SPOT_NOT_FOUND`(404), schema·보정 SHA-256이 맞지 않으면 `PARKING_SPOT_INVALID`(409), 주차 카메라가 설정되지 않았거나 feed가 없거나 3초 안에 새 프레임이 없거나 해상도가 보정과 다르면 `PARKING_CAMERA_UNAVAILABLE`(503)입니다. 영상은 들어오지만 stamp가 모두 요청 전이면(예: rosbag을 `use_sim_time` 없이 재생) 같은 코드에 그 사실을 적은 메시지가 붙습니다. 판정 노드가 이미 4개 요청을 처리 중이면 `PARKING_CHECK_BUSY`(429)입니다. 판정은 C++ 노드가 하며(2026-11-03부터 관제 안의 Python 판정 없음), 관제가 노드에 연결하지 못하면 `PARKING_NODE_UNAVAILABLE`(503), 6초 안에 응답이 없으면 `PARKING_NODE_TIMEOUT`(503)이고 자동 재시도는 없습니다. 이때 관측 객체에는 `judgment_source`와 노드가 구독한 영상 토픽 `node_image_topic`이 붙고(`feed_camera_id`는 같은 카메라를 보여 주는 관제 feed, 기본 `head_camera`), `/live`는 노드 상태가 없거나 2초 넘게 갱신되지 않으면 `NODE_UNAVAILABLE`입니다.
+3. **관측을 시작하지 못한 경우**는 관측 객체 대신 오류로 반환하고 task event를 남기지 않습니다. `spot_id` 형식이 틀리면 `PARKING_SPOT_ID_INVALID`(400), 등록 파일이 없으면 `PARKING_SPOT_NOT_FOUND`(404), schema·보정 SHA-256이 맞지 않으면 `PARKING_SPOT_INVALID`(409), 노드의 영상 토픽 발행자가 없거나 3초 안에 새 프레임이 없거나 해상도가 보정과 다르면 `PARKING_CAMERA_UNAVAILABLE`(503)입니다. 영상은 들어오지만 stamp가 모두 요청 전이면(예: rosbag을 `use_sim_time` 없이 재생) 같은 코드에 그 사실을 적은 메시지가 붙습니다. 그 밖의 노드 처리 오류는 `PARKING_OBSERVATION_ERROR`(503), 노드가 이미 4개 요청을 처리 중이면 `PARKING_CHECK_BUSY`(429)입니다. 관제가 노드에 연결하지 못하면 `PARKING_NODE_UNAVAILABLE`(503), 6초 안에 응답이 없으면 `PARKING_NODE_TIMEOUT`(503)이고 자동 재시도는 없습니다. `/live`는 노드 상태가 없거나 2초 넘게 갱신되지 않으면 `NODE_UNAVAILABLE`입니다.
 4. **화면 표시용 실시간 상태.** `GET /api/parking-spots/{spot_id}/live`는 같은 판정 방식으로 최신 프레임을 계속 보며 `NOT_IN_VIEW`/`MOVING`/`IN_POSITION`/`OFF_POSITION`/판정 불가(`AMBIGUOUS`, `VIEW_UNVERIFIED`, `CAMERA_UNAVAILABLE`, `SPOT_INVALID`, 추적 코드 오류 `TRACKING_ERROR`) 상태와 같은 오프셋·등급 필드, `since`(그 상태가 시작된 시각), `display_only: true`를 반환합니다. 이 값은 팔 단계 진행 조건으로 쓰지 않습니다.
 5. **작업 이력 연결.** 작업 실행 중의 관측은 `PARKING_OBSERVED` event로 task/step/robot ID와 함께 남깁니다. 이 event는 task·step 상태를 바꾸지 않습니다.
-6. **방향 표현.** `dx`/`dy`는 마커 축 기준입니다. 등록 파일에 `marker_forward_axis`가 있으면 Pinky 기준 `forward_mm`/`left_mm`를 함께 냅니다. 현재 `pinky_dock_1`은 `-x`(마커 왼쪽 변이 Pinky 앞쪽)로 기록돼 있습니다. 2026-11-02에 Pinky를 손으로 앞으로 약 5 cm 밀어, 마커 -x 방향으로 53.7 mm 이동한 것을 확인하고 정했습니다.
+6. **방향 표현.** `dx`/`dy`는 마커 축 기준입니다. 등록 파일에 `marker_forward_axis`가 있으면 Pinky 기준 `forward_mm`/`left_mm`를 함께 냅니다. 현재 `pinky_dock_1`은 `-x`(마커 왼쪽 변이 Pinky 앞쪽)로 기록돼 있습니다(정한 방법은 [실행 방법](../implementation/runbook.md#2026-11-02-현장-확인)).
 7. 이 관측은 `usable_for_robot_control: false`입니다. 좌표로 Pinky를 보정 이동시키는 명령은 만들지 않습니다.
 
 ## 6. 전송 방식: 합의된 범위와 미정 항목

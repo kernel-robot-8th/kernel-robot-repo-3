@@ -1,5 +1,7 @@
 # Pinky 주차 판정 C++ / ROS 2 워크스페이스
 
+이 colcon 워크스페이스에는 주차 판정 패키지 세 개와 OMX 칸 이동 action 정의 `omx_interfaces`가 있습니다. 아래 설명은 주차 판정입니다.
+
 천장 카메라의 ArUco 마커로 Pinky가 등록된 주차 위치에 섰는지 판정하는 **유일한 구현**입니다. 관제 서버에 있던 Python 판정(`parking_check`, `parking_observation`, `parking_tracker`)과 등록 CLI(`scripts/pinky_parking.py`)를 C++17로 옮기고 ROS 2 Jazzy 노드로 감쌌으며, 2026-11-03에 Python 쪽은 지웠습니다(커밋 `8ea4c84`가 마지막 Python 버전).
 
 **관측만 합니다.** Pinky나 로봇팔에 명령을 보내지 않고, 천장 카메라는 읽기 전용으로 엽니다. 결과의 `ARRIVED`는 마커가 등록 위치의 허용 범위 안에 있다는 관측일 뿐이며, Nav2 이동 성공을 대신하지 않습니다.
@@ -24,7 +26,8 @@
 |---|---|
 | `parking_vision` | ROS 의존성 없는 C++ 라이브러리 (ament_cmake). 검출과 평면 투영 판정·고정 마커 시야 확인(`parking_check`), 요청 이후 프레임 수집(`ParkingObservationCollector`), 화면 표시용 상태 기계(`ParkingTracker`), 주차 위치 파일 재로딩(`SpotReloader`), 등록(`build_registration`), `spot_id` 규칙. 스레드, 시계, 카메라 feed는 호출하는 쪽이 맡습니다. 등록·판정 CLI `pinky_parking`(`ros2 run parking_vision pinky_parking`)도 이 패키지에 있습니다. |
 | `parking_vision_interfaces` | `ParkingState.msg`, `CheckParking.srv`. 필드는 관제 JSON 계약(`/live`, `/check`의 `judgment_fields`·`image_overlay`)과 1:1입니다. JSON에서 `null`인 값은 `has_*` 플래그로 표시합니다. |
-| `parking_vision_ros` | `rclcpp_components` 컴포넌트 `parking_vision_ros::ParkingVisionNode`. 단독 실행 파일 `parking_vision_node`로도 쓸 수 있습니다. |
+| `parking_vision_ros` | `rclcpp_components` 컴포넌트 두 개: 판정 `parking_vision_ros::ParkingVisionNode`(단독 실행 파일 `parking_vision_node`)와 천장 카메라 캡처 `parking_vision_ros::CeilingCameraNode`(단독 실행 파일 `ceiling_camera_node`). launch는 판정 노드만 띄우는 `parking_vision.launch.py`와 캡처·판정을 한 컨테이너에 올리는 `ceiling_parking.launch.py`입니다. |
+| `omx_interfaces` | `MoveToSlot.action`. OMX 워커 `scripts/omx_ros_worker.py`가 `/omx/move_to_slot` action 서버로 씁니다. 관제는 이 action을 쓰지 않고 HTTP 명령 큐를 씁니다([OMX 명령 HTTP 인터페이스](../docs/implementation/arm-command-api.md#ros-2-action-워커-omxmove_to_slot)). |
 
 ### 노드 인터페이스 (노드 이름 `pinky_parking`)
 
@@ -39,7 +42,7 @@
 **결과 해석**
 
 - `ok=true`는 판정을 마쳤다는 뜻입니다. Pinky가 도착했는지는 `status`(`ARRIVED`, `MISALIGNED`, `NOT_FOUND`, `AMBIGUOUS`, `VIEW_UNVERIFIED`)로 확인합니다.
-- `ok=false`이면 판정을 시작하지 못했거나 끝내지 못한 것이고, `error_code`는 Python API와 같습니다.
+- `ok=false`이면 판정을 시작하지 못했거나 끝내지 못한 것이고, `error_code`는 관제 API의 오류 코드와 같습니다.
   - `PARKING_SPOT_ID_INVALID`: `spot_id` 형식이 틀림
   - `PARKING_SPOT_NOT_FOUND`: 주차 위치 파일이 없음
   - `PARKING_SPOT_INVALID`: schema가 맞지 않거나, 등록 이후 내부 보정 파일이 바뀜
@@ -78,7 +81,7 @@ ros2 topic echo --qos-durability transient_local --qos-reliability reliable /pin
 ros2 service call /pinky_parking/check parking_vision_interfaces/srv/CheckParking "{spot_id: pinky_dock_1}"
 ```
 
-천장 카메라 캡처(`CeilingCameraNode`)와 판정 노드를 한 컨테이너에 올리는 launch입니다. 영상이 프로세스 안에서 전달되고, 관제용 JPEG(`/ceiling_camera/image_raw/compressed`)도 함께 나갑니다. 관제가 같은 카메라를 V4L2로 열고 있으면 먼저 꺼야 합니다.
+천장 카메라 캡처(`CeilingCameraNode`, 노드 이름·namespace `ceiling_camera`)와 판정 노드를 한 컨테이너에 올리는 launch입니다. 캡처 노드는 `/ceiling_camera/image_raw`와 관제용 JPEG `/ceiling_camera/image_raw/compressed`를 내고, 판정 노드는 앞의 것을 프로세스 안에서 받습니다. 장치는 `video_device:=...`, 없으면 `CONTROL_STATION_CEILING_CAMERA`, 없으면 포트 4 by-path입니다. 관제가 같은 카메라를 V4L2로 열고 있으면 먼저 꺼야 합니다.
 
 ```bash
 ros2 launch parking_vision_ros ceiling_parking.launch.py repository_root:=. spot_id:=pinky_dock_1
@@ -112,7 +115,7 @@ ros2 component load /ComponentManager parking_vision_ros parking_vision_ros::Par
   -p repository_root:=. -p spot_id:=pinky_dock_1 -p image_topic:=/ceiling_camera/image_raw
 ```
 
-이 노드는 카메라 드라이버를 포함하지 않습니다. 천장 카메라는 관제 서버의 Head Camera와 같은 실물 장치(HCAM0)라서, 관제 서버와 카메라 드라이버 노드가 동시에 열 수 없습니다.
+이렇게 판정 노드만 올리면 영상은 다른 노드가 내야 합니다. 천장 카메라(HCAM0)는 한 프로그램만 열 수 있어서, 관제 서버와 캡처 노드가 동시에 열 수 없습니다.
 
 **프로세스 사이 영상 전달 주의 (2026-11-02)**
 
@@ -125,6 +128,7 @@ ros2 component load /ComponentManager parking_vision_ros parking_vision_ros::Par
 | `parking_vision/test/test_parking_check.cpp`, `test_parking_tracker.cpp` | 지운 Python 단위 테스트의 케이스를 C++로 옮긴 것과 `SpotReloader` |
 | `parking_vision/test/test_pinky_parking_cli.cpp` | 등록 결과가 Python CLI와 같은지(정상, 고정 마커 지정, 시야 확인 끔, 단일 마커 신뢰, 움직임 거부, 흔들린 고정 마커), 비디오 파일을 카메라 삼아 CLI register→check(종료 코드 0/1/2, 덮어쓰기 거부) |
 | `parking_vision/test/test_python_parity.cpp` | 같은 입력에서 C++ 결과가 옮기기 전 Python 결과와 같은지. 왜곡 렌즈의 평면 투영과 자세 추정, 프레임별 판정(고정 마커 하나만 밀림, 단일 마커 신뢰 포함), `ParkingJudge` 순서, 요청 이후 수집 7개 시나리오, 추적기 123틱 |
+| `parking_vision_ros/test/test_ceiling_camera_node.cpp` | 비디오 파일을 카메라 삼아 `CeilingCameraNode` → 판정 노드: 프레임이 판정과 JPEG 토픽에 닿는지, 카메라가 사라졌다 돌아올 때 따라가는지, 시작할 때 장치가 없어도 두 노드가 살아 있는지 |
 | `parking_vision_ros/test/test_parking_vision_node.cpp` | 영상 토픽 → `/pinky_parking/state`와 `/pinky_parking/check`. 정위치, 늦게 붙은 구독자의 마지막 상태 수신, 96px 밀림, 카메라 없음, 어긋남, 요청 전 stamp 프레임 무시, `spot_id` 오류·없음·보정 변경, 잘못된 추적 주차 위치 |
 
 기대값(`test/fixtures/`)은 Python 판정을 지우기 직전(커밋 `8ea4c84`의 Python 모듈, 시스템 OpenCV 4.6)에 그 모듈을 실제로 돌려서 만든 값이며, 이제 **고정된 회귀 기준**입니다. 생성 스크립트는 Python과 함께 지웠습니다. 판정 규칙을 의도적으로 바꾸면 기대값도 C++ 쪽에서 근거를 남기고 고쳐야 합니다.

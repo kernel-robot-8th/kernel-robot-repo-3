@@ -195,11 +195,11 @@ scripts/omx_act_policy_test.sh worker            # 그다음 관제 화면 원�
 선반과 팔을 앞에서 보는 선반 카메라(정면 카메라)를 관제 화면에 함께 띄우려면 `CONTROL_STATION_SHELF_CAMERA`에 장치 경로를 지정합니다. feed ID는 내부 보정 파일 `shelf_camera.json`과 같은 `shelf_camera`입니다. 2026-11-02 기준 이 카메라는 USB 포트 10의 HCAM0입니다. 천장 카메라와 모델이 같아 by-id로는 구분되지 않으므로 by-path를 씁니다.
 
 ```bash
-CONTROL_STATION_HEAD_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:4:1.0-video-index0 \
 CONTROL_STATION_SHELF_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:10:1.0-video-index0 \
-CONTROL_STATION_PARKING_CAMERA=head_camera CONTROL_STATION_PARKING_SPOT=pinky_dock_1 \
 ./run-control-station.sh
 ```
+
+포트 4의 천장 카메라(탑 캠)는 주차 판정 노드가 열기 때문에, 함께 띄울 때는 [C++ 주차 판정 노드로 관제 실행](#c-주차-판정-노드로-관제-실행)처럼 Head Camera를 `ros:` 토픽으로 받습니다.
 
 선반 카메라는 `shelf_camera`(`SHELF`) 카드로 영상과 연결 상태를 보여 줍니다. `CONTROL_STATION_SHELF_YOLO_WEIGHTS`(또는 `CONTROL_STATION_SHELF_YOLO_WORLD_PROMPTS`)를 주면 Head Camera와 같은 방식으로 YOLO 검출을 표시합니다. `_CONF`, `_DEVICE` 설정도 `CONTROL_STATION_SHELF_YOLO_` 접두어로 같습니다. 작업 관측 단계에는 연결하지 않습니다.
 
@@ -261,7 +261,7 @@ Ultralytics는 YOLO-World prompt class를 `set_classes()`로 지정하는 API를
 
 ## C++ 주차 판정 노드로 관제 실행
 
-관제의 주차 판정과 Head Camera 영상을 C++ ROS 2 노드 쪽으로 옮겨 실행하는 방법입니다([전환 계획](../plans/pinky-parking-ros2-node.md)). 천장 카메라는 드라이버 컨테이너가 열고, 관제는 영상과 판정을 ROS로 받습니다. 판정 규칙과 API 응답 형식은 아래 Python 판정과 같습니다.
+Pinky 주차 판정은 C++ ROS 2 노드만 합니다. 관제에는 판정 코드가 없습니다. 천장 카메라는 노드 컨테이너의 캡처 컴포넌트가 열고, 관제는 영상과 판정을 ROS 토픽·서비스로 받습니다. 노드 내부는 [cpp/README.md](../../cpp/README.md)에 있습니다.
 
 ```bash
 cd cpp && source /opt/ros/jazzy/setup.bash && colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release && cd ..
@@ -276,10 +276,11 @@ CONTROL_STATION_SHELF_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:10:1.0-vide
 ```
 
 - 천장 카메라 경로는 `video_device:=...`, 없으면 환경 변수 `CONTROL_STATION_CEILING_CAMERA`, 없으면 기본값(포트 4)을 씁니다. HCAM0 두 대는 by-id와 일련번호가 같아 USB 포트(by-path)로만 구분되므로, 포트 구성이 다른 PC는 Git에서 제외되는 `.control-station/control-station.env`에 `CONTROL_STATION_CEILING_CAMERA`를 두고 두 터미널에서 `set -a; source .control-station/control-station.env; set +a`를 먼저 실행합니다. 등록 CLI `pinky_parking`도 같은 변수를 씁니다.
-- `run-control-station.sh`는 위 설정이 있으면 ROS와 `cpp/install/setup.bash`를 source합니다. `/api/health`의 `parking.source`가 `ros`이면 판정 노드에 연결된 구성입니다.
-- Head Camera는 `/compressed` 토픽으로 받습니다. 같은 PC라도 raw 640×480 영상을 프로세스 사이로 보내면 대부분 전달되지 않았습니다(2026-11-02).
+- `run-control-station.sh`는 위 설정이 있으면 ROS와 `cpp/install/setup.bash`를 source합니다. 관제는 `CONTROL_STATION_MOBILE_DOMAIN`, 없으면 `ROS_DOMAIN_ID`의 domain으로 노드에 붙고, 둘 다 없으면 시작하지 않습니다. `/api/health`의 `parking.spot_id`와 `parking.live_tracking`으로 설정을 확인합니다.
+- Head Camera는 `/compressed` 토픽으로 받습니다(raw 영상의 프로세스 간 전달 문제는 [cpp/README.md](../../cpp/README.md)).
+- `CONTROL_STATION_PARKING_CAMERA`는 판정과 상관없이 주차 패널이 보여 줄 feed ID만 정합니다(기본 `head_camera`).
 - 판정 노드가 꺼지면 웹 주차 패널은 `NODE_UNAVAILABLE`, 확정 판정과 `VERIFY_ARRIVAL`은 `PARKING_NODE_UNAVAILABLE`로 팔 단계를 시작하지 않습니다.
-- 관제에는 주차 판정이 없습니다. `CONTROL_STATION_PARKING_SPOT`을 주지 않으면 주차 판정 없이 뜨고 `VERIFY_ARRIVAL`은 모의 성공입니다.
+- `CONTROL_STATION_PARKING_SPOT`을 주지 않으면 주차 판정 없이 뜨고, `VERIFY_ARRIVAL`은 모의 성공, 주문의 핑키 도착은 모의 판정입니다.
 - 2026-11-03 같은 영상에 두 판정을 동시에 30초 돌린 비교, `usb_cam` 대신 자체 캡처 노드를 쓰는 이유는 [cpp/README.md](../../cpp/README.md)에 있습니다.
 
 ## 천장 카메라 Pinky 주차 판정
@@ -293,7 +294,7 @@ CONTROL_STATION_SHELF_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:10:1.0-vide
 - (선택) 화면에 함께 보이는 바닥 고정 ArUco 마커. 이 마커로 카메라 시야가 등록할 때와 같은지 확인합니다. 쓰려면 바닥에 테이프로 고정하고, Pinky가 지나가거나 서는 자리와 사람이 가리는 자리에서 떨어뜨려 둡니다. 놓아만 둔 카드나 Pinky 바퀴 옆 마커는 밀려서 판정이 멈춥니다. 쓰지 않으면 `--no-anchors`로 등록합니다.
 - `cpp/`를 빌드하고 `source cpp/install/setup.bash`한 셸. `check --once`와 `register --headless`는 창을 띄우지 않고, 창이 있는 `register`와 실시간 `check`는 시스템 OpenCV(highgui) 창을 씁니다.
 - 카메라 경로. `--camera` 또는 환경 변수 `CONTROL_STATION_CEILING_CAMERA`로 지정합니다. 천장 카메라는 관제의 Head Camera와 같은 실물 카메라(HCAM0)입니다. 2026-11-02 현장에서는 USB 포트 4에 연결됐고, 이름은 Head Camera 기본 by-id(`usb-Jieli_Technology_USB_Composite_Device-video-index0`)로 잡혔습니다. 같은 모델이 여러 대 꽂혀 있으면 by-id로는 구분되지 않으므로 포트 기준 `/dev/v4l/by-path/...` 경로를 씁니다. 실제로 19:36에 다른 HCAM0이 USB 포트 10에 연결되자 by-id 링크가 그 카메라(선반을 옆에서 보는 시점)로 바뀌었습니다. by-path는 꽂은 USB 포트가 바뀌면 달라집니다.
-- 카메라는 한 프로그램만 열 수 있습니다. 관제 서버가 Head Camera로 이 카메라를 열고 있으면 서버를 먼저 종료합니다. 점유 여부는 `fuser -v /dev/videoN`으로 확인합니다.
+- 카메라는 한 프로그램만 열 수 있습니다. 주차 노드(`ceiling_parking.launch.py`)나 관제 서버가 이 카메라를 열고 있으면 먼저 끕니다. 점유 여부는 `fuser -v /dev/videoN`으로 확인합니다.
 
 ### 정답 위치 등록
 
@@ -370,55 +371,38 @@ ros2 run parking_vision pinky_parking check --spot-id pinky_dock_1 \
 
 ### 관제 API로 판정
 
-관제 서버를 켤 때 `CONTROL_STATION_PARKING_CAMERA`에 판정에 쓸 feed ID를 지정하면, 관제가 그 실물 카메라를 열고 주차 판정 API를 제공합니다. 천장 카메라는 Head Camera와 같은 카메라이므로 `head_camera`를 쓰고, Head Camera 경로는 포트 기준 by-path로 지정합니다. 2026-11-02 기준 Head Camera 기본 by-id 경로는 포트 10에 연결된 다른 HCAM0을 가리킵니다.
+[C++ 주차 판정 노드로 관제 실행](#c-주차-판정-노드로-관제-실행)처럼 노드와 관제를 띄운 뒤 확정 판정을 요청합니다.
 
 ```bash
-CONTROL_STATION_HEAD_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:4:1.0-video-index0 \
-CONTROL_STATION_PARKING_CAMERA=head_camera \
-./run-control-station.sh
-
 curl -s http://127.0.0.1:8000/api/parking-spots/pinky_dock_1/check
 ```
 
-- 요청을 받은 뒤에 찍힌 프레임만 최대 3초 동안 15프레임까지 모아 CLI와 같은 방식으로 판정합니다. 판정에 쓴 프레임이 5장보다 적으면 `NOT_FOUND`입니다.
-- 응답은 `{"observation": {...}}`이며, 필드는 [주차 정렬 관측 계약 초안](../spec/interface-contracts.md#pinky-주차-정렬-관측-초안)을 따릅니다. 오류는 `error_code`/`message`/`error`로 반환합니다.
+- 관제가 노드의 `/pinky_parking/check`를 부릅니다. 노드는 요청 뒤에 찍힌 프레임만 최대 3초 동안 15프레임까지 모아 CLI와 같은 방식으로 판정하고, 5장보다 적으면 `NOT_FOUND`입니다.
+- 응답은 `{"observation": {...}}`이며, 필드와 오류 코드는 [주차 정렬 관측 계약 초안](../spec/interface-contracts.md#pinky-주차-정렬-관측-초안)을 따릅니다.
 - 이 API 호출은 판정 결과를 작업 이력에 남기지 않고, 로봇 명령도 만들지 않습니다.
-- 관제가 카메라를 열고 있는 동안에는 CLI로 같은 카메라를 열 수 없습니다.
-- 코드의 기본 카메라 경로(by-id)는 바꾸지 않았습니다. 실습 PC의 포트 설정(포트 4 천장, 포트 10 선반)과 YOLO 모델 경로는 PC마다 다르므로 Git에서 제외되는 `.control-station/control-station.env`에 두고(`.control-station/control-station.env.example`을 복사해 고칩니다) `set -a; source .control-station/control-station.env; set +a; ./run-control-station.sh`로 실행합니다. 이 설정으로 띄운 화면은 [관제 화면 캡처](../images/control-station-overview-2026-11-02.png)에 있습니다.
-- 관제 가상환경의 `opencv-python-headless`와 CLI로 등록할 때 쓴 GUI OpenCV의 버전이 다르면 모서리 검출이 조금 달라집니다. 2026-11-02 같은 화면에서 OpenCV 4.6(등록)과 4.14(판정) 사이에 약 1 mm·0.2°·고정 마커 0.8 px 차이가 났습니다. 응답의 `opencv_version`과 `registration_opencv_version`으로 확인합니다.
-
-2026-11-02에 mock 모드, 임시 DB, 포트 8765로 관제를 띄워 실제 천장 카메라로 확인했습니다. `/api/cameras`의 `head_camera`는 640×480, 29.7 fps였습니다. 판정 API를 5회 호출했고 모두 약 0.5초 걸렸습니다. 결과는 모두 `ARRIVED`/`WITHIN`(앞 0.4 mm·왼쪽 1.5 mm·yaw 0.23° 이내)이었고, 15프레임 모두 요청 시각 이후 프레임이었으며, 호출 간 프레임 sequence는 겹치지 않았습니다. 없는 등록 ID는 404, 형식이 틀린 ID는 400으로 응답했습니다. 이때 밀림은 일어나지 않았습니다.
+- 노드가 카메라를 열고 있는 동안에는 CLI로 같은 카메라를 열 수 없습니다.
+- 실습 PC의 포트 설정(포트 4 천장, 포트 10 선반)과 YOLO 모델 경로는 PC마다 다르므로 Git에서 제외되는 `.control-station/control-station.env`에 두고(`.control-station/control-station.env.example`을 복사해 고칩니다) `set -a; source .control-station/control-station.env; set +a`로 읽습니다.
+- 등록 때와 판정 때의 OpenCV 버전은 응답의 `registration_opencv_version`, `opencv_version`으로 확인합니다(버전 차이의 영향은 [cpp/README.md](../../cpp/README.md)).
 
 ### 작업 흐름의 도착 확인 단계
 
-`CONTROL_STATION_PARKING_SPOT`에 주차 위치 ID를 더 지정하면, 모의 작업의 `VERIFY_ARRIVAL` 단계가 위 API와 같은 방식으로 판정합니다. 판정 결과는 그 단계의 `PARKING_OBSERVED` event로 작업 이력에 남고 화면의 이벤트 목록에 표시됩니다.
-
-```bash
-CONTROL_STATION_HEAD_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:4:1.0-video-index0 \
-CONTROL_STATION_PARKING_CAMERA=head_camera \
-CONTROL_STATION_PARKING_SPOT=pinky_dock_1 \
-./run-control-station.sh
-```
+`CONTROL_STATION_PARKING_SPOT`을 지정하면 이전 형식 작업의 `VERIFY_ARRIVAL` 단계와 주문의 `WAIT_PINKY_ARRIVAL` 단계([주문 흐름](order-flow.md))가 위 API와 같은 확정 판정을 씁니다. 판정 결과는 그 단계의 `PARKING_OBSERVED` event로 작업 이력에 남습니다. 아래 표는 `VERIFY_ARRIVAL`입니다.
 
 | 판정 | 단계·작업 | 오류 코드 |
 | --- | --- | --- |
 | `ARRIVED` | `VERIFY_ARRIVAL` 성공 → 팔 단계 진행 | 없음 |
 | `MISALIGNED` | `FAILED`, 팔 단계 미실행 | `PARKING_MISALIGNED` |
 | `NOT_FOUND`/`AMBIGUOUS`/`VIEW_UNVERIFIED` | `FAILED`, 팔 단계 미실행 | `PARKING_NOT_VERIFIED` |
-| 판정 시작 실패(등록 파일·카메라 오류) | `FAILED`, 팔 단계 미실행, `PARKING_OBSERVED` 없음 | 관측 오류 코드(예: `PARKING_CAMERA_UNAVAILABLE`) |
+| 판정 시작 실패(등록 파일·카메라 오류, 노드 연결 실패·timeout) | `FAILED`, 팔 단계 미실행, `PARKING_OBSERVED` 없음 | 관측 오류 코드(예: `PARKING_CAMERA_UNAVAILABLE`, `PARKING_NODE_UNAVAILABLE`) |
 
-자동 재주행이나 재판정은 하지 않습니다. 주차 위치만 지정하고 `CONTROL_STATION_PARKING_CAMERA`를 지정하지 않으면 서버가 시작을 거부합니다. 이동 단계는 아직 모의이므로, 판정은 Pinky가 실제로 서 있는 위치를 봅니다.
-
-2026-11-02 실제 천장 카메라로 확인했습니다. `pinky_dock_1`로 작업을 실행하면 `ARRIVED`(1.1 mm, 0.24°, 15프레임, 시야 확인 ON)로 모든 단계가 성공했습니다. 허용 오차를 0.1 mm/0.01°로 줄인 임시 등록으로 실행하면 `MISALIGNED`/`FAR`로 `VERIFY_ARRIVAL`이 실패하고, 팔 작업 이후 단계는 `NOT_EXECUTED_AFTER_FAILURE`로 끝났습니다.
+자동 재주행이나 재판정은 하지 않습니다. 이동 단계는 모의이므로, 판정은 Pinky가 실제로 서 있는 위치를 봅니다.
 
 관제 화면 **현황** 탭 아래쪽의 **Pinky 도착 확인** 패널에서 볼 수 있습니다.
 
-- **실시간 상태:** `CONTROL_STATION_PARKING_SPOT`까지 설정하면 관제가 그 위치를 계속 추적합니다(`GET /api/parking-spots/{spot_id}/live`, 화면은 0.5초마다 갱신). 상태는 화면 밖 → 이동 중 → 정상 위치 / 위치 벗어남이며, 같은 마커 여러 개·시야 미확인·카메라 없음·등록 파일 오류는 확인 불가로 표시합니다. 최근 1초 동안 5 mm·2° 안에서 멈춰 있어야 정상 위치/위치 벗어남을 판정합니다. 멈춘 Pinky도 프레임 하나하나는 약 ±1.5 mm·±0.55° 흔들려서, 처음 정한 2 mm·0.5°로는 계속 이동 중으로 나왔습니다(2026-11-02).
+- **실시간 상태:** 노드가 `spot_id` 위치를 10 Hz로 추적하고, 관제는 `/pinky_parking/state`를 받아 `GET /api/parking-spots/{spot_id}/live`로 보여 줍니다(화면은 0.5초마다 갱신). 상태는 화면 밖 → 이동 중 → 정상 위치 / 위치 벗어남이며, 같은 마커 여러 개·시야 미확인·카메라 없음·등록 파일 오류는 확인 불가로 표시합니다. 최근 1초 동안 5 mm·2° 안에서 멈춰 있어야 정상 위치/위치 벗어남을 판정합니다. 멈춘 Pinky도 프레임 하나하나는 약 ±1.5 mm·±0.55° 흔들려서, 처음 정한 2 mm·0.5°로는 계속 이동 중으로 나왔습니다(2026-11-02).
 - **화면 구성:** 왼쪽은 천장 카메라 실시간 영상입니다. 그 위에 등록 위치(흰 점선)와 지금 Pinky 마커·앞쪽 방향(상태 색)을 겹쳐 그립니다. 오른쪽은 진행 단계, 상태, 앞·왼쪽·회전 수치, 허용 오차 대비 배수, 위치 벗어남일 때의 보정 방향 안내, 위에서 본 그림입니다. 색은 정상 위치 초록, 조금 벗어남 주황, 많이 벗어남 빨강, 이동 중 파랑, 확인 불가 회색입니다.
-- **확정 판정:** 버튼을 누르면 `/check`로 요청 이후 프레임 15장을 판정해 결과를 한 줄로 보여 줍니다. 실시간 추적이 꺼져 있으면 이 결과로 패널 전체를 그립니다.
-- 실시간 상태는 화면 표시용입니다. 지나가는 도중 잠깐 범위 안에 든 프레임을 도착으로 착각하지 않도록, 팔 단계 진행은 작업 흐름의 도착 확인(도착 신호 이후 프레임으로 하는 판정)만 씁니다. 패널은 로봇 명령을 보내지 않습니다.
-
-2026-11-02에 실행 중인 관제의 천장 카메라 스트림을 추적기에 넣어 확인했습니다. 시작 약 1.8초 뒤 `IN_POSITION`(앞 −1.0 mm, 왼쪽 +1.0 mm, 회전 −0.3°)이 됐고 이후 유지됐습니다. 이동 중·위치 벗어남 화면은 예시 데이터로 렌더링만 확인했습니다.
+- **확정 판정:** 버튼을 누르면 `/check`로 요청 이후 프레임 15장을 판정해 결과를 한 줄로 보여 줍니다.
+- 실시간 상태는 화면 표시용입니다. 지나가는 도중 잠깐 범위 안에 든 프레임을 도착으로 착각하지 않도록, 팔 단계 진행은 확정 판정만 씁니다. 패널은 로봇 명령을 보내지 않습니다.
 
 ### 카메라 영상 밀림
 
