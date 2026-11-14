@@ -58,6 +58,7 @@ GET_ROUTES: tuple[Route, ...] = (
     Route(_prefix_suffix("/api/parking-spots/", "/check"), status.get_parking_check),
     Route(_path("/api/flow"), flow.get_flow),
     Route(_path("/api/pinky"), pinky.get_pinky),
+    Route(_path("/api/pinky/map"), pinky.get_map),
     Route(_path("/api/catalog"), orders.get_catalog),
     Route(_path("/api/inventory"), orders.get_inventory),
     Route(_path("/api/orders"), orders.get_orders),

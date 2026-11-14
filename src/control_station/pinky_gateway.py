@@ -130,6 +130,32 @@ def shape_mock_pinky(pinky_id: str, status: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# Fixed points of the cell as the Pinky fleet reports them (traffic_config and parking, 2026-11-14), used for the
+# mock map; with a dashboard they are read live.
+MOCK_PARKING = {"10": (0.4, 0.4), "11": (0.7, 0.4), "12": (1.0, 0.4)}
+MOCK_LANDMARKS = {"dock5": (0.39, 1.64), "junction7": (1.55, 1.24)}
+MOCK_GRID = {"width": 44, "height": 51, "resolution_m": 0.05, "origin_x_m": -0.349, "origin_y_m": -0.295}
+LANDMARK_LABELS = {"dock5": "5번 적재", "junction7": "교차로 7"}
+
+
+def _mock_grid() -> dict[str, Any]:
+    """An empty room with walls, the size of the real Nav2 map: enough to place things, clearly not the map."""
+    width, height = MOCK_GRID["width"], MOCK_GRID["height"]
+    cells = [100 if x in (0, width - 1) or y in (0, height - 1) else 0 for y in range(height) for x in range(width)]
+    return {**MOCK_GRID, "cells": cells}
+
+
+def _waypoints(robot: dict[str, Any]) -> list[dict[str, Any]]:
+    points = []
+    for point in robot.get("waypoints") or []:
+        if not isinstance(point, dict):
+            continue
+        x, y = _number(point.get("x_m", point.get("x"))), _number(point.get("y_m", point.get("y")))
+        if x is not None and y is not None:
+            points.append({"label": str(point.get("label")), "x_m": x, "y_m": y})
+    return points
+
+
 class PinkyGateway:
     def __init__(self, client: PinkyFleetClient | None, mock_status: Callable[[str], dict[str, Any]] | None = None):
         self.client = client
@@ -157,6 +183,77 @@ class PinkyGateway:
             log = list(self._log)
         return {"source": self.source, "reachable": error is None, "error": error, "pinkies": pinkies,
                 "log": log[::-1], "checked_at": _now()}
+
+    def map_view(self, zones: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        """Everything to draw the cell from above, in map metres: the Nav2 occupancy grid and keepout mask, the
+        parking spots, station 5 and junction 7, recorded waypoints, the receiving zones (placed where their last
+        waypoint is known) and each Pinky's live pose."""
+        zones = zones or []
+        if self.client is None:
+            return self._mock_map(zones)
+        try:
+            robots = self.client.robots()
+            extras = self.client.extras()
+        except (PinkyFleetError, OSError) as exc:
+            return {"source": self.source, "simulated": False, "available": False, "reason": str(exc)}
+        grid = next((value for robot in robots.values()
+                     if (value := ((robot.get("topics") or {}).get("map") or {}).get("value")) and value.get("cells")), None)
+        traffic = next((value.get("traffic_config") for robot in robots.values()
+                        if (value := ((robot.get("topics") or {}).get("line_control") or {}).get("value") or {})
+                        and value.get("traffic_config")), {}) or {}
+        landmarks = [{"key": key, "label": LANDMARK_LABELS[key], "x_m": _number(spot.get("x_m")), "y_m": _number(spot.get("y_m"))}
+                     for key, spot in traffic.items() if key in LANDMARK_LABELS and isinstance(spot, dict)]
+        waypoints = {pinky_id: _waypoints(robots.get(pinky_id) or {}) for pinky_id in PINKY_IDS}
+        cards = {card["pinky_id"]: card for card in self.view()["pinkies"]}
+        return {
+            "source": self.source, "simulated": False, "available": grid is not None,
+            "reason": None if grid is not None else "핑키 관제가 아직 지도를 받지 못했습니다",
+            "grid": grid, "keepout": extras.get("keepout"),
+            "parking_area": (traffic.get("parking") or {}).get("bounds"),
+            "parking": [{"pinky_id": pinky_id, "name": PINKY_NAMES[pinky_id], **(robots.get(pinky_id) or {}).get("parking", {})}
+                        for pinky_id in PINKY_IDS if (robots.get(pinky_id) or {}).get("parking")],
+            "landmarks": landmarks, "waypoints": waypoints,
+            "zones": [self._place_zone(zone, waypoints) for zone in zones],
+            "pinkies": [{"pinky_id": pid, "name": card["name"], "connected": card["connected"],
+                         "phase_label": card["phase_label"], **card["pose"]} for pid, card in cards.items()],
+            "note": None if any(waypoints.values()) else
+            "이 PC의 핑키 관제에 웨이포인트가 없습니다(data/waypoints.json). 경로를 달리려면 기록하거나 가져와야 합니다",
+        }
+
+    @staticmethod
+    def _place_zone(zone: dict[str, Any], waypoints: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+        last = (zone.get("route_labels") or [None])[-1]
+        point = next((p for points in waypoints.values() for p in points if p["label"] == last), None)
+        return {"zone_id": zone.get("zone_id"), "label": zone.get("label"), "waypoint": last,
+                "x_m": point["x_m"] if point else None, "y_m": point["y_m"] if point else None}
+
+    def _mock_map(self, zones: list[dict[str, Any]]) -> dict[str, Any]:
+        """The same picture from the mock world: known fixed points, Pinkys placed by their mission phase."""
+        cards = {card["pinky_id"]: card for card in self.view()["pinkies"]}
+        zone_xy = (1.55, 2.05)  # a stand-in spot for the mock receiving zone, labeled as mock
+        def place(pinky_id: str) -> tuple[float, float]:
+            phase = (cards.get(pinky_id) or {}).get("phase")
+            if phase in {"docking_manual", "docking_anchor", "docked_manual"}:
+                return MOCK_LANDMARKS["dock5"]
+            if phase == "course_complete":
+                return zone_xy
+            if phase == "driving":
+                return MOCK_LANDMARKS["junction7"]
+            return MOCK_PARKING[pinky_id]
+        return {
+            "source": self.source, "simulated": True, "available": True, "reason": None, "grid": _mock_grid(),
+            "keepout": None, "parking_area": [0.2, 1.2, 0.2, 0.6],
+            "parking": [{"pinky_id": pid, "name": PINKY_NAMES[pid], "label": f"{PINKY_NAMES[pid]} 주차장",
+                         "x_m": x, "y_m": y, "yaw_rad": math.pi} for pid, (x, y) in MOCK_PARKING.items()],
+            "landmarks": [{"key": key, "label": LANDMARK_LABELS[key], "x_m": x, "y_m": y} for key, (x, y) in MOCK_LANDMARKS.items()],
+            "waypoints": dict.fromkeys(PINKY_IDS, []),
+            "zones": [{"zone_id": zone.get("zone_id"), "label": zone.get("label"), "waypoint": None,
+                       "x_m": zone_xy[0], "y_m": zone_xy[1]} for zone in zones],
+            "pinkies": [{"pinky_id": pid, "name": PINKY_NAMES[pid], "connected": True,
+                         "phase_label": (cards.get(pid) or {}).get("phase_label"),
+                         "x_m": place(pid)[0], "y_m": place(pid)[1], "yaw_rad": math.pi} for pid in PINKY_IDS],
+            "note": "모의 지도입니다. 벽과 위치는 실제 좌표를 흉내 낸 것입니다",
+        }
 
     def stop(self, pinky_id: str) -> dict[str, Any]:
         """Stop one Pinky through the dashboard. Accepted means the dashboard took it, not that the Pinky stopped."""

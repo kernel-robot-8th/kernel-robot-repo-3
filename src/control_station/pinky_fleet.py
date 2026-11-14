@@ -93,6 +93,7 @@ class PinkyFleetClient:
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
         self._battery = BatteryHistory()
+        self._extras: dict[str, Any] = {}
         # Three Pinky cards and the waiting order poll the same status; share one answer for a moment.
         self.status_max_age_s = status_max_age_s
         self._cache: tuple[float, dict[str, Any]] | None = None
@@ -125,7 +126,14 @@ class PinkyFleetClient:
         robots = {str(robot.get("id")): robot for robot in answer["robots"] if isinstance(robot, dict)}
         with self._lock:
             self._cache = (time.monotonic(), robots)
+            self._extras = {"keepout": answer.get("keepout"), "traffic": answer.get("traffic")}
         return robots
+
+    def extras(self) -> dict[str, Any]:
+        """Fleet-wide parts of the last status answer: the keepout mask and the shared-zone reservations."""
+        self._robots()
+        with self._lock:
+            return dict(self._extras)
 
     def robots(self) -> dict[str, Any]:
         """Pinky id -> the dashboard's own record (route, operational state, live topics), shared for a moment."""

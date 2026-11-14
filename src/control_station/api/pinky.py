@@ -1,6 +1,7 @@
 """Pinky screen API: a thin HTTP layer over control_station.pinky_gateway.PinkyGateway.
 
 GET  /api/pinky                 every Pinky card, whether the fleet dashboard answered, recent commands
+GET  /api/pinky/map             the cell from above in map metres: Nav2 grid, keepout, fixed points, poses
 POST /api/pinky/{id}/stop       stop one Pinky (the dashboard latches a stop and cancels its Nav2 goal)
 POST /api/pinky/stop-all        stop request to every Pinky
 POST /api/pinky/credentials     {password}: passed to the dashboard, never stored or logged here
@@ -27,6 +28,12 @@ def _answer(h: ControlStationHandler, entry: dict[str, Any]) -> None:
 def get_pinky(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
     """핑키 화면: 핑키 3대 상태와 최근 명령"""
     h._json(200, h.app.pinky_gateway.view())
+
+
+def get_map(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
+    """핑키 지도: Nav2 격자, 금지 구역, 주차장, 5번, 교차로 7, 웨이포인트, 수령 구역, 핑키 위치(지도 좌표)"""
+    zones = [zone.as_dict() for zone in getattr(h.app.order_desk, "zones", {}).values()] if hasattr(h.app, "order_desk") else []
+    h._json(200, h.app.pinky_gateway.map_view(zones))
 
 
 def post_stop(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:

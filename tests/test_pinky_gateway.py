@@ -79,6 +79,32 @@ class SensorDetailTest(unittest.TestCase):
         self.assertAlmostEqual(card["pose"]["x_m"], 0.4206)
 
 
+class MapTest(unittest.TestCase):
+    def test_live_map_with_fixed_points_and_a_zone_placed_on_its_waypoint(self) -> None:
+        fleet = FakeFleet()
+        record = robot_record()
+        record["topics"]["map"] = {"fresh": True, "value": {"width": 2, "height": 1, "resolution_m": 0.05,
+                                                           "origin_x_m": -0.349, "origin_y_m": -0.295, "cells": [0, 100]}}
+        record["topics"]["line_control"] = {"fresh": True, "value": {"traffic_config": {
+            "dock5": {"x_m": 0.39, "y_m": 1.64}, "junction7": {"x_m": 1.55, "y_m": 1.24}, "parking": {"bounds": [0.2, 1.2, 0.2, 0.6]}}}}
+        record["parking"] = {"label": "P0 주차장", "x_m": 0.4, "y_m": 0.4, "yaw_rad": 3.14}
+        record["waypoints"] = [{"label": "9", "x_m": 1.6, "y_m": 2.0}]
+        fleet.robots = lambda: {"10": record, "11": {}, "12": {}}
+        fleet.extras = lambda: {"keepout": None}
+        view = PinkyGateway(fleet).map_view([{"zone_id": "zone_a", "label": "수령 구역 A", "route_labels": ["1", "9"]}])
+        self.assertEqual((view["available"], view["grid"]["cells"]), (True, [0, 100]))
+        self.assertEqual({lm["key"] for lm in view["landmarks"]}, {"dock5", "junction7"})
+        self.assertEqual(view["zones"][0], {"zone_id": "zone_a", "label": "수령 구역 A", "waypoint": "9", "x_m": 1.6, "y_m": 2.0})
+        self.assertIsNone(view["note"])
+
+    def test_mock_map_places_pinkys_by_phase(self) -> None:
+        world = MockWorld()
+        view = PinkyGateway(None, world.fleet_status).map_view([{"zone_id": "zone_a", "label": "수령 구역 A"}])
+        self.assertTrue(view["simulated"])
+        self.assertEqual([(p["name"], p["x_m"], p["y_m"]) for p in view["pinkies"]][0], ("P0", 0.4, 0.4))
+        self.assertEqual(len(view["grid"]["cells"]), 44 * 51)
+
+
 class CommandTest(unittest.TestCase):
     def test_stop_all_sends_each_and_logs_each_answer(self) -> None:
         fleet = FakeFleet({"11": (401, {"error": "SSH 비밀번호를 먼저 입력하세요."})})
