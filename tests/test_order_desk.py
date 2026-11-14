@@ -71,6 +71,19 @@ class OrderDeskTest(unittest.TestCase):
             time.sleep(0.02)
         self.fail(f"order did not finish: {self.store.get_task(order_id)['status']}")
 
+    def test_a_resent_order_with_the_same_key_is_not_a_second_order(self) -> None:
+        items = [{"object_class": "사과", "quantity": 2}]
+        first, made = self.desk.receive_once(items, None, "key-1")
+        again, made_again = self.desk.receive_once(items, None, "key-1")
+        self.assertEqual((made, made_again, again["id"]), (True, False, first["id"]))
+        self.assertEqual([order["id"] for order in self.desk.pending()], [first["id"]])
+        with self.assertRaises(OrderDeskError) as raised:
+            self.desk.receive_once([{"object_class": "사과", "quantity": 1}], None, "key-1")
+        self.assertEqual((raised.exception.error_code, raised.exception.status), ("IDEMPOTENCY_KEY_REUSED", 422))
+        other, made_other = self.desk.receive_once(items, None, "key-2")  # a new key is a new order
+        self.assertTrue(made_other)
+        self.assertNotEqual(other["id"], first["id"])
+
     def test_received_order_waits_without_a_pinky_or_a_zone(self) -> None:
         order = self.desk.receive([{"object_class": "사과", "quantity": 2}])  # the customer app sends no zone
         self.assertEqual((order["status"], order["pinky_id"], order["receiving_zone"]), ("PENDING", None, None))
@@ -269,6 +282,26 @@ class OrderApiTest(ApiTestCase):
         status, created, _ = self.request("POST", "/api/orders", {"items": [{"object_class": "apple", "quantity": 1}]})
         status, body, _ = self.request("POST", f"/api/orders/{created['order']['id']}/start")
         self.assertEqual((status, body["error_code"], body["zone"]["zone_id"]), (409, "ZONE_BUSY", None))
+
+    def test_a_resent_post_returns_the_order_it_made(self) -> None:
+        key = {"Idempotency-Key": "a1b2c3d4e5f60718"}
+        status, created, _ = self.request("POST", "/api/orders", {"items": CARROT_APPLE}, headers=key)
+        self.assertEqual((status, created["replayed"]), (201, False))
+        status, again, _ = self.request("POST", "/api/orders", {"items": CARROT_APPLE}, headers=key)
+        self.assertEqual((status, again["replayed"], again["order"]["id"]), (200, True, created["order"]["id"]))
+        status, pending, _ = self.request("GET", "/api/orders")
+        self.assertEqual(len(pending["orders"]), 1)
+        status, body, _ = self.request("POST", "/api/orders", {"items": CARROT_APPLE}, headers={"Idempotency-Key": "has space"})
+        self.assertEqual((status, body["error_code"]), (400, "IDEMPOTENCY_KEY_INVALID"))
+
+    def test_errors_say_whether_to_retry_and_carry_a_request_id(self) -> None:
+        status, body, headers = self.request("GET", "/api/orders/TASK-NOPE/assignment")
+        self.assertEqual((status, body["retryable"], body["request_id"]), (404, False, headers["x-request-id"]))
+        _, first, _ = self.request("POST", "/api/orders", {"items": CARROT_APPLE})
+        self.request("POST", f"/api/orders/{first['order']['id']}/start")
+        _, second, _ = self.request("POST", "/api/orders", {"items": [{"object_class": "apple", "quantity": 1}]})
+        status, body, _ = self.request("POST", f"/api/orders/{second['order']['id']}/start")
+        self.assertEqual((status, body["error_code"], body["retryable"]), (409, "ZONE_BUSY", True))
 
     def test_errors_carry_codes(self) -> None:
         status, body, _ = self.request("POST", "/api/orders", {"items": CARROT_APPLE, "note": "x"})

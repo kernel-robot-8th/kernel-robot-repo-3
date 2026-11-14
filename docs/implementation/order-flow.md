@@ -47,7 +47,7 @@
 | 경로 | 하는 일 |
 | --- | --- |
 | `GET /api/catalog` | 주문할 수 있는 물체(정책이 있는 물체), 선반 재고 합계, 수령 구역(참고용, 고객 앱은 고르지 않음) |
-| `POST /api/orders` | `{items: [{object_class, quantity}], receiving_zone?}` 접수. 핑키·구역은 아직 없음. `receiving_zone`을 보내면 작업자 지정으로 저장 |
+| `POST /api/orders` | `{items: [{object_class, quantity}], receiving_zone?}` 접수. 핑키·구역은 아직 없음. `receiving_zone`을 보내면 작업자 지정으로 저장. `Idempotency-Key` 머리글을 보내면 같은 키·같은 본문의 재전송은 이미 만든 주문을 200 `replayed: true`로 돌려줌(처음은 201). 같은 키에 다른 본문은 422 `IDEMPOTENCY_KEY_REUSED` |
 | `GET /api/orders` | 시작을 기다리는 주문, 오래된 순 |
 | `GET /api/orders/{id}/assignment` | 지금 시작하면 맡을 핑키·팔·수령 구역(`zone`: `zone_id`, `summary`, `operator_chosen`, 구역별 `verdicts`)과 그 이유. 큰 주문은 `fleet`에 배송별 핑키·팔 계획·적재 시간표. 아무것도 바꾸지 않음 |
 | `POST /api/orders/{id}/start` | 수령 구역과 핑키를 다시 골라 확정(`ZONE_ASSIGNED`·`PINKY_ASSIGNED` 이벤트)하고 주문 흐름 시작. 구역이 모두 사용 중이면 409 `ZONE_BUSY`(본문에 `zone`) |
@@ -171,7 +171,7 @@ ROS가 아니라 HTTP인 이유:
 
 - `GET /api/catalog`를 5초마다 읽어 물건별 남은 수량을 보여 줍니다. 카탈로그의 `notice`(재고를 확인하지 못해 주문을 닫음)는 노란 안내로, 물건별 `status`가 `available`이 아니면 카드를 흐리게 하고 칩(품절·주문 닫힘·판매 중지)과 물건별 `notice`를 보여 주며 수량 버튼을 막습니다.
 - 물건마다 1–5개를 고르고, 남은 수량을 알면 그보다 많이 고를 수 없습니다. 고르는 사이 수량이 줄거나 주문이 닫히면 담은 수량을 줄이거나 빼고 카드에 그렇게 적습니다. 받을 곳은 고르지 않고 "받을 곳은 로봇이 출발할 때 알려 드려요"로 안내합니다(설정된 구역이 없으면 주문을 막음). 내 주문 화면의 받을 곳은 배정 전 "출발할 때 정해져요"입니다.
-- **주문하기**는 `POST /api/orders`입니다. 접수되면 주문 번호와 물건을 보여 주고, 접수되지 않으면 서버 메시지를 그대로 보여 줍니다. `OUT_OF_STOCK`·`ITEM_CLOSED`면 카탈로그를 바로 다시 읽습니다.
+- **주문하기**는 `POST /api/orders`입니다. 보낼 때마다 `Idempotency-Key`를 붙이고, 응답을 못 받으면 같은 키를 남겨 두어 다시 눌러도 주문이 두 번 생기지 않습니다(장바구니가 바뀌면 새 키). 접수되면 주문 번호와 물건을 보여 주고, 접수되지 않으면 서버 메시지를 그대로 보여 줍니다. `OUT_OF_STOCK`·`ITEM_CLOSED`면 카탈로그를 바로 다시 읽습니다.
 
 ## 실행
 

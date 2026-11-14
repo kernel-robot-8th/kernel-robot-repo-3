@@ -143,6 +143,17 @@ class ArmCommandEventRecord(Base):
     command: Mapped[ArmCommandRecord] = relationship(back_populates="events")
 
 
+class OrderRequestRecord(Base):
+    """The Idempotency-Key an order window sent with POST /api/orders, so a resent request (the answer was lost on
+    the way back) returns the order it already made instead of a second one."""
+    __tablename__ = "order_requests"
+
+    idempotency_key: Mapped[str] = mapped_column(String, primary_key=True)
+    request_hash: Mapped[str] = mapped_column(String, nullable=False)  # sha256 of the body, to catch a reused key
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+
+
 def database_path() -> Path:
     default_path = Path(__file__).resolve().parents[2] / "data" / "tasks.sqlite3"
     return Path(os.environ.get("CONTROL_STATION_DB", default_path))

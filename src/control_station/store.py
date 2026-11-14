@@ -17,6 +17,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
 from control_station.database import (
+    OrderRequestRecord,
     TaskEventRecord,
     TaskRecord,
     TaskStepRecord,
@@ -784,12 +785,16 @@ class TaskStore:
         receiving_zone: str | None = None,
         defer_pinky: bool = False,
         zone_steps: bool | None = None,
+        idempotency: tuple[str, str] | None = None,
     ) -> dict[str, Any]:
         """Store a task. An order (order_items) is given a free Pinky, or the requested one if it is free.
 
         With `defer_pinky` the order waits in the intake without a Pinky; assign_pinky gives it one when it starts,
         so the choice is made with the fleet state of that moment. An order gets the receiving-zone steps when it
-        names its zone or with `zone_steps` (the zone is then given at start by assign_zone)."""
+        names its zone or with `zone_steps` (the zone is then given at start by assign_zone).
+
+        `idempotency` is (Idempotency-Key, request hash): it is stored with the task in the same transaction, so
+        a key is never left pointing at nothing and two requests with one key cannot both make a task."""
         created_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
         task = TaskRecord(
             id=f"TASK-{uuid.uuid4().hex[:8].upper()}",
@@ -853,8 +858,19 @@ class TaskStore:
                 )
             ]
             session.add(task)
-            session.flush()
+            session.flush()  # the task row first: the key row points at it
+            if idempotency is not None:
+                key, request_hash = idempotency
+                session.add(OrderRequestRecord(
+                    idempotency_key=key, request_hash=request_hash, task_id=task.id, created_at=created_at))
+                session.flush()
             return self._present_with_history(task)
+
+    def order_request(self, idempotency_key: str) -> tuple[str, str] | None:
+        """(request hash, order id) stored for an Idempotency-Key, or None when the key is new."""
+        with self._sessions() as session:
+            record = session.get(OrderRequestRecord, idempotency_key)
+            return None if record is None else (record.request_hash, record.task_id)
 
     def assign_pinky(self, task_id: str, pinky_id: str, assignment: dict[str, object]) -> dict[str, Any]:
         """Give a waiting order its Pinky, tag the Pinky steps with it and record why it was chosen."""

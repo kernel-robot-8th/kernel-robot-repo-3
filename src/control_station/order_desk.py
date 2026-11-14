@@ -9,6 +9,8 @@ shelf check, so the preview is advice and never a reservation. Nothing here move
 
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
 from collections import Counter
 from collections.abc import Callable, Mapping
@@ -64,6 +66,12 @@ _CUSTOMER_TEXT = {
 ZONE_PENDING_NOTE = "받을 곳은 로봇이 출발할 때 알려 드려요"
 # An order's destination until its zone is assigned (shown on the operator screen).
 ZONE_PENDING_LABEL = "수령 구역 (시작 때 배정)"
+
+
+def _request_hash(order_items: list[dict[str, Any]], zone_id: object) -> str:
+    """Fingerprint of what an order asks for, to tell a resent request from a different one with the same key."""
+    body = json.dumps({"items": order_items, "receiving_zone": zone_id}, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
 def _customer_stage(status: str, step_type: str | None) -> str:
@@ -152,21 +160,43 @@ class OrderDesk:
 
         The customer does not pick a receiving zone: `start` assigns one (choose_zone). A zone given here is an
         operator's choice and is kept as it is."""
+        return self.receive_once(items, zone_id)[0]
+
+    def receive_once(self, items: object, zone_id: object = None, idempotency_key: str | None = None,
+                     ) -> tuple[dict[str, Any], bool]:
+        """`receive` that a resent request cannot double: (order, made now).
+
+        With an Idempotency-Key the first request makes the order and every later one with the same key and body
+        gets that same order back (made now = False), even when stock has since run out because of it. The same key
+        with a different body is refused: it would hide a second order behind the first."""
         try:
             order_items = validate_order_items(items, self.policies)
         except ValueError as exc:
             raise OrderDeskError("ORDER_INVALID", str(exc), status=400) from exc
-        if not self.zones:
-            raise OrderDeskError("RECEIVING_ZONE_NOT_CONFIGURED", "수령 구역이 설정되지 않아 주문을 받을 수 없어요")
-        zone = None if zone_id is None else self._zone(zone_id)
-        summary = " · ".join(f"{self._label(item['object_class'])} {item['quantity']}" for item in order_items)
+        request_hash = _request_hash(order_items, zone_id)
         # Check and reserve as one step, so two windows cannot both sell the last unit.
         with self._intake:
+            if idempotency_key is not None:
+                known = self.store.order_request(idempotency_key)
+                if known is not None:
+                    stored_hash, order_id = known
+                    if stored_hash != request_hash:
+                        raise OrderDeskError("IDEMPOTENCY_KEY_REUSED",
+                                             "같은 주문 키로 다른 주문이 왔어요. 새 주문은 새 키로 보내 주세요", status=422)
+                    order = self.store.get_task(order_id)
+                    if order is not None:
+                        return order, False
+            if not self.zones:
+                raise OrderDeskError("RECEIVING_ZONE_NOT_CONFIGURED", "수령 구역이 설정되지 않아 주문을 받을 수 없어요")
+            zone = None if zone_id is None else self._zone(zone_id)
+            summary = " · ".join(f"{self._label(item['object_class'])} {item['quantity']}" for item in order_items)
             self._check_available(order_items)
-            return self.store.create_task(
+            order = self.store.create_task(
                 zone.label if zone else ZONE_PENDING_LABEL, f"{summary} 적재", order_items=order_items,
                 receiving_zone=zone.zone_id if zone else None, defer_pinky=True, zone_steps=True,
+                idempotency=None if idempotency_key is None else (idempotency_key, request_hash),
             )
+            return order, True
 
     def _check_available(self, order_items: list[dict[str, Any]]) -> None:
         """Refuse what cannot be sold now: an object closed (stock unknown, or by the operator), or more than the

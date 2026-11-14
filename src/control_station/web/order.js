@@ -29,6 +29,8 @@ const state = {
   cart: new Map(),       // object_class -> quantity, only quantities above 0
   adjusted: new Map(),   // object class -> 'lowered' (to the stock left) | 'removed' (closed or sold out) by a refresh
   sending: false,
+  orderKey: null,        // Idempotency-Key of the order being sent; kept when no answer came back, so a resend
+                         // returns the order the first try may have made instead of a second one
   orderId: null,         // the order being followed on the tracking screen
   track: null,           // the latest GET /api/orders/{id}/track answer
   trackTimer: null,
@@ -72,7 +74,16 @@ function cartItems() {
     .map((product) => ({ object_class: product.object_class, label: product.label, quantity: state.cart.get(product.object_class) }));
 }
 
+// 128 random bits as hex. crypto.randomUUID needs a secure context and the app is also opened over plain http
+// on the shop's network, so this uses getRandomValues, which works everywhere.
+function newOrderKey() {
+  const bytes = new Uint8Array(16);
+  window.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 function setQuantity(product, quantity) {
+  state.orderKey = null;  // a different cart is a different order
   const next = Math.max(0, Math.min(quantity, maxQuantity(product)));
   if (next) state.cart.set(product.object_class, next);
   else state.cart.delete(product.object_class);
@@ -93,6 +104,7 @@ function applyCatalog(catalog) {
     if (max) state.cart.set(objectClass, max);
     else state.cart.delete(objectClass);
     state.adjusted.set(objectClass, max ? 'lowered' : 'removed');
+    state.orderKey = null;
   }
 }
 
@@ -350,16 +362,18 @@ orderForm.addEventListener('submit', async (event) => {
   const items = cartItems().map(({ object_class, quantity }) => ({ object_class, quantity }));
   if (!items.length || !state.zones.length || state.sending) return;
   state.sending = true;
+  state.orderKey = state.orderKey || newOrderKey();
   clearError();
   render();
   try {
     const response = await fetch('/api/orders', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': state.orderKey },
       body: JSON.stringify({ items }),  // the receiving zone is the server's choice, made when the order starts
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
+      state.orderKey = null;  // the server answered: no order was made, the next try is a new request
       // OUT_OF_STOCK and ITEM_CLOSED name every refused object in one message; refresh so the cards agree.
       showError(result.message || result.error || '주문을 접수하지 못했어요.');
       if (['OUT_OF_STOCK', 'ITEM_CLOSED'].includes(result.error_code)) loadCatalog();
@@ -367,10 +381,11 @@ orderForm.addEventListener('submit', async (event) => {
     }
     state.cart.clear();
     state.adjusted.clear();
+    state.orderKey = null;
     followOrder(result.order.id);
   } catch {
-    // The request may have reached the server, so do not invite a second order blindly.
-    showError('응답을 받지 못했어요. 주문이 접수됐을 수 있으니 작업자에게 확인한 뒤 다시 주문해 주세요.');
+    // The request may have reached the server. The key is kept, so pressing again finds that order, not a second.
+    showError('응답을 받지 못했어요. 주문하기를 다시 누르면 같은 주문인지 확인해요 — 두 번 접수되지 않아요.');
   } finally {
     state.sending = false;
     render();

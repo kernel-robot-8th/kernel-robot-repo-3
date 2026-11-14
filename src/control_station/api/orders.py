@@ -5,6 +5,7 @@ GET  /api/inventory                  shelf inventory: on the shelves, reserved, 
 POST /api/inventory/{object}         operator override {mode: auto|closed|manual, count}
 POST /api/orders                     {items: [{object_class, quantity}], receiving_zone?} -> a waiting order
                                      (no zone: start assigns one; a zone given is an operator's choice)
+                                     Idempotency-Key header: a resend with the same key gets the same order (200)
 GET  /api/orders                     orders waiting in the intake, oldest first
 GET  /api/orders/{id}/assignment     which Pinky, arms and receiving zone would serve it now, and why
 POST /api/orders/{id}/start          assign the receiving zone and the Pinky, start the order flow
@@ -71,12 +72,21 @@ def post_order(h: ControlStationHandler, route: str, parts: list[str], body: dic
     if unsupported:
         h._json_error(400, "ORDER_INVALID", "지원하지 않는 필드: " + ", ".join(sorted(unsupported)))
         return
+    key = h.headers.get("Idempotency-Key")
+    if key is not None and not _valid_idempotency_key(key):
+        h._json_error(400, "IDEMPOTENCY_KEY_INVALID", "Idempotency-Key는 1~200자의 영문·숫자·기호(공백 없이)여야 해요")
+        return
     try:
-        order = h.app.order_desk.receive(body.get("items"), body.get("receiving_zone"))
+        order, made = h.app.order_desk.receive_once(body.get("items"), body.get("receiving_zone"), key)
     except OrderDeskError as exc:
         _desk_error(h, exc)
         return
-    h._json(201, {"order": order})
+    # A resend whose first answer was lost gets the order it already made, with 200 instead of 201.
+    h._json(201 if made else 200, {"order": order, "replayed": not made})
+
+
+def _valid_idempotency_key(key: str) -> bool:
+    return 0 < len(key) <= 200 and all(33 <= ord(char) <= 126 for char in key)
 
 
 def get_track(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
