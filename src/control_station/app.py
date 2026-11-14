@@ -198,12 +198,16 @@ def main() -> None:
         or server.parking_camera_id
         or os.environ.get("CONTROL_STATION_SHELF_CAMERA", "").strip()
         or os.environ.get("CONTROL_STATION_HEAD_CAMERA", "").strip().startswith("ros:")
+        or any(devices.devices for devices in server.policy_run_supervisor.arm_devices.values())
     ):
         server.camera_manager = UnconfiguredArmCameraStreamManager()
     else:
+        # Six cameras with two arms: ceiling (parking), shelf, and each arm's gripper and overhead camera.
         server.camera_manager = OpenCVArmCameraStreamManager(
             joint_enabled=server.arm_supervisor.enabled,
             policy_active=lambda: bool(server.policy_run_supervisor.snapshot()["process_alive"]),
+            policy_devices=server.policy_run_supervisor.active_devices,
+            arm_cameras=server.policy_run_supervisor.arm_devices,
         )
     server.task_store = task_store
     try:
@@ -231,8 +235,9 @@ def main() -> None:
     except ArmConfigError as exc:
         server.arms, server.arms_error = None, str(exc)
         print(f"팔 설정을 불러오지 못했습니다: {exc}", flush=True)
-    # Cameras the LeRobot policy opens itself; closed by the control station while a policy command runs.
-    server.policy_camera_devices = [
+    # Cameras the LeRobot policy opens itself, per arm; closed by the control station while that arm's policy
+    # command runs. Arms set with CONTROL_STATION_ARMxx_* use their own pair; "*" is the older single-arm pair.
+    legacy_policy_cameras = [
         device
         for device in (
             os.environ.get("CONTROL_STATION_ACT_OVERHEAD_CAMERA", "").strip(),
@@ -240,6 +245,11 @@ def main() -> None:
         )
         if device
     ]
+    server.policy_camera_devices = {
+        **({"*": legacy_policy_cameras} if legacy_policy_cameras else {}),
+        **{arm_id: devices.devices for arm_id, devices in server.policy_run_supervisor.arm_devices.items()
+           if devices.source == "arm" and devices.devices},
+    }
     server.policy_camera_lock = threading.Lock()
     server.policy_cameras_lent = False
     server.shelf_slot_zones = ShelfSlotZones(slot_map)

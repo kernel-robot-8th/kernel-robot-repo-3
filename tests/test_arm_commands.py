@@ -12,10 +12,11 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from control_station import arm_commands
-from control_station.act_policies import load_act_policies
+from control_station.act_policies import DEFAULT_POLICIES_PATH, load_act_policies
 from control_station.api import arm as arm_api
 from control_station.app import ControlStationHandler, ControlStationServer, WEB_DIR
 from control_station.arm_commands import ArmCommandConflict, ArmCommandError, ArmCommandStore
+from control_station.camera_adapters import UnconfiguredArmCameraStreamManager
 from control_station.shelf_slot_map import ShelfSlotMapError, load_shelf_slot_map
 from control_station.store import TaskStore
 
@@ -384,6 +385,26 @@ class PolicyCameraHandoverTests(PolicyCommandTests):
         app.camera_manager.take_back_devices.assert_called_once()
         self.assertFalse(app.policy_cameras_lent)
 
+    def test_only_the_commanded_arms_cameras_close(self) -> None:
+        app = self.app()
+        app.policy_camera_devices = {"arm-01": ["/dev/left_top", "/dev/left_gripper"], "arm-02": ["/dev/right_top"]}
+        self.store.create({**self.request(object_class="당근"), "robot_id": "arm-02"})
+        claimed = self.store.claim_next("arm-02", "w2", 0)
+        arm_api.sync_policy_cameras(app)
+        self.assertEqual(app.camera_manager.lend_devices.call_args.args[0], ["/dev/right_top"])
+        base = {"robot_id": "arm-02", "worker_id": "w2", "simulated": False}
+        self.store.apply_worker_event(claimed["command_id"], {**base, "event_id": "r", "event": "REJECTED", "reason_code": "X"})
+        arm_api.sync_policy_cameras(app)
+        app.camera_manager.take_back_devices.assert_called_once()
+
+    def test_the_older_single_arm_list_serves_every_arm(self) -> None:
+        app = self.app()
+        app.policy_camera_devices = {"*": ["/dev/overhead", "/dev/joint"]}
+        self.store.create({**self.request(object_class="당근"), "robot_id": "arm-02"})
+        self.store.claim_next("arm-02", "w2", 0)
+        arm_api.sync_policy_cameras(app)
+        self.assertEqual(app.camera_manager.lend_devices.call_args.args[0], ["/dev/overhead", "/dev/joint"])
+
     def test_other_commands_never_close_cameras(self) -> None:
         app = self.app()
         self.store.create(command_request(operation="MOVE_TO_SLOT", target={"pick_slot_id": "slot_a_2_1"}))
@@ -460,6 +481,27 @@ class ArmCommandHttpTests(unittest.TestCase):
         )
         self.assertEqual((status, body["error_code"]), (409, "POLICY_NOT_FOUND"))
         status, body = self.call("POST", "/api/arm/commands/from-camera", {"object_class": "carrot", "operation": "GRAB"})
+        self.assertEqual((status, body["error_code"]), (400, "ARM_COMMAND_INVALID"))
+
+    def test_camera_policy_command_goes_to_the_arm_in_the_body(self) -> None:
+        document = json.loads(DEFAULT_POLICIES_PATH.read_text(encoding="utf-8"))
+        for policy in document["policies"]:
+            policy["arm_id"] = "arm-01" if policy["object_class"] == "apple" else None
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / "policies.json"
+        path.write_text(json.dumps(document), encoding="utf-8")
+        self.server.arm_commands.act_policies = load_act_policies(path)
+        self.server.camera_manager = UnconfiguredArmCameraStreamManager()
+        request = {"object_class": "사과", "operation": "PICK_WITH_POLICY", "camera_id": "no_such_camera"}
+        status, body = self.call("POST", "/api/arm/commands/from-camera", {**request, "robot_id": "arm-02"})
+        self.assertEqual((status, body["error_code"]), (409, "POLICY_NOT_FOUND"))
+        self.assertIn("arm-02", body["message"])
+        self.assertNotIn("사과(apple)", body["details"]["policies"])
+        # The left arm has the apple policy, so the request gets as far as looking for the camera.
+        status, body = self.call("POST", "/api/arm/commands/from-camera", {**request, "robot_id": "arm-01"})
+        self.assertEqual((status, body["error_code"]), (404, "CAMERA_NOT_FOUND"))
+        status, body = self.call("POST", "/api/arm/commands/from-camera", {**request, "robot_id": "arm-03"})
         self.assertEqual((status, body["error_code"]), (400, "ARM_COMMAND_INVALID"))
 
     def test_cross_origin_browser_request_is_rejected(self) -> None:

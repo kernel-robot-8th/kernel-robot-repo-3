@@ -80,6 +80,12 @@ class CameraSnapshot:
     detector_device: str | None = None
     detector_ultralytics_version: str | None = None
     detections: list[dict[str, object]] = field(default_factory=list)
+    # What the camera is for, in words (e.g. "왼쪽 팔 탑 캠 (ACT 정책)"), which program opens the device
+    # (control_station / policy / ros_node), and a two-word state for people: "연결됨" or "연결 전".
+    role: str | None = None
+    opened_by: str | None = None
+    link_label: str | None = None
+    setting: str | None = None  # the environment variable that sets the device path
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
