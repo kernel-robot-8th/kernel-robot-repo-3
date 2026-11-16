@@ -10,8 +10,8 @@ from pathlib import Path
 from control_station.arm_devices import arm_devices, env_prefix, legacy_arm_id
 from control_station.arms import ArmConfigError, load_arms
 
-LEFT_SERIAL = "F58AE68650323952582E3120FF05260E"
-RIGHT_SERIAL = "A9F9354350323952582E3120FF070727"
+LEFT_SERIAL = "A9F9354350323952582E3120FF070727"  # arm-01, 2026-11-16 arm owner's layout
+RIGHT_SERIAL = "F58AE68650323952582E3120FF05260E"  # arm-02, where the apple and watermelon policies were recorded
 ARMS = (
     {"arm_id": "arm-01", "label": "왼쪽 팔", "board_serial": LEFT_SERIAL},
     {"arm_id": "arm-02", "label": "오른쪽 팔", "board_serial": RIGHT_SERIAL},

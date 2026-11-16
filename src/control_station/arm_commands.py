@@ -471,6 +471,37 @@ class ArmCommandStore:
         now = _now()
         with self._lock:
             with self._sessions.begin() as session:
+                open_commands = list(session.scalars(
+                    select(ArmCommandRecord)
+                    .where(
+                        ArmCommandRecord.state.in_(
+                            [state.value for state in (ArmCommandState.QUEUED, *IN_FLIGHT, ArmCommandState.UNKNOWN)]
+                        )
+                    )
+                    .order_by(ArmCommandRecord.created_at)
+                ))
+                for active in open_commands:
+                    self._settle(session, active, now)
+                blocking_all = [active for active in open_commands if self._blocks(active)]
+                active_policy = next(
+                    (active for active in blocking_all if active.operation == "PICK_WITH_POLICY"), None
+                )
+                if active_policy is not None:
+                    raise ArmCommandConflict(
+                        "POLICY_RUN_ACTIVE",
+                        "정책 집기 실행이 끝나거나 현장 확인될 때까지 다른 팔 명령을 등록할 수 없습니다.",
+                        self._present(active_policy),
+                    )
+                if operation == "PICK_WITH_POLICY":
+                    other_arm_command = next(
+                        (active for active in blocking_all if active.robot_id != robot_id), None
+                    )
+                    if other_arm_command is not None:
+                        raise ArmCommandConflict(
+                            "OTHER_ARM_COMMAND_ACTIVE",
+                            "다른 팔 명령이 끝나거나 현장 확인될 때까지 정책 집기를 등록할 수 없습니다.",
+                            self._present(other_arm_command),
+                        )
                 blocking = [command for command in self._robot_commands(session, robot_id, now) if self._blocks(command)]
                 if blocking:
                     raise ArmCommandConflict(

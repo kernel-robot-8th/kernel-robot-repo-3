@@ -5,8 +5,9 @@ The policy runs through LeRobot async inference: a policy server (`python -m ler
 started separately on this PC) and LeRobot's RobotClient, which this module runs in the worker process.
 An ACT policy has no "done" signal and never stops by itself, so this module decides when to stop:
 
-- RETURNED_TO_REST: the commanded joints first left the recorded home pose (more than `depart_ticks` on some
-  joint), then stayed within `rest_ticks` of it for `settle_s`. The training episodes start and end at rest.
+- RETURNED_TO_REST: measured joint positions first left the recorded home pose (more than `depart_ticks` on some
+  joint), then stayed within `rest_ticks` of it for `settle_s` while measurements remained fresh. The training
+  episodes start and end at rest.
 - NEVER_DEPARTED: `max_run_s` passed without the arm leaving rest.
 - TIMEOUT: `max_run_s` passed while the arm was away from rest.
 - CANCELED: the operator canceled the command.
@@ -34,6 +35,11 @@ DEFAULT_POLICIES = REPOSITORY_ROOT / "config" / "omx-act-policies.json"
 ROLES = ("OVERHEAD", "GRIPPER")
 
 
+def max_home_error_ticks(home: dict[str, int], current: dict[str, int]) -> int:
+    """Largest absolute error over the five arm joints shared by start and return-to-home checks."""
+    return max(abs(int(current[name]) - int(home[name])) for name in ARM_JOINTS)
+
+
 def load_policies(path: Path) -> tuple[str, dict[str, dict[str, Any]]]:
     """(SHA-256 of the file, policies by id). The control station freezes the same SHA-256 into each command."""
     raw = path.read_bytes()
@@ -50,21 +56,29 @@ def policy_cameras(policy: dict[str, Any], devices: dict[str, str]) -> dict[str,
 
 @dataclass
 class RestWatcher:
-    """Decides when the policy is done from the commanded joint ticks. Pure; fed by the control loop."""
+    """Recognize a return to the recorded home pose from measured joint ticks."""
 
     home: dict[str, int]
     depart_ticks: int = 300
     rest_ticks: int = 150
     settle_s: float = 1.5
+    max_sample_age_s: float = 0.2
     departed: bool = False
     rest_since: float | None = None
     farthest: int = 0
 
     def distance(self, ticks: dict[str, int]) -> int:
-        return max(abs(int(ticks[name]) - int(self.home[name])) for name in ARM_JOINTS)
+        return max_home_error_ticks(self.home, ticks)
 
-    def update(self, now: float, ticks: dict[str, int]) -> bool:
-        """True once the arm has left rest and has been back within rest_ticks for settle_s."""
+    def update(
+        self, now: float, ticks: dict[str, int], *, observed_at: float | None = None
+    ) -> bool:
+        """True after fresh measured positions return within tolerance and stay there for settle_s."""
+        if observed_at is not None and (
+            observed_at > now or now - observed_at > self.max_sample_age_s
+        ):
+            self.rest_since = None
+            return False
         distance = self.distance(ticks)
         self.farthest = max(self.farthest, distance)
         if distance > self.depart_ticks:
@@ -83,6 +97,8 @@ class PolicyRunResult:
     run_s: float
     farthest_from_home_ticks: int
     last_commanded_ticks: dict[str, int] = field(default_factory=dict)
+    last_observed_ticks: dict[str, int] = field(default_factory=dict)
+    final_error_ticks: dict[str, int] = field(default_factory=dict)
     actions_sent: int = 0
     message: str = ""
 
@@ -163,9 +179,11 @@ def run_policy(
     from lerobot.robots.omx_follower.config_omx_follower import OmxFollowerConfig
 
     class WatchedClient(RobotClient):
-        """RobotClient that remembers the last joint goal it wrote, in raw ticks."""
+        """RobotClient that tracks commanded and measured arm positions in raw ticks."""
 
-        last_ticks: dict[str, int] = {}
+        last_commanded_ticks: dict[str, int] = {}
+        last_observed_ticks: dict[str, int] = {}
+        last_observed_at: float | None = None
         actions_sent = 0
 
         def control_loop_action(self, verbose: bool = False):
@@ -175,7 +193,10 @@ def run_policy(
             for name in ARM_JOINTS:
                 low, high = calibration[name].range_min, calibration[name].range_max
                 ticks[name] = round((float(action[f"{name}.pos"]) + 100) / 200 * (high - low) + low)
-            self.last_ticks = ticks
+            self.last_commanded_ticks = ticks
+            measured = self.robot.bus.sync_read("Present_Position", normalize=False)
+            self.last_observed_ticks = {name: int(measured[name]) for name in ARM_JOINTS}
+            self.last_observed_at = time.monotonic()
             self.actions_sent += 1
             return action
 
@@ -222,7 +243,9 @@ def run_policy(
             now = time.monotonic()
             if not control.is_alive():
                 reason, message = "ERROR", "control loop stopped"
-            elif client.last_ticks and watcher.update(now, client.last_ticks):
+            elif client.last_observed_ticks and watcher.update(
+                now, client.last_observed_ticks, observed_at=client.last_observed_at
+            ):
                 reason = "RETURNED_TO_REST"
             elif now - begin > max_run_s:
                 reason = "TIMEOUT" if watcher.departed else "NEVER_DEPARTED"
@@ -233,7 +256,22 @@ def run_policy(
                         reason = "CANCELED"
                 except Exception as error:  # cannot read the cancel flag: stop the policy rather than run blind
                     reason, message = "ERROR", f"cancel check failed: {error}"[:300]
-        return PolicyRunResult(reason, now - begin, watcher.farthest, dict(client.last_ticks), client.actions_sent, message)
+        final_observed = dict(client.last_observed_ticks)
+        final_errors = {
+            name: abs(final_observed[name] - int(watcher.home[name]))
+            for name in ARM_JOINTS
+            if name in final_observed and name in watcher.home
+        }
+        return PolicyRunResult(
+            reason,
+            now - begin,
+            watcher.farthest,
+            last_commanded_ticks=dict(client.last_commanded_ticks),
+            last_observed_ticks=final_observed,
+            final_error_ticks=final_errors,
+            actions_sent=client.actions_sent,
+            message=message,
+        )
     finally:
         client.shutdown_event.set()
         if control is not None:

@@ -100,7 +100,8 @@ class OrderDeskTest(unittest.TestCase):
     def test_catalog_lists_products_stock_and_zones(self) -> None:
         catalog = self.desk.catalog()
         stock = {item["object_class"]: item["available"] for item in catalog["products"]}
-        self.assertEqual(stock, {"carrot": 4, "tissue": 3, "apple": 4})  # mock stock over both shelves
+        # mock stock over both shelves; watermelon has a policy but no stock
+        self.assertEqual(stock, {"carrot": 4, "tissue": 3, "apple": 4, "watermelon": 0})
         self.assertEqual([zone["zone_id"] for zone in catalog["zones"]], ["zone_a"])
 
     def test_bad_items_and_unknown_zone_are_refused(self) -> None:
@@ -116,8 +117,8 @@ class OrderDeskTest(unittest.TestCase):
         preview = self.desk.preview(order["id"])
         self.assertEqual(preview["pinky"]["pinky_id"], "10")  # mock batteries: P0 92 %, P1 78 %, P2 64 %
         self.assertEqual(preview["pinky"]["summary"], "P0 · 배터리 90%대 · 오늘 0회")
-        # The apple policy is the left arm's, so the two apples go left and the carrot right.
-        self.assertEqual(preview["arms"]["summary"], "왼쪽 팔 2개 → 오른쪽 팔 1개")
+        # The apple policy is the right arm's, so the two apples go right and the carrot left.
+        self.assertEqual(preview["arms"]["summary"], "오른쪽 팔 2개 → 왼쪽 팔 1개")
         self.assertIsNone(self.store.get_task(order["id"])["pinky_id"])
 
     def use_two_zones(self) -> None:

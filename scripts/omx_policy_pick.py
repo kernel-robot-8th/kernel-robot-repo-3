@@ -40,9 +40,17 @@ from omx_slot_motion import ARM_JOINTS, REPOSITORY_ROOT, Rejected, SlotMotion, b
 DEFAULT_GRIPPER_CAMERA = "/dev/v4l/by-id/usb-Innomaker_Innomaker-U20CAM-720P_SN0001-video-index0"
 
 
+SIDE_PREFIX = {"arm-01": "CONTROL_STATION_LEFT_", "arm-02": "CONTROL_STATION_RIGHT_"}
+SIDE_NAME = {"GRIPPER_CAMERA": "JOINT_CAMERA", "OVERHEAD_CAMERA": "CEILING_CAMERA"}
+
+
 def arm_env(robot_id: str, name: str) -> str:
-    """CONTROL_STATION_ARM01_<name> for arm-01; empty when unset."""
-    return os.environ.get("CONTROL_STATION_" + robot_id.replace("-", "").upper() + "_" + name, "").strip()
+    """CONTROL_STATION_ARM01_<name> for arm-01, else the side name CONTROL_STATION_LEFT_<name> (RIGHT_ for arm-02;
+    JOINT_CAMERA / CEILING_CAMERA for the gripper / overhead camera); empty when unset."""
+    value = os.environ.get("CONTROL_STATION_" + robot_id.replace("-", "").upper() + "_" + name, "").strip()
+    if not value and robot_id in SIDE_PREFIX:
+        value = os.environ.get(SIDE_PREFIX[robot_id] + SIDE_NAME.get(name, name), "").strip()
+    return value
 
 
 def arm_board(robot_id: str) -> str | None:

@@ -132,7 +132,7 @@ sequenceDiagram
 | GET | `/api/arm/commands` | 관제 화면 | 최근 20건, 워커 접속 상태, ACK 제한 시간 |
 | GET | `/api/arm/shelf-slots` | 둘 다 | 관제가 불러온 칸 정의 파일 내용과 버전(SHA-256). 파일이 없으면 404 `SHELF_SLOTS_NOT_CONFIGURED` |
 | GET | `/api/arm/policies` | 관제 화면 | 물체별 학습 정책 목록과 정책 파일 버전(SHA-256). 파일이 없으면 404 `ACT_POLICIES_NOT_CONFIGURED` |
-| POST | `/api/arm/commands/from-camera` | 관제 화면 | body `{"object_class": "당근", "operation": "PICK_WITH_POLICY", "robot_id": "arm-02"}`(operation 생략 시 `MOVE_TO_SLOT`, robot_id 생략 시 `arm-01`). 정면 카메라에서 한 칸에만 보일 때 그 팔에 명령 등록. 그 팔에 학습된 정책이 없는 물체는 409 `POLICY_NOT_FOUND` |
+| POST | `/api/arm/commands/from-camera` | 관제 화면 | body `{"object_class": "당근", "operation": "PICK_WITH_POLICY", "robot_id": "arm-02"}`(`robot_id` 생략 시 검출 칸의 담당 팔, operation 생략 시 `MOVE_TO_SLOT`). 정면 카메라에서 한 칸에만 보일 때 명령 등록. 선택 팔이 칸 담당과 다르면 409 `ARM_SHELF_MISMATCH`, 그 팔에 학습된 정책이 없는 물체는 409 `POLICY_NOT_FOUND` |
 | GET | `/api/arm/commands/{command_id}` | 둘 다 | 명령과 전체 이벤트 이력 |
 | POST | `/api/arm/commands/{command_id}/cancel` | 관제 화면 | body `{}`. `QUEUED`면 바로 취소, 실행 중이면 취소 요청 표시 |
 | POST | `/api/arm/commands/{command_id}/clear-unknown` | 관제 화면 | body `{"note": "..."}`. `UNKNOWN` 현장 확인 기록 |
@@ -231,12 +231,15 @@ sequenceDiagram
     W->>API: RESULT_UNKNOWN / PLACE_NOT_VERIFIED, pose_reached true
 ```
 
-- 정책 정의: [config/omx-act-policies.json](../../config/omx-act-policies.json). 물체 이름(YOLO 클래스, 한글 이름, 별칭) → 모델(Hugging Face repo), 정책 입력 `front`/`wrist`에 넣을 카메라 역할(`OVERHEAD` 선반을 위에서 봄, `GRIPPER` 그리퍼), 최대 실행 시간. 관제와 워커가 같은 파일을 읽고, 명령에는 파일의 SHA-256(`target.policy.registry_version`)이 고정됩니다. 다르면 워커가 `POLICY_REGISTRY_MISMATCH`로 거부합니다.
+- 정책 정의: [config/omx-act-policies.json](../../config/omx-act-policies.json). 물체 이름(YOLO 클래스, 한글 이름, 별칭) → 모델(Hugging Face repo), 정책 입력 `front`/`wrist`에 넣을 카메라 역할(`OVERHEAD` 선반을 위에서 봄, `GRIPPER` 그리퍼), 최대 실행 시간. `arm_id`가 지정된 정책은 학습한 팔에서만 실행됩니다. 관제와 워커가 같은 파일을 읽고, 명령에는 파일의 SHA-256(`target.policy.registry_version`)이 고정됩니다. 다르면 워커가 `POLICY_REGISTRY_MISMATCH`로 거부합니다.
+- 물체별 집기 UI에서 실행 팔을 선택합니다. 카메라에서 칸을 찾으면 `config/arms.json`의 shelf 담당 팔과 선택을 대조하고, 서로 다르면 `ARM_SHELF_MISMATCH`로 거부합니다. 선택하지 않은 경우 집기 버튼은 비활성 상태입니다.
+- 두 팔 워커 설정: `CONTROL_STATION_LEFT/RIGHT_FOLLOWER_PORT`, `CONTROL_STATION_LEFT/RIGHT_OMX_POSES`, `CONTROL_STATION_LEFT/RIGHT_CEILING_CAMERA`, `CONTROL_STATION_LEFT/RIGHT_JOINT_CAMERA`를 설정하고 각각 `scripts/omx_act_policy_test.sh worker --robot-id arm-01` 및 `--robot-id arm-02`로 실행합니다. 양쪽 워커는 대기할 수 있지만, 정책 실행 중에는 두 팔 모두 새 명령을 받지 않습니다. 반대 팔 명령이 미완료 상태이면 정책 집기도 등록되지 않습니다.
+- 별도 `액션 상한 진단 실행` 패널은 기존 LeRobot 직접 실행 진단용으로, home 복귀 판정을 하지 않습니다. 운영용 1회 집기는 반드시 위 HTTP 워커의 물체별 정책 버튼을 사용합니다.
 - 명령: `target`은 `object_class`(필수)와 선택적 `pick_slot_id`만 받습니다. 관제가 `target.object_class`를 검출기 클래스 이름으로 바꾸고 `target.policy`(`policy_id`, `label`, `model`, `registry_version`)를 붙입니다. 정책이 없는 물체는 400입니다. `place`는 다른 집기 명령과 같이 필요합니다(화면에서는 `CART_1`).
 - 워커 검사(거부 사유): 가짜·dry-run 팔(`POLICY_NEEDS_REAL_ARM`), 정책 파일 버전·정책 ID(`POLICY_REGISTRY_MISMATCH`, `POLICY_UNKNOWN`), 다른 팔에서 녹화한 정책이거나 포트가 이 팔의 보드가 아님(`POLICY_WRONG_ARM`), home 미기록(`POSE_NOT_RECORDED`), 만료(`EXPIRED`), 카메라 장치 없음(`CAMERA_UNAVAILABLE`), 다른 프로그램이 카메라 사용 중(`CAMERA_BUSY`), 정책 서버 응답 없음(`POLICY_SERVER_UNAVAILABLE`), 현재 자세가 home에서 400틱 넘게 떨어짐(`NOT_AT_REST`, 정책은 쉬는 자세에서 시작하도록 학습됨).
 - 카메라 넘겨주기: V4L2 카메라는 한 프로그램만 열 수 있습니다. 관제가 그 명령 팔의 정책 카메라(`CONTROL_STATION_ARM01_*_CAMERA`/`ARM02_*`, 예전 단일 팔 설정이면 `CONTROL_STATION_ACT_OVERHEAD_CAMERA`, `CONTROL_STATION_JOINT_CAMERA`와 같은 장치)를 화면에 띄우고 있으면, 워커가 정책 명령을 가져가는 순간(`DISPATCHED`) 그 카메라를 닫고 명령이 끝나면(`DISPATCHED`·`ACCEPTED`·`RUNNING`이 아니게 되면) 다시 엽니다. 그동안 화면에는 "학습 정책 실행 중"이 표시됩니다. 워커는 카메라를 열기 전에 다른 프로세스가 장치를 열고 있지 않은지 최대 5초 기다리고, 그래도 열려 있으면 `CAMERA_BUSY`로 거부합니다. 2026-11-07 임시 관제에서 실제 헤드캠(허브 4.4)으로 확인: 명령을 가져가는 응답(0.04초) 안에 닫히고, 명령이 끝난 뒤 다시 `STREAMING`.
 - 실행: ACCEPTED 뒤 서보 속도 프로파일을 0(학습 때와 같은 전원 기본값)으로 되돌리고, LeRobot `RobotClient`를 워커 프로세스 안에서 돌립니다. LeRobot이 연결하면서 모터 설정을 쓰느라 토크가 잠깐 꺼집니다. 정지할 때는 토크를 유지합니다(`disable_torque_on_disconnect=False`).
-- 멈추는 조건: 정책에는 완료 신호가 없어서, 워커가 정책이 쓴 관절 목표를 보고 정합니다. 어느 관절이든 home에서 300틱 넘게 벗어난 뒤 다섯 관절이 모두 150틱 안으로 돌아와 1.5초 머물면 `RETURNED_TO_REST`입니다(값은 워커 옵션 `--policy-depart-ticks`, `--policy-rest-ticks`, `--policy-settle-s`). 학습 에피소드가 쉬는 자세에서 끝나도록 녹화돼 있어서 이 조건을 씁니다.
+- 멈추는 조건: 정책에는 완료 신호가 없으므로, 워커가 LeRobot의 동일한 follower bus에서 읽은 실제 `Present_Position` 관절값으로 판정합니다. 어느 관절이든 home에서 300틱 넘게 벗어난 뒤 다섯 관절 모두 150틱 이내이고, 최신 측정값이 0.2초 이내인 상태로 1.5초 유지되면 `RETURNED_TO_REST`입니다(워커 옵션 `--policy-depart-ticks`, `--policy-rest-ticks`, `--policy-settle-s`; 시작 허용치는 `--policy-start-ticks=400`). 학습 에피소드가 쉬는 자세에서 끝나도록 녹화돼 있어서 이 조건을 씁니다. 이 신호는 팔이 home 근처로 돌아왔다는 뜻이며 물체 집기·적재 완료를 뜻하지 않습니다.
 - 결과:
 
 | 정책 정지 이유 | 그 뒤 동작 | 보고 |

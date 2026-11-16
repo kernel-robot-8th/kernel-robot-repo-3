@@ -70,7 +70,7 @@ class ArmQueuePickTest(unittest.TestCase):
     def test_a_policy_recorded_on_the_other_arm_moves_nothing(self) -> None:
         commands = FakeCommands(HOME_UNVERIFIED)
         with self.assertRaises(OrderFlowError) as raised:
-            pick(commands, arm_id="arm-02", object_class="apple")  # the apple policy is arm-01's
+            pick(commands, arm_id="arm-01", object_class="apple")  # the apple policy is arm-02's
         self.assertEqual(raised.exception.error_code, "POLICY_NOT_FOR_ARM")
         self.assertEqual(commands.created, [])
 
@@ -159,7 +159,7 @@ class RealPickOrderTest(unittest.TestCase):
         task = self.run_order(camera_counts=True)
         self.assertEqual(task["status"], "SUCCEEDED", task["error"])
         self.assertEqual(len(self.picks), 2)
-        self.assertIn(("arm-01", "apple"), self.picks)  # the apple policy was recorded on the left arm only
+        self.assertIn(("arm-02", "apple"), self.picks)  # the apple policy was recorded on the right arm only
         self.assertEqual([entry["arm_command_id"] for entry in self.settled], ["CMD-1", "CMD-2"])
         self.assertEqual({entry["simulated"] for entry in self.settled}, {False})
 

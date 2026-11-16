@@ -10,6 +10,9 @@ stock. Device paths differ per PC, so they come from .control-station/control-st
     CONTROL_STATION_ARM01_OVERHEAD_CAMERA   /dev/v4l/by-path/...
     (ARM02 the same)
 
+The side names work as well (2026-11-16, from main): CONTROL_STATION_LEFT_* for arm-01 and RIGHT_* for arm-02, with
+JOINT_CAMERA for the gripper camera and CEILING_CAMERA for the overhead one. An ARMxx setting wins over a side one.
+
 The older single-arm settings (CONTROL_STATION_POLICY_ROBOT_PORT or CONTROL_STATION_FOLLOWER_PORT, the
 CONTROL_STATION_POLICY_*_CAMERA, CONTROL_STATION_ACT_OVERHEAD_CAMERA and CONTROL_STATION_JOINT_CAMERA) still
 work. They count for one arm only: the arm whose board serial is in that port path, and only while no ARMxx
@@ -32,6 +35,18 @@ _FIELDS = ("FOLLOWER_PORT", "ROBOT_ID", "GRIPPER_CAMERA", "OVERHEAD_CAMERA")
 def env_prefix(arm_id: str) -> str:
     """arm-01 -> CONTROL_STATION_ARM01_"""
     return "CONTROL_STATION_" + arm_id.replace("-", "").upper() + "_"
+
+
+SIDE_PREFIX = {"arm-01": "CONTROL_STATION_LEFT_", "arm-02": "CONTROL_STATION_RIGHT_"}
+SIDE_FIELD = {"GRIPPER_CAMERA": "JOINT_CAMERA", "OVERHEAD_CAMERA": "CEILING_CAMERA"}
+
+
+def env_names(arm_id: str, field: str) -> tuple[str, ...]:
+    """The settings that give this arm's `field`, first match wins: ARMxx_<field>, then the side name."""
+    names = [env_prefix(arm_id) + field]
+    if arm_id in SIDE_PREFIX and field != "ROBOT_ID":
+        names.append(SIDE_PREFIX[arm_id] + SIDE_FIELD.get(field, field))
+    return tuple(names)
 
 
 def _first(env: Mapping[str, str], *names: str) -> str | None:
@@ -108,7 +123,7 @@ def arm_devices(arms: list[dict[str, Any]] | tuple[dict[str, Any], ...],
     result: dict[str, ArmDevices] = {}
     for arm in arms:
         prefix = env_prefix(arm["arm_id"])
-        own = {field: _first(env, prefix + field) for field in _FIELDS}
+        own = {field: _first(env, *env_names(arm["arm_id"], field)) for field in _FIELDS}
         if any(own.values()) or arm["arm_id"] != legacy_arm:
             port, cameras = own["FOLLOWER_PORT"], {role: own[f"{role}_CAMERA"] for role in CAMERA_ROLES}
             source = "arm" if any(own.values()) else "none"

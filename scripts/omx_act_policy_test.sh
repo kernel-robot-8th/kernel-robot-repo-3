@@ -5,7 +5,8 @@
 #   터미널 1:  scripts/omx_act_policy_test.sh server        정책 서버 (GPU, 모터 연결 없음). 아래 두 방식 모두 필요
 #
 # 관제에서 실행 (관제 화면 수동 조작 탭 "당근 집기"·"물티슈 집기" → PICK_WITH_POLICY):
-#   터미널 2:  scripts/omx_act_policy_test.sh worker [워커 옵션]   OMX 워커가 정책을 실행하고, 쉬는 자세로 돌아오면 멈춘 뒤 home 정렬
+#   터미널 2:  scripts/omx_act_policy_test.sh worker --robot-id arm-02   우측 OMX 워커
+#              arm-01은 좌측, arm-02는 우측 설정을 환경 변수에서 각각 불러옵니다.
 #              실험: worker --policy-any-start  (칸 앞 등 쉬는 자세가 아닌 곳에서도 정책 시작, 한 스텝 40틱 제한)
 #
 # 관제 없이 수동 시험:
@@ -15,10 +16,10 @@
 # 환경 변수
 #   CONTROL_STATION_ACT_OVERHEAD_CAMERA  선반을 위에서 보는 카메라 (필수, 정책 학습 때와 같은 위치·시점)
 #   CONTROL_STATION_JOINT_CAMERA         그리퍼 카메라 = 관제의 Joint Camera (기본 Innomaker by-id)
-#   CONTROL_STATION_FOLLOWER_PORT        follower 포트 (기본 /dev/omx_follower)
+#   CONTROL_STATION_LEFT/RIGHT_FOLLOWER_PORT, _OMX_POSES  팔별 포트와 자세 파일
+#   CONTROL_STATION_LEFT/RIGHT_CEILING_CAMERA, _JOINT_CAMERA  팔별 천장·그리퍼 카메라
 #   CONTROL_STATION_ACT_MODEL            client에서 설정 파일 대신 쓸 모델 (예: JJinJJin2/omx_act_policy_v4). 카메라 역할은 물체 설정을 따름
-#   CONTROL_STATION_OMX_POSES            워커의 자세 파일. 그 파일을 기록한 보드와 follower가 같아야 함
-#                                        (기본 config/omx-slot-poses.json)
+#   CONTROL_STATION_FOLLOWER_PORT / CONTROL_STATION_OMX_POSES  arm-01 구형 단일팔 설정
 # 정책마다 front/wrist에 어느 카메라를 넣을지는 config/omx-act-policies.json의 cameras가 정한다.
 #
 # 팔 포트는 배타적으로 열리지 않아 두 프로세스가 동시에 모터에 쓸 수 있다. 그래서 정책 클라이언트와 워커를 차례로만 실행한다.
@@ -34,6 +35,35 @@ POLICIES="$REPO_DIR/config/omx-act-policies.json"
 
 arm_busy() {
   pgrep -f "omx_lerobot_worker.py|omx_ros_worker.py|lerobot-teleoperate|lerobot.teleoperate|lerobot-record|robot_client import async_client" >/dev/null
+}
+
+other_arm_process_busy() {
+  pgrep -f "omx_ros_worker.py|lerobot-teleoperate|lerobot.teleoperate|lerobot-record|robot_client import async_client" >/dev/null
+}
+
+worker_busy_for_robot() {
+  python3 - "$1" <<'PY'
+import os, sys
+wanted = sys.argv[1]
+for entry in os.scandir('/proc'):
+    if not entry.name.isdigit():
+        continue
+    try:
+        args = open(f'{entry.path}/cmdline', 'rb').read().decode(errors='replace').split('\0')
+    except OSError:
+        continue
+    if not any(arg.endswith('omx_lerobot_worker.py') for arg in args):
+        continue
+    robot_id = 'arm-01'
+    for index, arg in enumerate(args):
+        if arg == '--robot-id' and index + 1 < len(args):
+            robot_id = args[index + 1]
+        elif arg.startswith('--robot-id='):
+            robot_id = arg.partition('=')[2]
+    if robot_id == wanted:
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
 }
 
 case "${1:-}" in
@@ -97,10 +127,22 @@ EOF
     echo "물체를 놓았고 그리퍼가 벌어졌는지 확인한 뒤: $0 worker → 관제 화면 원상복귀"
     ;;
   worker)
-    if arm_busy; then echo "정책 클라이언트나 다른 팔 프로세스가 아직 실행 중입니다. 먼저 끄세요." >&2; exit 1; fi
+    shift
+    ROBOT_ID=arm-01
+    WORKER_ARGS=("$@")
+    for ((i=0; i<${#WORKER_ARGS[@]}; i++)); do
+      case "${WORKER_ARGS[$i]}" in
+        --robot-id=*) ROBOT_ID="${WORKER_ARGS[$i]#*=}" ;;
+        --robot-id) ((i+=1)); ROBOT_ID="${WORKER_ARGS[$i]:-arm-01}" ;;
+      esac
+    done
+    if other_arm_process_busy || worker_busy_for_robot "$ROBOT_ID"; then
+      echo "$ROBOT_ID 워커, 텔레옵, 녹화 또는 직접 정책 클라이언트가 실행 중입니다. 같은 팔 프로세스를 먼저 확인하세요." >&2
+      exit 1
+    fi
     cd "$REPO_DIR"
-    WORKER=("$PY" scripts/omx_lerobot_worker.py --server http://127.0.0.1:8000 --port "$FOLLOWER" --poses "$POSES"
-            --overhead-camera "$OVERHEAD" --gripper-camera "$GRIPPER" --profile-velocity 5 --max-delta 1500 --tolerance 25 "${@:2}")
+    WORKER=("$PY" scripts/omx_lerobot_worker.py --server http://127.0.0.1:8000
+            --profile-velocity 5 --max-delta 1500 --tolerance 25 "${WORKER_ARGS[@]}")
     exec sg dialout -c "$(printf '%q ' "${WORKER[@]}")"
     ;;
   *)

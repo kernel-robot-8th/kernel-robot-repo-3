@@ -193,6 +193,10 @@ def main() -> int:
     parser.add_argument("--release-torque", action="store_true", help="turn arm torque off and exit (hold the arm first)")
     if arm_env(robot_id, "FOLLOWER_PORT"):
         parser.set_defaults(port=arm_env(robot_id, "FOLLOWER_PORT"))
+    # This arm's pose file (CONTROL_STATION_ARM01_OMX_POSES or _LEFT_OMX_POSES); SlotMotion refuses a pose file
+    # recorded on another board, so a wrong default stops instead of moving.
+    if arm_env(robot_id, "OMX_POSES"):
+        parser.set_defaults(poses=Path(arm_env(robot_id, "OMX_POSES")))
     args = parser.parse_args()
     finish_policy_arguments(args)
     args.result = "succeeded"

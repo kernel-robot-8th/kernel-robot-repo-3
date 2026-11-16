@@ -747,7 +747,6 @@ manualConfirm.addEventListener('keydown', (event) => {
 
 const cameraCommandForm = document.querySelector('#cameraCommandForm');
 const policyButtons = document.querySelector('#policyButtons');
-
 cameraCommandForm.addEventListener('submit', async (event) => {
   // The server picks the slot from the front camera; it refuses unless the object is in exactly one slot.
   event.preventDefault();
@@ -822,7 +821,7 @@ async function pickWithPolicy(policy) {
     const response = await fetch('/api/arm/commands/from-camera', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ object_class: policy.object_class, operation: 'PICK_WITH_POLICY' }),
+      body: JSON.stringify({ object_class: policy.object_class, operation: 'PICK_WITH_POLICY', robot_id: robotId }),
     });
     const result = await response.json();
     if (response.ok) {

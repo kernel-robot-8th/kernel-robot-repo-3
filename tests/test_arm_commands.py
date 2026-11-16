@@ -475,7 +475,7 @@ class ArmCommandHttpTests(unittest.TestCase):
         self.server.arm_commands.act_policies = load_act_policies()
         status, body = self.call("GET", "/api/arm/policies")
         self.assertEqual(status, 200)
-        self.assertEqual([policy["label"] for policy in body["policies"]], ["당근", "물티슈", "사과"])
+        self.assertEqual([policy["label"] for policy in body["policies"]], ["당근", "물티슈", "사과", "수박"])
         status, body = self.call(
             "POST", "/api/arm/commands/from-camera", {"object_class": "banana", "operation": "PICK_WITH_POLICY"}
         )

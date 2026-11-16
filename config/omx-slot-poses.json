@@ -34,14 +34,14 @@
       }
     },
     "home": {
-      "recorded_at": "2026-11-04T12:13:14+00:00",
+      "recorded_at": "2026-11-16T11:32:54+00:00",
       "ticks": {
-        "shoulder_pan": 2049,
-        "shoulder_lift": 735,
-        "elbow_flex": 3168,
-        "wrist_flex": 2676,
-        "wrist_roll": 2070,
-        "gripper": 2025
+        "shoulder_pan": 2081,
+        "shoulder_lift": 733,
+        "elbow_flex": 3135,
+        "wrist_flex": 2969,
+        "wrist_roll": 2120,
+        "gripper": 2366
       },
       "torque_enabled_while_recording": {
         "shoulder_pan": false,

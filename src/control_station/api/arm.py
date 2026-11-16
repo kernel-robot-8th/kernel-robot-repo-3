@@ -197,39 +197,47 @@ def post_command_from_camera(h: ControlStationHandler, route: str, parts: list[s
 
     operation MOVE_TO_SLOT(기본)은 그 칸 자세로 이동, PICK_WITH_POLICY는 그 물체용 학습 정책 실행.
     정책은 위치를 입력으로 받지 않으므로, 정책 명령에서 칸은 물체가 실제로 있다는 근거로만 남는다.
-    robot_id(기본 arm-01)는 명령을 받을 팔이며, 정책은 그 팔에서 녹화한 것(또는 팔이 정해지지 않은 것)만 고른다."""
+    robot_id를 주지 않으면 물체가 보인 칸을 맡은 팔이 받고, 주면 그 팔이 칸 담당이어야 한다(ARM_SHELF_MISMATCH).
+    정책은 그 팔에서 녹화한 것(또는 팔이 정해지지 않은 것)만 고른다(POLICY_NOT_FOUND)."""
     allowed = {"object_class", "camera_id", "valid_for_s", "operation", "robot_id"}
     object_class = body.get("object_class")
     operation = body.get("operation", "MOVE_TO_SLOT")
-    robot_id = body.get("robot_id", "arm-01")
+    requested_robot_id = body.get("robot_id")
     if (
         set(body) - allowed
         or not isinstance(object_class, str)
         or not object_class.strip()
         or operation not in {"MOVE_TO_SLOT", "PICK_WITH_POLICY"}
-        or robot_id not in ARM_ROBOT_IDS
+        or (requested_robot_id is not None and (
+            not isinstance(requested_robot_id, str) or requested_robot_id not in ARM_ROBOT_IDS
+        ))
     ):
         h._json_error(
             400,
             "ARM_COMMAND_INVALID",
-            "body needs object_class and may have camera_id, valid_for_s, "
-            f"operation (MOVE_TO_SLOT or PICK_WITH_POLICY), robot_id ({', '.join(sorted(ARM_ROBOT_IDS))})",
+            f"body needs object_class and may have robot_id ({', '.join(sorted(ARM_ROBOT_IDS))}), camera_id, "
+            "valid_for_s, operation (MOVE_TO_SLOT or PICK_WITH_POLICY)",
         )
         return
     class_name = object_class.strip()
     policies = h.app.arm_commands.act_policies
-    policy = policies.resolve(class_name, robot_id) if policies is not None else None
+
+    def no_policy(arm_id: str | None) -> None:
+        h._json_error(409, "POLICY_NOT_FOUND", f"{arm_id or '어느 팔'}에도 {class_name}에 학습된 정책이 없습니다",
+                      details={"policies": [f"{item['label']}({item['object_class']})" for item in policies.policies.values()
+                                            if arm_id is None or item["arm_id"] in (None, arm_id)]})
+
+    # The name only, before the arm is known: 당근 -> carrot, the detector's class name, for every operation.
+    named = policies.resolve(class_name, requested_robot_id) if policies is not None else None
     if operation == "PICK_WITH_POLICY":
         if policies is None:
             h._json_error(409, "ACT_POLICIES_NOT_CONFIGURED", getattr(h.app, "act_policies_error", None) or "정책 정의 파일이 없습니다")
             return
-        if policy is None:
-            h._json_error(409, "POLICY_NOT_FOUND", f"{robot_id}에는 {class_name}에 학습된 정책이 없습니다",
-                          details={"policies": [f"{item['label']}({item['object_class']})" for item in policies.policies.values()
-                                                if item["arm_id"] in (None, robot_id)]})
+        if named is None:
+            no_policy(requested_robot_id)
             return
-    if policy is not None:
-        class_name = policy["object_class"]  # 당근 -> carrot: the detector's class name, for every operation
+    if named is not None:
+        class_name = named["object_class"]
     camera_id = body.get("camera_id", "shelf_camera")
     snapshot = next((camera for camera in h.app.camera_manager.snapshots() if camera.id == camera_id), None)
     if snapshot is None:
@@ -237,6 +245,28 @@ def post_command_from_camera(h: ControlStationHandler, route: str, parts: list[s
         return
     try:
         selection = select_slot_for_class(h.app.shelf_slot_zones.annotate(snapshot.to_dict()), class_name)
+        # Route camera-confirmed work to the arm serving that shelf. An explicitly selected arm is
+        # accepted only when it serves the detected shelf, so a UI mismatch cannot dispatch across the aisle.
+        arms = getattr(h.app, "arms", None)
+        slot_map = h.app.arm_commands.slot_map
+        slot = slot_map.active_slots.get(selection["slot_id"]) if slot_map is not None else None
+        shelf_arm = arms.for_shelf(slot["shelf_id"]) if arms is not None and slot is not None else None
+        if shelf_arm is None:
+            h._json_error(409, "SHELF_ARM_NOT_CONFIGURED", "검출된 선반 칸을 담당할 팔 설정이 없습니다")
+            return
+        if requested_robot_id is not None and requested_robot_id != shelf_arm["arm_id"]:
+            h._json_error(
+                409,
+                "ARM_SHELF_MISMATCH",
+                f"{selection['slot_label']}은 {shelf_arm['label']} 담당 선반입니다. 팔 선택을 확인하세요.",
+                details={"expected_robot_id": shelf_arm["arm_id"]},
+            )
+            return
+        robot_id = shelf_arm["arm_id"]
+        # The policy must be one recorded on this arm (or bound to no arm).
+        if operation == "PICK_WITH_POLICY" and policies.resolve(class_name, robot_id) is None:
+            no_policy(robot_id)
+            return
         request: dict[str, Any] = {
             "robot_id": robot_id,
             "operation": operation,
