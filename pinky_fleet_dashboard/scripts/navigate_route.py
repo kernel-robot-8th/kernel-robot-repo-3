@@ -245,9 +245,18 @@ def run(node, points):
     if not node.client.wait_for_server(timeout_sec=15.):
         raise RouteFailure(3, 'Nav2 navigate_to_pose 액션 서버를 찾을 수 없습니다.')
     # Two publishers used to race on cmd_vel. Do not silently override teleop.
-    for _ in range(20):
+    # This node is new, and on a busy Pi discovering the guard's publisher can take longer than 1 s (it was running
+    # and publishing when a mission was refused on 2026-11-16), so wait up to 8 s for it.
+    deadline = time.monotonic()+8.
+    publishers = []
+    while time.monotonic() < deadline:
         rclpy.spin_once(node, timeout_sec=.05)
-    publishers = node.get_publishers_info_by_topic('/cmd_vel')
+        publishers = node.get_publishers_info_by_topic('/cmd_vel')
+        if any(p.node_name == 'pinky_final_guard' for p in publishers):
+            for _ in range(10):  # a moment more, so a competing publisher is seen as well
+                rclpy.spin_once(node, timeout_sec=.05)
+            publishers = node.get_publishers_info_by_topic('/cmd_vel')
+            break
     competitors = sorted({p.node_name for p in publishers if p.node_name != 'pinky_final_guard'})
     if competitors:
         raise RouteFailure(11, '수동/다른 cmd_vel 발행자를 종료한 뒤 시작하세요: '+', '.join(competitors))
@@ -300,6 +309,10 @@ def run(node, points):
                 start_xy=[start['x_m'],start['y_m']], end_xy=[end['x_m'],end['y_m']],
                 start_label=start['label'], end_label=end['label'],
                 dock_xy=[end['x_m'],end['y_m']] if end['label'] == '5' else None,
+                # The last straight stretch into station 5 (squared up 25 cm out): the low station is right in front
+                # there, so the ultrasonic is not looked at; the LiDAR still is.
+                dock_entry=start['label'] == '5 정면' and end['label'] == '5',
+                dock_entry_m=math.hypot(end['x_m']-start['x_m'], end['y_m']-start['y_m']),
                 outgoing_heading_rad=outgoing if end_turn else heading,
                 label=f"{start['label']}→{end['label']}", heading_rad=heading))
         pose = node.pose()
@@ -327,6 +340,36 @@ def run(node, points):
                     raise RouteFailure(19, '20cm 도킹 후진 제한 시간 초과 · 후방 장애물/센서를 확인하세요.')
                 rclpy.spin_once(node, timeout_sec=.05)
             if node.interrupted: raise RouteFailure(130, 'cancelled')
+            continue
+        if start['label'] == '5 정면' and end['label'] == '5':
+            # Into station 5 straight from its square-up point (DockEntry in the behaviour layer, not Nav2: the
+            # station right in front would read as a collision to Nav2). Then the usual 5 stop and waits.
+            node.cancel_active()
+            print('MISSION_STATUS '+json.dumps(dict(phase='dock_entry', message='5번 진입 · 정면 직진'), ensure_ascii=False), flush=True)
+            started = time.monotonic()
+            while rclpy.ok() and not node.interrupted:
+                pose = node.pose(.8)
+                context(pose)
+                feedback = mission_feedback(token)
+                entry_status = (feedback or {}).get('dock_entry', {})
+                if entry_status.get('key') != [token, segment]:
+                    entry_status = {}
+                if entry_status.get('state') == 'fault':
+                    raise RouteFailure(19, entry_status.get('message', '5번 진입 실패'))
+                if entry_status.get('state') == 'complete':
+                    break
+                if time.monotonic()-started > 40.:
+                    raise RouteFailure(19, '5번 진입 제한 시간 초과 · 옆 장애물/센서를 확인하세요.')
+                rclpy.spin_once(node, timeout_sec=.05)
+            if node.interrupted: raise RouteFailure(130, 'cancelled')
+            pose = node.pose(2.)
+            while cursor < end_index:
+                checkpoint(cursor, points[cursor], pose, passing=True, sampling='end_pose_no_crossing_sample')
+                cursor += 1
+            checkpoint(end_index, end, pose)
+            operator_wait(node,context,token,'docking_manual','dock_complete','5번 도착 · 정지 · 도킹완료 확인 대기')
+            node.anchor_dock(context, (end['x_m'],end['y_m'],end.get('yaw_rad',heading)), token)
+            operator_wait(node,context,token,'docked_manual','received','도킹완료 · 정지 유지 · 물건 수령 완료 대기')
             continue
         goal = NavigateToPose.Goal()
         goal.pose = PoseStamped()
@@ -411,7 +454,9 @@ def run(node, points):
         checkpoint(end_index, end, pose, sampling='docking_service' if dock_serviced else None)
         if end['label']=='5' and not end.get('use_ir'):
             operator_wait(node,context,token,'docking_manual','dock_complete','5번 도착 · 정지 · IR 보정 전 수동 도킹완료 확인 대기')
-            node.anchor_dock(context, (end['x_m'],end['y_m'],heading), token)
+            # Re-anchor along the dock's own heading (route_geometry sets it), not the incoming segment: a free
+            # mission reaches 5 from wherever Nav2 came, the fixed course always along 4->5 (the same value).
+            node.anchor_dock(context, (end['x_m'],end['y_m'],end.get('yaw_rad',heading)), token)
             operator_wait(node,context,token,'docked_manual','received','도킹완료 · 정지 유지 · 물건 수령 완료 대기')
         if end.get('course_end'):
             node.cancel_active()

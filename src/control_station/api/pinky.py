@@ -8,7 +8,13 @@ POST /api/pinky/prepare-all {map}  주행준비 for every Pinky not yet prepared
 POST /api/pinky/credentials     {password}: passed to the dashboard, never stored or logged here
 POST /api/pinky/{id}/ready {map}, /initial-pose, /nav-restart, /waypoints {label}, /waypoints/{wid}/delete
 POST /api/pinky/{id}/localize {pose?}  LiDAR localization (automatic, or the picked candidate pose)
+POST /api/pinky/{id}/set-pose {pose}  위치 다시 잡기: the pose the operator put on the map (LiDAR polishes it nearby)
 GET  /api/pinky/{id}/locate     read only: the LiDAR's candidate places now
+POST /api/pinky/{id}/test-mission {dropoff}  시운전 without an order: 5번 적재 → drop-off → 주차장 (Nav2 between stops)
+POST /api/pinky/{id}/route-clear   기존 경로 날리기 (stops a running route first)
+POST /api/pinky/{id}/return-home {via?}  drive to its own parking spot now
+POST /api/pinky/{id}/reset {map}   초기 세팅: hold stopped, drop the route, 주행준비 from the start
+POST /api/pinky/{id}/signal {action}  dock_complete | received | mission_complete for the current mission phase
 """
 
 from __future__ import annotations
@@ -48,6 +54,22 @@ def get_locate(h: ControlStationHandler, route: str, parts: list[str], body: Non
         h._json_error(409, "PINKY_LOCATE_UNAVAILABLE", answer["error"])
 
 
+def get_ros(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
+    """ROS 모니터: 핑키 관제가 받는 토픽 전부와 상태 (개발자 화면)"""
+    try:
+        h._json(200, h.app.pinky_gateway.ros_view(parts[2]))
+    except ValueError as exc:
+        h._json_error(404, "PINKY_UNKNOWN", str(exc))
+
+
+def get_nav_log(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
+    """핑키 Nav2 로그의 오류 줄과 마지막 줄 (개발자 화면, 읽기만)"""
+    try:
+        h._json(200, h.app.pinky_gateway.nav_log(parts[2]))
+    except ValueError as exc:
+        h._json_error(404, "PINKY_UNKNOWN", str(exc))
+
+
 def get_map(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
     """핑키 지도: Nav2 격자, 금지 구역, 주차장, 5번, 교차로 7, 웨이포인트, 수령 구역, 핑키 위치(지도 좌표)"""
     zones = [zone.as_dict() for zone in getattr(h.app.order_desk, "zones", {}).values()] if hasattr(h.app, "order_desk") else []
@@ -73,6 +95,18 @@ def post_action(h: ControlStationHandler, route: str, parts: list[str], body: di
             entry = gateway.initial_pose(pinky_id)
         elif action == "localize":
             entry = gateway.localize(pinky_id, body.get("pose"))
+        elif action == "set-pose":
+            entry = gateway.set_pose(pinky_id, body.get("pose"))
+        elif action == "test-mission":
+            entry = gateway.test_mission(pinky_id, body.get("dropoff"), body.get("via"))
+        elif action == "route-clear":
+            entry = gateway.clear_route(pinky_id)
+        elif action == "return-home":
+            entry = gateway.return_home(pinky_id, body.get("via"))
+        elif action == "reset":
+            entry = gateway.reset(pinky_id, body.get("map", "map-proto.yaml"))
+        elif action == "signal":
+            entry = gateway.signal(pinky_id, body.get("action"))
         elif action == "nav-restart":
             entry = gateway.nav_restart(pinky_id)
         elif action == "waypoints" and len(parts) == 4:

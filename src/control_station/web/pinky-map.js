@@ -134,7 +134,9 @@ function mapBaseSvg(svg, data, frame) {
       <rect x="-8" y="-24" width="${0.5 * MAP_PX_PER_M + 16}" height="32" rx="8"/>
       <line x1="0" y1="0" x2="${0.5 * MAP_PX_PER_M}" y2="0"/><text x="${0.25 * MAP_PX_PER_M}" y="-11">50 cm</text>
     </g>
-    <g class="map-pinkies"></g>`;
+    <g class="map-paths"></g>
+    <g class="map-pinkies"></g>
+    <g class="map-pick"></g>`;
 }
 
 // A caption goes right of its mark, or left of it near the right edge so it stays inside the map.
@@ -201,6 +203,28 @@ function drawMapPinkies(layer, pinkies, frame, stopping) {
   layer.querySelectorAll('[data-pinky]').forEach((mark) => { if (!seen.has(mark.dataset.pinky)) mark.remove(); });
 }
 
+// Each Pinky's trail (where it has been, solid) and Nav2's plan (where it means to go, dashed), in its own colour.
+const MAP_PATH_COLORS = { 10: '#e5487a', 11: '#12a150', 12: '#3182f6' };
+
+function polylinePoints(points, frame) {
+  return points.map(([x, y]) => `${frame.x(x).toFixed(1)},${frame.y(y).toFixed(1)}`).join(' ');
+}
+
+function drawMapPaths(layer, pinkies, frame) {
+  const html = pinkies.filter((pinky) => pinky.connected).map((pinky) => {
+    const color = MAP_PATH_COLORS[pinky.pinky_id] || '#3182f6';
+    const trail = (pinky.trail || []).length > 1
+      ? `<polyline class="map-trail" points="${polylinePoints(pinky.trail, frame)}" stroke="${color}"/>` : '';
+    const plan = (pinky.plan || []).length > 1
+      ? `<polyline class="map-plan" points="${polylinePoints(pinky.plan, frame)}" stroke="${color}"/>` : '';
+    return trail + plan;
+  }).join('');
+  if (layer.dataset.html !== html) {
+    layer.innerHTML = html;
+    layer.dataset.html = html;
+  }
+}
+
 function mapPlaced(pinky) {
   return pinky.connected && pinky.x_m != null && pinky.y_m != null;
 }
@@ -227,6 +251,7 @@ function drawPinkyMap(svg, empty) {
     svg.querySelector('.map-marks').innerHTML = mapMarksSvg(data, frame);
   }
   const stopping = new Set((pinkyScreen.view?.pinkies || []).filter((pinky) => pinky.stop_pending).map((pinky) => pinky.pinky_id));
+  drawMapPaths(svg.querySelector('.map-paths'), data.pinkies || [], frame);
   drawMapPinkies(svg.querySelector('.map-pinkies'), data.pinkies || [], frame, stopping);
   const placed = (data.pinkies || []).filter(mapPlaced);
   svg.setAttribute('aria-label', `핑키 지도${data.simulated ? devWord(' (모의)') : ''}: ${placed.length
@@ -272,7 +297,10 @@ function renderMapViewer() {
       <small>${mapPlaced(pinky)
         ? `x ${pinky.x_m.toFixed(2)} m, y ${pinky.y_m.toFixed(2)} m, ${Math.round(((pinky.yaw_rad || 0) * 180) / Math.PI)}°`
         : pinky.connected ? '위치를 받지 못했어요' : '연결 끊김'}</small></span>
+      ${pinky.connected ? `<button type="button" class="secondary small" data-map-set-pose="${escapeHtml(pinky.pinky_id)}"
+        ${mapPick.pinkyId === pinky.pinky_id ? 'aria-pressed="true"' : ''}>↗ 위치 다시 잡기</button>` : ''}
     </li>`).join('');
+  renderMapPick();
 }
 
 function openMapViewer(opener) {
@@ -280,6 +308,131 @@ function openMapViewer(opener) {
   renderMapViewer();
   refreshPinkyMap({ force: true });
 }
+
+// ---- 위치 다시 잡기: the operator puts a Pinky on the enlarged map, like RViz's 2D Pose Estimate ----
+// The Pinky finds itself with its LiDAR when it is prepared; when the map shows it in the wrong place, the operator
+// presses where it really stands and drags the way it faces. A click without a drag keeps the heading it has now.
+// The pose goes to POST /api/pinky/{id}/set-pose; the LiDAR polishes it only nearby (30 cm, 30°), so the answer
+// stays where the operator put it even in the symmetric cell. Esc, 취소 or closing the map ends the mode.
+
+const MAP_PICK_CLICK_PX = 8;  // a press that moves less than this on screen is a click
+// toMap: the screen-to-SVG transform taken when the press began, kept for the whole drag, so a map that shifts
+// under the pointer meanwhile (the side list re-rendered on a read) does not bend the heading.
+const mapPick = { pinkyId: null, start: null, end: null, startPx: null, endPx: null, toMap: null };
+const mapPickBar = document.querySelector('#mapPickBar');
+const mapPickText = document.querySelector('#mapPickText');
+
+function mapPinky(pinkyId) {
+  return (pinkyMapState.data?.pinkies || []).find((pinky) => pinky.pinky_id === pinkyId);
+}
+
+// A pointer event on the SVG -> SVG units (the viewBox) and map metres, or null outside the map.
+function mapPointAt(event, toMap = mapViewerSvg.getScreenCTM()?.inverse()) {
+  const grid = pinkyMapState.data?.grid;
+  if (!grid || !toMap) return null;
+  const p = new DOMPoint(event.clientX, event.clientY).matrixTransform(toMap);
+  const frame = mapFrame(grid);
+  if (p.x < 0 || p.y < 0 || p.x > frame.width || p.y > frame.height) return null;
+  return {
+    svgX: p.x, svgY: p.y,
+    x_m: p.x / MAP_PX_PER_M + grid.origin_x_m,
+    y_m: grid.origin_y_m + grid.height * grid.resolution_m - p.y / MAP_PX_PER_M,
+  };
+}
+
+function mapPickPose() {
+  const { start, end, startPx, endPx } = mapPick;
+  const dragged = endPx && Math.hypot(endPx.x - startPx.x, endPx.y - startPx.y) >= MAP_PICK_CLICK_PX;
+  const yaw = dragged ? Math.atan2(end.y_m - start.y_m, end.x_m - start.x_m) : (mapPinky(mapPick.pinkyId)?.yaw_rad ?? 0);
+  return { x_m: start.x_m, y_m: start.y_m, yaw_rad: yaw };
+}
+
+function renderMapPick() {
+  const picking = Boolean(mapPick.pinkyId);
+  mapPickBar.hidden = !picking;
+  mapViewerSvg.classList.toggle('picking', picking);
+  const layer = mapViewerSvg.querySelector('.map-pick');
+  if (!picking) {
+    if (layer) layer.innerHTML = '';
+    return;
+  }
+  const name = pinkyName(mapPick.pinkyId);
+  mapPickText.textContent = mapPick.start
+    ? `${name}: 바라보는 방향으로 끌었다가 놓으세요`
+    : `${name}이(가) 실제로 있는 곳을 누른 채, 바라보는 방향으로 끌었다가 놓으세요. 누르기만 하면 지금 방향을 그대로 써요.`;
+  if (!layer || !mapPick.start) {
+    if (layer) layer.innerHTML = '';
+    return;
+  }
+  const pose = mapPickPose();
+  const color = MAP_PATH_COLORS[mapPick.pinkyId] || '#3182f6';
+  const deg = (-pose.yaw_rad * 180) / Math.PI;
+  layer.innerHTML = `<g transform="translate(${mapPick.start.svgX.toFixed(1)} ${mapPick.start.svgY.toFixed(1)})" style="color:${color}">
+    <circle class="map-pick-spot" r="18"/>
+    <g transform="rotate(${deg.toFixed(1)})"><line class="map-pick-ray" x1="0" y1="0" x2="44" y2="0"/>
+      <path class="map-pick-head" d="M 54 0 L 40 -9 L 40 9 Z"/></g></g>`;
+}
+
+function startMapPick(pinkyId, opener) {
+  mapPick.pinkyId = pinkyId;
+  mapPick.start = mapPick.end = mapPick.startPx = mapPick.endPx = mapPick.toMap = null;
+  if (mapViewer.hidden) openMapViewer(opener);
+  else renderMapViewer();
+  renderMapPick();
+}
+
+function endMapPick() {
+  if (!mapPick.pinkyId) return;
+  mapPick.pinkyId = null;
+  mapPick.start = mapPick.end = mapPick.startPx = mapPick.endPx = mapPick.toMap = null;
+  renderMapViewer();
+  renderMapPick();
+}
+
+function sendMapPick() {
+  const pinkyId = mapPick.pinkyId;
+  const pose = mapPickPose();
+  endMapPick();
+  sendPinkyCommand(pinkyId, 'set_pose', { path: 'set-pose', body: { pose }, label: '위치 다시 잡기' });
+}
+
+mapViewerSvg.addEventListener('pointerdown', (event) => {
+  if (!mapPick.pinkyId || event.button !== 0) return;
+  const toMap = mapViewerSvg.getScreenCTM()?.inverse();
+  const point = mapPointAt(event, toMap);
+  if (!point) return;
+  mapPick.toMap = toMap;
+  mapPick.start = mapPick.end = point;
+  mapPick.startPx = mapPick.endPx = { x: event.clientX, y: event.clientY };
+  mapViewerSvg.setPointerCapture(event.pointerId);
+  event.preventDefault();
+  renderMapPick();
+});
+mapViewerSvg.addEventListener('pointermove', (event) => {
+  if (!mapPick.pinkyId || !mapPick.start) return;
+  mapPick.end = mapPointAt(event, mapPick.toMap) || mapPick.end;
+  mapPick.endPx = { x: event.clientX, y: event.clientY };
+  renderMapPick();
+});
+mapViewerSvg.addEventListener('pointerup', (event) => {
+  if (!mapPick.pinkyId || !mapPick.start) return;
+  mapPick.end = mapPointAt(event, mapPick.toMap) || mapPick.end;
+  mapPick.endPx = { x: event.clientX, y: event.clientY };
+  sendMapPick();
+});
+mapViewerSvg.addEventListener('pointercancel', () => {
+  if (!mapPick.start) return;
+  mapPick.start = mapPick.end = mapPick.startPx = mapPick.endPx = mapPick.toMap = null;
+  renderMapPick();
+});
+document.querySelector('#mapPickCancel').addEventListener('click', endMapPick);
+mapViewerList.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-map-set-pose]');
+  if (!button) return;
+  if (mapPick.pinkyId === button.dataset.mapSetPose) endMapPick();
+  else startMapPick(button.dataset.mapSetPose, button);
+});
+mapViewer.addEventListener('overlayclose', endMapPick);
 
 document.addEventListener('pinkymap', renderMapViewer);
 document.addEventListener('viewchange', () => refreshPinkyMap());

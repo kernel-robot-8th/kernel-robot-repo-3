@@ -60,7 +60,8 @@ const pinkyRouteLabels = {
 // The server's log names each action; the screen uses these words for them.
 const pinkyActionLabels = {
   stop: '정지', password: '비밀번호', prepare: '주행준비', prepare_all: '주행준비하고 위치 잡기',
-  initial_pose: '주차장 좌표로 맞추기', localize: '라이다 위치 찾기', nav_restart: 'Nav2 복구',
+  initial_pose: '주차장 좌표로 맞추기', localize: '라이다 위치 찾기', set_pose: '위치 다시 잡기', clear_route: '기존 경로 날리기', return_home: '주차장 복귀', reset: '초기 세팅', nav_restart: 'Nav2 복구',
+  test_mission: '시험 임무 시작', dock_complete: '도킹완료', received: '적재 완료', mission_complete: '수령 완료',
   waypoint: '웨이포인트 기록', waypoint_delete: '웨이포인트 삭제',
 };
 

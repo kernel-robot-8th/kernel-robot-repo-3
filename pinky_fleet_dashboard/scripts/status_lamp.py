@@ -39,7 +39,7 @@ class StatusLamp(Node):
         self.status = self.create_publisher(String, "/fleet/indicator_status", 1)
         self.create_subscription(String, "/fleet/indicator", self.on_indicator,
                                  QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
-        self.create_timer(0.2, self.tick)
+        self.create_timer(0.5, self.tick)
         self.create_timer(1.0, self.report)
 
     def on_indicator(self, msg):

@@ -20,13 +20,13 @@ from rclpy.executors import ExternalShutdownException
 from tf2_ros import Buffer, TransformListener, TransformException
 if __package__:
     from .line_following import LineAssist, default_profile, swept_clear, TemplateEstimator, validate_profile, normalize, surface_observation
-    from .mission_behaviors import Crossing, Docking, DockExit, UltrasonicDetour
+    from .mission_behaviors import Crossing, Docking, DockEntry, DockExit, UltrasonicDetour
     from .motion_gate import geometry, swept_footprint
     from .traffic import required_zones, lease_allows, LeaseReceiver
     from .control_journal import ControlJournal
 else:
     from line_following import LineAssist, default_profile, swept_clear, TemplateEstimator, validate_profile, normalize, surface_observation
-    from mission_behaviors import Crossing, Docking, DockExit, UltrasonicDetour
+    from mission_behaviors import Crossing, Docking, DockEntry, DockExit, UltrasonicDetour
     from motion_gate import geometry, swept_footprint
     from traffic import required_zones, lease_allows, LeaseReceiver
     from control_journal import ControlJournal
@@ -35,8 +35,16 @@ else:
 class UltrasonicSafety(Node):
     def __init__(self) -> None:
         super().__init__("pinky_ultrasonic_safety")
-        self.declare_parameter("stop_distance_m", 0.10)
-        self.declare_parameter("clear_distance_m", 0.15)
+        # navigation.json ultrasonic_stop_m / ultrasonic_clear_m (5 / 8 cm since 2026-11-16) override the defaults.
+        try:
+            _nav = json.loads(Path('/home/pinky/.cache/pinky-fleet/nav2/runtime_config.json').read_text()).get('navigation') or {}
+        except (OSError, ValueError):
+            _nav = {}
+        _stop = _nav.get('ultrasonic_stop_m') if isinstance(_nav.get('ultrasonic_stop_m'), (int, float)) else 0.10
+        _clear = _nav.get('ultrasonic_clear_m') if isinstance(_nav.get('ultrasonic_clear_m'), (int, float)) else 0.15
+        _stop = min(0.20, max(0.03, float(_stop)))
+        self.declare_parameter("stop_distance_m", _stop)
+        self.declare_parameter("clear_distance_m", max(_stop + 0.02, min(0.30, float(_clear))))
         self.declare_parameter("clear_hold_s", 0.75)
         self.declare_parameter("sensor_timeout_s", 0.60)
         self.nav_command = Twist()
@@ -81,6 +89,7 @@ class UltrasonicSafety(Node):
         self.crossing = Crossing()
         self.docking = Docking()
         self.dock_exit = DockExit()
+        self.dock_entry = DockEntry()
         self.mission_token = None
         self.control_token = None
         self.dock_saved_signature = None
@@ -175,14 +184,14 @@ class UltrasonicSafety(Node):
                 self.observer_model = TemplateEstimator(self.ir_profile['template'])
                 self.observer_revision = self.ir_profile.get('revision')
             estimate = self.observer_model.estimate([self.ir_raw[i] for i in self.ir_profile['channel_order']])
-        status = dict(version=1, policy='center_first', line_algorithm='fleet_control_v4', dock_protocol='sponge_v1', recovery_policy='parking_mission_v2', traffic_config=self.runtime['traffic_zones'], traffic_request=self.traffic_request, avoidance=self.detour.status(), crossing=self.crossing.status(), docking=self.docking.status(), dock_exit=self.dock_exit.status(), classification=self.ir_profile.get('mode'), estimate=estimate, control_estimate=self.line_estimate, cruise_speed_mps=.1152, enabled=bool(self.ir_profile.get('enabled')), state=state,
+        status = dict(version=1, policy='center_first', line_algorithm='fleet_control_v4', dock_protocol='sponge_v1', recovery_policy='parking_mission_v2', traffic_config=self.runtime['traffic_zones'], traffic_request=self.traffic_request, avoidance=self.detour.status(), crossing=self.crossing.status(), docking=self.docking.status(), dock_exit=self.dock_exit.status(), dock_entry=self.dock_entry.status(), classification=self.ir_profile.get('mode'), estimate=estimate, control_estimate=self.line_estimate, cruise_speed_mps=.1152, enabled=bool(self.ir_profile.get('enabled')), state=state,
                       revision=self.ir_profile.get('revision'), normalized=normalize(self.ir_raw,self.ir_profile) if now-self.last_ir_at<=.6 else None, surface_reading=surface_observation(self.ir_raw,self.ir_profile) if self.ir_profile.get('mode')=='calibrated' and now-self.last_ir_at<=.6 else None,
                       error=self.line_error, ir_fresh=now-self.last_ir_at <= .6,
                       lidar_fresh=now-self.last_scan_at <= .6,
                       ultrasonic_fresh=self.sensor_fresh(now) and self.sensor_valid, profile_error=self.profile_error)
         self.line_status_publisher.publish(String(data=json.dumps(status, allow_nan=False)))
         self.write_json('route_feedback.json', dict(token=self.mission_token, monotonic=now,
-                        traffic_config=self.runtime['traffic_zones'], traffic_request=self.traffic_request, avoidance=self.detour.status(), crossing=self.crossing.status(), docking=self.docking.status(), dock_exit=self.dock_exit.status(), state=self.line_state))
+                        traffic_config=self.runtime['traffic_zones'], traffic_request=self.traffic_request, avoidance=self.detour.status(), crossing=self.crossing.status(), docking=self.docking.status(), dock_exit=self.dock_exit.status(), dock_entry=self.dock_entry.status(), state=self.line_state))
 
     def write_json(self, name, data):
         path = Path('/home/pinky/.cache/pinky-fleet')/name
@@ -236,6 +245,21 @@ class UltrasonicSafety(Node):
         if context.get('mission_wait'):
             self.line_state = 'mission_wait'
             self.send()
+            return True
+        if context.get('dock_entry'):
+            # Straight into station 5 (DockEntry): no ultrasonic, no detour; the final guard watches the sides.
+            self.mission_token = context['token']
+            self.state = 'idle'
+            self.detour = UltrasonicDetour(self.geometry)
+            odom = self.fresh_pose('odom')
+            if odom is None or now-self.last_scan_at > .6:
+                self.line_state = 'mission_sensor_unavailable'
+                self.send()
+                return True
+            motion = self.dock_entry.update(context, odom, now,
+                Path('/home/pinky/.cache/pinky-fleet/dock_entry_latch.json'))
+            self.line_state = motion.state
+            self.send(motion.linear, motion.angular)
             return True
         if context.get('dock_exit'):
             self.mission_token = context['token']
@@ -390,7 +414,7 @@ class UltrasonicSafety(Node):
         )
         stop_distance = float(self.get_parameter("stop_distance_m").value)
         nav_active = time.monotonic()-self.last_command_at <= .5 and (abs(self.nav_command.linear.x) > .001 or abs(self.nav_command.angular.z) > .001)
-        if math.isfinite(value) and value <= stop_distance and self.state == "idle" and nav_active and self.docking.state not in Docking.ACTIVE and not getattr(self, "dock_exiting", False):
+        if math.isfinite(value) and value <= stop_distance and self.state == "idle" and nav_active and self.docking.state not in Docking.ACTIVE and not getattr(self, "dock_exiting", False) and not getattr(self, "dock_entering", False):
             self.state = "stopped"
             self.state_since = time.monotonic()
             self.clear_since = None
@@ -529,7 +553,11 @@ class UltrasonicSafety(Node):
             self.send()
             return
         self.dock_exiting = bool(context.get('dock_exit'))
-        if self.dock_exiting:
+        # Driving straight into station 5: the station itself is what the ultrasonic sees, so no ultrasonic hold.
+        self.dock_entering = bool(context.get('dock_entry'))
+        if self.dock_entering and self.state == 'stopped':
+            self.state = 'idle'
+        if self.dock_exiting or self.dock_entering:
             self.mission_tick(now)
             return
         # Explicit cancellation/context expiry always wins. A live detour owns

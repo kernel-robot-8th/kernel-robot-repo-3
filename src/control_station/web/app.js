@@ -44,7 +44,8 @@ let parkingCameraId = null;
 let controlMode = 'unknown';
 
 const viewNames = {
-  dashboard: '종합', flow: '주문 진행', pinky: '핑키', inventory: '재고', overview: '장비·카메라', manual: '수동 조작', tasks: '작업 이력', api: 'API',
+  dashboard: '종합', flow: '주문 진행', pinky: '핑키', inventory: '재고', overview: '장비·카메라', manual: '수동 조작', tasks: '작업 이력',
+  ros: 'ROS 모니터', api: 'API',
 };
 const controlModeLabels = {
   mock: '모의',
@@ -83,7 +84,7 @@ function devWord(word) {
 // The view lives in the address (#pinky, #inventory…), so a reload or a shared link opens the same view.
 // Other scripts follow the switch through the `viewchange` event instead of listening to the menu.
 // The operator screen (default) leaves out the equipment, manual control and API views; ?dev=1 shows everything.
-const DEV_ONLY_VIEWS = new Set(['overview', 'manual', 'api']);
+const DEV_ONLY_VIEWS = new Set(['overview', 'manual', 'ros', 'api']);
 
 function showView(requested) {
   const selected = viewNames[requested] && (devMode || !DEV_ONLY_VIEWS.has(requested)) ? requested : 'dashboard';

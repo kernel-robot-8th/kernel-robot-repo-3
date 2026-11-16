@@ -302,8 +302,8 @@ class LidarLocalizeTests(unittest.TestCase):
 
 class OperatorChoiceTests(LidarLocalizeTests):
     def test_a_mirror_image_room_waits_for_the_operator_then_takes_the_picked_place(self):
-        grid = room()  # bare rectangle: two places fit
-        monitor, sent = self.monitor(grid, cast(grid, 0.53, 0.38, 0.0))
+        grid = room()  # bare rectangle: two places fit, and this pose and its mirror are near no known place
+        monitor, sent = self.monitor(grid, cast(grid, 0.9, 1.0, 0.0))
         state = app.FleetState()
         with patch.multiple(app, TELEMETRY=monitor, STATE=state, TRAFFIC=NS(zones={})):
             ok, detail = app._localize_with_lidar('10')
@@ -312,11 +312,11 @@ class OperatorChoiceTests(LidarLocalizeTests):
             candidates = state.robots['10']['localization']['candidates']
             self.assertEqual(len(candidates), 2)
             self.assertEqual(sent, [])  # nothing reaches AMCL until someone picks
-            mirror = next(c for c in candidates if c['y_m'] > 1.0)
+            mirror = min(candidates, key=lambda c: c['x_m'])  # the half-turn of (0.9, 1.0) lies at x ≈ 0.65
             ok, detail = app._localize_with_lidar('10', (mirror['x_m'], mirror['y_m'], mirror['yaw_rad']))
         self.assertTrue(ok, detail)
         self.assertEqual(len(sent), 1)
-        self.assertGreater(sent[0][1], 1.0)
+        self.assertLess(sent[0][0], 0.8)
 
 
 class IndicatorTests(unittest.TestCase):
@@ -329,3 +329,26 @@ class IndicatorTests(unittest.TestCase):
         self.assertEqual(indicator({'stage': 'prepared'}, {'status': 'running'}, ready)['color'], 'green')
         self.assertEqual(indicator({'stage': 'prepared'}, {'status': 'running', 'stop_pending': True}, ready)['color'], 'red')
         self.assertEqual(indicator({'stage': 'fault'}, None, {})['color'], 'red')
+
+
+class OperatorPoseTests(LidarLocalizeTests):
+    def test_refine_stays_near_the_operators_pose_in_a_mirror_room(self):
+        from scripts.scan_localizer import refine
+        grid = room()  # bare rectangle: the half-turn place fits the scan just as well
+        scan = cast(grid, 0.53, 0.38, 0.0)
+        score, x, y, yaw = refine(grid, scan, (-0.017, 0.0, _math.pi), 0.60, 0.45, _math.radians(15))
+        self.assertGreater(score, 0.8)
+        self.assertLess(_math.hypot(x - 0.53, y - 0.38), 0.04)  # polished onto the true pose, not the mirror one
+        self.assertLess(abs(yaw), _math.radians(4))
+
+    def test_operator_pose_reaches_amcl_and_counts_as_localized(self):
+        grid = room(extra_walls={(col, 30) for col in range(1, 25)})
+        monitor, sent = self.monitor(grid, cast(grid, 0.53, 0.38, 0.0))
+        state = app.FleetState(); state.busy_robot = '10'
+        with patch.multiple(app, TELEMETRY=monitor, STATE=state):
+            app._set_operator_pose('10', 0.58, 0.42, 0.2)
+        self.assertEqual(len(sent), 1)
+        self.assertLess(_math.hypot(sent[0][0] - 0.53, sent[0][1] - 0.38), 0.04)
+        self.assertTrue(state.robots['10']['localized_at'])
+        self.assertEqual(state.robots['10']['localization']['method'], 'operator')
+        self.assertIsNone(state.busy_robot)

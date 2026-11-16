@@ -442,3 +442,62 @@ class DockExit:
 
     def status(self):
         return dict(key=self.key, state=self.state, progress_m=self.progress, target_m=.20, message=self.message)
+
+
+class DockEntry:
+    """Drive straight into station 5 from its square-up point on wheel odometry (2026-11-16).
+
+    The station stands right in front there, so the ultrasonic and the LiDAR straight ahead are not looked at;
+    the final guard keeps the LiDAR to both sides. The heading the Pinky squared up to (Nav2, within 3 degrees)
+    is held. A restart during the maneuver fails closed, as DockExit does; drifting sideways 3 cm, turning
+    more than 0.15 rad or taking over 25 s stops it as a fault."""
+    SPEED_MPS = .03
+
+    def __init__(self):
+        self.key = None
+        self.origin = None
+        self.started = 0.
+        self.state = 'idle'
+        self.progress = 0.
+        self.target = .25
+        self.message = ''
+
+    def update(self, context, odom, now, persist):
+        key = [context['token'], context['segment']]
+        if key != self.key:
+            self.key, self.origin, self.started = key, odom, now
+            try:
+                self.target = max(.05, min(.40, float(context.get('dock_entry_m') or .25)))
+            except (TypeError, ValueError):
+                self.target = .25
+            try:
+                previous = json.loads(persist.read_text())
+            except FileNotFoundError:
+                previous = {}
+            except (OSError, ValueError):
+                previous = {'key': key}
+            self.state = 'fault' if previous.get('key') == key else 'entering'
+            try:
+                temporary = persist.with_suffix('.tmp')
+                temporary.write_text(json.dumps(dict(key=key, state=self.state)))
+                temporary.replace(persist)
+            except OSError:
+                self.state = 'fault'
+        dx, dy = odom[0]-self.origin[0], odom[1]-self.origin[1]
+        self.progress = dx*math.cos(self.origin[2])+dy*math.sin(self.origin[2])
+        lateral = abs(-dx*math.sin(self.origin[2])+dy*math.cos(self.origin[2]))
+        heading_error = angle(self.origin[2]-odom[2])
+        if self.state == 'entering':
+            if lateral > .03 or abs(heading_error) > .15 or now-self.started > 25.:
+                self.state = 'fault'
+            elif self.progress >= self.target-.003:
+                self.state = 'complete'
+        self.message = {'entering': f'5번 진입 · 3cm/s로 {self.target*100:.0f}cm 직진 (앞은 안 보고 좌우 라이다만)',
+                        'complete': '5번 진입 완료 · 정지',
+                        'fault': '5번 진입 중단 · 옆으로 밀림/방향/시간 제한 확인'}[self.state]
+        if self.state == 'entering':
+            return Motion(self.SPEED_MPS, max(-.1, min(.1, 1.5*heading_error)), 'docking_entry_entering')
+        return Motion(0., 0., 'docking_entry_'+self.state)
+
+    def status(self):
+        return dict(key=self.key, state=self.state, progress_m=self.progress, target_m=self.target, message=self.message)

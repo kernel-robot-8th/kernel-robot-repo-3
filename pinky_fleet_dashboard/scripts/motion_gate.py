@@ -22,11 +22,17 @@ def geometry(config=None):
     return result
 
 
-def swept_footprint(points, linear, angular, config=None):
+def swept_footprint(points, linear, angular, config=None, reach_m=None):
+    """True when the footprint stays clear of `points` over the next second of (linear, angular). With reach_m
+    the look ahead stops once the body has moved that far, so the stop comes that close to an obstacle
+    (navigation.json guard_front_reach_m, 0.05 m since 2026-11-16) instead of one second of travel out."""
     g = geometry(config)
     length, width = g['half_length_m']+g['padding_m'],g['half_width_m']+g['padding_m']
+    horizon = 1.
+    if reach_m is not None and abs(linear) > 1e-6:
+        horizon = min(1., reach_m/abs(linear))
     for step in range(21):
-        t=step/20;theta=angular*t
+        t=horizon*step/20;theta=angular*t
         x,y=(linear*t,0.) if abs(angular)<1e-6 else (linear*math.sin(theta)/angular,linear*(1-math.cos(theta))/angular)
         c,s=math.cos(theta),math.sin(theta)
         if any(abs(c*(px-x)+s*(py-y))<=length and abs(-s*(px-x)+c*(py-y))<=width for px,py in points):return False
@@ -62,13 +68,13 @@ class LowObstacleMemory:
         return [(c*(px-x)+s*(py-y),-s*(px-x)+c*(py-y)) for px,py,_ in self.points]
 
 
-def gate(linear, angular, *, fresh, stop, context_valid, points, config=None):
+def gate(linear, angular, *, fresh, stop, context_valid, points, config=None, reach_m=None):
     if not all(math.isfinite(v) for v in (linear,angular)):return 0.,0.,'invalid_command'
     if stop:return 0.,0.,'operator_stopped'
     if not context_valid:return 0.,0.,'route_or_traffic_wait'
     if not fresh:return 0.,0.,'sensor_or_command_stale'
     linear=max(-.12,min(.12,linear));angular=max(-.30,min(.30,angular))
-    if not swept_footprint(points,linear,angular,config):return 0.,0.,'collision_stop'
+    if not swept_footprint(points,linear,angular,config,reach_m):return 0.,0.,'collision_stop'
     return linear,angular,'allowed'
 
 

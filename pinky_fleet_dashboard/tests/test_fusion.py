@@ -1,48 +1,12 @@
-"""No hardware: LiDAR + ultrasonic fusion in Nav2's height-cell costmap, and IR kept as a reading only."""
-import math
+"""No hardware: the fused low layer in Nav2's height-cell costmap, and IR kept as a reading only.
+
+The fusion itself (scripts/fusion_grid.py) is tested in test_fusion_grid.py."""
 import unittest
 from unittest.mock import patch
 
 import app
 from scripts.install_nav2_runtime import add_ultrasonic_fusion
-from scripts.ultrasonic_cloud import RangeFilter
-
-
-class RangeFilterTests(unittest.TestCase):
-    def test_a_steady_echo_is_marked_after_agreeing_readings(self):
-        f = RangeFilter({})
-        self.assertEqual(f.update(0.30)[0], 'unsure')
-        self.assertEqual(f.update(0.31)[0], 'unsure')
-        kind, distance = f.update(0.30)
-        self.assertEqual(kind, 'obstacle')
-        self.assertAlmostEqual(distance, 0.30)
-
-    def test_a_single_jump_is_outvoted_by_the_median(self):
-        f = RangeFilter({})
-        for value in (0.40, 0.40):
-            f.update(value)
-        self.assertEqual(f.update(0.20), ('obstacle', 0.40))  # one odd reading (12번 0.60→0.77 같은) does not move it
-
-    def test_a_real_change_needs_new_agreeing_readings(self):
-        f = RangeFilter({'window': 3})
-        for value in (0.50, 0.50, 0.50):
-            f.update(value)
-        self.assertEqual(f.update(0.20)[0], 'obstacle')  # median still 0.50
-        self.assertEqual(f.update(0.20)[0], 'unsure')    # median moved to 0.20: agreement starts again
-
-    def test_far_echoes_only_clear_and_no_echo_clears_to_the_limit(self):
-        f = RangeFilter({})
-        for value in (0.70, 0.70, 0.70):
-            kind, distance = f.update(value)
-        self.assertEqual((kind, distance), ('free', 0.70))  # beyond mark_max_range_m: may be the floor
-        self.assertEqual(f.update(math.inf), ('free', 0.8))
-        self.assertEqual(f.update(math.nan), ('unsure', None))
-
-    def test_the_arc_spans_the_cone(self):
-        points = RangeFilter({'arc_points': 3}).arc(0.5, 0.26)
-        self.assertEqual(len(points), 3)
-        self.assertAlmostEqual(points[1][0], 0.5)
-        self.assertAlmostEqual(points[0][1], -points[2][1])
+from scripts.fusion_grid import validated
 
 
 def pinky_params():
@@ -61,22 +25,35 @@ def pinky_params():
 
 
 class Nav2FusionParamsTests(unittest.TestCase):
-    def test_both_costmaps_get_height_cells_with_the_scan_and_both_ultrasonic_clouds(self):
+    def test_the_ultrasonic_goes_to_the_local_costmap_only_by_default(self):
         parsed = pinky_params()
         add_ultrasonic_fusion(parsed)
+        local = parsed['local_costmap']['local_costmap']['ros__parameters']['voxel_layer']
+        self.assertEqual(local['observation_sources'].split(), ['scan', 'fusion_low_mark', 'fusion_low_clear'])
+        self.assertFalse(local['publish_voxel_map'])
+        self.assertEqual(parsed['global_costmap'], pinky_params()['global_costmap'])  # a wrong mark is not kept there
+
+    def test_with_global_both_costmaps_get_height_cells_with_the_scan_and_both_ultrasonic_clouds(self):
+        parsed = pinky_params()
+        add_ultrasonic_fusion(parsed, include_global=True)
         for name, layer in (('local_costmap', 'voxel_layer'), ('global_costmap', 'obstacle_layer')):
             section = parsed[name][name]['ros__parameters'][layer]
             self.assertEqual(section['plugin'], 'nav2_costmap_2d::VoxelLayer')
-            self.assertEqual(section['observation_sources'].split(), ['scan', 'ultrasonic_mark', 'ultrasonic_clear'])
-            self.assertTrue(section['ultrasonic_mark']['marking'])
-            self.assertFalse(section['ultrasonic_mark']['clearing'])
-            self.assertTrue(section['ultrasonic_clear']['clearing'])
-            self.assertFalse(section['ultrasonic_clear']['marking'])
+            self.assertEqual(section['observation_sources'].split(), ['scan', 'fusion_low_mark', 'fusion_low_clear'])
+            self.assertEqual((section['fusion_low_mark']['topic'], section['fusion_low_clear']['topic']),
+                             ('/fusion/low_marks', '/fusion/low_clear'))  # scripts/fusion_grid.py publishes these
+            self.assertTrue(section['fusion_low_mark']['marking'])
+            self.assertFalse(section['fusion_low_mark']['clearing'])
+            self.assertTrue(section['fusion_low_clear']['clearing'])
+            self.assertFalse(section['fusion_low_clear']['marking'])
+            # Both stay in the lowest 5 cm voxel row: the LiDAR plane (about 12.5 cm) is never cleared by them
+            self.assertLessEqual(section['fusion_low_clear']['max_obstacle_height'], 0.10)
             self.assertEqual(section['scan']['topic'], '/scan')  # the LiDAR source stays as it was
+            self.assertFalse(section['publish_voxel_map'])
         again = pinky_params()
         add_ultrasonic_fusion(again)
         add_ultrasonic_fusion(again)  # applying twice adds nothing twice
-        self.assertEqual(again['local_costmap']['local_costmap']['ros__parameters']['voxel_layer']['observation_sources'].split().count('ultrasonic_mark'), 1)
+        self.assertEqual(again['local_costmap']['local_costmap']['ros__parameters']['voxel_layer']['observation_sources'].split().count('fusion_low_mark'), 1)
 
 
 class IrReadingOnlyTests(unittest.TestCase):
@@ -91,6 +68,9 @@ class IrReadingOnlyTests(unittest.TestCase):
         # 2026-11-16: LiDAR-only costmap first; the ultrasonic joins once that runs steadily.
         self.assertEqual((app.NAVIGATION['ir_steering'], app.NAVIGATION['ultrasonic_fusion'], app.NAVIGATION['ultrasonic_detour']),
                          (False, False, False))
+
+    def test_the_shipped_fusion_grid_settings_are_valid(self):
+        validated(app.NAVIGATION['fusion_grid'])  # the robot node would refuse to start otherwise
 
 
 if __name__ == '__main__':
@@ -109,3 +89,15 @@ class LocalizedBeforeReadyTests(unittest.TestCase):
         self.assertEqual(operational_status(robot, topics)['state'], 'unlocalized')
         robot['localized_at'] = 101.0
         self.assertEqual(operational_status(robot, topics)['state'], 'ready')
+
+
+class StatusDisplayTests(unittest.TestCase):
+    def test_the_screen_follows_the_lamp_colour_and_says_no_link_when_the_dashboard_is_quiet(self):
+        from scripts.status_display import screen_state, render
+        self.assertEqual(screen_state(('blue', 'on'), 10.0, 11.0), ('blue', 'READY'))
+        self.assertEqual(screen_state(('green', 'on'), 10.0, 11.0), ('green', 'DRIVING'))
+        self.assertEqual(screen_state(('green', 'on'), 10.0, 20.0), ('orange', 'NO LINK'))
+        self.assertEqual(screen_state(None, 0.0, 1.0), ('orange', 'NO LINK'))
+        image = render((320, 240), 'P2', '12', 'blue', 'READY')
+        self.assertEqual(image.size, (320, 240))
+        self.assertEqual(image.getpixel((5, 5)), (0, 90, 255))

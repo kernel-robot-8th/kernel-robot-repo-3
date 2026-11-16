@@ -13,6 +13,13 @@ KEEP_OUT_RECTS_M = (
     (-0.20, 1.80, 1.86, 2.19),  # upper room band
     (-0.20, 1.36, 0.89, 1.00),  # cross-room strip
 )
+# Receiving zones stand inside the upper room band (recorded 2026-11-16 as waypoints '수령 A' (0.56, 1.93) and
+# '수령 B' (1.08, 1.94)). Only a circle around each is opened, so a Pinky can drive in and stop there while the
+# rest of the band stays forbidden. (x, y, radius) in map metres.
+OPENINGS_M = (
+    (0.56, 1.93, 0.15),  # 수령 A
+    (1.08, 1.94, 0.15),  # 수령 B
+)
 
 
 def _pgm_tokens(data: bytes) -> tuple[list[bytes], int]:
@@ -79,7 +86,7 @@ def create_mask(map_yaml: Path, map_pgm: Path, output_pgm: Path, output_yaml: Pa
             blocked = any(
                 min_x <= world_x <= max_x and min_y <= world_y <= max_y
                 for min_x, max_x, min_y, max_y in KEEP_OUT_RECTS_M
-            )
+            ) and not any((world_x - x) ** 2 + (world_y - y) ** 2 <= r ** 2 for x, y, r in OPENINGS_M)
             values.append("0" if blocked else "255")
             blocked_count += int(blocked)
         pixels.append(" ".join(values))

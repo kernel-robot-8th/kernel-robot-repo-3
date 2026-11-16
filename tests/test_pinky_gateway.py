@@ -56,6 +56,10 @@ class FakeFleet:
         self.sent.append(("localize", (pinky_id, pose)))
         return 202, {"ok": True, "message": "라이다로 위치 찾기를 시작했습니다."}
 
+    def set_pose(self, pinky_id: str, pose: dict) -> tuple[int, dict]:
+        self.sent.append(("set_pose", (pinky_id, pose)))
+        return 202, {"ok": True, "message": "지정한 위치를 넣는 중입니다."}
+
     def locate(self, pinky_id: str) -> tuple[int, dict]:
         return 200, {"robot": pinky_id, "match": {"ok": False, "reason": "후보 중 실제 자리를 골라 주세요", "candidates": [
             {"score": 0.86, "x_m": 0.33, "y_m": 1.66, "yaw_rad": 3.04}, {"score": 0.81, "x_m": 1.23, "y_m": 0.35, "yaw_rad": -0.1}]}}
@@ -132,6 +136,19 @@ class MapTest(unittest.TestCase):
         self.assertEqual(view["zones"][0], {"zone_id": "zone_a", "label": "수령 구역 A", "waypoint": "9", "x_m": 1.6, "y_m": 2.0})
         self.assertEqual(view["waypoints"]["10"][0]["id"], "c" * 32)  # the delete button needs it
         self.assertIsNone(view["note"])
+
+    def test_live_map_carries_each_pinkys_plan_and_trail(self) -> None:
+        fleet = FakeFleet()
+        record = robot_record()
+        record["topics"]["map"] = {"fresh": True, "value": {"width": 1, "height": 1, "resolution_m": 0.05,
+                                                           "origin_x_m": 0, "origin_y_m": 0, "cells": [0]}}
+        record["topics"]["plan"] = {"fresh": True, "value": {"points": [[0.4, 0.4], [1.0, 1.6]]}}
+        record["topics"]["trail"] = {"fresh": True, "value": {"points": [[0.4, 0.4], [0.5, 0.45], ["x", 1]]}}
+        fleet.robots = lambda: {"10": record, "11": {}, "12": {}}
+        fleet.extras = lambda: {"keepout": None}
+        pinky = PinkyGateway(fleet).map_view([])["pinkies"][0]
+        self.assertEqual(pinky["plan"], [[0.4, 0.4], [1.0, 1.6]])
+        self.assertEqual(pinky["trail"], [[0.4, 0.4], [0.5, 0.45]])  # a malformed point is dropped
 
     def test_mock_map_places_pinkys_by_phase(self) -> None:
         world = MockWorld()
@@ -230,6 +247,41 @@ class PinkyApiTest(ApiTestCase):
         status, body, _ = self.request("POST", "/api/pinky/12/localize", {"pose": {"x_m": "a"}})
         self.assertEqual((status, body["error_code"]), (400, "PINKY_ACTION_INVALID"))
         self.assertEqual(self.fleet.sent, [("localize", ("12", None)), ("localize", ("12", pick))])
+
+    def test_operator_sets_the_pose_on_the_map(self) -> None:
+        put = {"x_m": 1.12, "y_m": 0.31, "yaw_rad": -1.57}
+        status, body, _ = self.request("POST", "/api/pinky/10/set-pose", {"pose": put})
+        self.assertEqual((status, body["command"]["action"]), (202, "set_pose"))
+        for bad in ({}, {"pose": {"x_m": 1.0, "y_m": 0.3}}, {"pose": {"x_m": "nan", "y_m": 0.3, "yaw_rad": 0}}):
+            status, body, _ = self.request("POST", "/api/pinky/10/set-pose", bad)
+            self.assertEqual((status, body["error_code"]), (400, "PINKY_ACTION_INVALID"))
+        self.assertEqual(self.fleet.sent, [("set_pose", ("10", put))])
+
+    def test_test_mission_and_its_signals(self) -> None:
+        self.fleet.start_test_mission = lambda pid, dropoff, via: (self.fleet.sent.append(("mission", (pid, dropoff, via))) or
+                                                                    (202, {"ok": True, "labels": ["주차장", "5", dropoff, "주차장"]}))
+        status, body, _ = self.request("POST", "/api/pinky/12/test-mission", {"dropoff": "수령 A", "via": ["9", " 7 "]})
+        self.assertEqual((status, body["command"]["action"]), (202, "test_mission"))
+        status, body, _ = self.request("POST", "/api/pinky/12/test-mission", {})
+        self.assertEqual((status, body["error_code"]), (400, "PINKY_ACTION_INVALID"))
+        # 12 has no route in the fake fleet: a signal for a phase it is not in is refused, not sent
+        status, body, _ = self.request("POST", "/api/pinky/12/signal", {"action": "dock_complete"})
+        self.assertEqual(status, 409)
+        status, body, _ = self.request("POST", "/api/pinky/12/signal", {"action": "launch"})
+        self.assertEqual(status, 400)
+        self.assertEqual(self.fleet.sent, [("mission", ("12", "수령 A", ["9", "7"]))])
+
+    def test_ros_monitor_view_keeps_topics_but_not_the_map_grid(self) -> None:
+        record = robot_record()
+        record["topics"]["map"] = {"fresh": True, "age_s": 3.0, "value": {"width": 2, "height": 1, "cells": [0, 100]}}
+        record.update(stage="prepared", domain=10, message="준비됨")
+        self.fleet.robots = lambda: {"10": record}
+        status, view, _ = self.request("GET", "/api/pinky/10/ros")
+        self.assertEqual((status, view["ok"], view["stage"], view["domain"]), (200, True, "prepared", 10))
+        self.assertEqual(view["topics"]["map"]["value"], {"width": 2, "height": 1, "cells": "2칸"})
+        self.assertIn("scan", view["topics"])
+        status, body, _ = self.request("GET", "/api/pinky/99/ros")
+        self.assertEqual(status, 404)
 
     def test_password_route(self) -> None:
         status, body, _ = self.request("POST", "/api/pinky/credentials", {"password": "s3cret"})

@@ -17,6 +17,7 @@
   <script src="/pinky-detail.js" defer></script>
   <script src="/inventory.js" defer></script>
   <script src="/dashboard.js" defer></script>
+  <script src="/ros-monitor.js" defer></script>
 </head>
 <body>
   <div class="app-shell">
@@ -30,6 +31,7 @@
         <button type="button" class="nav-item" data-view="tasks">작업 이력</button>
         <button type="button" class="nav-item" data-view="overview" data-dev-only>장비·카메라</button>
         <button type="button" class="nav-item" data-view="manual" data-dev-only>수동 조작</button>
+        <button type="button" class="nav-item" data-view="ros" data-dev-only>ROS 모니터</button>
         <button type="button" class="nav-item" data-view="api" data-dev-only>API</button>
       </nav>
       <a id="screenModeSwitch" class="screen-mode-switch" href="?dev=1">개발자 화면</a>
@@ -401,6 +403,25 @@
 
       </div>
 
+      <div class="view" id="view-ros" hidden>
+    <section aria-labelledby="ros-title">
+      <div class="section-heading"><h2 id="ros-title">ROS 모니터</h2><span class="updated" id="rosStatus">핑키를 고르세요</span></div>
+      <div class="ros-controls">
+        <label for="rosPinky">핑키</label>
+        <select id="rosPinky"></select>
+        <input id="rosFilter" type="search" placeholder="터미널 거르기 (예: 안전, /scan)" autocomplete="off">
+        <button type="button" class="secondary" id="rosPause">멈춤</button>
+        <button type="button" class="secondary" id="rosClear">지우기</button>
+        <button type="button" class="secondary" id="rosNavLog">Nav2 로그</button>
+      </div>
+      <div id="rosTerminal" class="ros-terminal" role="log" aria-label="ROS 변화 기록"></div>
+      <div class="ros-table-wrap">
+        <table class="ros-topics"><thead><tr><th>항목</th><th>ROS 토픽</th><th>수신</th><th>마지막 값</th></tr></thead><tbody id="rosTopics"></tbody></table>
+      </div>
+      <p class="note">핑키 관제(PC)가 로봇별 ROS 도메인에서 받는 값이에요. 1초마다 갱신하고, 터미널에는 바뀐 것만 시각과 함께 쌓여요. 최근 600줄이며 이 화면에만 남아요. 값에 마우스를 올리면 전체가 보여요.</p>
+    </section>
+      </div>
+
       <div class="view" id="view-api" hidden>
     <section aria-labelledby="api-title">
       <div class="section-heading"><h2 id="api-title">서버 API</h2></div>
@@ -458,6 +479,10 @@
     </header>
     <div class="map-viewer-body">
       <div class="map-viewer-map">
+        <div id="mapPickBar" class="map-pick-bar" role="status" hidden>
+          <span id="mapPickText"></span>
+          <button type="button" class="secondary small" id="mapPickCancel">취소</button>
+        </div>
         <svg id="pinkyMapLarge" class="pinky-map" role="img" aria-label="핑키 지도"></svg>
         <p id="pinkyMapLargeEmpty" class="map-empty" hidden></p>
       </div>

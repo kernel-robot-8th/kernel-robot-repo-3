@@ -21,24 +21,32 @@ def replace_once(text: str, old: str, new: str, expected: int = 1) -> str:
 
 
 ULTRASONIC_SOURCES = {
-    # A confirmed low echo marks the cells of its arc; the clearing cloud clears in front of it. Both sit at the
-    # sensor's height (about 3.7 cm), below the LiDAR plane (about 12.5 cm), so neither touches the other's cells.
-    'ultrasonic_mark': {'topic': '/us_sensor/cloud_mark', 'data_type': 'PointCloud2', 'marking': True,
+    # scripts/fusion_grid.py fuses the LiDAR and the ultrasonic in its own probabilistic grid and hands Nav2 the low
+    # layer. Both clouds are in base_footprint at the ultrasonic's height (about 3.7 cm, the lowest 5 cm voxel row),
+    # below the LiDAR plane (about 12.5 cm): the occupied low cells mark, and a ring at the grid's edge clears, so
+    # Nav2's low cells inside the window follow the fused grid while the LiDAR's own cells are never touched.
+    # 1.5 m covers the corners of the 2 m window.
+    'fusion_low_mark': {'topic': '/fusion/low_marks', 'data_type': 'PointCloud2', 'marking': True,
                         'clearing': False, 'min_obstacle_height': 0.0, 'max_obstacle_height': 0.10,
-                        'obstacle_max_range': 1.0, 'obstacle_min_range': 0.0},
-    'ultrasonic_clear': {'topic': '/us_sensor/cloud_clear', 'data_type': 'PointCloud2', 'marking': False,
+                        'obstacle_max_range': 1.5, 'obstacle_min_range': 0.0},
+    'fusion_low_clear': {'topic': '/fusion/low_clear', 'data_type': 'PointCloud2', 'marking': False,
                          'clearing': True, 'min_obstacle_height': 0.0, 'max_obstacle_height': 0.10,
-                         'raytrace_max_range': 1.0, 'raytrace_min_range': 0.0},
+                         'raytrace_max_range': 1.5, 'raytrace_min_range': 0.0},
 }
 
 
-def add_ultrasonic_fusion(parsed: dict) -> None:
-    """LiDAR + ultrasonic in height cells: both costmaps get a VoxelLayer fed by the scan and the ultrasonic clouds.
+def add_ultrasonic_fusion(parsed: dict, include_global: bool = False) -> None:
+    """LiDAR + ultrasonic in height cells: the local costmap's VoxelLayer is fed by the scan and the fused low layer.
 
-    The global costmap's 2D ObstacleLayer would let LiDAR rays passing over a low box clear what the ultrasonic
-    marked, so it becomes a VoxelLayer with the same scan source. A column is an obstacle when any of its cells
-    within the robot's height is occupied."""
-    for name, layer_name in (('local_costmap', 'voxel_layer'), ('global_costmap', 'obstacle_layer')):
+    Local only by default (2026-11-16 plan): the local costmap is a window that moves with the robot, so a wrong
+    ultrasonic mark is forgotten once the robot has passed. In the global costmap it would stay until the robot looks
+    that way again, and in the 2.2 x 2.6 m cell that can block the plan. With include_global (after the low-box test)
+    the global 2D ObstacleLayer also becomes a VoxelLayer with the same sources, since a 2D layer lets LiDAR rays
+    passing over a low box clear what the ultrasonic marked. A column is an obstacle when any of its cells within the
+    robot's height is occupied. publish_voxel_map stays off: nothing reads the voxel grid, and on a Raspberry Pi
+    publishing it every cycle costs CPU."""
+    layers = [('local_costmap', 'voxel_layer')] + ([('global_costmap', 'obstacle_layer')] if include_global else [])
+    for name, layer_name in layers:
         section = parsed[name][name]['ros__parameters']
         if layer_name not in section.get('plugins', []):
             raise RuntimeError(f"{name}에 {layer_name}가 없습니다")
@@ -49,7 +57,7 @@ def add_ultrasonic_fusion(parsed: dict) -> None:
         layer.setdefault('z_voxels', 16)
         layer.setdefault('max_obstacle_height', 2.0)
         layer.setdefault('mark_threshold', 0)
-        layer.setdefault('publish_voxel_map', True)
+        layer['publish_voxel_map'] = False
         sources = str(layer.get('observation_sources', 'scan')).split()
         for source, settings in ULTRASONIC_SOURCES.items():
             if source not in sources:
@@ -91,6 +99,17 @@ def main() -> None:
         '<remap from="/tf_static" to="tf_static"/>\n            <remap from="cmd_vel" to="cmd_vel_nav2"/>',
     )
     navigation = prefix + behavior_start + behavior_block + "</node>" + suffix
+    # The same for the composed behavior_server (use_composition:=True runs Nav2 as one process, which a busy
+    # Raspberry Pi brings up far faster): its spin/backup must also reach the motors only through the guard chain.
+    composed_start = '<composable_node pkg="nav2_behaviors" plugin="behavior_server::BehaviorServer" name="behavior_server">'
+    prefix, composed_tail = navigation.split(composed_start, 1)
+    composed_block, suffix = composed_tail.split("</composable_node>", 1)
+    composed_block = replace_once(
+        composed_block,
+        '<remap from="/tf_static" to="tf_static"/>',
+        '<remap from="/tf_static" to="tf_static"/>\n            <remap from="cmd_vel" to="cmd_vel_nav2"/>',
+    )
+    navigation = prefix + composed_start + composed_block + "</composable_node>" + suffix
 
     if keepout_enabled:
         keepout_nodes = '''
@@ -144,8 +163,22 @@ def main() -> None:
                 'override_lethal_cost': True,
                 'lethal_override_cost': 252,
             }
-    if (runtime_config.get('navigation') or {}).get('ultrasonic_fusion'):
-        add_ultrasonic_fusion(parsed)
+    navigation_settings = runtime_config.get('navigation') or {}
+    if navigation_settings.get('ultrasonic_fusion'):
+        add_ultrasonic_fusion(parsed, include_global=bool(navigation_settings.get('ultrasonic_fusion_global')))
+    inflation = (runtime_config.get('navigation') or {}).get('inflation_radius_m')
+    if isinstance(inflation, (int, float)) and 0.05 <= inflation <= 0.5:
+        # Free Nav2 driving plans its own way: 0.08 m (tuned for line following) let paths hug the keepout corner
+        # until the controller saw a collision ahead (2026-11-16). Pinky's own default is 0.15 m.
+        for name in ('local_costmap', 'global_costmap'):
+            parsed[name][name]['ros__parameters']['inflation_layer']['inflation_radius'] = float(inflation)
+    rotate = navigation_settings.get('rotate_to_heading_min_angle_rad')
+    if isinstance(rotate, (int, float)) and 0.1 <= rotate <= 1.6:
+        # Wide turns (2026-11-16): below this heading error the controller curves onto the path instead of
+        # stopping to turn in place, which it did right beside the walls.
+        for plugin in parsed['controller_server']['ros__parameters'].values():
+            if isinstance(plugin, dict) and 'rotate_to_heading_min_angle' in plugin:
+                plugin['rotate_to_heading_min_angle'] = float(rotate)
     params=yaml.safe_dump(parsed,sort_keys=False)
     (RUNTIME / "bringup_launch.xml").write_text(bringup, encoding="utf-8")
     (RUNTIME / "navigation_launch.xml").write_text(navigation, encoding="utf-8")
@@ -198,7 +231,7 @@ def main() -> None:
         'geometry': RUNTIME / 'runtime_config.json',
         'motion_gate': RUNTIME / 'motion_gate.py',
         'traffic': RUNTIME / 'traffic.py',
-        'ultrasonic_cloud': RUNTIME / 'ultrasonic_cloud.py',
+        'fusion_grid': RUNTIME / 'fusion_grid.py',
     }
     if keepout_enabled:
         sources.update({

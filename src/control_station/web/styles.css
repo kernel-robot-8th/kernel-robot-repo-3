@@ -100,6 +100,22 @@ button:disabled { background: var(--fill); color: var(--text-disabled); cursor: 
 .nav-item.active, .nav-item.active:hover { background: var(--blue-soft); color: var(--blue-strong); font-weight: 700; }
 /* Waiting orders need a person to start them: yellow. */
 .nav-badge { min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px; background: var(--yellow); color: var(--text); font-size: 12px; font-weight: 700; line-height: 22px; text-align: center; }
+/* ---- ROS 모니터 (developer screen): a terminal of changes and the live topic table ---- */
+.ros-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.ros-controls select, .ros-controls input { width: auto; min-width: 140px; }
+.ros-controls input { flex: 1 1 200px; }
+.ros-terminal { height: 360px; overflow: auto; padding: 12px 14px; border-radius: var(--radius-inner); background: #0f1720; color: #d6e2ee;
+  font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ros-line time { margin-right: 10px; color: #6b7d90; }
+.ros-line.good { color: #6ee7a8; }
+.ros-line.bad { color: #ff8a8a; }
+.ros-line.log { color: #9fb3c8; }
+.ros-table-wrap { margin-top: 14px; overflow-x: auto; }
+.ros-topics { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ros-topics th, .ros-topics td { padding: 6px 8px; border-bottom: 1px solid var(--line-soft); text-align: left; vertical-align: top; }
+.ros-topics tr.stale td { color: var(--text-3); }
+.ros-value { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; max-width: 520px; overflow-wrap: anywhere; }
+
 /* Operator screen by default: developer-only parts appear with ?dev=1 (body.dev). */
 body:not(.dev) [data-dev-only] { display: none !important; }
 .screen-mode-switch { margin-top: auto; padding: 6px 12px; color: var(--text-3); font-size: 13px; text-decoration: none; }
@@ -401,6 +417,8 @@ dl.pinky-facts { display: grid; margin: 0; padding: 0; }
 .map-scale rect { fill: rgba(255, 255, 255, .9); }
 .map-scale line { stroke: var(--text-2); stroke-width: 3; stroke-linecap: round; }
 .map-scale text { fill: var(--text-2); font-size: 11px; font-weight: 600; }
+.map-trail { fill: none; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; opacity: .45; }
+.map-plan { fill: none; stroke-width: 4; stroke-dasharray: 10 8; stroke-linecap: round; opacity: .9; }
 .map-pinky { transition: transform .6s cubic-bezier(.2, .8, .2, 1); }
 .map-pinky-heading { transition: transform .4s ease; }
 .map-pinky circle { fill: var(--card); stroke: var(--blue); stroke-width: 2.5; }
@@ -466,8 +484,18 @@ button.small { min-height: 30px; padding: 4px 10px; font-size: 12px; }
 
 /* ---- enlarged map ---- */
 .map-viewer-body { display: grid; flex: 1; grid-template-columns: minmax(0, 1fr) 280px; gap: 20px; min-height: 0; padding: 18px 20px 20px; overflow-y: auto; }
-.map-viewer-map { display: grid; place-items: center; min-height: 0; border-radius: var(--radius-inner); background: var(--card-muted); }
+.map-viewer-map { position: relative; display: grid; place-items: center; min-height: 0; border-radius: var(--radius-inner); background: var(--card-muted); }
 .map-viewer-map .pinky-map { width: auto; max-width: 100%; height: auto; max-height: calc(100vh - var(--overlay-top, 0px) - 120px); }
+.map-pick-bar { position: absolute; top: 10px; left: 10px; right: 10px; z-index: 1; display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 12px; background: var(--blue); color: #fff; font-size: 14px; font-weight: 600;
+  box-shadow: 0 6px 18px rgb(0 0 0 / .18); }
+.map-pick-bar span { flex: 1; }
+.pinky-map.picking { cursor: crosshair; touch-action: none; }
+.map-pick-spot { fill: currentColor; fill-opacity: .18; stroke: currentColor; stroke-width: 3; stroke-dasharray: 6 4; }
+.map-pick-ray { stroke: currentColor; stroke-width: 5; stroke-linecap: round; }
+.map-pick-head { fill: currentColor; }
+.map-pinky-list li > button { margin-left: auto; white-space: nowrap; }
+.map-pinky-list li > button[aria-pressed="true"] { background: var(--blue); color: #fff; }
 .map-viewer-side { display: grid; align-content: start; gap: 10px; }
 .map-viewer-side h3 { color: var(--text-2); font-size: 14px; font-weight: 600; }
 .map-pinky-list, .map-legend { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }

@@ -79,10 +79,21 @@ class FinalVelocityGuard(Node):
                and self.valid_range and odom is not None and pose is not None)
         if odom and self.valid_range and now-self.last_sensor_at<.6 and self.memory_seq!=self.range_seq:
             self.memory.update(odom,self.range_m,now);self.memory_seq=self.range_seq
-        obstacles=self.scan_points+(self.memory.local(odom) if odom else [])
+        # Into station 5 (dock_entry) the ultrasonic memory is left out: the low station is meant to be close there.
+        docking_in=bool(context.get('dock_entry')) and live
+        scan=self.scan_points
+        if docking_in:
+            # The station is straight ahead (2026-11-16): only what is beside the body's own width counts.
+            width=self.config['half_width_m']+.01
+            scan=[(px,py) for px,py in scan if not (px>0 and abs(py)<=width)]
+        obstacles=scan+(self.memory.local(odom) if odom and not docking_in else [])
+        # How far ahead of the body an obstacle stops the Pinky (navigation.json guard_front_reach_m, kept within
+        # 2-20 cm), or one second of travel when it is not set.
+        reach=((getattr(self,'runtime',None) or {}).get('navigation') or {}).get('guard_front_reach_m')
+        reach=min(.20,max(.02,float(reach))) if isinstance(reach,(int,float)) and not isinstance(reach,bool) else None
         v,w,state=gate(self.command.linear.x,self.command.angular.z,fresh=fresh,
                        stop=(CACHE/'stop_latch.json').exists(),context_valid=live and traffic,
-                       points=obstacles,config=self.config)
+                       points=obstacles,config=self.config,reach_m=reach)
         msg=Twist();msg.linear.x=v;msg.angular.z=w;self.publisher.publish(msg)
         self.journal.record('final_velocity',state=state,robot_id=self.runtime['robot_id'],run_id=context.get('token'),
                             requested=[self.command.linear.x,self.command.angular.z],applied=[v,w],odom=odom,

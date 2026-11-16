@@ -166,10 +166,36 @@ class PinkyFleetClient:
         `localization` and message."""
         return self._send("POST", f"/api/robots/{pinky_id}/localize", {} if pose is None else {"pose": pose})
 
+    def set_pose(self, pinky_id: str, pose: dict[str, float]) -> tuple[int, dict[str, Any]]:
+        """The operator's own pose for the Pinky (RViz's 2D Pose Estimate): the LiDAR polishes it only within 30 cm and
+        30 degrees, then AMCL is given it. Refused (409) while a route runs. 202 = started."""
+        return self._send("POST", f"/api/robots/{pinky_id}/set-pose", {"pose": pose})
+
     def locate(self, pinky_id: str) -> tuple[int, dict[str, Any]]:
         """Read only: where the LiDAR puts the Pinky now and the other places that fit (AMCL is not touched)."""
         # Matching a scan against the whole map takes about a second, after waiting for a fresh scan.
         return self._request("GET", f"/api/robots/{pinky_id}/locate", timeout_s=15.0)
+
+    def start_test_mission(self, pinky_id: str, dropoff: str, via: list[str] | None = None) -> tuple[int, dict[str, Any]]:
+        """A test run without an order: from where the Pinky stands to 5 (dock, load), to the drop-off waypoint
+        (hand over), back to its parking spot; Nav2 plans between the stops. 202 = started, not moved."""
+        return self._send("POST", f"/api/robots/{pinky_id}/mission", {"dropoff": dropoff, "via": list(via or [])})
+
+    def nav_log(self, pinky_id: str) -> tuple[int, dict[str, Any]]:
+        """Read only, for developers: the error lines and the tail of the Pinky's Nav2 log (over SSH)."""
+        return self._request("GET", f"/api/robots/{pinky_id}/nav-log", timeout_s=60.0)
+
+    def clear_route(self, pinky_id: str) -> tuple[int, dict[str, Any]]:
+        """기존 경로 날리기: a running route is stopped first; the route, its lines and any wait to go home are dropped."""
+        return self._send("POST", f"/api/robots/{pinky_id}/route/clear", {})
+
+    def return_home(self, pinky_id: str, via: list[str] | None = None) -> tuple[int, dict[str, Any]]:
+        """Drive from where the Pinky stands to its own parking spot (Nav2), through `via`. 202 = started."""
+        return self._send("POST", f"/api/robots/{pinky_id}/return-home", {"via": list(via or [])})
+
+    def reset(self, pinky_id: str, map_name: str) -> tuple[int, dict[str, Any]]:
+        """초기 세팅: hold it stopped, drop its route, then 주행준비 from the start even if it was prepared. 202 = started."""
+        return self._send("POST", f"/api/robots/{pinky_id}/reset", {"map": map_name})
 
     def nav_restart(self, pinky_id: str) -> tuple[int, dict[str, Any]]:
         """Restart Nav2 when its action server is missing; refused while a route runs."""

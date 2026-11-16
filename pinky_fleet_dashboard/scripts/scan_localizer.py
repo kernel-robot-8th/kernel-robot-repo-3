@@ -180,3 +180,26 @@ def locate(grid: dict[str, Any], scan: dict[str, Any], laser_pose: tuple[float, 
     return Match(False, x, y, yaw, score, runner_up,
                  f"지도가 대칭이라 비슷하게 맞는 자리가 {len(contenders)}곳입니다. 후보 중 실제 자리를 골라 주세요 "
                  f"({score:.2f} 대 {runner_up:.2f})", offered)
+
+
+def refine(grid: dict[str, Any], scan: dict[str, Any], laser_pose: tuple[float, float, float],
+           x: float, y: float, yaw: float, span_m: float = 0.30, span_yaw: float = math.radians(30.0)
+           ) -> tuple[float, float, float, float]:
+    """The best-fitting pose near one the operator gave: (score, x, y, yaw), searched only within span_m and
+    span_yaw of it, so the answer stays on the operator's side of a symmetric cell."""
+    points = scan_points(scan, laser_pose)
+    if len(points) < 40:
+        return 0.0, x, y, yaw
+    field = MapField(grid)
+    best = (-1.0, x, y, yaw)
+    for step_m, step_yaw, span, yspan in ((0.03, math.radians(3.0), span_m, span_yaw),
+                                          (0.01, math.radians(0.5), 0.04, math.radians(4.0))):
+        offsets = np.arange(-span, span + 1e-9, step_m)
+        dx, dy = (a.ravel() for a in np.meshgrid(offsets, offsets))
+        cx, cy, cyaw = best[1], best[2], best[3]
+        for candidate_yaw in cyaw + np.arange(-yspan, yspan + 1e-9, step_yaw):
+            scores = field.score(points, cx + dx, cy + dy, float(candidate_yaw))
+            k = int(np.argmax(scores))
+            if scores[k] > best[0]:
+                best = (float(scores[k]), cx + float(dx[k]), cy + float(dy[k]), _wrap(float(candidate_yaw)))
+    return best

@@ -60,6 +60,12 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
     def app(self) -> ControlStationServer:
         return self.server  # type: ignore[return-value]
 
+    def end_headers(self) -> None:
+        # The screens change while the station runs: a browser must ask again instead of keeping an old page or script
+        # (an old index.html had no ROS 모니터 menu, 2026-11-16).
+        self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
+
     @property
     def request_id(self) -> str:
         """이 요청의 ID: 응답 머리글 X-Request-Id와 오류 본문 request_id로 돌려줘 서버 기록과 맞춰 볼 수 있게"""

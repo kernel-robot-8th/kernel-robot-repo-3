@@ -1,6 +1,7 @@
 // 핑키 상세: the panel that opens when a Pinky card is tapped. Its live state and every sensor reading, the route
 // and safety monitor, its marker, its waypoints, and the operator actions that used to live on the fleet dashboard:
-// 정지, 라이다 위치 찾기 (with the candidate places to pick from when the cell's symmetry leaves two), 주차장 좌표로
+// 정지, 위치 다시 잡기 (the operator puts it on the enlarged map when the automatic place is wrong), 라이다 위치 찾기
+// (with the candidate places to pick from when the cell's symmetry leaves two), 주차장 좌표로
 // 맞추기, 주행준비 (with the map to load), Nav2 복구, 웨이포인트 기록 and 삭제.
 //
 // Loaded after pinky.js (pinkyScreen, pinkySheet, pinkyById, pinkyName, sendPinkyCommand, stopPinky, setHtmlIfChanged,
@@ -45,6 +46,10 @@ function detailSkeleton(pinkyId) {
       <h3>지도 위치</h3>
       <p class="sheet-hint" data-field="loc-summary"></p>
       <div class="sheet-action">
+        <div><strong>위치 다시 잡기</strong><small>지도에 보이는 자리가 실제와 다르면 눌러요. 큰 지도에서 핑키가 있는 곳을 누른 채, 바라보는 방향으로 끌었다가 놓으면 돼요. 라이다는 그 근처(30 cm·30°)에서만 다듬어요.</small></div>
+        <button type="button" data-set-pose>↗ 위치 다시 잡기</button>
+      </div>
+      <div class="sheet-action">
         <div><strong>라이다로 위치 찾기</strong><small>라이다로 지도에서 자기 자리를 찾아 넣어요. 비밀번호는 필요 없고 Nav2만 떠 있으면 돼요. 경기장이 대칭이라 헷갈리면 후보를 보여 드려요.</small></div>
         <div class="sheet-action-controls">
           <button type="button" class="secondary" data-locate-preview>후보 보기</button>
@@ -55,6 +60,30 @@ function detailSkeleton(pinkyId) {
       <div class="sheet-action" data-dev-only>
         <div><strong>주차장 좌표로 맞추기</strong><small>라이다로 못 찾을 때 예비로 써요. 핑키가 자기 주차 칸에 서 있다고 보고 그 좌표를 넣어요.</small></div>
         <button type="button" class="secondary" data-pinky-action="initial-pose">주차장 좌표로</button>
+      </div>
+    </section>
+
+    <section class="sheet-group" aria-label="시운전">
+      <h3>시운전 (주문 없이)</h3>
+      <div class="sheet-action">
+        <div><strong>5번 적재 → 배달 → 주차장</strong><small>지금 자리에서 출발해 5번에서 멈춰 적재를 기다리고, 고른 웨이포인트에서 수령을 기다린 뒤 자기 주차 칸으로 돌아와요. 길은 Nav2가 짜고, 교차로·5번·주차장 출입은 한 대씩 들어가요.</small></div>
+        <div class="sheet-action-controls">
+          <label class="visually-hidden" for="pinkyDropoff">배달 목적지</label>
+          <select id="pinkyDropoff" data-field="dropoff"></select>
+          <label class="visually-hidden" for="pinkyVia">경유 웨이포인트</label>
+          <input id="pinkyVia" data-field="via" placeholder="경유 (예: 9,7)" autocomplete="off" size="9">
+          <button type="button" data-pinky-action="test-mission">시험 임무 시작</button>
+        </div>
+      </div>
+      <p class="sheet-hint" data-field="mission-status"></p>
+      <div class="sheet-signal" data-field="mission-signal"></div>
+      <div class="sheet-action">
+        <div><strong>정지 뒤 정리</strong><small>정지하면 받던 경로를 비우고 명령을 기다려요. 1분 동안 명령이 없으면 자기 주차 칸으로 돌아가요(정지를 한 번 더 누르거나, 그사이 옮기거나 위치를 다시 잡으면 안 가요). 초기 세팅은 정지·경로 지우기 뒤 주행준비를 처음부터 다시 해요.</small></div>
+        <div class="sheet-action-controls">
+          <button type="button" class="secondary" data-pinky-action="return-home">주차장 복귀</button>
+          <button type="button" class="secondary" data-pinky-action="route-clear">기존 경로 날리기</button>
+          <button type="button" class="secondary" data-pinky-action="reset">초기 세팅</button>
+        </div>
       </div>
     </section>
 
@@ -176,9 +205,11 @@ function locSummaryText(pinky) {
   const pose = pinky.pose || {};
   const now = pose.x_m == null ? '지금 지도 위치가 없어요.' : `지금 위치: ${placeText(pose.x_m, pose.y_m)}, ${facingText(pose.yaw_rad)}.`;
   const loc = pinky.localization;
-  if (!loc) return now;
+  if (!loc) return pose.x_m == null ? `${now} ↗ 위치 다시 잡기로 지도에서 직접 넣을 수 있어요.` : now;
   const when = loc.at ? `${formatClock(new Date(loc.at * 1000).toISOString())} ` : '';
-  const result = loc.applied ? '라이다로 위치를 넣었어요' : loc.ok ? '라이다가 위치를 찾았지만 아직 넣지 않았어요' : loc.reason;
+  if (loc.method === 'operator') return `${now} ${when}${loc.reason || '직접 지정한 위치예요'}`;
+  const result = loc.applied ? '라이다로 위치를 잡았어요. 지도에서 맞는지 보고, 틀리면 ↗ 위치 다시 잡기를 눌러 주세요.'
+    : loc.ok ? '라이다가 위치를 찾았지만 아직 넣지 않았어요' : `${loc.reason} ↗ 위치 다시 잡기로 직접 넣어 주세요.`;
   return `${now} ${when}라이다: ${result}`;
 }
 
@@ -217,6 +248,53 @@ async function previewCandidates(pinkyId) {
   renderPinkyDetail();
 }
 
+// ---- 시운전: a test mission without an order, and the operator's signals along it ----
+
+const MISSION_SIGNALS = {
+  docking_manual: ['dock_complete', '도킹완료', '5번에 섰어요. 제자리에 붙었으면 눌러 주세요.'],
+  docked_manual: ['received', '적재 완료 · 출발', '물건을 실었으면 눌러 주세요. 20 cm 뒤로 빠진 뒤 배달 목적지로 가요.'],
+  course_complete: ['mission_complete', '수령 완료 · 복귀', '배달 목적지에 섰어요. 물건을 받았으면 눌러 주세요. 자기 주차 칸으로 돌아가요.'],
+};
+
+// Every recorded waypoint of the map (a receiving zone recorded by any Pinky counts), except 5, the loading spot.
+function dropoffLabels() {
+  const all = Object.values(pinkyMapState.data?.waypoints || {}).flat().map((point) => point.label);
+  return [...new Set(all)].filter((label) => label !== '5');
+}
+
+// "9,7" → ['9', '7']: waypoints to pass on the way out (and back in reverse), e.g. the passage past the middle wall.
+function viaLabels() {
+  return detailField('via').value.split(/[,\s→]+/).map((label) => label.trim()).filter(Boolean);
+}
+
+function renderDropoffs() {
+  const select = detailField('dropoff');
+  // 원점: load at 5, back out, and drive back to where it started (no hand-over stop).
+  const labels = ['원점', ...dropoffLabels()];
+  const html = labels.map((label) => `<option value="${escapeHtml(label)}">${escapeHtml(label === '원점' ? '원점 (적재 후 후진·복귀)' : label)}</option>`).join('');
+  if (pinkyScreen.rendered.get(select) === html) return;
+  const previous = select.value;
+  select.innerHTML = html;
+  pinkyScreen.rendered.set(select, html);
+  select.value = labels.includes(previous) ? previous : (labels.find((label) => label.includes('수령')) || labels[0] || '');
+}
+
+function missionStatusText(pinky) {
+  if (!pinky.mission) return '진행 중인 시험 임무가 없어요. 배달 목적지는 수령존에서 [지금 위치 기록]으로 찍은 웨이포인트를 고르면 돼요.';
+  const route = pinky.route?.status ? (pinkyRouteLabels[pinky.route.status] || pinky.route.status) : '';
+  const left = pinky.mission.auto_return_at ? Math.max(0, Math.round(pinky.mission.auto_return_at - Date.now() / 1000)) : null;
+  const wait = left == null ? '' : ` · ${left}초 뒤 주차장으로 자동 복귀 (취소: 정지 한 번 더 또는 기존 경로 날리기)`;
+  return `${pinky.mission.message || '시험 임무'} · ${route}${pinky.phase_label ? ` · 지금: ${pinky.phase_label}` : ''}${wait}`;
+}
+
+function missionSignalHtml(pinky) {
+  const signal = MISSION_SIGNALS[pinky.phase];
+  if (!signal) return '';
+  const [action, label, hint] = signal;
+  return `<div class="sheet-action"><div><strong>${escapeHtml(label)}</strong><small>${escapeHtml(hint)}</small></div>
+    <button type="button" data-pinky-signal="${action}">${escapeHtml(label)}</button></div>`;
+}
+
 function detailLogHtml(pinkyId) {
   const entries = (pinkyScreen.view?.log || []).filter((entry) => entry.pinky_id === pinkyId).slice(0, 6);
   if (!entries.length) return '<li class="muted">보낸 명령이 없어요</li>';
@@ -247,6 +325,9 @@ function renderPinkyDetail() {
     button.disabled = pinkyScreen.sending.has(`${id}:${button.dataset.pinkyAction}`);
   });
   detailField('loc-summary').textContent = locSummaryText(pinky);
+  renderDropoffs();
+  detailField('mission-status').textContent = missionStatusText(pinky);
+  setHtmlIfChanged(detailField('mission-signal'), missionSignalHtml(pinky));
   setHtmlIfChanged(detailField('candidates'), candidateRowsHtml(pinky));
   setHtmlIfChanged(detailField('sensors'), sensorRowsHtml(pinky));
   setHtmlIfChanged(detailField('facts'), detailFactsHtml(pinky));
@@ -272,11 +353,28 @@ function openPinkyDetail(pinkyId, opener) {
 const pinkyDetailActions = {
   ready: { path: 'ready', label: '주행준비', body: () => ({ map: detailField('map').value }) },
   localize: { path: 'localize', label: '라이다 위치 찾기', body: () => ({}) },
+  'test-mission': {
+    path: 'test-mission', label: '시험 임무 시작',
+    body: () => ({ dropoff: detailField('dropoff').value, via: viaLabels() }),
+    confirm: (name) => `${name} 핑키를 출발시킬까요?\n${viaLabels().length ? `${viaLabels().join(' → ')} 경유 → ` : ''}5번 적재 → ${detailField('dropoff').value === '원점' ? '후진 → 출발한 자리로 복귀' : `${detailField('dropoff').value} 배달 → 주차장 복귀`}\n로봇 옆에 지켜보는 사람이 있어야 해요.`,
+  },
   'initial-pose': {
     path: 'initial-pose', label: '주차장 좌표로 맞추기', body: () => ({}),
     confirm: (name) => `${name} 핑키가 자기 주차장에 서 있나요?\n주차장 좌표를 지금 위치로 넣습니다.`,
   },
   'nav-restart': { path: 'nav-restart', label: 'Nav2 복구', body: () => ({}) },
+  'return-home': {
+    path: 'return-home', label: '주차장 복귀', body: () => ({ via: viaLabels().slice().reverse() }),
+    confirm: (name) => `${name} 핑키를 지금 자리에서 자기 주차 칸으로 보낼까요?${viaLabels().length ? `\n경유: ${viaLabels().slice().reverse().join(' → ')}` : ''}`,
+  },
+  'route-clear': {
+    path: 'route-clear', label: '기존 경로 날리기', body: () => ({}),
+    confirm: (name) => `${name} 핑키의 경로·주행선·자동 복귀를 지울까요?\n주행 중이면 먼저 세워요.`,
+  },
+  reset: {
+    path: 'reset', label: '초기 세팅', body: () => ({ map: detailField('map')?.value || 'map-proto.yaml' }),
+    confirm: (name) => `${name} 핑키를 초기 세팅할까요?\n정지 잠금 → 경로 지우기 → 주행준비를 처음부터 다시 해요(1~2분). 끝나면 라이다로 위치를 찾아요.`,
+  },
 };
 
 pinkySheetBody.addEventListener('click', (event) => {
@@ -293,6 +391,18 @@ pinkySheetBody.addEventListener('click', (event) => {
     sendPinkyCommand(pinkyId, 'waypoint_delete', {
       path: `waypoints/${encodeURIComponent(remove.dataset.waypointDelete)}/delete`, body: {}, label: '웨이포인트 삭제',
     });
+    return;
+  }
+  const signal = event.target.closest('[data-pinky-signal]');
+  if (signal) {
+    const action = signal.dataset.pinkySignal;
+    const label = Object.values(MISSION_SIGNALS).find(([a]) => a === action)?.[1] || action;
+    sendPinkyCommand(pinkyId, action, { path: 'signal', body: { action }, label });
+    return;
+  }
+  const setPose = event.target.closest('[data-set-pose]');
+  if (setPose) {
+    startMapPick(pinkyId, setPose);
     return;
   }
   if (event.target.closest('[data-locate-preview]')) {
