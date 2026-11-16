@@ -1,6 +1,6 @@
 {
   "ir_steering": false,
-  "ultrasonic_fusion": true,
+  "ultrasonic_fusion": false,
   "ultrasonic_detour": false,
   "ultrasonic_cloud": {
     "min_range_m": 0.03,

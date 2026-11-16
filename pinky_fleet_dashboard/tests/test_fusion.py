@@ -87,9 +87,10 @@ class IrReadingOnlyTests(unittest.TestCase):
         with patch.multiple(app, IR_PROFILES=profiles, NAVIGATION={'ir_steering': True}):
             self.assertTrue(app._ir_steers('10'))
 
-    def test_the_shipped_settings_are_nav2_with_fusion_and_no_detour(self):
+    def test_the_shipped_settings_are_nav2_with_lidar_costmap_first_and_no_detour(self):
+        # 2026-11-16: LiDAR-only costmap first; the ultrasonic joins once that runs steadily.
         self.assertEqual((app.NAVIGATION['ir_steering'], app.NAVIGATION['ultrasonic_fusion'], app.NAVIGATION['ultrasonic_detour']),
-                         (False, True, False))
+                         (False, False, False))
 
 
 if __name__ == '__main__':

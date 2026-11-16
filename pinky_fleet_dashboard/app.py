@@ -40,7 +40,17 @@ ROOT = Path(__file__).resolve().parent
 PARKING = json.loads((ROOT / "config" / "parking.json").read_text())
 # Driving is Nav2's (decided 2026-11-14): IR only reports, the ultrasonic joins the LiDAR in Nav2's height-cell
 # costmap, and the ultrasonic safety node holds forward motion near an obstacle instead of running its own detour.
-NAVIGATION = json.loads((ROOT / "config" / "navigation.json").read_text())
+NAVIGATION_PATH = ROOT / "config" / "navigation.json"
+NAVIGATION = json.loads(NAVIGATION_PATH.read_text())
+
+
+def _reload_navigation() -> None:
+    """Read navigation.json again, so a changed setting applies from the next 주행준비 without a restart."""
+    global NAVIGATION
+    try:
+        NAVIGATION = json.loads(NAVIGATION_PATH.read_text())
+    except (OSError, ValueError) as exc:
+        JOURNAL.record('navigation_config_error', state=str(exc))  # keep the last good settings
 WEB = ROOT / "web"
 ROS_DOMAIN = 0
 HOST = "127.0.0.1"
@@ -680,7 +690,7 @@ def _topic_ready(robot_id: str, keys: tuple[str, ...], timeout: float = START_TI
     return TELEMETRY.wait_for(robot_id, keys, timeout)
 
 
-def _ssh_run(robot_id: str, remote_command: str, timeout_seconds: float = 35.0) -> tuple[bool, str]:
+def _ssh_run(robot_id: str, remote_command: str, timeout_seconds: float = 35.0, keep_chars: int = 1200) -> tuple[bool, str]:
     robot = ROBOTS[robot_id]
     with STATE.lock:
         password = STATE.password
@@ -723,9 +733,9 @@ def _ssh_run(robot_id: str, remote_command: str, timeout_seconds: float = 35.0) 
         if result.returncode != 0:
             if "Permission denied" in combined:
                 return False, "SSH 인증이 거부되었습니다."
-            return False, combined[-1200:] or f"SSH 종료 코드 {result.returncode}"
+            return False, combined[-keep_chars:] or f"SSH 종료 코드 {result.returncode}"
         STATE.update(robot_id, last_ssh_ok=time.time(), ssh_reachable=True)
-        return True, combined[-1200:]
+        return True, combined[-keep_chars:]
     except subprocess.TimeoutExpired:
         return False, "SSH 명령이 시간 초과되었습니다."
     except OSError as exc:
@@ -1084,6 +1094,7 @@ def _stop_script_command(name: str) -> str:
 
 
 def _start_navigation_with_safety(robot_id: str, map_path: str, map_name: str) -> tuple[bool, str]:
+    _reload_navigation()
     stopped, stop_output = _stop_ultrasonic_safety(robot_id)
     if not stopped or "SAFETY_PID_MISMATCH" in stop_output:
         return False, stop_output or "이전 초음파 안전 감시기를 정리하지 못했습니다."
@@ -1105,9 +1116,9 @@ def _start_navigation_with_safety(robot_id: str, map_path: str, map_name: str) -
     # The status lamp is a convenience: if the Pinky has no lamp or LED package, preparation goes on without it.
     # The lamp script was just reinstalled with the runtime bundle: stop the old one so the new code runs.
     _ssh_run(robot_id, _stop_script_command("status_lamp"))
+    _ssh_run(robot_id, _stop_script_command("ultrasonic_cloud"))  # an old one, whether fusion stays on or not
     if NAVIGATION.get("ultrasonic_fusion"):
         # Nav2's costmap is configured to read these clouds, so preparation needs the node running.
-        _ssh_run(robot_id, _stop_script_command("ultrasonic_cloud"))
         ok, output = _ssh_run(robot_id, _remote_start_command(robot_id, "ultrasonic_cloud",
                                   "python3 /home/pinky/.cache/pinky-fleet/nav2/ultrasonic_cloud.py"))
         if not ok or not any(token in output for token in ("STARTED", "ALREADY_RUNNING")):
@@ -1649,7 +1660,17 @@ class Handler(BaseHTTPRequestHandler):
         if processes_match:
             # Read only, for developers: what runs on the robot (ROS, Nav2, Python), busiest first.
             ok, output = _ssh_run(processes_match.group(1),
-                                  "ps -eo pid,etime,pcpu,pmem,args --sort=-pcpu | grep -E 'ros|nav2|python3|PID' | grep -v grep | cut -c1-220 | head -60")
+                                  "uptime; ps -eo pid,etime,pcpu,pmem,args --sort=-pcpu | grep -E 'ros|nav2|python3|PID' | grep -v grep | cut -c1-220 | head -60",
+                                  keep_chars=12000)
+            self._json(200 if ok else 502, {"ok": ok, "output": output})
+            return
+        nav_log_match = re.fullmatch(r"/api/robots/(10|11|12)/nav-log", path)
+        if nav_log_match:
+            # Read only, for developers: why Nav2 did not come up, without the repeated keepout TF warnings.
+            log = "/home/pinky/.cache/pinky-fleet/navigation.log"
+            ok, output = _ssh_run(nav_log_match.group(1),
+                                  f"ls -la {log}; grep -nE 'ERROR|FATAL|died|exit code|Timed out|timed out|Failed|terminate|Aborting|Activating|Configuring|Waiting' {log} "
+                                  "| grep -v KeepoutFilter | tail -120 | cut -c1-260", keep_chars=30000)
             self._json(200 if ok else 502, {"ok": ok, "output": output})
             return
         locate_match = re.fullmatch(r"/api/robots/(10|11|12)/locate", path)
