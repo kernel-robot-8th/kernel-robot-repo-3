@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlsplit
 
-from control_station.arm_commands import ArmCommandConflict, ArmCommandError, ArmCommandNotFound
+from control_station.arm_commands import ARM_ROBOT_IDS, ArmCommandConflict, ArmCommandError, ArmCommandNotFound
 from control_station.shelf_slot_zones import SlotSelectionError, select_slot_for_class
 
 if TYPE_CHECKING:
@@ -175,19 +175,23 @@ def post_command_from_camera(h: ControlStationHandler, route: str, parts: list[s
 
     operation MOVE_TO_SLOT(기본)은 그 칸 자세로 이동, PICK_WITH_POLICY는 그 물체용 학습 정책 실행.
     정책은 위치를 입력으로 받지 않으므로, 정책 명령에서 칸은 물체가 실제로 있다는 근거로만 남는다."""
-    allowed = {"object_class", "camera_id", "valid_for_s", "operation"}
+    allowed = {"object_class", "camera_id", "valid_for_s", "operation", "robot_id"}
     object_class = body.get("object_class")
     operation = body.get("operation", "MOVE_TO_SLOT")
+    requested_robot_id = body.get("robot_id")
     if (
         set(body) - allowed
         or not isinstance(object_class, str)
         or not object_class.strip()
         or operation not in {"MOVE_TO_SLOT", "PICK_WITH_POLICY"}
+        or (requested_robot_id is not None and (
+            not isinstance(requested_robot_id, str) or requested_robot_id not in ARM_ROBOT_IDS
+        ))
     ):
         h._json_error(
             400,
             "ARM_COMMAND_INVALID",
-            "body needs object_class and may have camera_id, valid_for_s, "
+            "body needs object_class and may have robot_id, camera_id, valid_for_s, "
             "operation (MOVE_TO_SLOT or PICK_WITH_POLICY)",
         )
         return
@@ -213,8 +217,25 @@ def post_command_from_camera(h: ControlStationHandler, route: str, parts: list[s
         return
     try:
         selection = select_slot_for_class(h.app.shelf_slot_zones.annotate(snapshot.to_dict()), class_name)
+        # Route camera-confirmed work to the arm serving that shelf. An explicitly selected arm is
+        # accepted only when it serves the detected shelf, so a UI mismatch cannot dispatch across the aisle.
+        arms = getattr(h.app, "arms", None)
+        slot_map = h.app.arm_commands.slot_map
+        slot = slot_map.active_slots.get(selection["slot_id"]) if slot_map is not None else None
+        shelf_arm = arms.for_shelf(slot["shelf_id"]) if arms is not None and slot is not None else None
+        if shelf_arm is None:
+            h._json_error(409, "SHELF_ARM_NOT_CONFIGURED", "검출된 선반 칸을 담당할 팔 설정이 없습니다")
+            return
+        if requested_robot_id is not None and requested_robot_id != shelf_arm["arm_id"]:
+            h._json_error(
+                409,
+                "ARM_SHELF_MISMATCH",
+                f"{selection['slot_label']}은 {shelf_arm['label']} 담당 선반입니다. 팔 선택을 확인하세요.",
+                details={"expected_robot_id": shelf_arm["arm_id"]},
+            )
+            return
         request: dict[str, Any] = {
-            "robot_id": "arm-01",
+            "robot_id": shelf_arm["arm_id"],
             "operation": operation,
             "valid_for_s": body.get("valid_for_s", 60),
             "target": {"object_class": class_name, "pick_slot_id": selection["slot_id"]},

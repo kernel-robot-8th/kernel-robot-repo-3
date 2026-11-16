@@ -34,11 +34,56 @@ from pathlib import Path
 
 from mock_omx_worker import Refused, Worker, request_json
 from omx_act_policy_run import (
-    DEFAULT_POLICIES, RestWatcher, check_policy_server, load_policies, policy_cameras, run_policy, wait_devices_free,
+    DEFAULT_POLICIES, RestWatcher, check_policy_server, load_policies, max_home_error_ticks, policy_cameras,
+    run_policy, wait_devices_free,
 )
-from omx_slot_motion import ARM_JOINTS, Outcome, Rejected, SlotMotion, add_motion_arguments
+from omx_slot_motion import (
+    ARM_JOINTS, DEFAULT_PORT, Outcome, REPOSITORY_ROOT, Rejected, SlotMotion, add_motion_arguments,
+)
 
 DEFAULT_GRIPPER_CAMERA = "/dev/v4l/by-id/usb-Innomaker_Innomaker-U20CAM-720P_SN0001-video-index0"
+
+
+def configure_arm_devices(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """Resolve the selected arm's serial port, pose file and policy cameras from its own environment settings."""
+    side_by_robot = {"arm-01": "LEFT", "arm-02": "RIGHT"}
+    side = side_by_robot.get(args.robot_id)
+    if side is None:
+        parser.error("--robot-id must be arm-01 or arm-02")
+    side_prefix = f"CONTROL_STATION_{side}_"
+
+    if args.port is None:
+        args.port = os.environ.get(f"{side_prefix}FOLLOWER_PORT", "").strip()
+        if not args.port and side == "LEFT":
+            args.port = os.environ.get("CONTROL_STATION_FOLLOWER_PORT", "").strip()
+        if not args.port and side == "RIGHT":
+            args.port = DEFAULT_PORT
+        if not args.port:
+            parser.error(f"{side_prefix}FOLLOWER_PORT를 설정하세요")
+
+    if args.poses is None:
+        poses = os.environ.get(f"{side_prefix}OMX_POSES", "").strip()
+        if not poses and side == "LEFT":
+            poses = os.environ.get("CONTROL_STATION_OMX_POSES", "").strip()
+        if poses:
+            args.poses = Path(poses)
+        elif side == "RIGHT":
+            args.poses = REPOSITORY_ROOT / "config" / "omx-slot-poses.json"
+        else:
+            parser.error(f"{side_prefix}OMX_POSES를 설정하세요")
+
+    args.overhead_camera = (
+        args.overhead_camera
+        or os.environ.get(f"{side_prefix}CEILING_CAMERA", "").strip()
+        or os.environ.get("CONTROL_STATION_ACT_OVERHEAD_CAMERA", "").strip()
+    )
+    args.gripper_camera = (
+        args.gripper_camera
+        or os.environ.get(f"{side_prefix}JOINT_CAMERA", "").strip()
+        or os.environ.get("CONTROL_STATION_JOINT_CAMERA", "").strip()
+        or DEFAULT_GRIPPER_CAMERA
+    )
+
 
 
 class LeRobotOmxWorker(Worker):
@@ -83,6 +128,8 @@ class LeRobotOmxWorker(Worker):
         policy = self.policies.get(policy_ref.get("policy_id"))
         if policy is None or policy["model"] != policy_ref.get("model"):
             return "POLICY_UNKNOWN", None
+        if policy.get("arm_id") not in (None, command["robot_id"]):
+            return "POLICY_WRONG_ARM", None
         if "home" not in self.motion.poses["poses"]:
             return "POSE_NOT_RECORDED", None
         if datetime.fromisoformat(command["valid_until"]) <= datetime.now(timezone.utc):
@@ -103,7 +150,7 @@ class LeRobotOmxWorker(Worker):
         home = self.motion.poses["poses"]["home"]["ticks"]
         with self.motion.follower():
             now = self.motion.present()
-        away = max(abs(now[name] - home[name]) for name in ARM_JOINTS)
+        away = max_home_error_ticks(home, now)
         print(f"  현재 {now}\n  home과 최대 차이 {away} ticks", flush=True)
         if away > settings.policy_start_ticks:
             if not settings.policy_any_start:
@@ -291,13 +338,13 @@ def main() -> int:
     parser.add_argument("--wait-s", type=float, default=20)
     parser.add_argument("--once", action="store_true", help="exit after one command")
     add_motion_arguments(parser)
+    # Resolve defaults after --robot-id is known; add_motion_arguments also serves one-arm ROS tools.
+    parser.set_defaults(port=None, poses=None)
     policy = parser.add_argument_group("PICK_WITH_POLICY (LeRobot ACT)")
     policy.add_argument("--policies", type=Path, default=DEFAULT_POLICIES, help="object -> trained policy file")
     policy.add_argument("--policy-server", default="127.0.0.1:8080", help="lerobot.async_inference.policy_server address")
-    policy.add_argument("--overhead-camera", default=os.environ.get("CONTROL_STATION_ACT_OVERHEAD_CAMERA", ""),
-                        help="camera seeing the shelf from above, as in training (env CONTROL_STATION_ACT_OVERHEAD_CAMERA)")
-    policy.add_argument("--gripper-camera", default=os.environ.get("CONTROL_STATION_JOINT_CAMERA") or DEFAULT_GRIPPER_CAMERA,
-                        help="camera on the gripper (env CONTROL_STATION_JOINT_CAMERA)")
+    policy.add_argument("--overhead-camera", help="camera seeing the shelf from above, as in training")
+    policy.add_argument("--gripper-camera", help="camera on the gripper")
     policy.add_argument("--policy-start-ticks", type=int, default=400,
                         help="refuse to start the policy when a joint is farther than this from home")
     policy.add_argument("--policy-depart-ticks", type=int, default=300, help="a joint this far from home = policy started moving")
@@ -312,6 +359,7 @@ def main() -> int:
                              "40 with --policy-any-start)")
     parser.add_argument("--release-torque", action="store_true", help="turn arm torque off and exit (hold the arm first)")
     args = parser.parse_args()
+    configure_arm_devices(args, parser)
     if args.policy_any_start and args.policy_max_step_ticks is None:
         args.policy_max_step_ticks = 40  # about 1,200 ticks/s at 30 Hz; the first actions from an unseen pose may jump
     args.result = "succeeded"

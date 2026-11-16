@@ -590,6 +590,15 @@ async function postArmCommand(url, body) {
 
 const cameraCommandForm = document.querySelector('#cameraCommandForm');
 const policyButtons = document.querySelector('#policyButtons');
+const policyArm = document.querySelector('#policyArm');
+
+function updatePolicyButtonAvailability() {
+  policyButtons.querySelectorAll('button').forEach((button) => {
+    button.disabled = !policyArm.value || (button.dataset.policyArm && button.dataset.policyArm !== policyArm.value);
+  });
+}
+
+policyArm.addEventListener('change', updatePolicyButtonAvailability);
 
 cameraCommandForm.addEventListener('submit', async (event) => {
   // The server picks the slot from the front camera; it refuses unless the object is in exactly one slot.
@@ -629,39 +638,45 @@ async function pickWithPolicy(policy) {
   // 1) Ask the server to confirm the object in the front camera (the slot becomes evidence in the command).
   // 2) If the camera cannot confirm it, the operator may send the command without camera evidence.
   const buttons = policyButtons.querySelectorAll('button');
+  const robotId = policyArm.value;
+  if (!robotId) {
+    armCommandMessage.textContent = '정책을 실행할 팔을 먼저 선택하세요.';
+    return;
+  }
+  const armLabel = robotId === 'arm-02' ? '오른쪽 팔' : '왼쪽 팔';
   buttons.forEach((button) => { button.disabled = true; });
-  armCommandMessage.textContent = `${policy.label}: 정면 캠에서 확인 중`;
+  armCommandMessage.textContent = `${armLabel} · ${policy.label}: 정면 캠에서 확인 중`;
   try {
     const response = await fetch('/api/arm/commands/from-camera', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ object_class: policy.object_class, operation: 'PICK_WITH_POLICY' }),
+      body: JSON.stringify({ object_class: policy.object_class, operation: 'PICK_WITH_POLICY', robot_id: robotId }),
     });
     const result = await response.json();
     if (response.ok) {
       const found = result.selection;
-      armCommandMessage.textContent = `${policy.label} 집기 등록 (${result.command.command_id}) · 정면 캠 ${Math.round(found.confidence * 100)}% @ ${found.slot_label} · 워커가 가져갈 때까지 대기`;
+      armCommandMessage.textContent = `${armLabel} · ${policy.label} 집기 등록 (${result.command.command_id}) · 정면 캠 ${Math.round(found.confidence * 100)}% @ ${found.slot_label} · 워커가 가져갈 때까지 대기`;
       return;
     }
     const reason = apiErrorMessage(result, '정면 캠 확인 실패');
     if (!cameraCheckErrors.has(result.error_code)
-      || !window.confirm(`${reason}\n\n정면 캠 확인 없이 ${policy.label} 집기 정책을 실행할까요? 팔이 움직입니다.`)) {
+      || !window.confirm(`${reason}\n\n정면 캠 확인 없이 ${armLabel}에서 ${policy.label} 집기 정책을 실행할까요? 팔이 움직입니다.`)) {
       armCommandMessage.textContent = reason;
       return;
     }
     const command = await postArmCommand('/api/arm/commands', {
-      robot_id: 'arm-01',
+      robot_id: robotId,
       operation: 'PICK_WITH_POLICY',
       valid_for_s: 60,
       target: { object_class: policy.object_class },
       place: { slot_id: 'CART_1' },
       source: { kind: 'OPERATOR_INPUT', note: `정면 캠 확인 없이 실행 (${result.error_code})` },
     });
-    if (command) armCommandMessage.textContent = `${policy.label} 집기 등록 (${command.command_id}) · 정면 캠 확인 없음 · 워커가 가져갈 때까지 대기`;
+    if (command) armCommandMessage.textContent = `${armLabel} · ${policy.label} 집기 등록 (${command.command_id}) · 정면 캠 확인 없음 · 워커가 가져갈 때까지 대기`;
   } catch (error) {
     armCommandMessage.textContent = error.message;
   } finally {
-    buttons.forEach((button) => { button.disabled = false; });
+    updatePolicyButtonAvailability();
     await refreshArmCommands();
   }
 }
@@ -674,11 +689,15 @@ async function loadPolicyButtons() {
     policyButtons.replaceChildren(...result.policies.map((policy) => {
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = `${policy.label} 집기`;
-      button.title = `${policy.model} (${policy.object_class})`;
+      button.dataset.policyArm = policy.arm_id || '';
+      const trainedArm = policy.arm_id === 'arm-02' ? '오른쪽 팔'
+        : policy.arm_id === 'arm-01' ? '왼쪽 팔' : '양쪽 팔';
+      button.textContent = `${policy.label} 집기 · ${trainedArm}`;
+      button.title = `${policy.model} (${policy.object_class}) · ${trainedArm} 전용`;
       button.addEventListener('click', () => pickWithPolicy(policy));
       return button;
     }));
+    updatePolicyButtonAvailability();
   } catch (error) {
     policyButtons.innerHTML = `<span class="note">${escapeHtml(error.message)}</span>`;
   }
