@@ -34,7 +34,8 @@ from pathlib import Path
 
 from mock_omx_worker import Refused, Worker, request_json
 from omx_act_policy_run import (
-    DEFAULT_POLICIES, RestWatcher, check_policy_server, load_policies, policy_cameras, run_policy, wait_devices_free,
+    DEFAULT_POLICIES, RestWatcher, check_policy_server, load_policies, max_home_error_ticks, policy_cameras,
+    run_policy, wait_devices_free,
 )
 from omx_slot_motion import ARM_JOINTS, Outcome, Rejected, SlotMotion, add_motion_arguments
 
@@ -103,7 +104,7 @@ class LeRobotOmxWorker(Worker):
         home = self.motion.poses["poses"]["home"]["ticks"]
         with self.motion.follower():
             now = self.motion.present()
-        away = max(abs(now[name] - home[name]) for name in ARM_JOINTS)
+        away = max_home_error_ticks(home, now)
         print(f"  현재 {now}\n  home과 최대 차이 {away} ticks", flush=True)
         if away > settings.policy_start_ticks:
             if not settings.policy_any_start:

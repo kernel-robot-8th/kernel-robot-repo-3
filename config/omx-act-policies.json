@@ -59,6 +59,25 @@
       },
       "max_run_s": 40,
       "notes": "에피소드 20개(약 15초), 쉬는 자세에서 시작. 녹화 때 카메라 이름이 뒤바뀌어 front에 그리퍼 카메라(분홍 손가락, F58AE686 팔), wrist에 위에서 본 카메라가 들어감. 2026-11-11 영상으로 확인. 실물 실행은 아직 안 함."
+    },
+    {
+      "policy_id": "watermelon_act_20261108",
+      "object_class": "watermelon",
+      "label": "수박",
+      "aliases": [
+        "수박",
+        "watermelon"
+      ],
+      "model": "neverlish/omx_act_record-watermelon-20261108-1",
+      "policy_type": "act",
+      "task": "Pick up Doll",
+      "dataset": "neverlish/record-watermelon-20261108-1",
+      "cameras": {
+        "front": "OVERHEAD",
+        "wrist": "GRIPPER"
+      },
+      "max_run_s": 45,
+      "notes": "ACT 데이터셋 2026-11-08, 체크포인트 100000. 학습 카메라 역할은 front=천장, wrist=그리퍼. task 문장은 녹화 당시 이름이며 정책 식별에는 쓰이지 않음."
     }
   ]
 }
