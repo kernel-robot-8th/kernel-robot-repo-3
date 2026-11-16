@@ -229,14 +229,18 @@ def main() -> None:
         server.arms, server.arms_error = None, str(exc)
         print(f"팔 설정을 불러오지 못했습니다: {exc}", flush=True)
     # Cameras the LeRobot policy opens itself; closed by the control station while a policy command runs.
-    server.policy_camera_devices = [
+    server.policy_camera_devices = list(dict.fromkeys(
         device
-        for device in (
-            os.environ.get("CONTROL_STATION_ACT_OVERHEAD_CAMERA", "").strip(),
-            os.environ.get("CONTROL_STATION_JOINT_CAMERA", "").strip(),
+        for name in (
+            "CONTROL_STATION_ACT_OVERHEAD_CAMERA",
+            "CONTROL_STATION_JOINT_CAMERA",
+            "CONTROL_STATION_LEFT_CEILING_CAMERA",
+            "CONTROL_STATION_LEFT_JOINT_CAMERA",
+            "CONTROL_STATION_RIGHT_CEILING_CAMERA",
+            "CONTROL_STATION_RIGHT_JOINT_CAMERA",
         )
-        if device
-    ]
+        if (device := os.environ.get(name, "").strip())
+    ))
     server.policy_camera_lock = threading.Lock()
     server.policy_cameras_lent = False
     server.shelf_slot_zones = ShelfSlotZones(slot_map)

@@ -43,6 +43,7 @@
     },
     {
       "policy_id": "apple_act_20261109",
+      "arm_id": "arm-02",
       "object_class": "apple",
       "label": "사과",
       "aliases": [
@@ -62,6 +63,7 @@
     },
     {
       "policy_id": "watermelon_act_20261108",
+      "arm_id": "arm-02",
       "object_class": "watermelon",
       "label": "수박",
       "aliases": [
