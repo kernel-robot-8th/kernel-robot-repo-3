@@ -94,7 +94,10 @@ class PrepareAllTests(unittest.TestCase):
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)  # cleanups run last-in first: shut down, then close
-        patcher = patch.multiple(app, STATE=state, WORKERS=workers)
+        # A prepared Pinky counts as prepared only while its Nav2 still gives a map pose (it may have been switched
+        # off and on since): here every Pinky has one.
+        live = {rid: {'tf_pose': {'fresh': True}} for rid in state.robots}
+        patcher = patch.multiple(app, STATE=state, WORKERS=workers, TELEMETRY=NS(snapshot=lambda: live))
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -128,6 +131,15 @@ class PrepareAllTests(unittest.TestCase):
         self.assertEqual(state.busy_robot, 'all')
         self.assertEqual(submitted, [(app._prepare_robots_in_turn, (['11'], 'map-proto.yaml'))])
         self.assertEqual(post({})[0], 409)  # busy until the job ends
+
+    def test_a_prepared_pinky_without_a_map_pose_is_prepared_again(self):
+        state = app.FleetState()
+        state.password = 'test-only'
+        state.robots['10'].update(stage='prepared', ssh_reachable=True)  # switched off and on: no Nav2 any more
+        post, submitted = self.serve(state)
+        with patch.object(app, 'TELEMETRY', NS(snapshot=lambda: {})):
+            status, answer = post({})
+        self.assertEqual((status, answer['robots']), (202, ['10']))
 
     def test_nothing_to_prepare_is_refused(self):
         state = app.FleetState()

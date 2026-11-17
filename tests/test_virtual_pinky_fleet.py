@@ -68,10 +68,13 @@ class VirtualFleetTests(unittest.TestCase):
 
     def test_route_needs_the_pinkys_own_waypoints_like_the_real_dashboard(self) -> None:
         client = self.start()
-        with self.assertRaises(PinkyFleetError) as rejected:  # Pinky 10 has recorded only 5 and two midpoints
-            client.dispatch("10", ZONE_A)
+        line_course = ["1", "2", "3"]  # no 5 in it: the old /route, where a Pinky drives only its own waypoints
+        with self.assertRaises(PinkyFleetError) as rejected:  # Pinky 10 has not recorded them
+            client.dispatch("10", line_course)
         self.assertIn("저장되지 않은 웨이포인트", str(rejected.exception))
-        self.assertTrue(self.start(shared_waypoints=True).dispatch("10", ZONE_A)["accepted"])
+        self.assertTrue(self.start(shared_waypoints=True).dispatch("10", line_course)["accepted"])
+        # An order's route has 5 in it and runs as the Nav2 mission, where any Pinky's recording of a place counts.
+        self.assertTrue(client.dispatch("10", ZONE_A)["accepted"])
 
     def test_stop_cancels_the_route_and_a_second_route_waits_for_the_first(self) -> None:
         client = self.start()

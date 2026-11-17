@@ -507,3 +507,50 @@ class DockEntry:
 
     def status(self):
         return dict(key=self.key, state=self.state, progress_m=self.progress, target_m=self.target, message=self.message)
+
+
+class BackOff:
+    """Too close to something in front (the ultrasonic): do not just stand there. After hold_s of standing, reverse
+    straight until the ultrasonic reads clear_m or distance_m is covered, so Nav2 has room to turn onto the path
+    round the obstacle (which the fused costmap now holds). Only while the LiDAR shows the way back clear; at most
+    `tries` times in a row, then it waits (reset once the front has been clear for reset_s). 2026-11-17."""
+
+    def __init__(self, distance_m=.12, clear_m=.15, hold_s=1.0, speed_mps=.04, tries=3, timeout_s=6., reset_s=10.):
+        self.distance_m, self.clear_m, self.hold_s = distance_m, clear_m, hold_s
+        self.speed_mps, self.tries, self.timeout_s, self.reset_s = speed_mps, tries, timeout_s, reset_s
+        self.blocked_since = None
+        self.clear_since = None
+        self.origin = None
+        self.started = 0.
+        self.count = 0
+
+    @property
+    def active(self):
+        return self.origin is not None
+
+    def update(self, blocked, range_m, odom, now, rear_clear):
+        """A reversing Motion while backing off, else None (the caller holds or drives as before)."""
+        if self.active:
+            done = (odom is None or not rear_clear or now-self.started > self.timeout_s
+                    or distance(odom, self.origin) >= self.distance_m
+                    or (range_m is not None and range_m >= self.clear_m))
+            if done:
+                self.origin, self.blocked_since = None, None
+                self.count += 1
+                return None
+            return Motion(-self.speed_mps, 0., 'ultrasonic_back_off')
+        if not blocked:
+            self.blocked_since = None
+            if self.clear_since is None:
+                self.clear_since = now
+            if now-self.clear_since >= self.reset_s:
+                self.count = 0
+            return None
+        self.clear_since = None
+        if self.blocked_since is None:
+            self.blocked_since = now
+        if (now-self.blocked_since >= self.hold_s and self.count < self.tries and odom is not None and rear_clear
+                and self.distance_m > 0):
+            self.origin, self.started = odom, now
+            return Motion(-self.speed_mps, 0., 'ultrasonic_back_off')
+        return None

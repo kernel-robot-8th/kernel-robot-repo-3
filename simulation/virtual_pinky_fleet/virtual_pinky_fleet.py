@@ -299,21 +299,33 @@ class VirtualFleet:
             "traffic": {"owners": {}, "waiting": {}, "error": ""}, "parking": pinky.parking, "route": route,
         }
 
-    def start_route(self, pinky_id: str, labels: object) -> tuple[int, dict[str, Any]]:
+    def start_mission(self, pinky_id: str, dropoff: object, via: object) -> tuple[int, dict[str, Any]]:
+        """POST /mission {dropoff, via}: parking -> via -> 5 -> the drop-off -> parking, as the real dashboard's Nav2
+        mission (which the control station uses for orders). Waypoints another Pinky recorded count, as there."""
+        via = [] if via is None else via
+        if (not isinstance(dropoff, str) or not dropoff.strip() or dropoff.strip() == "5" or not isinstance(via, list)
+                or len(via) > 6 or any(not isinstance(v, str) or not v.strip() for v in via)):
+            return 400, {"error": "배달 목적지 웨이포인트 이름과 경유지 목록을 확인하세요."}
+        return self.start_route(pinky_id, [v.strip() for v in via] + ["5", dropoff.strip()], shared=True,
+                                execution="free_mission")
+
+    def start_route(self, pinky_id: str, labels: object, shared: bool | None = None,
+                    execution: str = "continuous_segments") -> tuple[int, dict[str, Any]]:
         if not isinstance(labels, list) or not 1 <= len(labels) <= 50 or any(not isinstance(v, str) for v in labels):
             return 400, {"error": "웨이포인트 이름 목록을 확인하세요."}
         with self.lock:
             pinky = self.pinkies[pinky_id]
             if pinky.route and pinky.route["status"] == "running":
                 return 409, {"error": f"Pinky {pinky_id}가 이미 경로를 주행 중입니다."}
-            selected = [self.waypoint(pinky_id, label, self.shared_waypoints) for label in labels]
+            selected = [self.waypoint(pinky_id, label, self.shared_waypoints if shared is None else shared)
+                        for label in labels]
             missing = [label for label, item in zip(labels, selected) if item is None]
             if missing:
                 return 400, {"error": "저장되지 않은 웨이포인트: " + ", ".join(missing)}
             parking = dict(pinky.parking, label="주차장")
             goals = [parking] + [dict(item) for item in selected] + [parking]
             names = ["주차장"] + list(labels) + ["주차장"]
-            pinky.start(goals, names, course_end=len(goals) - 2, execution="continuous_segments")
+            pinky.start(goals, names, course_end=len(goals) - 2, execution=execution)
         return 202, {"ok": True, "robot": pinky_id, "labels": names}
 
     def return_home(self, pinky_id: str, via: object) -> tuple[int, dict[str, Any]]:
@@ -406,6 +418,8 @@ class Handler(BaseHTTPRequestHandler):
         pinky_id, action = match.groups()
         if action == "route":
             self._json(*fleet.start_route(pinky_id, data.get("labels")))
+        elif action == "mission":
+            self._json(*fleet.start_mission(pinky_id, data.get("dropoff"), data.get("via")))
         elif action == "route/cancel":
             with fleet.lock:
                 fleet.pinkies[pinky_id].stop("작업자 정지 (가상)")

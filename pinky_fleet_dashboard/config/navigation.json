@@ -37,5 +37,6 @@
     "min": 0.15,
     "max": 0.35
   },
-  "goal_xy_tolerance_m": 0.03
+  "goal_xy_tolerance_m": 0.03,
+  "ultrasonic_back_off_m": 0.12
 }

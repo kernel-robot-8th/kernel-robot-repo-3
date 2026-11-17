@@ -35,6 +35,8 @@ class MissionRouteTests(unittest.TestCase):
 
 
 class MissionEndpointTests(unittest.TestCase):
+    NAVIGATION = {'ir_steering': False}  # no passage points, no queue spot, the reverse exit: the plain mission
+
     def post(self, state, body):
         server = ThreadingHTTPServer(('127.0.0.1', 0), app.Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -42,7 +44,7 @@ class MissionEndpointTests(unittest.TestCase):
         self.addCleanup(server.shutdown)
         submitted = []
         with patch.multiple(app, STATE=state, WORKERS=NS(submit=lambda fn, *a: submitted.append((fn, a))),
-                            _route_start_problem=lambda rid: None,
+                            _route_start_problem=lambda rid: None, NAVIGATION=dict(self.NAVIGATION),
                             TELEMETRY=NS(snapshot=lambda: {'12': {'tf_pose': {'value': {'x_m': 1.0, 'y_m': 0.45, 'yaw_rad': 0.1}}}}),
                             TRAFFIC=NS(zones={'parking': {'bounds': [0.2, 1.2, 0.2, 0.6]}})):
             request = urllib.request.Request(f'http://127.0.0.1:{server.server_port}/api/robots/12/mission',
@@ -230,3 +232,48 @@ class StopLeavesReadyTests(unittest.TestCase):
         monitor.data = {'10': {}}
         monitor.forget('10', 'trail')
         self.assertEqual(list(monitor.trails['10']), [])
+
+
+class BackOffTests(unittest.TestCase):
+    def test_backs_off_after_standing_then_stops_when_the_front_is_clear(self):
+        from scripts.mission_behaviors import BackOff
+        b = BackOff(distance_m=.12, clear_m=.15, hold_s=1.0)
+        self.assertIsNone(b.update(True, .04, (0., 0., 0.), 0.0, True))          # just stopped: wait first
+        self.assertIsNone(b.update(True, .04, (0., 0., 0.), 0.5, True))
+        m = b.update(True, .04, (0., 0., 0.), 1.1, True)
+        self.assertLess(m.linear, 0)                                               # reversing straight
+        self.assertEqual((m.angular, m.state), (0., 'ultrasonic_back_off'))
+        self.assertLess(b.update(False, .10, (-.06, 0., 0.), 2.6, True).linear, 0)  # goes on past the 8 cm line
+        self.assertIsNone(b.update(False, .16, (-.10, 0., 0.), 3.5, True))          # 15 cm in front: enough
+        self.assertFalse(b.active)
+
+    def test_never_reverses_into_something_and_gives_up_after_three_tries(self):
+        from scripts.mission_behaviors import BackOff
+        b = BackOff(hold_s=0.0)
+        self.assertIsNone(b.update(True, .04, (0., 0., 0.), 0.0, False))           # LiDAR: not clear behind
+        now = 1.0
+        for _ in range(3):
+            self.assertIsNotNone(b.update(True, .04, (0., 0., 0.), now, True))
+            self.assertIsNone(b.update(True, .04, (-.13, 0., 0.), now + 1, True))  # the 12 cm is done
+            now += 2
+        self.assertIsNone(b.update(True, .04, (0., 0., 0.), now, True))            # the fourth time it waits
+
+
+class ShippedCourseTests(MissionEndpointTests):
+    test_starts_from_where_it_stands_using_a_drop_off_recorded_by_another_pinky = None  # the plain mission's test
+
+    NAVIGATION = {'ir_steering': False, 'dock_exit_reverse': False, 'dock_queue': {'waypoint': '4'},
+                  'wall_passages': [{'x_m': 1.57, 'wall_y_m': 1.035, 'approach_m': 0.24}]}
+
+    def test_through_the_passage_to_the_queue_spot_then_in_and_out_forward(self):
+        state = self.state()
+        state.waypoints['11'] = [wp('4', 1.55, 1.64)]
+        status, answer, submitted = self.post(state, {'dropoff': '수령 A'})
+        self.assertEqual(status, 202, answer)
+        goals = submitted[0][1][1]
+        self.assertEqual([g['label'] for g in goals],
+                         ['주차장', '통로 아래', '통로 위', '4', '5 정면', '5', '수령 A', '통로 위', '통로 아래', '주차장'])
+        passing = {g['label']: g.get('pass_radius_m') for g in goals}
+        self.assertEqual((passing['통로 아래'], passing['통로 위'], passing['4'], passing['5 정면'], passing['5']),
+                         (0.10, 0.10, 0.06, None, None))  # only the passage points and the queue spot are passed
+        self.assertFalse(any(g.get('dock_exit') for g in goals))  # out of station 5 forward, no backing out

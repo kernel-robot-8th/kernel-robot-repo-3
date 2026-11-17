@@ -20,13 +20,13 @@ from rclpy.executors import ExternalShutdownException
 from tf2_ros import Buffer, TransformListener, TransformException
 if __package__:
     from .line_following import LineAssist, default_profile, swept_clear, TemplateEstimator, validate_profile, normalize, surface_observation
-    from .mission_behaviors import Crossing, Docking, DockEntry, DockExit, UltrasonicDetour
+    from .mission_behaviors import BackOff, Crossing, Docking, DockEntry, DockExit, UltrasonicDetour
     from .motion_gate import geometry, swept_footprint
     from .traffic import required_zones, lease_allows, LeaseReceiver
     from .control_journal import ControlJournal
 else:
     from line_following import LineAssist, default_profile, swept_clear, TemplateEstimator, validate_profile, normalize, surface_observation
-    from mission_behaviors import Crossing, Docking, DockEntry, DockExit, UltrasonicDetour
+    from mission_behaviors import BackOff, Crossing, Docking, DockEntry, DockExit, UltrasonicDetour
     from motion_gate import geometry, swept_footprint
     from traffic import required_zones, lease_allows, LeaseReceiver
     from control_journal import ControlJournal
@@ -90,6 +90,9 @@ class UltrasonicSafety(Node):
         self.docking = Docking()
         self.dock_exit = DockExit()
         self.dock_entry = DockEntry()
+        # navigation.json ultrasonic_back_off_m: how far to reverse when the ultrasonic holds the Pinky (0 = never).
+        _back = _nav.get('ultrasonic_back_off_m', 0.12)
+        self.back_off = BackOff(distance_m=min(0.25, max(0.0, float(_back))) if isinstance(_back, (int, float)) else 0.12)
         self.mission_token = None
         self.control_token = None
         self.dock_saved_signature = None
@@ -596,6 +599,16 @@ class UltrasonicSafety(Node):
             # motion is held back; Nav2's turns and reversing still pass so it can take its new path out.
             command = self.forward_nav_command()
             linear = command.linear.x
+            # Standing too close: back off a little (LiDAR must show the way back clear), then Nav2 goes round.
+            scan_fresh = now-self.last_scan_at <= .6
+            motion = self.back_off.update(
+                blocked=self.sensor_valid and not self.sensor_clear, range_m=self.range_m if self.sensor_valid else None,
+                odom=self.fresh_pose('odom'), now=now,
+                rear_clear=scan_fresh and swept_footprint(self.scan_points, -self.back_off.speed_mps, 0., self.geometry))
+            if motion is not None:
+                self.line_state = motion.state
+                self.send(motion.linear, 0.)
+                return
             if not self.sensor_clear and linear > 0.0:
                 linear = 0.0
                 self.line_state = 'ultrasonic_hold_forward'
