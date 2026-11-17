@@ -11,11 +11,8 @@ const policyRunDetail = document.querySelector('#policyRunDetail');
 const policyRunStart = document.querySelector('#policyRunStart');
 const policyRunStop = document.querySelector('#policyRunStop');
 const policyProfile = document.querySelector('#policyProfile');
-const targetObservationForm = document.querySelector('#targetObservationForm');
 const detectorClassOptions = document.querySelector('#detectorClassOptions');
 const taskForm = document.querySelector('#taskForm');
-const commandParseForm = document.querySelector('#commandParseForm');
-const commandParseMessage = document.querySelector('#commandParseMessage');
 const taskList = document.querySelector('#taskList');
 const taskDetail = document.querySelector('#taskDetail');
 const taskCount = document.querySelector('#taskCount');
@@ -45,30 +42,124 @@ const views = [...document.querySelectorAll('.view[id^="view-"]')];
 let selectedTaskId = null;
 let parkingCameraId = null;
 let controlMode = 'unknown';
-let targetObservationClass = '';
-let targetObservationColor = '';
-let targetObservationShelfLevel = '';
-let targetObservationRequest = 0;
 
-const viewNames = { flow: '주문 진행', overview: '현황', manual: '수동 조작', tasks: '작업 이력', api: 'API' };
+const viewNames = {
+  dashboard: '종합', flow: '주문 진행', pinky: '핑키', inventory: '재고', overview: '장비·카메라', manual: '수동 조작', tasks: '작업 이력',
+  ros: 'ROS 모니터', api: 'API',
+};
 const controlModeLabels = {
   mock: '모의',
   ros2: 'ROS 2 상태 관측',
 };
 
-navItems.forEach((item) => {
-  item.addEventListener('click', () => {
-    const selectedView = item.dataset.view;
-    views.forEach((view) => { view.hidden = view.id !== `view-${selectedView}`; });
-    navItems.forEach((navItem) => {
-      const active = navItem === item;
-      navItem.classList.toggle('active', active);
-      if (active) navItem.setAttribute('aria-current', 'page');
-      else navItem.removeAttribute('aria-current');
-    });
-    viewTitle.textContent = viewNames[selectedView] || '현황';
+let activeView = 'dashboard';
+
+// Mock traces (the mock world panel, "모의" tags, mode words) show only with ?dev=1. Every script asks this one
+// function, so the rule stays in one place.
+function isDevView() {
+  return new URLSearchParams(window.location.search).get('dev') === '1';
+}
+
+const devMode = isDevView();
+document.body.classList.toggle('dev', devMode);
+
+// The switch between the operator and the developer screen keeps the current view in the address.
+const screenModeSwitch = document.querySelector('#screenModeSwitch');
+function updateScreenModeSwitch() {
+  const params = new URLSearchParams(window.location.search);
+  if (devMode) params.delete('dev'); else params.set('dev', '1');
+  const query = params.toString();
+  screenModeSwitch.href = `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`;
+  screenModeSwitch.textContent = devMode ? '운영 화면으로' : '개발자 화면';
+}
+updateScreenModeSwitch();
+window.addEventListener('hashchange', updateScreenModeSwitch);
+document.addEventListener('viewchange', updateScreenModeSwitch);
+
+// A mock word in dev mode, nothing otherwise.
+function devWord(word) {
+  return devMode ? word : '';
+}
+
+// The view lives in the address (#pinky, #inventory…), so a reload or a shared link opens the same view.
+// Other scripts follow the switch through the `viewchange` event instead of listening to the menu.
+// The operator screen (default) leaves out the equipment, manual control and API views; ?dev=1 shows everything.
+const DEV_ONLY_VIEWS = new Set(['overview', 'manual', 'ros', 'api']);
+
+function showView(requested) {
+  const selected = viewNames[requested] && (devMode || !DEV_ONLY_VIEWS.has(requested)) ? requested : 'dashboard';
+  activeView = selected;
+  document.body.dataset.view = selected;
+  closeAllOverlays();
+  views.forEach((view) => { view.hidden = view.id !== `view-${selected}`; });
+  navItems.forEach((item) => {
+    const active = item.dataset.view === selected;
+    item.classList.toggle('active', active);
+    if (active) item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
+    if (active) keepInNavView(item);
   });
+  viewTitle.textContent = viewNames[selected];
+  if (window.location.hash !== `#${selected}`) window.history.replaceState(null, '', `#${selected}`);
+  document.dispatchEvent(new CustomEvent('viewchange', { detail: { view: selected } }));
+}
+
+// At phone width the menu is one scrolling row; keep the current item in sight without moving the page.
+function keepInNavView(item) {
+  const nav = item.parentElement;
+  if (nav.scrollWidth <= nav.clientWidth) return;
+  nav.scrollLeft = item.offsetLeft - (nav.clientWidth - item.offsetWidth) / 2;
+}
+
+navItems.forEach((item) => item.addEventListener('click', () => showView(item.dataset.view)));
+
+// ---- panels over the page (Pinky detail, enlarged map, password prompt) ----
+// They open below the sticky header, so 핑키 전체 정지 stays visible and usable while one is open. The dim area
+// or Esc closes the top one; focus goes back to what opened it.
+const overlayScrim = document.querySelector('#overlayScrim');
+const pageHeader = document.querySelector('.header');
+const overlayStack = [];  // [{ panel, opener }], last on top
+
+function placeOverlays() {
+  const top = Math.max(0, Math.round(pageHeader.getBoundingClientRect().bottom));
+  document.documentElement.style.setProperty('--overlay-top', `${top}px`);
+}
+
+function openOverlay(panel, opener = document.activeElement) {
+  if (overlayStack.some((entry) => entry.panel === panel)) return;
+  placeOverlays();
+  overlayStack.push({ panel, opener });
+  panel.style.zIndex = String(30 + overlayStack.length);
+  panel.hidden = false;
+  overlayScrim.hidden = false;
+  (panel.querySelector('[data-overlay-focus]') || panel).focus();
+}
+
+function closeOverlay(panel) {
+  const index = overlayStack.findIndex((entry) => entry.panel === panel);
+  if (index < 0) return;
+  const [{ opener }] = overlayStack.splice(index, 1);
+  panel.hidden = true;
+  overlayScrim.hidden = !overlayStack.length;
+  panel.dispatchEvent(new Event('overlayclose'));
+  if (opener?.isConnected) opener.focus();
+}
+
+function closeAllOverlays() {
+  [...overlayStack].reverse().forEach(({ panel }) => closeOverlay(panel));
+}
+
+overlayScrim.addEventListener('click', () => { if (overlayStack.length) closeOverlay(overlayStack.at(-1).panel); });
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && overlayStack.length) closeOverlay(overlayStack.at(-1).panel);
 });
+document.addEventListener('click', (event) => {
+  const close = event.target.closest('[data-overlay-close]');
+  if (close) closeOverlay(close.closest('.overlay-panel'));
+});
+window.addEventListener('scroll', () => { if (overlayStack.length) placeOverlays(); }, { passive: true });
+window.addEventListener('resize', () => { if (overlayStack.length) placeOverlays(); });
+window.addEventListener('hashchange', () => showView(window.location.hash.slice(1)));
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -79,6 +170,35 @@ function escapeHtml(value) {
 function apiErrorMessage(result, fallback) {
   const message = result.message || result.error || fallback;
   return result.error_code ? `${result.error_code} · ${message}` : message;
+}
+
+const clockFormat = new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+
+// One big number of a summary card. tone: attention (a person must act) | danger | active | zero.
+function setStat(stat, value, { total = null, tone = '' } = {}) {
+  const shown = value == null ? '–' : escapeHtml(value);
+  stat.querySelector('dd').innerHTML = total == null ? shown : `${shown}<small>/${escapeHtml(total)}</small>`;
+  stat.className = `stat${tone ? ` ${tone}` : ''}`;
+}
+
+const overviewSummaryTitle = document.querySelector('#overviewSummaryTitle');
+const overviewStatRobots = document.querySelector('#overviewStatRobots');
+const overviewStatCameras = document.querySelector('#overviewStatCameras');
+
+function renderOverviewSummary(health, robots, cameras) {
+  if (!health) {
+    overviewSummaryTitle.textContent = '관제 서버에 연결하지 못했어요';
+    setStat(overviewStatRobots, null);
+    setStat(overviewStatCameras, null);
+    return;
+  }
+  overviewSummaryTitle.textContent = health.mode !== 'mock' || devMode
+    ? `API 정상, ${controlModeLabels[health.mode] || health.mode} 모드로 실행 중이에요`
+    : '관제 서버가 정상이에요';
+  const reachable = robots.filter((robot) => robot.state === 'available').length;
+  const streaming = cameras.filter((camera) => camera.stream_state === 'STREAMING').length;
+  setStat(overviewStatRobots, reachable, { total: robots.length, tone: reachable < robots.length ? 'attention' : '' });
+  setStat(overviewStatCameras, streaming, { total: cameras.length, tone: streaming < cameras.length ? 'attention' : '' });
 }
 
 function renderRobots(robots) {
@@ -94,7 +214,9 @@ function renderRobots(robots) {
 }
 
 function renderCameras(cameras) {
-  const names = { HEAD: 'Head Camera', JOINT: 'Joint Camera', FRONT: 'Front Camera', SHELF: '선반 카메라 (정면)' };
+  const names = { HEAD: '천장 카메라', JOINT: '조인트 카메라', FRONT: '정면 카메라', SHELF: '선반 카메라 (정면)' };
+  // The server names each camera by its job ("왼쪽 팔 탑 캠 (ACT 정책)"); the table above is for older servers.
+  const cameraName = (camera) => camera.role || names[camera.position] || camera.id;
   const connectionLabel = {
     CONNECTED: '연결됨', DISCONNECTED: '연결 끊김', UNKNOWN: '확인 필요',
   };
@@ -123,7 +245,7 @@ function renderCameras(cameras) {
     cameraGrid.dataset.cameraIds = cameraIds;
     cameraGrid.innerHTML = cameras.map((camera) => `
       <article class="camera-card" data-camera-id="${escapeHtml(camera.id)}">
-        <header class="camera-head"><h3>${escapeHtml(names[camera.position] || camera.id)}</h3><span class="camera-position">${escapeHtml(camera.position)}</span></header>
+        <header class="camera-head"><h3>${escapeHtml(cameraName(camera))}</h3><span class="camera-position">${escapeHtml(camera.position)}</span></header>
         <div class="camera-preview" data-field="preview"><span>영상 스트림 미연결</span></div>
         <div class="camera-details">
           <div class="camera-detail"><span>연결</span><strong data-field="connection"></strong></div>
@@ -135,7 +257,6 @@ function renderCameras(cameras) {
           <div class="camera-detail" data-field="detections-row" hidden><span>YOLO 검출</span><strong data-field="detections"></strong></div>
           <div class="camera-detail" data-field="slot-zones-row" hidden><span>선반 칸 · 표시 전용</span><strong data-field="slot-zones"></strong></div>
           <div class="camera-detail" data-field="detector-provenance-row" hidden><span>YOLO 설정 / 모델</span><strong data-field="detector-provenance"></strong></div>
-          <div class="camera-detail" data-field="target-observation" hidden><span>대상 판정 · 관측 전용</span><strong data-field="target-status"></strong></div>
         </div>
         <p class="note" data-field="error"></p>
       </article>`).join('');
@@ -190,7 +311,7 @@ function renderCameras(cameras) {
     if (camera.stream_url && !preview.querySelector('img')) {
       const image = document.createElement('img');
       image.src = camera.stream_url;
-      image.alt = `${names[camera.position] || camera.id} 영상`;
+      image.alt = `${cameraName(camera)} 영상`;
       image.addEventListener('error', () => {
         if (!image.isConnected) return;
         preview.replaceChildren(document.createTextNode('영상 스트림 연결 대기 중'));
@@ -201,12 +322,6 @@ function renderCameras(cameras) {
     }
     renderSlotZones(card, preview, camera);
   });
-  if (targetObservationClass) {
-    const requestId = ++targetObservationRequest;
-    cameras
-      .filter((camera) => ['HEAD', 'JOINT', 'FRONT'].includes(camera.position))
-      .forEach((camera) => refreshTargetObservation(camera, requestId));
-  }
 }
 
 const slotZoneStatusLabels = {
@@ -274,135 +389,6 @@ function renderSlotZones(card, preview, camera) {
   card.querySelector('[data-field="slot-zones"]').textContent = `보정 적용 · 재투영 ${zones.reprojection_rms_px} px${summary.length ? ` · ${summary.join(', ')}` : ' · 검출 없음'}`;
 }
 
-async function refreshTargetObservation(camera, requestId) {
-  const row = cameraGrid.querySelector(`[data-camera-id="${camera.id}"] [data-field="target-observation"]`);
-  const output = row?.querySelector('[data-field="target-status"]');
-  if (!row || !output) return;
-  row.hidden = false;
-  output.textContent = `${targetObservationClass} 관측 중…`;
-  try {
-    const query = new URLSearchParams({ class_name: targetObservationClass });
-    if (targetObservationColor) query.set('color', targetObservationColor);
-    if (targetObservationShelfLevel) query.set('shelf_level', targetObservationShelfLevel);
-    const response = await fetch(`/api/cameras/${encodeURIComponent(camera.id)}/target-observation?${query}`, { cache: 'no-store' });
-    const result = await response.json();
-    if (requestId !== targetObservationRequest) return;
-    if (!response.ok) throw new Error(apiErrorMessage(result, '관측 요청 실패'));
-    const observation = result.observation;
-    const labels = {
-      DETECTOR_NOT_CONFIGURED: '검출 모델 미설정', DETECTOR_LOADING: '검출 모델 준비 중',
-      DETECTOR_ERROR: '검출 모델 오류', DETECTOR_NOT_READY: '검출기 사용 불가',
-      REQUEST_PROMPT_INFERENCE_ERROR: '요청 대상 prompt 추론 오류',
-      CLASS_UNKNOWN: '모델에 없는 클래스', PIXEL_TRANSFORM_UNKNOWN: '픽셀 변환 출처 미확인',
-      CAMERA_DISCONNECTED: '카메라 연결 끊김', CAMERA_STREAM_UNAVAILABLE: '카메라 스트림 오류',
-      FRAME_PROVENANCE_UNKNOWN: '프레임 fingerprint 미확인',
-      FRAME_STALE: '프레임 지연 · 결과 폐기', FRAME_UNAVAILABLE: '최신 프레임 없음',
-      TARGET_NOT_FOUND: '대상 후보 없음', SINGLE_CANDIDATE: '단일 후보', AMBIGUOUS: '복수 후보 · 모호',
-    };
-    const candidates = observation.candidates.map(formatDetectionCandidate).join(', ');
-    const colorEvaluation = formatColorEvaluation(observation.color_evaluation);
-    const shelfEvaluation = formatShelfLevelEvaluation(observation.shelf_level_evaluation);
-    output.textContent = `${labels[observation.status] || observation.status}${observation.candidate_count == null ? '' : ` · ${observation.candidate_count}개`}${colorEvaluation ? ` · ${colorEvaluation}` : ''}${shelfEvaluation ? ` · ${shelfEvaluation}` : ''}${candidates ? ` · ${candidates}` : ''}`;
-  } catch (error) {
-    if (requestId === targetObservationRequest) output.textContent = `관측 API 오류 · ${error.message}`;
-  }
-}
-
-function formatDetectionCandidate(item) {
-  const colorLabels = { red: '빨강', blue: '파랑', green: '초록', yellow: '노랑', black: '검정', white: '흰색' };
-  const hint = item.color_hint;
-  const hintStatusLabels = {
-    ESTIMATED: '색상 추정',
-    LOW_COLOR_COVERAGE: '색상 픽셀 비율 낮음',
-    MIXED_COLOR: '색상 혼합',
-    UNAVAILABLE: '색상 힌트 사용 불가',
-  };
-  const hintVersion = typeof hint?.algorithm_version === 'string' && /^[a-z0-9-]{1,80}$/.test(hint.algorithm_version)
-    ? ` · ${hint.algorithm_version}`
-    : '';
-  const hintFraction = Number.isFinite(hint?.pixel_fraction)
-    ? ` · 픽셀 ${Math.round(hint.pixel_fraction * 100)}%`
-    : '';
-  const hintValue = hint?.status === 'ESTIMATED' && colorLabels[hint.color]
-    ? ` ${colorLabels[hint.color]}`
-    : '';
-  const colorHint = hint && hintStatusLabels[hint.status]
-    ? ` · ${hintStatusLabels[hint.status]}${hintValue}${hintFraction}${hintVersion}`
-    : '';
-  return `(${item.center_px.join(', ')}) ${Math.round(item.confidence * 100)}%${colorHint}`;
-}
-
-function formatColorEvaluation(evaluation) {
-  if (!evaluation) return '';
-  const indices = Array.isArray(evaluation.candidate_indices)
-    ? evaluation.candidate_indices.map((index) => `#${index + 1}`).join(', ')
-    : '';
-  const labels = {
-    UNSUPPORTED_REQUEST_COLOR: '지원하지 않는 색상 조건',
-    NO_CANDIDATES: '색상 비교 후보 없음',
-    NO_ESTIMATED_COLOR_HINTS: '색상 힌트 판정 불가',
-    NO_COLOR_HINT_MATCH: '색상 힌트 일치 0개',
-    SINGLE_COLOR_HINT_MATCH: `색상 힌트 일치 ${indices || '1개'}`,
-    MULTIPLE_COLOR_HINT_MATCHES: `색상 힌트 일치 ${indices || `${evaluation.candidate_indices?.length || 0}개`}`,
-  };
-  const algorithm = typeof evaluation.algorithm_version === 'string' && /^[a-z0-9-]{1,80}$/.test(evaluation.algorithm_version)
-    ? ` · 기준 ${evaluation.algorithm_version}`
-    : '';
-  return `${labels[evaluation.status] || evaluation.status}${algorithm} · 검토 필요 · 자동 선택 아님`;
-}
-
-function formatShelfLevelEvaluation(evaluation) {
-  if (!evaluation) return '';
-  const indices = Array.isArray(evaluation.candidate_indices)
-    ? evaluation.candidate_indices.map((index) => `#${index + 1}`).join(', ')
-    : '';
-  const assignmentLabels = {
-    AMBIGUOUS_REGION_ASSIGNMENT: '층 영역 모호',
-    OUTSIDE_REGIONS: '미분류',
-    INVALID_CENTER_PX: '중심 좌표 오류',
-    INVALID_CANDIDATE: '후보 오류',
-  };
-  const assignments = Array.isArray(evaluation.candidate_assignments)
-    ? evaluation.candidate_assignments.map((assignment) => {
-      const candidate = `#${assignment.candidate_index + 1}`;
-      if (Number.isInteger(assignment.shelf_level)) return `${candidate}→${assignment.shelf_level}층`;
-      if (assignment.status === 'AMBIGUOUS_REGION_ASSIGNMENT' && assignment.shelf_levels?.length) {
-        return `${candidate}→모호(${assignment.shelf_levels.join('/')})`;
-      }
-      return `${candidate}→${assignmentLabels[assignment.status] || assignment.status}`;
-    }).join(', ')
-    : '';
-  const labels = {
-    CALIBRATION_NOT_CONFIGURED: '층 영역 초안 미설정',
-    CALIBRATION_UNREADABLE: '층 영역 초안 읽기 실패',
-    CALIBRATION_INVALID: '층 영역 초안 무효',
-    CALIBRATION_CAMERA_MISMATCH: '층 영역 카메라 불일치',
-    CALIBRATION_PIXEL_TRANSFORM_MISMATCH: '픽셀 변환 불일치',
-    CALIBRATION_RESOLUTION_MISMATCH: '영상 해상도 불일치',
-    REQUESTED_LEVEL_NOT_CONFIGURED: '요청 층 영역 미설정',
-    NO_CANDIDATES: '층 비교 후보 없음',
-    NO_REGION_MATCH: '등록 영역 안 후보 없음',
-    NO_SHELF_LEVEL_MATCH: '요청 층 힌트 일치 없음',
-    AMBIGUOUS_REGION_ASSIGNMENT: '층 영역 겹침/경계로 모호',
-    INVALID_CANDIDATE_POSITION: '후보 중심 좌표 오류',
-    SINGLE_SHELF_LEVEL_MATCH: `층 힌트 일치 ${indices || '1개'}`,
-    MULTIPLE_SHELF_LEVEL_MATCHES: `층 힌트 일치 ${indices || '복수'}`,
-  };
-  const artifactHash = /^[0-9a-f]{64}$/.test(evaluation.calibration_artifact_sha256 || '')
-    ? ` · ROI SHA-256 ${evaluation.calibration_artifact_sha256}`
-    : '';
-  return `${labels[evaluation.status] || evaluation.status}${assignments ? ` (${assignments})` : ''}${artifactHash} · 검토 필요 · 자동 선택 아님`;
-}
-
-targetObservationForm.addEventListener('submit', (event) => {
-  event.preventDefault();
-  const formData = new FormData(targetObservationForm);
-  targetObservationClass = String(formData.get('class_name') || '').trim();
-  targetObservationColor = String(formData.get('color') || '').trim();
-  targetObservationShelfLevel = String(formData.get('shelf_level') || '').trim();
-  refresh();
-});
-
 function renderArm(arm) {
   const labels = {
     DISABLED: '비활성화', STOPPED: '중지', STARTING: '시작 중',
@@ -412,6 +398,18 @@ function renderArm(arm) {
   armDetail.textContent = arm.detail;
   armStart.disabled = !arm.enabled || arm.process_alive;
   armStop.disabled = !arm.process_alive;
+  showDirectBlock(manualTeleop, arm.enabled || arm.process_alive);
+}
+
+// Teleoperation and the one-off policy run start LeRobot on this PC. They are off unless the server was started
+// with them (run-control-station.sh --arm, CONTROL_STATION_POLICY_ENABLED=1); a switched-off block stays hidden.
+const manualDirect = document.querySelector('#manualDirect');
+const manualTeleop = document.querySelector('#manualTeleop');
+const manualPolicyRun = document.querySelector('#manualPolicyRun');
+
+function showDirectBlock(block, enabled) {
+  block.hidden = !(enabled || devMode);
+  manualDirect.hidden = manualTeleop.hidden && manualPolicyRun.hidden;
 }
 
 function renderPolicyRun(policyRun) {
@@ -441,6 +439,7 @@ function renderPolicyRun(policyRun) {
     : `${policyRun.detail} · CONTROL_STATION_POLICY_MAX_ACTION_STEPS 설정 필요`;
   policyRunStart.disabled = !policyRun.enabled || !policyRun.max_action_steps || policyRun.process_alive;
   policyRunStop.disabled = !policyRun.process_alive;
+  showDirectBlock(manualPolicyRun, policyRun.enabled || policyRun.process_alive);
 }
 
 async function sendArmAction(action) {
@@ -486,86 +485,217 @@ const armCommandForm = document.querySelector('#armCommandForm');
 const armCommandMessage = document.querySelector('#armCommandMessage');
 const armCommandRows = document.querySelector('#armCommandRows');
 const armWorkerState = document.querySelector('#armWorkerState');
+const armPicker = document.querySelector('#armPicker');
+const manualNow = document.querySelector('#manualNow');
+const manualNowArm = document.querySelector('#manualNowArm');
+const armCommandCount = document.querySelector('#armCommandCount');
 const armCommandStateLabels = {
   QUEUED: '대기 (워커 미수신)', DISPATCHED: '워커 수신 · 수락 대기', ACCEPTED: '수락',
   RUNNING: '실행 중', SUCCEEDED: '성공', FAILED: '실패', REJECTED: '워커 거부',
   CANCELED: '취소됨', EXPIRED: '만료', UNKNOWN: '결과 불명 · 현장 확인 필요',
 };
+// Short words for the big state chip of the latest command, and its colour.
+const armCommandStateShort = {
+  QUEUED: ['워커 기다리는 중', 'attention'], DISPATCHED: ['수락 기다리는 중', 'attention'], ACCEPTED: ['수락됨', 'active'],
+  RUNNING: ['움직이는 중', 'active'], SUCCEEDED: ['끝남', 'good'], FAILED: ['실패', 'danger'], REJECTED: ['워커 거부', 'danger'],
+  CANCELED: ['취소됨', ''], EXPIRED: ['만료', ''], UNKNOWN: ['결과 불명', 'attention'],
+};
+const WORKER_LIVE_S = 30;  // a worker that polled within this is treated as attached
+
+const manual = {
+  armId: 'arm-01',   // the arm the buttons send to
+  workers: [],       // from GET /api/arm/commands
+  commands: [],
+  policies: [],      // trained policies, each with the arm it was recorded on (arm_id null = any arm)
+  busy: false,       // a pick or home request is being sent
+};
 
 function formatClock(iso) {
-  return iso ? new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(iso)) : '-';
+  return iso ? clockFormat.format(new Date(iso)) : '-';
 }
 
-function renderArmWorkers(workers) {
-  const worker = workers.find((item) => item.robot_id === 'arm-01');
+// Arms come from config/arms.json through the flow view; before it answers, the single arm-01 stands in.
+function manualArms() {
+  const arms = flowSummary.flow?.arms;
+  return arms && arms.length ? arms : [{ arm_id: 'arm-01', label: '팔 1' }];
+}
+
+function workerFor(armId) {
+  return manual.workers.find((item) => item.robot_id === armId);
+}
+
+function workerLive(worker) {
+  if (!worker) return false;
+  if (worker.waiting_polls > 0) return true;
+  return (Date.now() - new Date(worker.last_poll_at).getTime()) / 1000 < WORKER_LIVE_S;
+}
+
+// An arm can be chosen once its worker is attached. With no worker anywhere, arm-01 stays choosable so a command
+// can wait in the queue for the worker that is about to start.
+function armSelectable(armId) {
+  const anyLive = manual.workers.some(workerLive);
+  return workerLive(workerFor(armId)) || (!anyLive && armId === 'arm-01');
+}
+
+function renderArmPicker() {
+  const arms = manualArms();
+  if (!armSelectable(manual.armId)) {
+    const first = arms.find((arm) => armSelectable(arm.arm_id));
+    if (first && first.arm_id !== manual.armId) {
+      manual.armId = first.arm_id;
+      renderPolicyTiles();
+    }
+  }
+  const html = arms.map((arm) => {
+    const selectable = armSelectable(arm.arm_id);
+    const chosen = arm.arm_id === manual.armId;
+    const live = workerLive(workerFor(arm.arm_id));
+    return `<button type="button" role="radio" class="arm-choice${chosen ? ' chosen' : ''}" data-arm-id="${escapeHtml(arm.arm_id)}"
+      aria-checked="${chosen}"${selectable ? '' : ' disabled'}>
+      <span>${escapeHtml(arm.label)}</span><small>${live ? '워커 연결됨' : selectable ? '워커 기다리는 중' : '연결 전'}</small></button>`;
+  }).join('');
+  if (armPicker.dataset.html !== html) {
+    armPicker.dataset.html = html;
+    armPicker.innerHTML = html;
+  }
+}
+
+armPicker.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-arm-id]');
+  if (!button || button.disabled || button.dataset.armId === manual.armId) return;
+  manual.armId = button.dataset.armId;
+  armCommandMessage.textContent = '';
+  renderArmPicker();
+  renderPolicyTiles();
+  renderArmWorkers();
+  renderManualNow();
+});
+
+function armLabel(armId) {
+  return manualArms().find((arm) => arm.arm_id === armId)?.label || armId;
+}
+
+function renderArmWorkers() {
+  const worker = workerFor(manual.armId);
+  armWorkerState.className = `worker-state${workerLive(worker) ? ' live' : ''}`;
   if (!worker) {
-    armWorkerState.textContent = '워커 접속 기록 없음';
+    armWorkerState.textContent = '워커 연결 안 됨';
   } else if (worker.waiting_polls > 0) {
     armWorkerState.textContent = `워커 대기 중 · ${worker.worker_id}`;
   } else {
     const seconds = Math.round((Date.now() - new Date(worker.last_poll_at).getTime()) / 1000);
-    armWorkerState.textContent = `워커 마지막 접속 ${seconds}초 전 · ${worker.worker_id}`;
+    armWorkerState.textContent = `워커 ${seconds}초 전 접속 · ${worker.worker_id}`;
+  }
+}
+
+function commandWhat(command) {
+  const target = command.target;
+  return { MOVE_TO_SLOT: '칸 앞으로 이동', RETURN_HOME: '원상복귀' }[command.operation]
+    || (target.policy ? `${escapeHtml(target.policy.label)} 집기` : `${escapeHtml(target.object_class)} → ${escapeHtml(command.place.slot_id)}`);
+}
+
+function commandWhere(command) {
+  const target = command.target;
+  if (target.pick_slot_id) {
+    const camera = command.source?.kind === 'CAMERA'
+      ? ` · 정면 캠 ${escapeHtml(command.source.class_name)} ${Math.round(command.source.confidence * 100)}%`
+      : '';
+    return `칸 ${escapeHtml(target.slot_label || target.pick_slot_id)}${camera}`;
+  }
+  return target.policy ? '정면 캠 확인 없음' : 'home 자세';
+}
+
+function commandAction(command) {
+  const inFlight = ['DISPATCHED', 'ACCEPTED', 'RUNNING'].includes(command.state);
+  const id = escapeHtml(command.command_id);
+  if (command.state === 'QUEUED' || (inFlight && !command.cancel_requested)) {
+    return `<button type="button" class="secondary" data-arm-cancel="${id}">취소</button>`;
+  }
+  if (inFlight) return '<small>취소 요청됨</small>';
+  if (command.state === 'UNKNOWN' && !command.operator_cleared_at) {
+    return `<button type="button" class="secondary" data-arm-clear="${id}">현장 확인 완료</button>`;
+  }
+  return '';
+}
+
+// The most recent command for the chosen arm, with what to do about it, in one place.
+function renderManualNow() {
+  manualNowArm.textContent = armLabel(manual.armId);
+  const command = manual.commands.find((item) => item.robot_id === manual.armId);
+  if (!command) {
+    manualNow.innerHTML = '<p class="manual-empty">이 팔로 보낸 명령이 없어요</p>';
+    manualNow.dataset.html = '';
+    return;
+  }
+  const [word, tone] = armCommandStateShort[command.state] || [command.state, ''];
+  const cleared = command.operator_cleared_at ? ` · 현장 확인 ${escapeHtml(formatClock(command.operator_cleared_at))}` : '';
+  const reason = command.reason_code ? `<small class="manual-reason">${escapeHtml(command.reason_code)}</small>` : '';
+  const simulated = command.result && command.result.simulated ? '<span class="simulated">모의</span>' : '';
+  const html = `
+    <div class="manual-now-row">
+      <span class="chip ${tone}">${escapeHtml(word)}</span>${simulated}
+      <span class="manual-now-action">${commandAction(command)}</span>
+    </div>
+    <p class="manual-now-what">${commandWhat(command)}</p>
+    <p class="manual-now-meta">${commandWhere(command)} · ${escapeHtml(formatClock(command.created_at))} 보냄${cleared}</p>
+    ${reason}`;
+  if (manualNow.dataset.html !== html) {
+    manualNow.dataset.html = html;
+    manualNow.innerHTML = html;
   }
 }
 
 function renderArmCommands(commands) {
+  armCommandCount.textContent = commands.length ? `최근 ${commands.length}건` : '';
   if (!commands.length) {
     armCommandRows.innerHTML = '<tr><td colspan="5" class="loading">보낸 명령이 없습니다.</td></tr>';
     return;
   }
   armCommandRows.innerHTML = commands.map((command) => {
     const target = command.target;
-    const camera = command.source?.kind === 'CAMERA'
-      ? ` · 정면 캠 ${escapeHtml(command.source.class_name)} ${Math.round(command.source.confidence * 100)}%`
-      : '';
-    let where = target.policy ? '카메라 위치 근거 없음' : 'home 자세';
-    if (target.pick_slot_id) {
-      where = `칸 ${escapeHtml(target.slot_label || target.pick_slot_id)} (${escapeHtml(target.pick_slot_id)})${camera}`;
-    }
-    const what = { MOVE_TO_SLOT: '칸 앞으로 이동', RETURN_HOME: '원상복귀' }[command.operation]
-      || (target.policy
-        ? `학습 정책 집기: ${escapeHtml(target.policy.label)}<small>${escapeHtml(target.policy.model)}</small>`
-        : `${escapeHtml(target.object_class)} → ${escapeHtml(command.place.slot_id)}`);
+    const what = target.policy && !['MOVE_TO_SLOT', 'RETURN_HOME'].includes(command.operation)
+      ? `${commandWhat(command)}<small>${escapeHtml(target.policy.model)}</small>`
+      : commandWhat(command);
     const simulated = command.result && command.result.simulated ? '<span class="simulated">모의</span>' : '';
     const reason = command.reason_code ? `<small>${escapeHtml(command.reason_code)}</small>` : '';
     const cleared = command.operator_cleared_at ? `<small>현장 확인 ${escapeHtml(formatClock(command.operator_cleared_at))}</small>` : '';
-    const inFlight = ['DISPATCHED', 'ACCEPTED', 'RUNNING'].includes(command.state);
-    let action = '';
-    if (command.state === 'QUEUED' || (inFlight && !command.cancel_requested)) {
-      action = `<button type="button" class="secondary" data-arm-cancel="${escapeHtml(command.command_id)}">취소</button>`;
-    } else if (inFlight) {
-      action = '<small>취소 요청됨</small>';
-    } else if (command.state === 'UNKNOWN' && !command.operator_cleared_at) {
-      action = `<button type="button" class="secondary" data-arm-clear="${escapeHtml(command.command_id)}">현장 확인 완료</button>`;
-    }
     return `<tr>
-      <td>${escapeHtml(command.command_id)}<small>${escapeHtml(formatClock(command.created_at))}</small></td>
+      <td>${escapeHtml(command.command_id)}<small>${escapeHtml(armLabel(command.robot_id))} · ${escapeHtml(formatClock(command.created_at))}</small></td>
       <td>${escapeHtml(armCommandStateLabels[command.state] || command.state)}${simulated}${reason}${cleared}</td>
-      <td>${what}<small>${where}</small></td>
+      <td>${what}<small>${commandWhere(command)}</small></td>
       <td>${escapeHtml(command.worker_id || '-')}<small>${escapeHtml(formatClock(command.last_event_at || command.dispatched_at))}</small></td>
-      <td>${action}</td>
+      <td>${commandAction(command)}</td>
     </tr>`;
   }).join('');
-  armCommandRows.querySelectorAll('[data-arm-cancel]').forEach((button) => {
-    button.addEventListener('click', () => postArmCommand(`/api/arm/commands/${button.dataset.armCancel}/cancel`, {}));
-  });
-  armCommandRows.querySelectorAll('[data-arm-clear]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const note = window.prompt('팔·물체 상태를 현장에서 확인한 내용을 적어 주세요. 결과는 UNKNOWN으로 남고, 새 명령만 다시 보낼 수 있게 됩니다.');
-      if (note && note.trim()) postArmCommand(`/api/arm/commands/${button.dataset.armClear}/clear-unknown`, { note: note.trim() });
-    });
-  });
 }
+
+// Cancel and "현장 확인 완료" work the same from the latest-command card and the log.
+document.querySelector('#view-manual').addEventListener('click', (event) => {
+  const cancel = event.target.closest('[data-arm-cancel]');
+  if (cancel) {
+    postArmCommand(`/api/arm/commands/${cancel.dataset.armCancel}/cancel`, {});
+    return;
+  }
+  const clear = event.target.closest('[data-arm-clear]');
+  if (clear) {
+    const note = window.prompt('팔·물체 상태를 현장에서 확인한 내용을 적어 주세요. 결과는 결과 불명으로 남고, 새 명령만 다시 보낼 수 있게 됩니다.');
+    if (note && note.trim()) postArmCommand(`/api/arm/commands/${clear.dataset.armClear}/clear-unknown`, { note: note.trim() });
+  }
+});
 
 async function refreshArmCommands() {
   try {
     const response = await fetch('/api/arm/commands', { cache: 'no-store' });
     if (!response.ok) throw new Error();
     const data = await response.json();
-    renderArmWorkers(data.workers);
+    manual.workers = data.workers;
+    manual.commands = data.commands;
+    renderArmPicker();
+    renderArmWorkers();
+    renderManualNow();
     renderArmCommands(data.commands);
   } catch {
-    armWorkerState.textContent = '명령 목록을 불러오지 못했습니다';
+    armWorkerState.textContent = '명령 목록을 불러오지 못했어요';
   }
 }
 
@@ -588,18 +718,35 @@ async function postArmCommand(url, body) {
   }
 }
 
-const cameraCommandForm = document.querySelector('#cameraCommandForm');
-const policyButtons = document.querySelector('#policyButtons');
-const policyArm = document.querySelector('#policyArm');
+// One confirm bar for every command that moves the arm. Resolves true only on the confirm button.
+const manualConfirm = document.querySelector('#manualConfirm');
+const manualConfirmOk = document.querySelector('#manualConfirmOk');
+let confirmAnswer = null;
 
-function updatePolicyButtonAvailability() {
-  policyButtons.querySelectorAll('button').forEach((button) => {
-    button.disabled = !policyArm.value || (button.dataset.policyArm && button.dataset.policyArm !== policyArm.value);
+function askConfirm({ title, detail, ok }) {
+  if (confirmAnswer) confirmAnswer(false);
+  document.querySelector('#manualConfirmTitle').textContent = title;
+  document.querySelector('#manualConfirmDetail').textContent = detail;
+  manualConfirmOk.textContent = ok;
+  manualConfirm.hidden = false;
+  manualConfirmOk.focus();
+  return new Promise((resolve) => {
+    confirmAnswer = (answer) => {
+      confirmAnswer = null;
+      manualConfirm.hidden = true;
+      resolve(answer);
+    };
   });
 }
 
-policyArm.addEventListener('change', updatePolicyButtonAvailability);
+manualConfirmOk.addEventListener('click', () => confirmAnswer?.(true));
+document.querySelector('#manualConfirmCancel').addEventListener('click', () => confirmAnswer?.(false));
+manualConfirm.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') confirmAnswer?.(false);
+});
 
+const cameraCommandForm = document.querySelector('#cameraCommandForm');
+const policyButtons = document.querySelector('#policyButtons');
 cameraCommandForm.addEventListener('submit', async (event) => {
   // The server picks the slot from the front camera; it refuses unless the object is in exactly one slot.
   event.preventDefault();
@@ -634,19 +781,43 @@ const cameraCheckErrors = new Set([
   'TARGET_NOT_FOUND', 'TARGET_AMBIGUOUS', 'TARGET_MULTIPLE',
 ]);
 
+function setManualBusy(busy) {
+  manual.busy = busy;
+  policyButtons.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
+  document.querySelector('#armReturnHome').disabled = busy;
+}
+
+async function sendPolicyWithoutCamera(policy, armId, why) {
+  const command = await postArmCommand('/api/arm/commands', {
+    robot_id: armId,
+    operation: 'PICK_WITH_POLICY',
+    valid_for_s: 60,
+    target: { object_class: policy.object_class },
+    place: { slot_id: 'CART_1' },
+    source: { kind: 'OPERATOR_INPUT', note: `정면 캠 확인 없이 실행 (${why})` },
+  });
+  if (command) armCommandMessage.textContent = `${policy.label} 집기를 보냈어요 · 정면 캠 확인 없음 · 워커가 가져가면 움직여요`;
+}
+
 async function pickWithPolicy(policy) {
-  // 1) Ask the server to confirm the object in the front camera (the slot becomes evidence in the command).
-  // 2) If the camera cannot confirm it, the operator may send the command without camera evidence.
-  const buttons = policyButtons.querySelectorAll('button');
-  const robotId = policyArm.value;
-  if (!robotId) {
-    armCommandMessage.textContent = '정책을 실행할 팔을 먼저 선택하세요.';
-    return;
-  }
-  const armLabel = robotId === 'arm-02' ? '오른쪽 팔' : '왼쪽 팔';
-  buttons.forEach((button) => { button.disabled = true; });
-  armCommandMessage.textContent = `${armLabel} · ${policy.label}: 정면 캠에서 확인 중`;
+  // 1) Confirm with the operator: the arm moves. 2) Ask the server to find the object in the front camera (the slot
+  // becomes evidence in the command). 3) If the camera cannot confirm it, ask once more before sending without it.
+  const armId = manual.armId;
+  if (manual.busy) return;
+  const go = await askConfirm({
+    title: `${armLabel(armId)}로 ${policy.label} 집기`,
+    detail: '팔이 움직여요. 팔 주변과 핑키 위가 비어 있는지 확인해 주세요.',
+    ok: '집기 시작',
+  });
+  if (!go) return;
+  setManualBusy(true);
+  armCommandMessage.textContent = `${policy.label}: 정면 캠에서 확인하는 중`;
   try {
+    if (armId !== 'arm-01') {
+      // The server's front-camera check sends to arm-01 only, so the other arm goes without the camera evidence.
+      await sendPolicyWithoutCamera(policy, armId, '정면 캠 확인은 arm-01만 지원');
+      return;
+    }
     const response = await fetch('/api/arm/commands/from-camera', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -655,140 +826,108 @@ async function pickWithPolicy(policy) {
     const result = await response.json();
     if (response.ok) {
       const found = result.selection;
-      armCommandMessage.textContent = `${armLabel} · ${policy.label} 집기 등록 (${result.command.command_id}) · 정면 캠 ${Math.round(found.confidence * 100)}% @ ${found.slot_label} · 워커가 가져갈 때까지 대기`;
+      armCommandMessage.textContent = `${policy.label} 집기를 보냈어요 · 정면 캠 ${Math.round(found.confidence * 100)}% @ ${found.slot_label} · 워커가 가져가면 움직여요`;
       return;
     }
     const reason = apiErrorMessage(result, '정면 캠 확인 실패');
-    if (!cameraCheckErrors.has(result.error_code)
-      || !window.confirm(`${reason}\n\n정면 캠 확인 없이 ${armLabel}에서 ${policy.label} 집기 정책을 실행할까요? 팔이 움직입니다.`)) {
+    if (!cameraCheckErrors.has(result.error_code)) {
       armCommandMessage.textContent = reason;
       return;
     }
-    const command = await postArmCommand('/api/arm/commands', {
-      robot_id: robotId,
-      operation: 'PICK_WITH_POLICY',
-      valid_for_s: 60,
-      target: { object_class: policy.object_class },
-      place: { slot_id: 'CART_1' },
-      source: { kind: 'OPERATOR_INPUT', note: `정면 캠 확인 없이 실행 (${result.error_code})` },
+    const anyway = await askConfirm({
+      title: `정면 캠에서 ${policy.label}을(를) 확인하지 못했어요`,
+      detail: `${reason} 정책은 자기 카메라로 물건을 찾으니 확인 없이 실행할 수도 있어요. 팔이 움직여요.`,
+      ok: '확인 없이 집기',
     });
-    if (command) armCommandMessage.textContent = `${armLabel} · ${policy.label} 집기 등록 (${command.command_id}) · 정면 캠 확인 없음 · 워커가 가져갈 때까지 대기`;
+    if (anyway) await sendPolicyWithoutCamera(policy, armId, result.error_code);
+    else armCommandMessage.textContent = reason;
   } catch (error) {
     armCommandMessage.textContent = error.message;
   } finally {
-    updatePolicyButtonAvailability();
+    setManualBusy(false);
     await refreshArmCommands();
   }
 }
 
+// One request for the trained-policy list, shared by the policy buttons and the object labels of orders.
+const policyListRequest = fetch('/api/arm/policies', { cache: 'no-store' }).then(async (response) => {
+  const result = await response.json();
+  if (!response.ok) throw new Error(apiErrorMessage(result, '정책 목록을 불러오지 못했습니다'));
+  return result.policies;
+});
+
+// A policy runs only on the arm it was recorded on; arm_id null means it is not tied to one arm.
+function renderPolicyTiles() {
+  const policies = manual.policies.filter((policy) => !policy.arm_id || policy.arm_id === manual.armId);
+  if (!policies.length) {
+    const text = manual.policies.length ? `${armLabel(manual.armId)}에서 녹화한 정책이 없어요` : '정책 목록 확인 중';
+    policyButtons.innerHTML = `<p class="manual-empty">${escapeHtml(text)}</p>`;
+    return;
+  }
+  policyButtons.replaceChildren(...policies.map((policy) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'pick-tile';
+    button.disabled = manual.busy;
+    button.title = `${policy.model} (${policy.object_class})`;
+    const mark = document.createElement('span');
+    mark.className = 'pick-mark';
+    mark.setAttribute('aria-hidden', 'true');
+    mark.textContent = [...policy.label][0] || '?';
+    const name = document.createElement('span');
+    name.className = 'pick-name';
+    name.textContent = policy.label;
+    const meta = document.createElement('small');
+    meta.textContent = policy.max_run_s ? `최대 ${policy.max_run_s}초` : policy.object_class;
+    button.append(mark, name, meta);
+    button.addEventListener('click', () => pickWithPolicy(policy));
+    return button;
+  }));
+}
+
 async function loadPolicyButtons() {
   try {
-    const response = await fetch('/api/arm/policies', { cache: 'no-store' });
-    const result = await response.json();
-    if (!response.ok) throw new Error(apiErrorMessage(result, '정책 목록을 불러오지 못했습니다'));
-    policyButtons.replaceChildren(...result.policies.map((policy) => {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.dataset.policyArm = policy.arm_id || '';
-      const trainedArm = policy.arm_id === 'arm-02' ? '오른쪽 팔'
-        : policy.arm_id === 'arm-01' ? '왼쪽 팔' : '양쪽 팔';
-      button.textContent = `${policy.label} 집기 · ${trainedArm}`;
-      button.title = `${policy.model} (${policy.object_class}) · ${trainedArm} 전용`;
-      button.addEventListener('click', () => pickWithPolicy(policy));
-      return button;
-    }));
-    updatePolicyButtonAvailability();
+    manual.policies = await policyListRequest;
+    renderPolicyTiles();
   } catch (error) {
-    policyButtons.innerHTML = `<span class="note">${escapeHtml(error.message)}</span>`;
+    policyButtons.innerHTML = `<p class="manual-empty">${escapeHtml(error.message)}</p>`;
   }
 }
 loadPolicyButtons();
 
-// ---- 주문 (여러 물체·수량, 핑키 배정) ----
-const orderForm = document.querySelector('#orderForm');
-const orderItems = document.querySelector('#orderItems');
-const orderMessage = document.querySelector('#orderMessage');
+// ---- 주문 표시 공통 (물체 이름, 핑키 배지) ----
 const pinkyNames = { 10: 'P0', 11: 'P1', 12: 'P2' };
-let orderPolicies = [];
+let objectLabels = new Map();  // object_class -> label (사과, 당근…), filled from the policy list
+policyListRequest
+  .then((policies) => { objectLabels = new Map(policies.map((policy) => [policy.object_class, policy.label])); })
+  .catch(() => {});  // the policy buttons already show the error; labels fall back to the class name
 
 function objectLabel(objectClass) {
-  return orderPolicies.find((policy) => policy.object_class === objectClass)?.label || objectClass;
+  return objectLabels.get(objectClass) || objectClass;
 }
 
 function orderSummary(items) {
-  return (items || []).map((item) => `${objectLabel(item.object_class)} ${item.quantity}`).join(' · ');
+  return (items || []).map((item) => `${objectLabel(item.object_class)} ${item.quantity}`).join(', ');
 }
 
-function pinkyBadge(pinkyId) {
-  return pinkyId ? `<span class="pinky-badge pinky-${escapeHtml(pinkyId)}">${escapeHtml(pinkyNames[pinkyId] || pinkyId)}</span>` : '';
+// P0–P2 mark: blue while the Pinky answers, grey when it does not.
+function pinkyBadge(pinkyId, { offline = false } = {}) {
+  if (!pinkyId) return '';
+  return `<span class="pinky-badge${offline ? ' offline' : ''}">${escapeHtml(pinkyNames[pinkyId] || pinkyId)}</span>`;
 }
 
-function addOrderRow(objectClass = '', quantity = 1) {
-  const row = document.createElement('div');
-  row.className = 'order-item';
-  const objects = [...new Map(orderPolicies.map((policy) => [policy.object_class, policy.label])).entries()];
-  row.innerHTML = `
-    <label>물체<select name="object_class" required>${objects.map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)} (${escapeHtml(value)})</option>`).join('')}</select></label>
-    <label>수량<input name="quantity" type="number" min="1" max="5" step="1" required value="${Number(quantity) || 1}"></label>
-    <button type="button" class="secondary" data-remove-order-item>삭제</button>`;
-  if (objectClass) row.querySelector('select').value = objectClass;
-  row.querySelector('[data-remove-order-item]').addEventListener('click', () => {
-    row.remove();
-    if (!orderItems.children.length) addOrderRow();
-  });
-  orderItems.append(row);
+// Short notices in the corner (new order, start result, refused control); they disappear by themselves.
+// kind: info | warning | error. A line break in the detail starts a new line.
+const toastStack = document.querySelector('#toastStack');
+const TOAST_MS = 5000;
+
+function showToast(title, detail = '', kind = 'info', durationMs = TOAST_MS) {
+  const toast = document.createElement('div');
+  toast.className = `toast ${kind}`;
+  toast.innerHTML = `<strong>${escapeHtml(title)}</strong>${detail ? `<span>${escapeHtml(detail)}</span>` : ''}`;
+  toastStack.append(toast);
+  window.setTimeout(() => toast.remove(), durationMs);
 }
-
-function setOrderRows(items) {
-  orderItems.replaceChildren();
-  (items.length ? items : [{ object_class: '', quantity: 1 }]).forEach((item) => addOrderRow(item.object_class, item.quantity));
-}
-
-async function loadOrderPolicies() {
-  try {
-    const response = await fetch('/api/arm/policies', { cache: 'no-store' });
-    const result = await response.json();
-    if (!response.ok) throw new Error(apiErrorMessage(result, '정책 목록을 불러오지 못했습니다'));
-    orderPolicies = result.policies;
-    setOrderRows([]);
-  } catch (error) {
-    orderMessage.textContent = `주문할 물체 목록을 불러오지 못했습니다: ${error.message}`;
-  }
-}
-loadOrderPolicies();
-
-document.querySelector('#orderAddItem').addEventListener('click', () => addOrderRow());
-
-orderForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const button = orderForm.querySelector('button[type="submit"]');
-  const items = [...orderItems.querySelectorAll('.order-item')].map((row) => ({
-    object_class: row.querySelector('select').value,
-    quantity: Number(row.querySelector('input').value),
-  }));
-  const pinkyId = orderForm.elements.pinky_id.value;
-  button.disabled = true;
-  try {
-    const response = await fetch('/api/tasks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ order_items: items, ...(pinkyId ? { pinky_id: pinkyId } : {}) }),
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(apiErrorMessage(result, '주문을 등록하지 못했습니다.'));
-    selectedTaskId = result.task.id;
-    const startNow = orderForm.elements.start_now.checked;
-    setOrderRows([]);
-    orderForm.elements.pinky_id.value = '';
-    orderMessage.textContent = `${result.task.id} 등록 · ${orderSummary(result.task.order_items)} · 핑키 ${pinkyNames[result.task.pinky_id] || result.task.pinky_id} 배정.`;
-    if (startNow) await orderControl(result.task.id, 'start');
-    await Promise.all([refreshTasks(), refreshFlow()]);
-  } catch (error) {
-    orderMessage.textContent = error.message;
-  } finally {
-    button.disabled = false;
-  }
-});
 
 // The worker replays the joint pose it taught for the chosen slot; no coordinates are sent.
 const armCommandSlot = document.querySelector('#armCommandSlot');
@@ -816,7 +955,7 @@ armCommandForm.addEventListener('submit', async (event) => {
   const formData = new FormData(armCommandForm);
   button.disabled = true;
   const command = await postArmCommand('/api/arm/commands', {
-    robot_id: 'arm-01',
+    robot_id: manual.armId,
     operation: 'MOVE_TO_SLOT',
     valid_for_s: Number(formData.get('valid_for_s')),
     target: { object_class: String(formData.get('object_class') || '').trim() || null, pick_slot_id: armCommandSlot.value },
@@ -827,18 +966,25 @@ armCommandForm.addEventListener('submit', async (event) => {
   button.disabled = false;
 });
 
-document.querySelector('#armReturnHome').addEventListener('click', async (event) => {
+document.querySelector('#armReturnHome').addEventListener('click', async () => {
   // No slot or place: the worker moves the arm back to the home pose it recorded.
-  const button = event.currentTarget;
-  button.disabled = true;
+  const armId = manual.armId;
+  if (manual.busy) return;
+  const go = await askConfirm({
+    title: `${armLabel(armId)} 원상복귀`,
+    detail: '기록해 둔 home 자세로 팔이 움직여요. 팔이 물건을 잡고 있으면 떨어질 수 있어요.',
+    ok: '돌려보내기',
+  });
+  if (!go) return;
+  setManualBusy(true);
   const command = await postArmCommand('/api/arm/commands', {
-    robot_id: 'arm-01',
+    robot_id: armId,
     operation: 'RETURN_HOME',
-    valid_for_s: Number(armCommandForm.elements.valid_for_s.value),
+    valid_for_s: 60,
     source: { kind: 'OPERATOR_INPUT' },
   });
-  if (command) armCommandMessage.textContent = `${command.command_id} 원상복귀 등록 · 워커가 가져갈 때까지 대기`;
-  button.disabled = false;
+  if (command) armCommandMessage.textContent = '원상복귀를 보냈어요 · 워커가 가져가면 움직여요';
+  setManualBusy(false);
 });
 
 const taskStatusLabels = {
@@ -858,7 +1004,7 @@ const executionLabels = {
   QUEUED: '워커 대기열', DISPATCHED: '워커가 가져감', REJECTED: '워커 거부', EXPIRED: '만료',
 };
 const stepOutcomeLabels = {
-  SIMULATED_SUCCESS: '모의 완료',
+  SIMULATED_SUCCESS: devMode ? '모의 완료' : '완료',
   CANCEL_CONFIRMED: '취소 확인',
   NOT_EXECUTED_AFTER_CANCEL: '취소 뒤 미실행',
   NOT_EXECUTED_AFTER_FAILURE: '실패 뒤 미실행',
@@ -868,9 +1014,9 @@ const stepOutcomeLabels = {
   ARM_HOME_PLACEMENT_LEFT_TO_VERIFY_LOAD: '적재 판단은 적재 확인 단계로',
 };
 const taskEventLabels = {
-  MOCK_SCENARIO_FAILURE: '모의 실패 시나리오 발생',
-  MOCK_EXECUTION_FAILED: '모의 실행 오류',
-  MOCK_TASK_COMPLETED: '모의 작업 완료',
+  MOCK_SCENARIO_FAILURE: `${devWord('모의 ')}실패 시나리오 발생`,
+  MOCK_EXECUTION_FAILED: `${devWord('모의 ')}실행 오류`,
+  MOCK_TASK_COMPLETED: `${devWord('모의 ')}작업 완료`,
   ARRIVAL_NOT_CONFIRMED: '도착 미확인 · 팔 단계 시작 안 함',
   LOAD_NOT_CONFIRMED: '적재 미확인 · 출발하지 않음',
   TARGET_CONFIRMED: '정면 카메라 물체 확인',
@@ -889,7 +1035,7 @@ const loadStatusLabels = {
 function formatLoadObservation(payload) {
   const observation = payload.observation || {};
   const observed = observation.observed_count == null ? '개수 없음' : `${observation.observed_count}개`;
-  return `적재 확인 · ${loadStatusLabels[payload.status] || payload.status} · 기대 ${payload.expected_count}개 · 관측 ${observed}${observation.simulated ? ' · 모의 관측(카메라 미사용)' : ''}`;
+  return `적재 확인 · ${loadStatusLabels[payload.status] || payload.status} · 기대 ${payload.expected_count}개 · 관측 ${observed}${observation.simulated ? devWord(' · 모의 관측(카메라 미사용)') : ''}`;
 }
 const parkingStatusLabels = {
   ARRIVED: '도착',
@@ -925,7 +1071,6 @@ let parkingLiveBusy = false;
 let parkingLive = false;
 let parkingStreamCamera = null;
 let parkingLiveOk = false;  // the last /live poll succeeded, so the panel shows live state
-const clockFormat = new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 const parkingColors = { within: '#2f8f4e', near: '#c98a1a', far: '#bd4242', moving: '#3478cb', unknown: '#7a838d' };
 const parkingOverlayColors = { within: '#3fbf6a', near: '#f0a830', far: '#f05a5a', moving: '#5aa2f0', unknown: '#c3c9cf' };
 const parkingLiveTitles = {
@@ -1286,17 +1431,17 @@ function renderTaskDetail(task) {
     && task.local_execution_owner === 'LOCAL_WORKER_ACTIVE';
   const modeLabel = controlModeLabels[controlMode] || controlMode;
   const modeNote = controlMode === 'mock'
-    ? '모의 모드 · 단계 성공은 진행 시뮬레이션이며 실제 인식/로봇 명령을 의미하지 않습니다.'
-    : `현재 ${escapeHtml(modeLabel)} 모드 · 작업 실행은 모의 모드에서만 제공됩니다.`;
+    ? devWord('모의 모드 · 단계 성공은 진행 시뮬레이션이며 실제 인식/로봇 명령을 의미하지 않습니다.')
+    : `현재 ${escapeHtml(modeLabel)} 모드에서는 이 화면에서 작업을 실행하지 않습니다.`;
   const ownershipNote = task.local_execution_owner === 'NO_LOCAL_WORKER'
     ? '<p class="task-error">저장된 작업은 활성 상태지만 이 서버 프로세스에 실행 worker가 없습니다. 자동 재개나 명령 재전송은 하지 않습니다. 작업 상태를 운영자가 확인해야 합니다.</p>'
     : task.local_execution_owner === 'MODE_NOT_MANAGED'
       ? '<p class="task-error">저장된 작업은 활성 상태지만 현재 모드에는 이 작업을 관리하는 실행 worker가 연결되어 있지 않습니다. 자동 재개나 명령 재전송은 하지 않습니다.</p>'
       : '';
   const action = canStart
-    ? '<button type="button" data-task-action="start">모의 작업 시작</button>'
+    ? '<button type="button" data-task-action="start">작업 시작</button>'
     : canCancel
-      ? '<button type="button" class="secondary" data-task-action="cancel">모의 작업 취소</button>'
+      ? '<button type="button" class="secondary" data-task-action="cancel">작업 취소</button>'
       : '';
   taskDetail.innerHTML = `
     <header class="task-detail-head"><div><h3>${escapeHtml(task.destination)}</h3><small>${escapeHtml(task.id)}</small></div><span class="task-status">${escapeHtml(taskStatusLabels[task.status] || task.status)}</span></header>
@@ -1311,7 +1456,7 @@ function renderTaskDetail(task) {
     <ol class="step-list">${steps.map((step) => {
       const stepLabel = stepLabels[step.step_type] || step.step_type;
       const robotLabel = step.robot_id === 'mobile-01' ? '주행 로봇' : step.robot_id === 'arm-01' ? '로봇팔' : '';
-      return `<li><span>${escapeHtml(stepLabel)}${step.robot_id ? `<small class="step-robot">${robotLabel ? `${robotLabel} · ` : ''}${escapeHtml(step.robot_id)}</small>` : ''}</span><strong>${escapeHtml(executionLabels[step.status] || step.status)}${step.result?.outcome && stepOutcomeLabels[step.result.outcome] ? ` · ${stepOutcomeLabels[step.result.outcome]}` : ''}${step.result?.source === 'mock' ? ' · 모의' : ''}</strong></li>`;
+      return `<li><span>${escapeHtml(stepLabel)}${step.robot_id ? `<small class="step-robot">${robotLabel ? `${robotLabel} · ` : ''}${escapeHtml(step.robot_id)}</small>` : ''}</span><strong>${escapeHtml(executionLabels[step.status] || step.status)}${step.result?.outcome && stepOutcomeLabels[step.result.outcome] ? ` · ${stepOutcomeLabels[step.result.outcome]}` : ''}${step.result?.source === 'mock' ? devWord(' · 모의') : ''}</strong></li>`;
     }).join('')}</ol>
     <h4>이벤트</h4>
     <ol class="event-list">${events.map((event) => {
@@ -1328,7 +1473,7 @@ function renderTaskDetail(task) {
           : eventName === 'PROGRESS' && event.payload?.arm_state
             ? `OMX ${event.payload.arm_command_id} · ${executionLabels[event.payload.arm_state] || event.payload.arm_state}`
           : eventName === 'PROGRESS'
-            ? `${event.payload?.source === 'mock' ? '모의 ' : ''}진행률 ${Number(event.payload?.progress) || 0}% · ${event.payload?.message || '진행 이벤트'}`
+            ? `${event.payload?.source === 'mock' ? devWord('모의 ') : ''}진행률 ${Number(event.payload?.progress) || 0}% · ${event.payload?.message || '진행 이벤트'}`
           : eventName === 'TARGET_CONFIRMED'
             ? `${taskEventLabels[eventName]} · ${event.payload?.message || ''} · 신뢰도 ${event.payload?.confidence ?? '-'}`
           : eventName === 'ARM_COMMAND_CREATED'
@@ -1346,15 +1491,12 @@ function renderTaskDetail(task) {
 }
 
 async function sendTaskAction(taskId, action) {
-  taskMessage.textContent = action === 'start' ? '모의 작업을 시작합니다…' : '모의 작업 취소를 요청합니다…';
+  taskMessage.textContent = action === 'start' ? '작업을 시작합니다…' : '작업 취소를 요청합니다…';
   try {
     const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/${action}`, { method: 'POST' });
     const result = await response.json();
-    if (!response.ok) {
-      const message = result.message || result.error || '작업 요청에 실패했습니다.';
-      throw new Error(result.error_code ? `${result.error_code} · ${message}` : message);
-    }
-    taskMessage.textContent = `${result.execution_mode || 'mock'} · ${taskStatusLabels[result.task.status] || result.task.status}`;
+    if (!response.ok) throw new Error(apiErrorMessage(result, '작업 요청에 실패했습니다.'));
+    taskMessage.textContent = `${devMode ? `${result.execution_mode || 'mock'} · ` : ''}${taskStatusLabels[result.task.status] || result.task.status}`;
   } catch (error) {
     taskMessage.textContent = error.message;
   } finally {
@@ -1377,39 +1519,6 @@ async function refreshTasks() {
     taskMessage.textContent = error.message;
   }
 }
-
-commandParseForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const text = String(new FormData(commandParseForm).get('text') || '').trim();
-  const button = commandParseForm.querySelector('button');
-  button.disabled = true;
-  commandParseMessage.textContent = '명령 초안을 해석하는 중…';
-  try {
-    const response = await fetch('/api/tasks/parse-command', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || '명령 초안을 해석하지 못했습니다.');
-    const draft = result.draft;
-    const parsed = draft.parsed;
-    const order = result.order;
-    if (order?.order_items?.length) setOrderRows(order.order_items);
-    taskForm.elements.target_category.value = parsed.pick_request?.category || '';
-    taskForm.elements.target_color.value = parsed.pick_request?.color || '';
-    taskForm.elements.shelf_level.value = parsed.pick_request?.shelf_level || '';
-    taskForm.elements.destination.value = parsed.destination || '';
-    taskForm.elements.arm_job.value = parsed.arm_job || '';
-    commandParseMessage.textContent = order?.order_items?.length
-      ? `주문 초안: ${orderSummary(order.order_items)}${order.warnings.length ? ` · ${order.warnings.join(' · ')}` : ''} · 확인한 뒤 주문 등록을 누르세요.`
-      : `주문 물체를 찾지 못했습니다${order?.warnings?.length ? ` · ${order.warnings.join(' · ')}` : ''}.`;
-  } catch (error) {
-    commandParseMessage.textContent = error.message;
-  } finally {
-    button.disabled = false;
-  }
-});
 
 taskForm.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -1463,15 +1572,18 @@ async function refresh() {
     controlMode = health.mode;
     updateParkingConfig(health.parking);
     serverStatus.className = 'server-status ok';
-    serverStatus.innerHTML = `<span class="dot"></span> API 정상 · ${escapeHtml(controlModeLabels[health.mode] || health.mode)} 모드`;
+    const modeWords = health.mode !== 'mock' || devMode ? `<small>${escapeHtml(controlModeLabels[health.mode] || health.mode)} 모드</small>` : '';
+    serverStatus.innerHTML = `<span class="dot"></span><span><strong>API 정상</strong>${modeWords}</span>`;
+    renderOverviewSummary(health, robotData.robots, cameraData.cameras);
     renderRobots(robotData.robots);
     renderCameras(cameraData.cameras);
     renderArm(armData.arm);
     renderPolicyRun(armData.policy_run);
-    updatedAt.textContent = `갱신 ${new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date())}`;
+    updatedAt.textContent = `갱신 ${clockFormat.format(new Date())}`;
   } catch {
     serverStatus.className = 'server-status error';
-    serverStatus.innerHTML = '<span class="dot"></span> 서버 연결 실패';
+    serverStatus.innerHTML = '<span class="dot"></span><span><strong>서버 연결 실패</strong><small>다시 연결하는 중</small></span>';
+    renderOverviewSummary(null);
     robotRows.innerHTML = '<tr><td colspan="3" class="error-row">서버 API에 연결할 수 없습니다.</td></tr>';
     cameraGrid.innerHTML = '<p class="error-row">서버 API에 연결할 수 없습니다.</p>';
     cameraGrid.dataset.cameraIds = '';
@@ -1504,34 +1616,80 @@ function elapsed(fromIso, toIso) {
   return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
+const pickupSending = new Set();  // order ids whose pickup confirmation is in flight
+let renderedAlerts = '';
+
+function alertActionsHtml(alert) {
+  const id = escapeHtml(alert.task_id);
+  if (alert.pickup) {
+    const sending = pickupSending.has(alert.task_id);
+    return `<span class="alert-actions"><button type="button" class="pickup-confirm" data-pickup-confirm="${id}"${sending ? ' disabled' : ''}>${sending ? '보내는 중…' : '수령 확인'}</button></span>`;
+  }
+  return alert.acknowledgeable ? `<button type="button" class="secondary" data-ack-alert="${id}">확인</button>` : '<span></span>';
+}
+
+// Rewritten only when something changed: the flow polls every second, and a button swapped out under the
+// pointer would lose the click.
 function renderFlowAlerts(alerts) {
-  flowAlerts.innerHTML = alerts.map((alert) => `
+  const html = alerts.map((alert) => `
     <div class="alert-card ${alert.level}" role="alert">
-      <span class="alert-icon" aria-hidden="true">${alert.level === 'error' ? '⛔' : '⚠️'}</span>
+      <span class="alert-icon" aria-hidden="true">!</span>
       <div><strong>${escapeHtml(alert.title || '확인 필요')}</strong>
         <div>${escapeHtml(alert.message || '')}</div>
-        <small>${alert.pinky_name ? `핑키 ${escapeHtml(alert.pinky_name)} · ` : ''}${escapeHtml(alert.task_id)}${alert.code ? ` · ${escapeHtml(alert.code)}` : ''}</small></div>
-      ${alert.acknowledgeable ? `<button type="button" class="secondary" data-ack-alert="${escapeHtml(alert.task_id)}">확인</button>` : '<span></span>'}
+        <small class="alert-meta">${[alert.pinky_name ? `핑키 ${alert.pinky_name}` : '', alert.task_id, alert.code]
+          .filter(Boolean).map((part) => `<span>${escapeHtml(part)}</span>`).join('')}</small></div>
+      ${alertActionsHtml(alert)}
     </div>`).join('');
-  flowAlerts.querySelectorAll('[data-ack-alert]').forEach((button) => {
-    button.addEventListener('click', async () => {
-      button.disabled = true;
-      await fetch(`/api/flow/alerts/${encodeURIComponent(button.dataset.ackAlert)}/ack`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note: '화면에서 확인' }),
-      });
-      await refreshFlow();
-    });
-  });
+  if (html === renderedAlerts) return;
+  renderedAlerts = html;
+  flowAlerts.innerHTML = html;
 }
+
+// The operator confirms for the customer (no phone, or the customer left): the Pinky then goes home.
+async function confirmPickup(orderId) {
+  if (pickupSending.has(orderId)) return;
+  if (!window.confirm(`${orderId} 주문을 손님이 받았다고 확인할까요?\n확인하면 핑키가 주차장으로 돌아갑니다.`)) return;
+  pickupSending.add(orderId);
+  renderedAlerts = '';
+  await refreshFlow();
+  try {
+    const response = await fetch(`/api/orders/${encodeURIComponent(orderId)}/pickup-confirm`, { method: 'POST' });
+    const result = await response.json().catch(() => ({}));
+    if (response.ok) showToast('수령 확인을 보냈어요', `${orderId} · 핑키가 주차장으로 돌아갑니다`);
+    else showToast('수령 확인을 보내지 못했어요', result.message || `HTTP ${response.status}`, 'error');
+  } catch {
+    showToast('수령 확인 응답을 받지 못했어요', '주문 상태를 확인한 뒤 다시 눌러 주세요', 'warning');
+  } finally {
+    pickupSending.delete(orderId);
+    renderedAlerts = '';
+    await Promise.all([refreshFlow(), refreshIntake()]);
+  }
+}
+
+flowAlerts.addEventListener('click', async (event) => {
+  const pickup = event.target.closest('[data-pickup-confirm]');
+  if (pickup) {
+    confirmPickup(pickup.dataset.pickupConfirm);
+    return;
+  }
+  const ack = event.target.closest('[data-ack-alert]');
+  if (!ack) return;
+  ack.disabled = true;
+  await fetch(`/api/flow/alerts/${encodeURIComponent(ack.dataset.ackAlert)}/ack`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note: '화면에서 확인' }),
+  });
+  renderedAlerts = '';
+  await refreshFlow();
+});
 
 function renderFlowRobots(view) {
   const pinkies = view.pinkies.map((pinky) => `
-    <article class="robot-card pinky-${escapeHtml(pinky.pinky_id)}${pinky.reachable ? '' : ' unreachable'}${pinky.stopped_order_id ? ' stopped' : ''}">
-      <h3><span>핑키 ${escapeHtml(pinky.name)}</span><span>${pinky.order_id && pinky.order_id === view.station_owner ? '<span class="spot-tag">적재 자리</span> ' : ''}${pinky.simulated ? '<span class="sim-tag">모의</span>' : ''}</span></h3>
+    <article class="robot-card${pinky.reachable ? '' : ' unreachable'}${pinky.stopped_order_id ? ' stopped' : ''}">
+      <h3>${pinkyBadge(pinky.pinky_id, { offline: !pinky.reachable })}<span>${pinky.order_id && pinky.order_id === view.station_owner ? '<span class="spot-tag">적재 자리</span> ' : ''}${pinky.simulated ? '<span class="sim-tag">모의</span>' : ''}</span></h3>
       <div class="robot-state">${escapeHtml(pinky.reachable ? pinky.phase_label : '연결 안 됨')}</div>
-      <p>${escapeHtml(pinky.message || '')}</p>
+      ${pinky.message && pinky.message !== pinky.phase_label ? `<p>${escapeHtml(pinky.message)}</p>` : ''}
       <p>${pinky.order_id ? `주문 ${escapeHtml(pinky.order_id)}`
-        : pinky.stopped_order_id ? `<strong class="stopped-note">멈춘 주문 ${escapeHtml(pinky.stopped_order_id)} · 현장 확인 필요</strong>` : '배정된 진행 주문 없음'}</p>
+        : pinky.stopped_order_id ? `<strong class="stopped-note">멈춘 주문 ${escapeHtml(pinky.stopped_order_id)}, 현장 확인 필요</strong>` : '배정된 진행 주문 없음'}</p>
     </article>`);
   const arms = view.arms.map((arm) => `
     <article class="robot-card arm${arm.state === 'busy' ? ' busy' : ''}">
@@ -1549,29 +1707,29 @@ function planChips(order) {
     const state = index < order.loaded ? 'done'
       : index === order.loaded && order.status === 'FAILED' && order.stages.find((stage) => stage.key === 'LOAD').state === 'failed' ? 'failed'
         : index === order.loaded && order.active_step && ['PICK_ITEM', 'VERIFY_TRANSFER'].includes(order.active_step) ? 'doing' : '';
-    return `<span class="plan-chip ${state}">${escapeHtml(unit.arm_label)} · ${escapeHtml(unit.label)} #${unit.unit}</span>`;
+    return `<span class="plan-chip ${state}">${escapeHtml(unit.arm_label)} ${escapeHtml(unit.label)} #${unit.unit}</span>`;
   }).join('<span aria-hidden="true">→</span>')}</div>`;
 }
 
 function renderFlowOrders(orders) {
-  if (!orders.length) {
-    flowOrders.innerHTML = '<p class="loading">아직 주문이 없습니다. 위에서 주문을 등록하세요.</p>';
+  // Waiting orders are started or rejected in 주문 접수 above; this list follows them once they run.
+  const started = orders.filter((order) => order.status !== 'PENDING');
+  if (!started.length) {
+    flowOrders.innerHTML = '<p class="loading">시작한 주문이 없습니다. 접수된 주문은 위 주문 접수에서 시작합니다.</p>';
     return;
   }
-  flowOrders.innerHTML = orders.map((order) => `
-    <article class="order-card pinky-${escapeHtml(order.pinky_id || '')}${order.status === 'FAILED' ? ' failed' : ''}">
+  flowOrders.innerHTML = started.map((order) => `
+    <article class="order-card${order.status === 'FAILED' ? ' failed' : ''}">
       <div class="order-head">
         ${pinkyBadge(order.pinky_id)} <strong>${escapeHtml(orderSummary(order.order_items))}</strong>
         <span class="status-chip ${escapeHtml(order.status)}">${escapeHtml(orderStatusLabels[order.status] || order.status)}</span>
         ${order.simulated ? '<span class="sim-tag">모의</span>' : ''}
-        <span class="order-meta">${escapeHtml(order.id)}${order.started_at ? ` · ${elapsed(order.started_at, order.finished_at)}` : ''}</span>
+        <span class="order-meta"><span>${escapeHtml(order.id)}</span>${order.started_at ? `<time>${elapsed(order.started_at, order.finished_at)}</time>` : ''}</span>
       </div>
       <ol class="pipeline">${order.stages.map((stage) => `<li class="${stage.state}">${escapeHtml(stage.label)}</li>`).join('')}</ol>
       <p class="order-now"><b>지금</b> ${escapeHtml(order.current)}</p>
       ${planChips(order)}
       <div class="order-actions-row">
-        ${order.status === 'PENDING' ? `<button type="button" data-order-action="start" data-order-id="${escapeHtml(order.id)}">주문 시작</button>
-          <button type="button" class="secondary" data-order-action="cancel" data-order-id="${escapeHtml(order.id)}">주문 취소</button>` : ''}
         ${['RUNNING', 'VALIDATING'].includes(order.status) ? `<button type="button" class="secondary" data-order-action="cancel" data-order-id="${escapeHtml(order.id)}">멈추기</button>` : ''}
         <button type="button" class="secondary" data-order-detail="${escapeHtml(order.id)}">단계·기록 보기</button>
       </div>
@@ -1593,7 +1751,7 @@ function renderFlowOrders(orders) {
 }
 
 function renderMockWorld(world, faultKinds) {
-  mockPanel.hidden = !world;
+  mockPanel.hidden = !world || !devMode;
   if (!world) return;
   if (!mockFaultKind.options.length) {
     mockFaultKind.innerHTML = faultKinds.map((kind) => `<option value="${escapeHtml(kind)}">${escapeHtml(mockFaultLabels[kind] || kind)}</option>`).join('');
@@ -1612,8 +1770,31 @@ async function orderControl(taskId, action) {
     const result = await response.json();
     if (!response.ok) throw new Error(apiErrorMessage(result, `주문 ${action} 실패`));
   } catch (error) {
-    orderMessage.textContent = error.message;
+    showToast(`${taskId} 요청 실패`, error.message, 'error');
   }
+}
+
+// ---- 주문 진행 요약: waiting orders come from the intake poll, the rest from /api/flow ----
+const flowSummaryTitle = document.querySelector('#flowSummaryTitle');
+const flowStatWaiting = document.querySelector('#flowStatWaiting');
+const flowStatRunning = document.querySelector('#flowStatRunning');
+const flowStatStopped = document.querySelector('#flowStatStopped');
+const flowStatPinkies = document.querySelector('#flowStatPinkies');
+const flowSummary = { waiting: null, flow: null };
+
+function renderFlowSummary() {
+  const { waiting, flow } = flowSummary;
+  const running = flow ? flow.orders.filter((order) => ['VALIDATING', 'RUNNING', 'CANCELING'].includes(order.status)).length : null;
+  const stopped = flow ? flow.alerts.filter((alert) => alert.level === 'error').length : null;
+  const reachable = flow ? flow.pinkies.filter((pinky) => pinky.reachable).length : null;
+  setStat(flowStatWaiting, waiting, { tone: waiting ? 'attention' : 'zero' });
+  setStat(flowStatRunning, running, { tone: running ? 'active' : 'zero' });
+  setStat(flowStatStopped, stopped, { tone: stopped ? 'danger' : 'zero' });
+  setStat(flowStatPinkies, reachable, { total: flow?.pinkies.length, tone: flow && reachable < flow.pinkies.length ? 'attention' : '' });
+  if (stopped) flowSummaryTitle.textContent = `멈춘 주문이 ${stopped}건 있어요. 경보를 확인해 주세요`;
+  else if (waiting) flowSummaryTitle.textContent = `주문 ${waiting}건이 시작을 기다리고 있어요`;
+  else if (running) flowSummaryTitle.textContent = `주문 ${running}건을 처리하고 있어요`;
+  else if (waiting === 0 && flow) flowSummaryTitle.textContent = '기다리는 주문이 없어요';
 }
 
 async function refreshFlow() {
@@ -1621,15 +1802,17 @@ async function refreshFlow() {
     const response = await fetch('/api/flow', { cache: 'no-store' });
     const view = await response.json();
     if (!response.ok) throw new Error(apiErrorMessage(view, '진행 상황을 불러오지 못했습니다'));
+    flowSummary.flow = view;
+    renderFlowSummary();
     renderFlowAlerts(view.alerts);
     renderFlowRobots(view);
     renderFlowOrders(view.orders);
     renderMockWorld(view.mock_world, view.mock_fault_kinds);
     flowStation.textContent = !view.station_owner ? '적재 자리 비어 있음'
-      : view.station_held_by_stopped ? `적재 자리 막힘 · 멈춘 주문 ${view.station_owner} (경보 확인 필요)` : `적재 자리 사용 중 · ${view.station_owner}`;
-    flowUpdated.textContent = `갱신 ${new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date())}`;
+      : view.station_held_by_stopped ? `적재 자리 막힘, 멈춘 주문 ${view.station_owner} (경보 확인 필요)` : `적재 자리 사용 중, ${view.station_owner}`;
+    flowUpdated.textContent = `갱신 ${clockFormat.format(new Date())}`;
   } catch (error) {
-    flowUpdated.textContent = `갱신 실패 · ${error.message}`;
+    flowUpdated.textContent = `갱신 실패: ${error.message}`;
   }
 }
 
@@ -1651,13 +1834,207 @@ document.querySelector('#mockRestock').addEventListener('click', async () => {
   await refreshFlow();
 });
 
+// ---- 주문 접수: 주문 창(/order)에서 들어와 작업자의 시작을 기다리는 주문 ----
+const intakeOrders = document.querySelector('#intakeOrders');
+const intakeUpdated = document.querySelector('#intakeUpdated');
+const intakeBadge = document.querySelector('#intakeBadge');
+const pageTitle = document.title;
+const intake = {
+  orders: [],               // GET /api/orders, oldest first
+  seenIds: null,            // ids of the previous poll; null until the first load, so old orders raise no toast
+  previews: new Map(),      // order id -> { result } or { error } from GET /api/orders/{id}/assignment
+  previewLoading: new Set(),
+  notes: new Map(),         // order id -> { title, text, verdicts? } left on the card by a refused start or reject
+  busy: new Map(),          // order id -> 'start' | 'reject' while that request is in flight
+};
+const renderedCards = new WeakMap();  // card element -> the HTML it shows
+let intakeRequestSeq = 0;
+
+function itemCount(items) {
+  return (items || []).reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+}
+
+function verdictListHtml(verdicts, chosenId) {
+  return `<ul class="verdict-list">${verdicts.map((verdict) => {
+    const chosen = verdict.pinky_id === chosenId;
+    const label = !verdict.eligible ? '제외' : chosen ? `배정 · ${verdict.rank}순위` : `${verdict.rank}순위`;
+    return `<li class="verdict${chosen ? ' chosen' : ''}${verdict.eligible ? '' : ' excluded'}">
+      ${pinkyBadge(verdict.pinky_id)}<b>${escapeHtml(label)}</b><span>${escapeHtml(verdict.reason)}</span></li>`;
+  }).join('')}</ul>`;
+}
+
+// The plan itself is drawn by intake-plan.js (trays, arm timeline, reasons behind "자세히").
+function previewHtml(order) {
+  const preview = intake.previews.get(order.id);
+  if (!preview) return '<p class="preview-state">배정 미리보기를 계산하는 중…</p>';
+  if (preview.error) return `<p class="preview-state blocked">배정 미리보기 실패 · ${escapeHtml(preview.error)}</p>`;
+  if (window.IntakePlan) return window.IntakePlan.html(order, preview.result);
+  return `<p class="preview-state">${escapeHtml(preview.result.pinky?.summary || '')}</p>`;
+}
+
+function intakeCardHtml(order) {
+  const id = escapeHtml(order.id);
+  const busy = intake.busy.get(order.id);
+  const disabled = busy ? ' disabled' : '';
+  const note = intake.notes.get(order.id);
+  return `
+    <header class="intake-head">
+      <time datetime="${escapeHtml(order.created_at)}">${escapeHtml(formatClock(order.created_at))}</time>
+      <h3 class="intake-id">${id}</h3>
+      <span class="intake-items">${escapeHtml(orderSummary(order.order_items))}, 총 ${itemCount(order.order_items)}개</span>
+      <span class="intake-zone">${escapeHtml(order.destination)}</span>
+      <span class="intake-actions">
+        <button type="button" data-intake-action="start" data-order-id="${id}"${disabled}>${busy === 'start' ? '시작 중…' : '시작'}</button>
+        <button type="button" class="secondary" data-intake-action="reject" data-order-id="${id}"${disabled}>${busy === 'reject' ? '거절 중…' : '거절'}</button>
+      </span>
+    </header>
+    ${previewHtml(order)}
+    ${note ? `<div class="intake-note" role="alert"><strong>${escapeHtml(note.title)}</strong> ${escapeHtml(note.text)}
+      ${note.verdicts ? verdictListHtml(note.verdicts, null) : ''}</div>` : ''}`;
+}
+
+function renderIntake() {
+  const { orders } = intake;
+  flowSummary.waiting = orders.length;
+  renderFlowSummary();
+  intakeBadge.hidden = !orders.length;
+  intakeBadge.textContent = String(orders.length);
+  intakeBadge.title = `기다리는 주문 ${orders.length}건`;
+  document.title = orders.length ? `(${orders.length}) ${pageTitle}` : pageTitle;
+  if (!orders.length) {
+    intakeOrders.innerHTML = '<p class="intake-empty">기다리는 주문이 없어요.<a href="/order" target="_blank" rel="noopener">주문 창 열기</a></p>';
+    return;
+  }
+  // Cards are keyed by order id and rewritten only when their HTML changes, so a poll never swaps a button out
+  // from under the pointer.
+  const cards = new Map([...intakeOrders.querySelectorAll('[data-intake-order]')].map((card) => [card.dataset.intakeOrder, card]));
+  intakeOrders.querySelectorAll(':scope > :not([data-intake-order])').forEach((node) => node.remove());
+  orders.forEach((order, index) => {
+    let card = cards.get(order.id);
+    cards.delete(order.id);
+    if (!card) {
+      card = document.createElement('article');
+      card.className = 'intake-card';
+      card.dataset.intakeOrder = order.id;
+    }
+    const html = intakeCardHtml(order);
+    if (renderedCards.get(card) !== html) {
+      card.innerHTML = html;
+      renderedCards.set(card, html);
+    }
+    if (intakeOrders.children[index] !== card) intakeOrders.insertBefore(card, intakeOrders.children[index] || null);
+  });
+  cards.forEach((card) => card.remove());
+}
+
+function announceNewOrders(orders) {
+  if (intake.seenIds) {
+    orders.filter((order) => !intake.seenIds.has(order.id)).forEach((order) => {
+      showToast(`새 주문 ${order.id} 접수`, `${orderSummary(order.order_items)}, ${order.destination}`);
+    });
+  }
+  intake.seenIds = new Set(orders.map((order) => order.id));
+}
+
+function forgetGoneOrders() {
+  const waiting = new Set(intake.orders.map((order) => order.id));
+  [intake.previews, intake.notes].forEach((byOrder) => {
+    [...byOrder.keys()].filter((id) => !waiting.has(id)).forEach((id) => byOrder.delete(id));
+  });
+}
+
+async function loadPreview(orderId) {
+  if (intake.previewLoading.has(orderId)) return;
+  intake.previewLoading.add(orderId);
+  let preview;
+  try {
+    const response = await fetch(`/api/orders/${encodeURIComponent(orderId)}/assignment`, { cache: 'no-store' });
+    const result = await response.json();
+    preview = response.ok ? { result } : { error: apiErrorMessage(result, '배정 미리보기를 불러오지 못했습니다') };
+  } catch {
+    preview = { error: '서버에서 배정 미리보기를 받지 못했습니다' };
+  } finally {
+    intake.previewLoading.delete(orderId);
+  }
+  if (!intake.orders.some((order) => order.id === orderId)) return;  // started or rejected meanwhile
+  intake.previews.set(orderId, preview);
+  renderIntake();
+}
+
+function refreshIntakePreviews() {
+  intake.orders.forEach((order) => loadPreview(order.id));
+}
+
+async function refreshIntake() {
+  const seq = ++intakeRequestSeq;
+  try {
+    const response = await fetch('/api/orders', { cache: 'no-store' });
+    const result = await response.json();
+    if (!response.ok) throw new Error(apiErrorMessage(result, '접수된 주문을 불러오지 못했습니다'));
+    if (seq !== intakeRequestSeq) return;  // a newer poll has been sent; its answer wins
+    announceNewOrders(result.orders);
+    intake.orders = result.orders;
+    forgetGoneOrders();
+    renderIntake();
+    intake.orders.filter((order) => !intake.previews.has(order.id)).forEach((order) => loadPreview(order.id));
+    intakeUpdated.textContent = `갱신 ${clockFormat.format(new Date())}`;
+  } catch (error) {
+    intakeUpdated.textContent = `갱신 실패: ${error.message}`;
+  }
+}
+
+async function controlIntakeOrder(order, action) {
+  const verb = action === 'start' ? '시작' : '거절';
+  intake.busy.set(order.id, action);
+  intake.notes.delete(order.id);
+  renderIntake();
+  try {
+    const response = await fetch(`/api/orders/${encodeURIComponent(order.id)}/${action}`, { method: 'POST' });
+    const result = await response.json();
+    if (!response.ok) {
+      // PINKY_UNAVAILABLE carries the Pinky verdicts of that moment; keep them on the card next to the reason.
+      intake.notes.set(order.id, {
+        title: `${verb}하지 못함`,
+        text: apiErrorMessage(result, `주문을 ${verb}하지 못했습니다`),
+        verdicts: result.assignment?.verdicts,
+      });
+    } else if (action === 'start') {
+      const pinkyId = result.order.pinky_id;
+      showToast(`${order.id} 시작`, `${orderSummary(order.order_items)}, 핑키 ${pinkyNames[pinkyId] || pinkyId}`);
+    } else {
+      showToast(`${order.id} 거절`, orderSummary(order.order_items));
+    }
+  } catch {
+    // No answer is not a refusal: the order may have changed on the server, so ask for a look instead of retrying.
+    intake.notes.set(order.id, { title: '결과 확인 필요', text: `${verb} 요청의 응답을 받지 못했습니다. 주문 목록에서 상태를 확인하세요.` });
+  } finally {
+    intake.busy.delete(order.id);
+    await Promise.all([refreshIntake(), refreshFlow()]);
+  }
+}
+
+intakeOrders.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-intake-action]');
+  const order = button && intake.orders.find((item) => item.id === button.dataset.orderId);
+  if (!order || intake.busy.has(order.id)) return;
+  const action = button.dataset.intakeAction;
+  if (action === 'reject' && !window.confirm(
+    `${order.id} 주문을 거절할까요?\n${orderSummary(order.order_items)}, ${order.destination}\n거절한 주문은 다시 시작할 수 없습니다.`,
+  )) return;
+  controlIntakeOrder(order, action);
+});
+
+showView(window.location.hash.slice(1));
 refresh();
 refreshFlow();
+refreshIntake();
 refreshTasks();
 refreshArmCommands();
 loadShelfSlots();
 window.setInterval(refresh, 3000);
 window.setInterval(refreshFlow, 1000);
+window.setInterval(refreshIntake, 2000);
+window.setInterval(refreshIntakePreviews, 3000);
 window.setInterval(refreshTasks, 1000);
 window.setInterval(refreshArmCommands, 1000);
 window.setInterval(pollParkingLive, 500);

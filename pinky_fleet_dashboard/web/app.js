@@ -1,3 +1,4 @@
+let latestKeepout = null;
 const grid = document.querySelector("#robot-grid");
 const alerts = document.querySelector("#alerts");
 const bridgePill = document.querySelector("#bridge-status");
@@ -28,13 +29,14 @@ function sensor(title, topicKey, main, sub="") {
 let currentRobot = null;
 
 function stageLabel(robot) {
+  if(robot.operational && (robot.stage==="prepared" || (robot.operational.last_preparation_ok && robot.stage==="idle"))) return robot.operational.label;
   const labels = {idle:robot.ssh_reachable?"연결됨":"대기",base_starting:"기본 bringup",sensors_starting:"센서 시작",nav_starting:"Nav2 시작",stopping:"초기화 중",prepared:"준비 완료",fault:"오류"};
   return labels[robot.stage] || robot.stage;
 }
 function badgeClass(robot) {
   if (robot.stage === "fault") return "fault";
   if (["base_starting","sensors_starting","nav_starting","stopping"].includes(robot.stage)) return "busy";
-  if (robot.stage === "prepared") return "good";
+  if (robot.stage === "prepared") return robot.operational?.ready_for_motion?"good":"";
   return "";
 }
 function stepClass(robot, step) {
@@ -56,7 +58,7 @@ function irAssistPanel(robot, busyRobot) {
   const templateMode=profile.mode==="template";
   const estimate=statusTopic.fresh?status.estimate:null;
   const ready=!profile.calibration_error&&Array.isArray(profile.floor)&&Array.isArray(profile.line);
-  const states={operator_stopped:"작업자 정지 · 새 경로 시작 전까지 정지 유지",disabled:"꺼짐",idle:"명령 대기",template_centered:"CSV 중앙 안정 구간 · 직진",template_tracking:"CSV 이탈량 PD 보정",template_unreliable:"CSV 패턴 불일치·모호함 · 정지",route_context_stale:"경로 제어 신호 끊김 · 정지",parking_transit:"주차장 출입 · Nav2",nav2_only:"IR 보정 대기 · Nav2 주행",mission_wait:"코스 완주 · 주행완료 신호 대기",mission_sensor_unavailable:"교차·도킹 센서/위치 미수신 · 정지",crossing_traverse:"교차로 통과 · Nav2 저속 유지",crossing_reacquire:"교차로 출구 · 차선 재획득",crossing_fault:"교차로 통과 제한 도달 · 정지",docking_search:"도킹 흰색 탐색 · 앞뒤 저속 이동",docking_creep:"도킹중 · 저속 진입",docking_reverse:"도킹중 · 제한 후진",docking_wait:"도킹중 · 정지 확인 대기",docking_stopped:"도킹완료 · 수령 대기",docking_released:"물건 수령 완료 · 경로 재개",docking_fault:"도킹 제어 오류 · 정지",tracking:status.policy==="center_first"?"CH2 선 복귀 보정 중":"IR 차선 보정 중",centered:"CH2 선 유지 · 직진",startup_centered:"CH2 정렬 · 저속 직진",route_start_straight:"출발 직진 · 회전 0 · 1초",line_reacquire:"마지막 선 방향 · 저속 재탐색",black_edge_reacquire:"검정 경계 + 바닥 · 흰선 방향 저속 복귀",white_side_reacquire:"옆 흰선 감지 · CH2 중앙 복귀",line_search:"선 재탐색 · 전진 없이 제한 회전",line_search_failed:"재탐색 실패 · 정지 · 위치 확인 필요",heading_unavailable:"오도메트리 방향 미수신 · 정지",route_corner_gap:"경로 코너 · 흰선 단절 허용 · 저속 Nav2",line_gap_stop:"직선 흰선 미검출 · 정지",line_ambiguous_stop:"좌우 흰선·중앙 검정 · 정지",nav2_corner:"CH2+옆 센서 감지 · Nav2 조향",nav2_ambiguous:"CH2 미검출·좌우 감지: Nav2",nav2_turn:"Nav2 저속·제자리 회전 요청",nav2_avoidance:"장애물 우회: Nav2",nav2_line_lost:"선 미검출: Nav2",marker_unclassified:"교차·마커 후보: Nav2",ir_unavailable:"IR 미수신: 정지",lidar_unavailable:"LiDAR·TF 미수신: 정지",lidar_stop:"LiDAR 충돌 예상: 정지",profile_error:"보정 파일 오류: 정지",ultrasonic_unavailable:"초음파 미수신: 정지",ultrasonic_stopped:"초음파 정지",ultrasonic_turning:"초음파 회피 회전",ultrasonic_creeping:"초음파 저속 전진"};
+  const states={operator_stopped:"작업자 정지 · 새 경로 시작 전까지 정지 유지",disabled:"꺼짐",idle:"명령 대기",template_centered:"CSV 중앙 안정 구간 · 직진",template_tracking:"CSV 이탈량 PD 보정",template_unreliable:"CSV 패턴 불일치·모호함 · 정지",route_context_stale:"경로 제어 신호 끊김 · 정지",parking_transit:"주차장 출입 · Nav2",nav2_only:"IR 보정 대기 · Nav2 주행",mission_wait:"코스 완주 · 주행완료 신호 대기",mission_sensor_unavailable:"교차·도킹 센서/위치 미수신 · 정지",crossing_traverse:"교차로 통과 · Nav2 저속 유지",crossing_reacquire:"교차로 출구 · 차선 재획득",crossing_fault:"교차로 통과 제한 도달 · 정지",docking_search:"도킹 흰색 탐색 · 앞뒤 저속 이동",docking_creep:"도킹중 · 저속 진입",docking_reverse:"도킹중 · 제한 후진",docking_wait:"도킹중 · 정지 확인 대기",docking_anchor_wait:"5번 지도 위치 재설정 중",docking_exit_reversing:"도킹 탈출 · 20cm 후진",docking_exit_complete:"도킹 후진 완료",docking_exit_fault:"도킹 후진 오류 · 정지",docking_stopped:"도킹완료 · 수령 대기",docking_released:"물건 수령 완료 · 경로 재개",docking_fault:"도킹 제어 오류 · 정지",tracking:status.policy==="center_first"?"CH2 선 복귀 보정 중":"IR 차선 보정 중",centered:"CH2 선 유지 · 직진",startup_centered:"CH2 정렬 · 저속 직진",route_start_straight:"출발 직진 · 회전 0 · 1초",line_reacquire:"마지막 선 방향 · 저속 재탐색",black_edge_reacquire:"검정 경계 + 바닥 · 흰선 방향 저속 복귀",white_side_reacquire:"옆 흰선 감지 · CH2 중앙 복귀",line_search:"선 재탐색 · 전진 없이 제한 회전",line_search_failed:"재탐색 실패 · 정지 · 위치 확인 필요",heading_unavailable:"오도메트리 방향 미수신 · 정지",route_corner_gap:"경로 코너 · 흰선 단절 허용 · 저속 Nav2",line_gap_stop:"직선 흰선 미검출 · 정지",line_ambiguous_stop:"좌우 흰선·중앙 검정 · 정지",nav2_corner:"CH2+옆 센서 감지 · Nav2 조향",nav2_ambiguous:"CH2 미검출·좌우 감지: Nav2",nav2_turn:"Nav2 저속·제자리 회전 요청",nav2_avoidance:"장애물 우회: Nav2",nav2_line_lost:"선 미검출: Nav2",marker_unclassified:"교차·마커 후보: Nav2",ir_unavailable:"IR 미수신: 정지",lidar_unavailable:"LiDAR·TF 미수신: 정지",lidar_stop:"LiDAR 충돌 예상: 정지",profile_error:"보정 파일 오류: 정지",ultrasonic_unavailable:"초음파 미수신: 정지",ultrasonic_stopped:"초음파 정지",ultrasonic_turning:"초음파 회피 회전",ultrasonic_creeping:"초음파 저속 전진",traffic_wait:"공유 구역 예약·관제 허가 대기",ultrasonic_return_turn:"회피 완료 · 차선 복귀 방향 회전",ultrasonic_returning:"원래 차선으로 저속 접근",ultrasonic_line_align:"흰선 검출 · 진행 방향 정렬",ultrasonic_line_confirm:"CH2 흰선 연속 확인",ultrasonic_offset:"초음파 우회 · 옆으로 10cm 확보",ultrasonic_aligning:"초음파 우회 · 진행 방향 복원",ultrasonic_passing:"초음파 우회 · 장애물 통과",ultrasonic_clearance_wait:"초음파 우회 · 바퀴/차체 공간 부족 · 정지",ultrasonic_geometry_unavailable:"초음파 우회 · LiDAR/오도메트리 미수신 · 정지",ultrasonic_fault:"초음파 우회 제한 초과 · 정지"};
   const label=statusTopic.fresh?(states[status.state]||status.state||"상태 대기"):profile.enabled?"적용 확인 대기":"감시기 대기 · 주행준비 필요";
   const canCapture=!routeActive(robot)&&!templateMode&&!busyRobot&&!enabled&&topic(robot,"ir").fresh;
   const canEnable=!routeActive(robot)&&!busyRobot&&ready&&robot.stage==="prepared"&&statusTopic.fresh&&status.version===1;
@@ -87,7 +89,7 @@ function liveMapPanel(robot) {
     <div class="live-map-scale"><span data-map-scale="${esc(robot.id)}"></span><small>0.5 m 축척</small></div>
     <div class="live-pose-readout" data-pose-readout="${esc(robot.id)}"></div>
     <div class="live-map-meta" data-map-meta="${esc(robot.id)}"></div>
-    <div class="live-map-legend"><span><i class="legend-robot"></i>핑키 위치·방향</span><span><i class="legend-amcl"></i>AMCL 95% 오차 반경</span><span><i class="legend-waypoint"></i>웨이포인트·계획 경로(10cm)</span><span><i class="legend-free"></i>통행 가능</span><span><i class="legend-occupied"></i>점유</span><span><i class="legend-unknown"></i>미확인</span></div>
+    <div class="live-map-legend"><span><i style="background:#9b5de566;border:1px solid #8143bc"></i>keepout · 진입 금지</span><span><i style="background:#008b9a"></i>도킹 후진 20cm</span><span><i class="legend-robot"></i>핑키 위치·방향</span><span><i class="legend-amcl"></i>AMCL 95% 오차 반경</span><span><i class="legend-waypoint"></i>웨이포인트·계획 경로(10cm)</span><span><i class="legend-free"></i>통행 가능</span><span><i class="legend-occupied"></i>점유</span><span><i class="legend-unknown"></i>미확인</span></div>
   </section>`;
 }
 function mapCell(map, x, y) {
@@ -166,11 +168,32 @@ function drawLiveMaps(robots) {
       ctx.drawImage(raster,0,0,canvas.width,canvas.height);
       ctx.setTransform(canvas.width/width,0,0,canvas.height/height,0,0);
       const toCanvas=(x,y)=>{const p=mapCell(map,x,y);return p?{x:p.x,y:height-p.y}:null;};
+      const mask=latestKeepout;
+      if(mask?.available && mask.map===robot.map){
+        const co=Math.cos(mask.origin_yaw_rad||0),si=Math.sin(mask.origin_yaw_rad||0),res=mask.resolution_m;
+        const corner=(x,y)=>toCanvas(mask.origin_x_m+co*x*res-si*y*res,mask.origin_y_m+si*x*res+co*y*res);
+        ctx.save();ctx.fillStyle="rgba(139,65,199,.30)";ctx.strokeStyle="rgba(104,34,160,.58)";ctx.lineWidth=.055;
+        for(let y=0;y<mask.height;y++)for(let x=0;x<mask.width;x++){
+          if(mask.cells[y*mask.width+x]<65)continue;
+          const p=[corner(x,y),corner(x+1,y),corner(x+1,y+1),corner(x,y+1)];
+          if(p.some(at=>!at))continue;
+          ctx.beginPath();p.forEach((at,i)=>i?ctx.lineTo(at.x,at.y):ctx.moveTo(at.x,at.y));ctx.closePath();ctx.fill();
+          ctx.beginPath();ctx.moveTo(p[0].x,p[0].y);ctx.lineTo(p[2].x,p[2].y);ctx.stroke();
+        }
+        ctx.restore();
+      }
       const planned=(robot.route_preview||[]).filter(p=>p.map===robot.map);
-      if(planned.length){
-        ctx.beginPath();planned.forEach((p,i)=>{const at=toCanvas(p.x_m,p.y_m);if(at) i?ctx.lineTo(at.x,at.y):ctx.moveTo(at.x,at.y);});
-        ctx.strokeStyle="#b48300";ctx.lineWidth=.15;ctx.setLineDash([.45,.3]);ctx.stroke();ctx.setLineDash([]);
-        for(const p of planned.filter(p=>!p.anchor)){const at=toCanvas(p.x_m,p.y_m);if(at){ctx.beginPath();ctx.arc(at.x,at.y,.17,0,Math.PI*2);ctx.fillStyle="#bc8a00";ctx.fill();}}
+      for(let i=1;i<planned.length;i++){
+        const p=planned[i],a=toCanvas(planned[i-1].x_m,planned[i-1].y_m),b=toCanvas(p.x_m,p.y_m);
+        if(!a||!b)continue;
+        ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);
+        ctx.strokeStyle=p.reverse?"#008b9a":"#b48300";ctx.lineWidth=p.reverse?.32:.15;
+        ctx.setLineDash(p.reverse?[.6,.25]:[.45,.3]);ctx.stroke();ctx.setLineDash([]);
+        if(p.dock_exit){
+          ctx.beginPath();ctx.arc(b.x,b.y,.65,0,Math.PI*2);ctx.strokeStyle="#008b9a";ctx.stroke();
+          ctx.font="bold 1.3px sans-serif";ctx.textAlign="left";ctx.fillStyle="#006774";
+          ctx.fillText("후진 20cm",b.x+.9,b.y-1);
+        }
       }
       for(const point of (robot.waypoints||[]).filter(p=>!p.map || p.map===robot.map)) {
         const at=toCanvas(point.x_m,point.y_m); if(!at || at.x<0 || at.x>width || at.y<0 || at.y>height) continue;
@@ -237,7 +260,7 @@ function drawLiveMaps(robots) {
       poseStatus.classList.toggle("uncertain",!!(radius!=null&&radius>.10&&radius<=.25));
       poseStatus.classList.toggle("high-error",!!(radius!=null&&radius>.25));
     }
-    if(meta) meta.textContent=map?`${map.source==="local_file"?"PC PGM/YAML":"Nav2 /map"} · ${number(map.width*(map.resolution_m||0),2)} × ${number(map.height*(map.resolution_m||0),2)} m · ${number(map.resolution_m,3)} m/cell · origin (${number(map.origin_x_m,3)}, ${number(map.origin_y_m,3)}, ${number(map.origin_yaw_rad,3)})`:`${robot.map||"지도"} · /map 메시지를 기다리는 중`;
+    if(meta) meta.textContent=map?`${map.source==="local_file"?"PC PGM/YAML":"Nav2 /map"} · ${number(map.width*(map.resolution_m||0),2)} × ${number(map.height*(map.resolution_m||0),2)} m · ${number(map.resolution_m,3)} m/cell · origin (${number(map.origin_x_m,3)}, ${number(map.origin_y_m,3)}, ${number(map.origin_yaw_rad,3)}) · ${latestKeepout?.available&&latestKeepout.map===robot.map?"keepout 마스크 표시 중":"keepout 표시 없음"}`:`${robot.map||"지도"} · /map 메시지를 기다리는 중`;
   }
 }
 function waypointPanel(robot) {
@@ -255,26 +278,32 @@ function waypointPanel(robot) {
 function routePanel(robot, busyRobot) {
   const route=robot.route;
   const active=["starting","running","cancel_requested"].includes(route?.status);
-  const prerequisites=[["map","지도"],["tf_pose","AMCL map 위치"],["scan","LiDAR"],["odom","오도메트리"],["ultrasonic","초음파 안전센서"],["ir","IR"],["line_control","주행 감시기"]];
+  const prerequisites=[["safety_status","최종 충돌 감시기"],["map","지도"],["tf_pose","AMCL map 위치"],["scan","LiDAR"],["odom","오도메트리"],["ultrasonic","초음파 안전센서"],["ir","IR"],["line_control","주행 감시기"]];
   const missing=prerequisites.filter(([key])=>!topic(robot,key).fresh).map(([,label])=>label);
-  if(value(robot,"line_control")?.recovery_policy!=="parking_mission_v2") missing.push("새 감시기 적용 · Nav2 복구 필요");
+  if((value(robot,"line_control")?.recovery_policy!=="parking_mission_v2"||value(robot,"line_control")?.line_algorithm!=="fleet_control_v4"||value(robot,"line_control")?.dock_protocol!=="sponge_v1")) missing.push("새 감시기 적용 · Nav2 복구 필요");
   if(robot.ir_profile?.enabled&&robot.ir_profile?.calibration_error) missing.push("기체 IR 보정 필요");
   const liveReady=missing.length===0;
   const missingWaypoints=[...new Set(waypointRoute)].filter(label=>!(robot.waypoints||[]).some(p=>p.label===label&&p.map===robot.map));
-  const ready=robot.stage==="prepared" && !busyRobot && liveReady && missingWaypoints.length===0;
+  const ready=robot.stage==="prepared" && robot.operational?.ready_for_motion && !busyRobot && liveReady && missingWaypoints.length===0;
   const progress=route ? `${route.completed||0}/${route.labels?.length||robot.route_preview?.length||waypointRoute.length} 도착 · ${route.current_label?`현재 ${esc(route.current_label)}`:""}` : "대기";
   return `<section class="route-panel">
-    <div class="waypoint-head"><div><strong>${fleetIdentity[robot.id].label} · 주차장 출발 임무</strong><small>주차장 → ${waypointRoute.map(esc).join(" → ")} → 완료 신호 대기 → 자기 주차장</small></div><span class="route-status ${active?"active":route?.status==="complete"?"done":route?.status==="failed"?"failed":""}">${route?esc(route.status):"미실행"}</span></div>
+    <div class="waypoint-head"><div><strong>${fleetIdentity[robot.id].label} · 주차장 출발 임무</strong><small>주차장 → ${waypointRoute.map(p=>p==="6"?"후진 20cm → 6":esc(p)).join(" → ")} → 완료 신호 대기 → 자기 주차장</small></div><span class="route-status ${active?"active":route?.status==="complete"?"done":route?.status==="failed"?"failed":""}">${route?esc(route.status):"미실행"}</span></div>
     <p class="waypoint-hint">직선 구간 연속 제어 · 10cm 보간점은 정지 없이 통과 좌표 기록 · ${robot.route_preview?.length||0}개 점 · 기준점만 도착 오차 5cm 검증. 통과 오차가 5cm를 넘으면 표시하며 중간 점마다 정지하지 않습니다. <a href="/api/robots/${esc(robot.id)}/route-preview.csv">10cm 경로 CSV</a></p>
     ${route?.last_check?`<p class="waypoint-hint">${route.last_check.sampling==="docking_service"?"도킹 위치 기록":route.last_check.pass_through?"마지막 통과 기록":"마지막 도착 검증"} ${esc(route.last_check.label)} · ${route.last_check.pass_through?"TF 통과 추정":"TF 도착 위치"} (${number(route.last_check.x_m,3)}, ${number(route.last_check.y_m,3)})m · 목표 오차 ${number(route.last_check.error_m*100,1)}cm${route.last_check.within_tolerance===false?(route.last_check.sampling==="docking_service"?" · 도킹 저속 이동 포함":" · 5cm 초과"):""}</p>`:""}
     <p class="waypoint-hint">자동 주행 전 수동 키보드 노드를 종료하세요. 같은 cmd_vel에 다른 발행자가 있으면 시작을 거부합니다.</p>
-    <p class="waypoint-hint">${liveReady?"지도·위치·LiDAR·오도메트리·초음파 수신 확인됨.":`시작 대기 · 미수신: ${missing.map(esc).join(", ")}`} 초음파가 0.10 m 이내 장애물을 감지하면 안전 감시기가 정지·회전·저속 전진 동작을 제어합니다.</p>
+    <p class="waypoint-hint">${liveReady?"지도·위치·LiDAR·오도메트리·초음파 수신 확인됨.":`시작 대기 · 미수신: ${missing.map(esc).join(", ")}`} 초음파가 0.10 m 이내 장애물을 감지하면 안전 감시기가 정지 후 측면 10cm 확보·방향 복원·저속 통과를 진행합니다. 차체 충돌 여유가 없으면 정지합니다.</p>
+    <p class="waypoint-hint">최종 출력: ${esc(value(robot,'safety_status')?.state||'미수신')} · 실제 명령 ${number(value(robot,'safety_status')?.applied?.[0],3)}m/s / ${number(value(robot,'safety_status')?.applied?.[1],3)}rad/s · 초음파 위치: ${esc(({configured:'실측 설정',tf:'TF 좌표 사용',unmeasured_default:'미실측 기본값'})[value(robot,'safety_status')?.sensor_pose_source]||'대기')} · ${robot.operational?.last_preparation_ok?'이전 주행준비 성공 기록 있음':''}</p>
     ${route?`<div class="route-progress">${esc(route.message||"")} · ${progress}</div>${route.detail?`<div class="error-box">${esc(route.detail)}</div>`:""}`:""}
     ${missingWaypoints.length?`<div class="error-box">경로 좌표 누락: ${missingWaypoints.map(esc).join(", ")}</div>`:""}
-    <div class="route-actions"><button class="button" data-mission-complete="${esc(robot.id)}" data-token="${esc(route?.mission_token)}" ${route?.status==="running"&&route?.phase==="course_complete"?"":"disabled"}>주행완료 · 주차장 복귀</button><button class="button" data-route-start="${esc(robot.id)}" ${ready&&!active?"":"disabled"}>${route?.status==="complete"?"경로 다시 주행":"경로 주행 시작"}</button><button class="button button-reset" data-route-cancel="${esc(robot.id)}">정지 · 경로 취소</button>${(route?.status==="failed"||(!active&&robot.stage==="prepared"&&value(robot,"line_control")?.recovery_policy!=="parking_mission_v2"))?`<button class="button button-quiet" data-nav-recover="${esc(robot.id)}" ${busyRobot?"disabled":""}>Nav2 복구</button>`:""}</div>
+    <div class="route-actions"><button class="button" data-mission-complete="${esc(robot.id)}" data-token="${esc(route?.mission_token)}" ${route?.status==="running"&&route?.phase==="course_complete"?"":"disabled"}>주행완료 · 주차장 복귀</button><button class="button" data-route-start="${esc(robot.id)}" ${ready&&!active?"":"disabled"}>${route?.status==="complete"?"경로 다시 주행":"경로 주행 시작"}</button><button class="button button-reset" data-route-cancel="${esc(robot.id)}">정지 · 경로 취소</button>${(route?.status==="failed"||(!active&&robot.stage==="prepared"&&(value(robot,"line_control")?.recovery_policy!=="parking_mission_v2"||value(robot,"line_control")?.line_algorithm!=="fleet_control_v4"||value(robot,"line_control")?.dock_protocol!=="sponge_v1")))?`<button class="button button-quiet" data-nav-recover="${esc(robot.id)}" ${busyRobot?"disabled":""}>Nav2 복구</button>`:""}</div>
   </section>`;
 }
 function dockingPanel(robot,busyRobot) {
+  if(robot.route?.phase==="docking_anchor") return `<section class="docking-panel"><strong>도킹완료 확인 · 5번 위치 재설정 중</strong><p>AMCL과 지도 TF가 5번 좌표에 반영될 때까지 정지합니다. 수령 완료 버튼은 반영 후 활성화됩니다.</p></section>`;
+  if(robot.route?.phase==="dock_exit") {
+    const entry=topic(robot,"line_control"),exit=entry.value?.dock_exit||{};
+    return `<section class="docking-panel"><strong>도킹 스테이션 탈출 · 20cm 후진</strong><p>${esc(entry.fresh?exit.message||"후진 준비":"상태 수신 대기 · 정지 유지")}</p><p>${number((exit.progress_m||0)*100,1)} / 20cm · 후진 후 6번 (0.59, 1.24)m으로 이동</p></section>`;
+  }
   if(!robot.ir_profile?.enabled && !["docking_manual","docked_manual"].includes(robot.route?.phase)) return `<section class="docking-panel"><strong>IR 보정 대기 · 5번에서 수동 도킹 확인</strong><p class="waypoint-hint">현재 임무는 Nav2로 코스를 완주하고 주행완료 신호를 받은 뒤 자기 주차장으로 복귀합니다. IR 조향·흰색 탐색은 보정 후 활성화합니다. 5번에서는 도킹완료 확인과 물건 수령 완료 버튼을 모두 기다립니다.</p></section>`;
   if(["docking_manual","docked_manual"].includes(robot.route?.phase)) return `<section class="docking-panel"><strong>${robot.route.phase==="docked_manual"?"도킹완료 · 정지 유지":"5번 도착 · 도킹 확인 대기"}</strong><p>IR 보정 전 수동 확인 모드입니다. 버튼 입력 전까지 이동하지 않습니다.</p><button class="button" data-operator="dock_complete" data-robot="${esc(robot.id)}" data-token="${esc(robot.route.mission_token)}" ${robot.route.phase==="docking_manual"?"":"disabled"}>도킹완료 확인</button><button class="button" data-operator="received" data-robot="${esc(robot.id)}" data-token="${esc(robot.route.mission_token)}" ${robot.route.phase==="docked_manual"?"":"disabled"}>물건 수령 완료</button></section>`;
   const entry=topic(robot,"line_control"),control=entry.value||{},dock=control.docking||{},cross=control.crossing||{};
@@ -282,15 +311,15 @@ function dockingPanel(robot,busyRobot) {
   const fresh=entry.fresh&&control.ir_fresh&&control.lidar_fresh&&control.ultrasonic_fresh;
   const pending=pendingDockCommands.has(robot.id);
   const complete=active&&fresh&&!pending&&["docking","await_confirmation","recovery_hold"].includes(dock.state);
-  const received=active&&fresh&&!pending&&dock.state==="stopped";
-  const names={search:"도킹 흰색 탐색중",search_hold:"도킹 탐색 종료 · 정지",idle:"도킹 대기",docking:"도킹중",reverse:"도킹중 · 후진 보정",await_confirmation:"도킹중 · 정지 대기",recovery_hold:"도킹중 · 감시기 재시작 후 정지 유지",stopped:"도킹완료",released:"물건 수령 완료",fault:"도킹 오류 · 정지"};
+  const received=active&&fresh&&!pending&&dock.state==="stopped"&&dock.anchored===true;
+  const names={anchor_wait:"5번 지도 위치 재설정 중",search:"도킹 흰색 탐색중",search_hold:"도킹 탐색 종료 · 정지",idle:"도킹 대기",docking:"도킹중",reverse:"도킹중 · 후진 보정",await_confirmation:"도킹중 · 정지 대기",recovery_hold:"도킹중 · 감시기 재시작 후 정지 유지",stopped:"도킹완료",released:"물건 수령 완료",fault:"도킹 오류 · 정지"};
   const phases={approach:"접근",turn:"회전",reacquire:"차선 확인",idle:"대기"};
   const crossing={idle:"일반 주행",traverse:"교차로 통과중",reacquire:"다음 차선 재획득중",fault:"교차로 통과 실패 · 정지"};
   return `<section class="docking-panel"><div class="waypoint-head"><strong>5번 · 도킹 / 수령</strong><span class="ir-control-state ${dock.state==="stopped"?"enabled":""}">${entry.fresh?esc(names[dock.state]||"도킹 대기"):"상태 수신 대기"}</span></div>
   <p class="docking-message">${entry.fresh?esc(dock.message||"5번 위치 5cm 이내 + 세 센서 흰색 연속 확인 시 도킹을 시작합니다."):"주행준비 후 도킹 감시 상태를 확인할 수 있습니다."}</p>
   <p class="waypoint-hint">${entry.fresh?`IR 세 채널 흰색: ${dock.all_white?"예":"아니오"} · 도킹완료 입력: ${dock.complete?"수신":"대기"}`:"—"}${active&&!fresh?" · 센서/위치 확인 필요 · 정지 유지":""}</p>
   <div class="docking-actions"><button class="button button-quiet" data-docking="complete" data-robot="${esc(robot.id)}" data-dock-id="${esc(dock.dock_id)}" ${complete?"":"disabled"}>도킹완료 확인</button><button class="button" data-docking="received" data-robot="${esc(robot.id)}" data-dock-id="${esc(dock.dock_id)}" ${received?"":"disabled"}>물건 수령 완료</button></div>
-  <p class="waypoint-hint">흰색 미검출 시 앞뒤 3cm 탐색(1cm/s·최대 26초) 후 정지 대기 · 도킹중 1cm/s · 전진 최대 10cm/10초 · 흰색 이탈 시 도킹 중에만 최대 2cm 후진 후 정지. 도킹완료 후에는 수령 버튼을 누를 때까지 정지합니다.</p>
+  <p class="waypoint-hint">흰색 미검출 시 앞뒤 3cm 탐색(1cm/s·최대 26초) 후 정지 대기 · 도킹중 1cm/s · 전진 최대 10cm/10초 · 흰색 이탈 시 도킹 중에만 최대 2cm 후진 후 정지. 도킹완료 확인 → 5번 위치 재설정 → 수령 대기 → 수령 완료 후 20cm 후진 → 6번으로 이동합니다.</p>
   <div class="crossing-readout">${entry.fresh?esc(crossing[cross.state]||"일반 주행"):"교차로 상태 대기"}${entry.fresh&&cross.state&&cross.state!=="idle"?` · ${esc(phases[cross.phase]||cross.phase||"")} ${number(cross.phase_elapsed_s,1)}초${cross.failure_reason?` · ${esc(cross.failure_reason)}`:""} · 통과 이동 ${number(cross.travel_m*100,1)}cm · 누적 회전 ${number(cross.rotation_rad*180/Math.PI,0)}°`:""}</div></section>`;
 }
 
@@ -338,7 +367,7 @@ function renderCard(robot, busyRobot) {
       ${waypointPanel(robot)}
       ${routePanel(robot,busyRobot)}
     </div>
-    <div class="card-foot"><span>PC domain 0 ← Pinky domain ${esc(robot.domain)}</span><span>${robot.last_ssh_ok?`SSH ${new Date(robot.last_ssh_ok*1000).toLocaleTimeString("ko-KR")}`:"아직 SSH 명령 없음"}</span></div>
+    <div class="card-foot"><span>PC 직접 구독 · Pinky domain ${esc(robot.domain)}</span><span>${robot.last_ssh_ok?`SSH ${new Date(robot.last_ssh_ok*1000).toLocaleTimeString("ko-KR")}`:"아직 SSH 명령 없음"}</span></div>
   </article>`;
 }
 
@@ -347,7 +376,16 @@ async function refresh() {
     const response = await fetch("/api/status", {cache:"no-store"});
     const data = await response.json();
     latestFleet=data.robots;
-    document.querySelector("#fleet-start").disabled=fleetPending||!!data.busy_robot||data.robots.length!==3||new Set(data.robots.map(r=>r.map)).size!==1||data.robots.some(r=>routeActive(r)||r.stage!=="prepared"||(r.ir_profile?.enabled&&r.ir_profile?.calibration_error)||["map","tf_pose","scan","odom","ultrasonic","ir","line_control"].some(k=>!topic(r,k).fresh)||value(r,"line_control")?.recovery_policy!=="parking_mission_v2");
+    const trafficBox=document.querySelector('#traffic-panel');
+    if(trafficBox){
+      const names={junction7:'7번 교차로',dock5:'5번 도킹',parking:'주차장 출입'};
+      const traffic=data.traffic||{owners:{},waiting:{}};
+      trafficBox.innerHTML=`<h3>공유 구역 예약</h3><p class="waypoint-hint">연결이 끊긴 기체의 점유는 유지합니다. 예약 해제는 최신 위치로 구역 밖 또는 주차장 정지를 확인한 경우만 가능합니다.</p>${traffic.error?`<div class="error-box">예약 저장 상태 오류: ${esc(traffic.error)}</div>`:''}${Object.entries(names).map(([key,label])=>{
+        const owner=traffic.owners?.[key],wait=Object.entries(traffic.waiting||{}).filter(([,zones])=>zones.includes(key)).map(([rid])=>fleetIdentity[rid]?.label||rid);
+        return `<p>${label} · ${owner?`${esc(fleetIdentity[owner.robot_id]?.label||owner.robot_id)} 점유`:'비어 있음'}${wait.length?` · 대기: ${wait.map(esc).join(', ')}`:''} ${owner?`<button class="button button-quiet" data-release-zone="${esc(key)}" data-robot="${esc(owner.robot_id)}" data-token="${esc(owner.token)}">위치 확인 후 예약 해제</button>`:''}</p>`;
+      }).join('')}`;
+    }
+    document.querySelector("#fleet-start").disabled=fleetPending||!!data.busy_robot||data.robots.length!==3||new Set(data.robots.map(r=>r.map)).size!==1||data.robots.some(r=>routeActive(r)||r.stage!=="prepared"||(r.ir_profile?.enabled&&r.ir_profile?.calibration_error)||["map","tf_pose","scan","odom","ultrasonic","ir","line_control"].some(k=>!topic(r,k).fresh)||value(r,"line_control")?.recovery_policy!=="parking_mission_v2"||value(r,"line_control")?.dock_protocol!=="sponge_v1");
     document.querySelector("#fleet-stop").disabled=fleetPending||!data.robots.some(r=>r.ssh_reachable);
     // Replacing the entire robot grid every second steals focus from the
     // waypoint name field. Leave the cards in place while a name is edited.
@@ -360,12 +398,13 @@ async function refresh() {
       fleetMap.innerHTML=liveMapPanel(reference);
       fleetMap.dataset.reference=reference.id;
     }
+    latestKeepout=data.keepout;
     drawLiveMaps(data.robots);
     const freshCount=data.robots.reduce((sum,r)=>sum+Object.values(r.topics||{}).filter(t=>t.fresh).length,0);
     resetAllButton.disabled=!!data.busy_robot||data.robots.some(routeActive);
     resetAllButton.textContent=data.busy_robot==="all"?"초기화 중…":"전체 초기화";
     bridgePill.className = `system-pill ${data.monitor_error?"bad":freshCount?"good":""}`;
-    bridgePill.innerHTML = `<i></i>${data.monitor_error?"ROS 모니터 오류":freshCount?`센서 브릿지 수신 ${freshCount}`:"브릿지 대기 · 센서 미수신"}`;
+    bridgePill.innerHTML = `<i></i>${data.monitor_error?"ROS 모니터 오류":freshCount?`직접 구독 수신 ${freshCount}`:"로봇 데이터 대기 · 센서 미수신"}`;
     alerts.innerHTML = data.monitor_error ? `<div class="alert">${esc(data.monitor_error)}</div>` : (data.busy_robot==="all" ? `<div class="alert info">세 핑키의 대시보드 실행 노드와 키보드 조작을 종료하는 중입니다.</div>` : data.busy_robot ? `<div class="alert info">Pinky ${esc(data.busy_robot)} 준비 중입니다. 완료 또는 장애 상태가 표시될 때까지 다른 로봇은 대기합니다.</div>` : "");
   } catch (error) {
     bridgePill.className="system-pill bad";
@@ -548,3 +587,13 @@ async function fleetCommand(action) {
 }
 document.querySelector("#fleet-start").addEventListener("click",()=>fleetCommand("route"));
 document.querySelector("#fleet-stop").addEventListener("click",()=>fleetCommand("route/cancel"));
+
+document.querySelector('#traffic-panel').addEventListener('click',async event=>{
+  const button=event.target.closest('[data-release-zone]');if(!button)return;
+  button.disabled=true;
+  try{
+    const response=await fetch('/api/traffic/release',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({zone:button.dataset.releaseZone,robot_id:button.dataset.robot,token:button.dataset.token})});
+    const result=await response.json();if(!response.ok)alerts.innerHTML=`<div class="alert">${esc(result.error)}</div>`;
+  }catch(error){alerts.innerHTML=`<div class="alert">${esc(error.message)}</div>`;}
+  await refresh();
+});

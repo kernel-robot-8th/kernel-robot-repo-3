@@ -33,7 +33,7 @@ CAPTURED_AT = "2026-11-03T12:00:00.000+00:00"
 PIXEL_TRANSFORM = "opencv-v4l2-capture-no-app-geometry-v1"
 
 
-def detection(class_name: str, x: int, color: str) -> dict[str, object]:
+def detection(class_name: str, x: int) -> dict[str, object]:
     return {
         "class_name": class_name,
         "confidence": 0.9,
@@ -45,7 +45,6 @@ def detection(class_name: str, x: int, color: str) -> dict[str, object]:
         "pixel_transform_id": PIXEL_TRANSFORM,
         "frame_width": 640,
         "frame_height": 480,
-        "color_hint": {"status": "ESTIMATED", "color": color},
     }
 
 
@@ -66,7 +65,7 @@ def head_camera(**changes: object) -> CameraSnapshot:
         detector_state="ready",
         detector_model_type="YOLO_CLOSED_SET",
         detector_classes=["strawberry", "ball"],
-        detections=[detection("strawberry", 100, "red"), detection("strawberry", 300, "green")],
+        detections=[detection("strawberry", 100), detection("strawberry", 300)],
     )
     values.update(changes)
     return CameraSnapshot(**values)  # type: ignore[arg-type]
@@ -142,7 +141,6 @@ class ApiTestCase(unittest.TestCase):
         server.task_store = self.task_store
         server.arm_commands = ArmCommandStore(self.task_store.session_factory, slot_map=slot_map)
         server.shelf_slot_zones = ShelfSlotZones(slot_map, directory=self.directory / "poses")
-        server.parking_source = "ros" if self.parking else None
         server.parking_spot_id = "pinky_dock_1" if self.parking else None
         server.parking_camera_id = "head_camera" if self.parking else None
         server.parking_check = self.fake_parking.check if self.parking else None
@@ -164,9 +162,10 @@ class ApiTestCase(unittest.TestCase):
         raw: bytes | None = None,
         content_type: str | None = "application/json",
         origin: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> tuple[int, object, dict[str, str]]:
         connection = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=10)
-        headers: dict[str, str] = {}
+        headers = dict(headers or {})
         payload = raw if raw is not None else (None if body is None else json.dumps(body).encode())
         if payload is not None and content_type is not None:
             headers["Content-Type"] = content_type
@@ -182,12 +181,19 @@ class ApiTestCase(unittest.TestCase):
         return response.status, data, response_headers
 
     def get(self, path: str) -> tuple[int, object]:
-        status, body, _ = self.request("GET", path)
-        return status, body
+        status, body, headers = self.request("GET", path)
+        return status, self._without_request_id(body, headers)
 
     def post(self, path: str, body: object = None, **options: object) -> tuple[int, object]:
-        status, data, _ = self.request("POST", path, body, **options)  # type: ignore[arg-type]
-        return status, data
+        status, data, headers = self.request("POST", path, body, **options)  # type: ignore[arg-type]
+        return status, self._without_request_id(data, headers)
+
+    def _without_request_id(self, body: object, headers: dict[str, str]) -> object:
+        """Error bodies carry the request's random ID; check it matches X-Request-Id, then compare the rest."""
+        if isinstance(body, dict) and "request_id" in body:
+            body = dict(body)
+            self.assertEqual(body.pop("request_id"), headers.get("x-request-id"))
+        return body
 
     def create_task(self, pick_request: dict[str, object] | None = None) -> str:
         body: dict[str, object] = {"destination": "작업대 A", "arm_job": "상자 이동"}
@@ -198,15 +204,17 @@ class ApiTestCase(unittest.TestCase):
         return data["task"]["id"]  # type: ignore[index]
 
 
-def error(message: str, code: str | None = None, **details: object) -> dict[str, object]:
-    return {"error_code": code, "message": message, "error": message, **details} if code else {"error": message}
+def error(message: str, code: str | None = None, *, retryable: bool = False, **details: object) -> dict[str, object]:
+    if not code:
+        return {"error": message}
+    return {"error_code": code, "message": message, "error": message, "retryable": retryable, **details}
 
 
 class ReadRouteTests(ApiTestCase):
     def test_health_without_parking(self) -> None:
         self.assertEqual(self.get("/api/health"), (200, {
             "status": "ok", "mode": "mock",
-            "parking": {"source": None, "camera_id": None, "spot_id": None, "live_tracking": False},
+            "parking": {"camera_id": None, "spot_id": None, "live_tracking": False},
         }))
 
     def test_robots(self) -> None:
@@ -215,30 +223,6 @@ class ReadRouteTests(ApiTestCase):
     def test_cameras(self) -> None:
         # No shelf pose is activated for this camera, so the snapshot passes through without slot_zones.
         self.assertEqual(self.get("/api/cameras"), (200, {"cameras": [json.loads(json.dumps(head_camera().to_dict()))]}))
-
-    def test_camera_target_observation(self) -> None:
-        status, body = self.get("/api/cameras/head_camera/target-observation?class_name=strawberry&color=red")
-        self.assertEqual(status, 200)
-        observation = body["observation"]  # type: ignore[index]
-        self.assertEqual(observation["status"], "AMBIGUOUS")
-        self.assertEqual(observation["candidate_count"], 2)
-        self.assertEqual(observation["color_evaluation"]["status"], "SINGLE_COLOR_HINT_MATCH")
-        self.assertEqual(observation["color_evaluation"]["candidate_indices"], [0])
-        self.assertEqual(observation["decision_scope"], "OBSERVATION_ONLY")
-        self.assertIs(observation["arm_command_sent"], False)
-
-    def test_camera_target_observation_errors(self) -> None:
-        base = "/api/cameras/head_camera/target-observation"
-        once = "class_name is required once; color and shelf_level may be provided once"
-        for query in ("", "?class_name=a&class_name=b", "?class_name=a&other=1", "?class_name=a&color=r&color=g"):
-            with self.subTest(query=query):
-                self.assertEqual(self.get(base + query), (400, error(once)))
-        self.assertEqual(self.get(base + "?class_name=%20"), (400, error("class_name must contain 1 to 80 characters")))
-        self.assertEqual(self.get(base + "?class_name=a&color=%20"), (400, error("color must contain 1 to 40 characters")))
-        status, body = self.get(base + "?class_name=a&shelf_level=0")
-        self.assertEqual(status, 400)
-        self.assertIn("shelf_level must be an integer from 1 to", body["error"])  # type: ignore[index]
-        self.assertEqual(self.get("/api/cameras/nope/target-observation?class_name=a"), (404, error("Camera not found")))
 
     def test_tasks(self) -> None:
         task_id = self.create_task()
@@ -276,7 +260,7 @@ class ReadRouteTests(ApiTestCase):
         self.assertEqual(self.get("/api/parking-spots/pinky_dock_1/live"), (404, error(
             "이 주차 위치는 실시간 추적 중이 아닙니다 (CONTROL_STATION_PARKING_SPOT)", "PARKING_TRACKING_NOT_CONFIGURED")))
         self.assertEqual(self.get("/api/parking-spots/pinky_dock_1/check"), (503, error(
-            "주차 판정 노드가 설정되지 않았습니다 (CONTROL_STATION_PARKING_SPOT)", "PARKING_NODE_UNAVAILABLE")))
+            "주차 판정 노드가 설정되지 않았습니다 (CONTROL_STATION_PARKING_SPOT)", "PARKING_NODE_UNAVAILABLE", retryable=True)))
 
     def test_streams_and_static_files(self) -> None:
         self.assertEqual(self.get("/streams/nope.mjpg"), (404, error("Camera stream not found")))
@@ -300,7 +284,7 @@ class ParkingRouteTests(ApiTestCase):
 
     def test_health_with_parking(self) -> None:
         self.assertEqual(self.get("/api/health")[1]["parking"], {  # type: ignore[index]
-            "source": "ros", "camera_id": "head_camera", "spot_id": "pinky_dock_1", "live_tracking": True})
+            "camera_id": "head_camera", "spot_id": "pinky_dock_1", "live_tracking": True})
 
     def test_live_and_check(self) -> None:
         self.assertEqual(self.get("/api/parking-spots/pinky_dock_1/live"), (200, {"live": self.fake_parking.snapshot()}))
@@ -308,7 +292,7 @@ class ParkingRouteTests(ApiTestCase):
         self.assertEqual(self.get("/api/parking-spots/pinky_dock_1/check"), (200, {"observation": {
             "spot_id": "pinky_dock_1", "status": "ARRIVED", "reason": "within tolerance"}}))
         self.fake_parking.error = ParkingObservationError(503, "PARKING_NODE_TIMEOUT", "늦음")
-        self.assertEqual(self.get("/api/parking-spots/pinky_dock_1/check"), (503, error("늦음", "PARKING_NODE_TIMEOUT")))
+        self.assertEqual(self.get("/api/parking-spots/pinky_dock_1/check"), (503, error("늦음", "PARKING_NODE_TIMEOUT", retryable=True)))
 
 
 class RequestBodyTests(ApiTestCase):

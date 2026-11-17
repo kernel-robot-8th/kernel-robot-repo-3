@@ -16,9 +16,12 @@ The motion itself and its safety checks live in omx_slot_motion.py, shared with 
 - moves only after the control station answers ACCEPTED with HTTP 200
 - checks the command's cancel flag about once a second while moving
 - --release-torque turns arm torque off and exits (support the arm by hand first)
-PICK_WITH_POLICY runs the LeRobot ACT policy trained for the named object (omx_act_policy_run.py) through the
-policy server on this PC, stops it once the arm is back at rest, then aligns it to the recorded home pose. Whether
+PICK_WITH_POLICY runs the LeRobot ACT policy trained for the named object (omx_policy_pick.py, shared with the ROS 2
+action server omx_pick_action_server.py) through the policy server on this PC, stops it once the arm is back at rest, then aligns it to the recorded home pose. Whether
 the object was grasped and placed is not checked, so the outcome is RESULT_UNKNOWN / PLACE_NOT_VERIFIED.
+A policy recorded on one arm (arm_id) runs only in that arm's worker (--robot-id) on that arm's board
+(board_serial in config/arms.json). With two arms, run one worker per arm; each takes its port and cameras from
+CONTROL_STATION_ARM01_* / ARM02_* (FOLLOWER_PORT, GRIPPER_CAMERA, OVERHEAD_CAMERA) for its --robot-id.
 Any other operation is rejected (NOT_IMPLEMENTED).
 This does not replace the hardware power cut.
 """
@@ -26,64 +29,12 @@ This does not replace the hardware power cut.
 from __future__ import annotations
 
 import argparse
-import os
 import time
-from dataclasses import asdict
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from datetime import datetime
 
 from mock_omx_worker import Refused, Worker, request_json
-from omx_act_policy_run import (
-    DEFAULT_POLICIES, RestWatcher, check_policy_server, load_policies, max_home_error_ticks, policy_cameras,
-    run_policy, wait_devices_free,
-)
-from omx_slot_motion import (
-    ARM_JOINTS, DEFAULT_PORT, Outcome, REPOSITORY_ROOT, Rejected, SlotMotion, add_motion_arguments,
-)
-
-DEFAULT_GRIPPER_CAMERA = "/dev/v4l/by-id/usb-Innomaker_Innomaker-U20CAM-720P_SN0001-video-index0"
-
-
-def configure_arm_devices(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
-    """Resolve the selected arm's serial port, pose file and policy cameras from its own environment settings."""
-    side_by_robot = {"arm-01": "LEFT", "arm-02": "RIGHT"}
-    side = side_by_robot.get(args.robot_id)
-    if side is None:
-        parser.error("--robot-id must be arm-01 or arm-02")
-    side_prefix = f"CONTROL_STATION_{side}_"
-
-    if args.port is None:
-        args.port = os.environ.get(f"{side_prefix}FOLLOWER_PORT", "").strip()
-        if not args.port and side == "LEFT":
-            args.port = os.environ.get("CONTROL_STATION_FOLLOWER_PORT", "").strip()
-        if not args.port and side == "RIGHT":
-            args.port = DEFAULT_PORT
-        if not args.port:
-            parser.error(f"{side_prefix}FOLLOWER_PORT를 설정하세요")
-
-    if args.poses is None:
-        poses = os.environ.get(f"{side_prefix}OMX_POSES", "").strip()
-        if not poses and side == "LEFT":
-            poses = os.environ.get("CONTROL_STATION_OMX_POSES", "").strip()
-        if poses:
-            args.poses = Path(poses)
-        elif side == "RIGHT":
-            args.poses = REPOSITORY_ROOT / "config" / "omx-slot-poses.json"
-        else:
-            parser.error(f"{side_prefix}OMX_POSES를 설정하세요")
-
-    args.overhead_camera = (
-        args.overhead_camera
-        or os.environ.get(f"{side_prefix}CEILING_CAMERA", "").strip()
-        or os.environ.get("CONTROL_STATION_ACT_OVERHEAD_CAMERA", "").strip()
-    )
-    args.gripper_camera = (
-        args.gripper_camera
-        or os.environ.get(f"{side_prefix}JOINT_CAMERA", "").strip()
-        or os.environ.get("CONTROL_STATION_JOINT_CAMERA", "").strip()
-        or DEFAULT_GRIPPER_CAMERA
-    )
-
+from omx_policy_pick import PolicyPick, add_policy_arguments, arm_env, finish_policy_arguments
+from omx_slot_motion import ARM_JOINTS, Outcome, Rejected, SlotMotion, add_motion_arguments
 
 
 class LeRobotOmxWorker(Worker):
@@ -93,10 +44,9 @@ class LeRobotOmxWorker(Worker):
         super().__init__(args)
         self.motion = SlotMotion(args)
         self.goal: dict[str, int] = {}
-        self.policy_version, self.policies = load_policies(args.policies)
-        self.camera_devices = {"OVERHEAD": args.overhead_camera, "GRIPPER": args.gripper_camera}
+        self.pick = PolicyPick(self.motion, args)
         print(self.motion.describe(), flush=True)
-        print(f"학습 정책: {sorted(self.policies)} · 위 카메라 {args.overhead_camera or '미지정'} · 그리퍼 카메라 "
+        print(f"학습 정책: {sorted(self.pick.policies)} · 위 카메라 {args.overhead_camera or '미지정'} · 그리퍼 카메라 "
               f"{args.gripper_camera} · 정책 서버 {args.policy_server}", flush=True)
 
     # ---- worker hooks ----
@@ -116,54 +66,12 @@ class LeRobotOmxWorker(Worker):
             return rejected.reason_code
         return None
 
-    # ---- PICK_WITH_POLICY ----
-    def check_policy(self, command: dict) -> tuple[str | None, dict | None]:
-        """(reason to reject, policy). Reads the arm but writes nothing."""
-        settings = self.args
-        policy_ref = command["target"].get("policy") or {}
-        if settings.fake_follower or settings.dry_run:
-            return "POLICY_NEEDS_REAL_ARM", None
-        if policy_ref.get("registry_version") != self.policy_version:
-            return "POLICY_REGISTRY_MISMATCH", None
-        policy = self.policies.get(policy_ref.get("policy_id"))
-        if policy is None or policy["model"] != policy_ref.get("model"):
-            return "POLICY_UNKNOWN", None
-        if policy.get("arm_id") not in (None, command["robot_id"]):
-            return "POLICY_WRONG_ARM", None
-        if "home" not in self.motion.poses["poses"]:
-            return "POSE_NOT_RECORDED", None
-        if datetime.fromisoformat(command["valid_until"]) <= datetime.now(timezone.utc):
-            return "EXPIRED", None
-        missing = [role for role, path in self.camera_devices.items() if not path or not os.path.exists(path)]
-        if missing:
-            print(f"  카메라 없음: {missing} {self.camera_devices}", flush=True)
-            return "CAMERA_UNAVAILABLE", None
-        # The control station closes these cameras when it hands out this command; wait for that.
-        busy = wait_devices_free(list(self.camera_devices.values()))
-        if busy:
-            print(f"  다른 프로그램이 카메라를 쓰는 중: {busy}", flush=True)
-            return "CAMERA_BUSY", None
-        problem = check_policy_server(settings.policy_server)
-        if problem:
-            print(f"  {problem}", flush=True)
-            return "POLICY_SERVER_UNAVAILABLE", None
-        home = self.motion.poses["poses"]["home"]["ticks"]
-        with self.motion.follower():
-            now = self.motion.present()
-        away = max_home_error_ticks(home, now)
-        print(f"  현재 {now}\n  home과 최대 차이 {away} ticks", flush=True)
-        if away > settings.policy_start_ticks:
-            if not settings.policy_any_start:
-                return "NOT_AT_REST", None  # the policy was trained starting from rest
-            print(f"  실험 모드: 쉬는 자세가 아닌 곳에서 정책 시작 (한 스텝 최대 {settings.policy_max_step_ticks} ticks)", flush=True)
-        return None, policy
-
+    # ---- PICK_WITH_POLICY (checks, run and home alignment are omx_policy_pick.PolicyPick) ----
     def handle_policy(self, command: dict) -> None:
-        settings = self.args
         policy_ref = command["target"].get("policy") or {}
         print(f"[{command['command_id']}] PICK_WITH_POLICY {policy_ref.get('label')} ({policy_ref.get('model')})", flush=True)
         try:
-            reason, policy = self.check_policy(command)
+            reason, policy = self.pick.check(policy_ref, datetime.fromisoformat(command["valid_until"]))
         except (ConnectionError, OSError, RuntimeError) as error:
             print(f"  팔로워 포트를 열 수 없음: {error}", flush=True)
             reason, policy = "FOLLOWER_PORT_UNAVAILABLE", None
@@ -172,11 +80,7 @@ class LeRobotOmxWorker(Worker):
                 self.send(command, "REJECTED", reason_code=reason)
                 return
             command = self.send(command, "ACCEPTED")  # only an HTTP 200 here allows motion
-            with self.motion.follower():
-                # Run the policy at the servo speed it was recorded with (power-on default 0 = no profile limit);
-                # the slot/home moves of this worker leave a slow profile in RAM.
-                self.motion.write("Profile_Velocity", {name: 0 for name in ARM_JOINTS})
-                self.motion.write("Profile_Acceleration", {name: 0 for name in ARM_JOINTS})
+            self.pick.prepare()
         except Refused as refused:
             print(f"  중단: 관제가 거부함 ({refused}). 더 진행하지 않습니다.", flush=True)
             return
@@ -184,8 +88,6 @@ class LeRobotOmxWorker(Worker):
             self.report_policy_error(command, f"profile reset failed: {error}")
             return
 
-        home = {name: int(self.motion.poses["poses"]["home"]["ticks"][name]) for name in ARM_JOINTS}
-        watcher = RestWatcher(home, settings.policy_depart_ticks, settings.policy_rest_ticks, settings.policy_settle_s)
         command_id = command["command_id"]
 
         def cancel_requested() -> bool:
@@ -194,15 +96,10 @@ class LeRobotOmxWorker(Worker):
                 raise RuntimeError(f"HTTP {status}")
             return body["command"]["cancel_requested"]
 
-        cameras = policy_cameras(policy, self.camera_devices)
-        print(f"  정책 실행: {policy['model']} · front={cameras['front']} · wrist={cameras['wrist']}", flush=True)
         try:
-            result = run_policy(
-                policy, port=settings.port, cameras=cameras, server_address=settings.policy_server, watcher=watcher,
-                max_run_s=policy["max_run_s"], cancel_requested=cancel_requested,
+            result, policy_details = self.pick.run(
+                policy, cancel_requested=cancel_requested,
                 started=lambda: self.send(command, "PROGRESS", phase="APPROACH_TARGET"),
-                max_step_ticks=settings.policy_max_step_ticks,
-                policy_device=settings.policy_device,
             )
         except Refused as refused:
             print(f"  관제가 진행 보고를 거부함 ({refused}). 정책은 멈췄고 팔은 그 자리에서 토크를 유지합니다.", flush=True)
@@ -210,59 +107,12 @@ class LeRobotOmxWorker(Worker):
         except Exception as error:  # the arm keeps torque where the policy left it; a person has to look
             self.report_policy_error(command, str(error))
             return
-        policy_details = {"policy_id": policy["policy_id"], "model": policy["model"], **asdict(result)}
-        print(f"  정책 종료: {result.stop_reason}, {result.run_s:.1f}s, 행동 {result.actions_sent}개, "
-              f"home에서 가장 멀리 {result.farthest_from_home_ticks} ticks", flush=True)
+        end = self.pick.end(result, policy_details)
         try:
-            if result.stop_reason == "RETURNED_TO_REST":
-                self.finish_at_home(command, policy_details)
-            elif result.stop_reason == "CANCELED":
-                self.send(command, "CANCELED", phase="APPROACH_TARGET", details={"policy_run": policy_details})
-            elif result.stop_reason == "NEVER_DEPARTED":
-                self.send(command, "FAILED", reason_code="POLICY_DID_NOT_MOVE", details={"policy_run": policy_details})
-            elif result.stop_reason == "TIMEOUT":
-                # Not back at rest: it may hold the object or be near the shelf, so no automatic move home.
-                self.send(command, "FAILED", reason_code="POLICY_TIMEOUT_NOT_AT_REST",
-                          message="정책을 멈췄고 팔은 그 자리에서 토크를 유지합니다. 현장 확인 뒤 원상복귀하세요.",
-                          details={"policy_run": policy_details})
-            else:
-                self.send(command, "RESULT_UNKNOWN", reason_code="POLICY_RUN_ERROR", message=result.message[:300] or None,
-                          details={"policy_run": policy_details})
+            self.send(command, end.event, reason_code=end.reason_code, message=end.message,
+                      pose_reached=end.pose_reached, phase=end.phase, details=end.details)
         except Refused as refused:
             print(f"  관제가 결과 보고를 거부함 ({refused})", flush=True)
-
-    def finish_at_home(self, command: dict, policy_details: dict) -> None:
-        """The policy came back to rest: align to the recorded home pose. The command was accepted in time, so the
-        follow-up move is not tied to valid_until."""
-        time.sleep(0.5)  # let the servos finish the last goal the policy wrote
-        try:
-            with self.motion.follower():
-                goal = self.motion.plan("home", self.motion.slot_map_version,
-                                        datetime.now(timezone.utc) + timedelta(seconds=60))
-                now = self.motion.present()
-                away = max(abs(goal[name] - now[name]) for name in ARM_JOINTS)
-                if away > 2 * self.args.policy_rest_ticks:
-                    self.send(command, "FAILED", reason_code="REST_NOT_CONFIRMED",
-                              message=f"정책은 쉬는 자세로 돌아왔다고 봤지만 실제 관절이 home에서 {away} ticks 떨어져 있어 움직이지 않았습니다.",
-                              details={"policy_run": policy_details, "present_ticks": now})
-                    return
-                outcome = self.motion.move(goal, lambda: False)
-        except Rejected as rejected:
-            self.send(command, "FAILED", reason_code=rejected.reason_code, details={"policy_run": policy_details})
-            return
-        except (ConnectionError, OSError, RuntimeError) as error:
-            self.report_policy_error(command, f"home alignment: {error}", policy_details)
-            return
-        home_details = {"goal_ticks": goal, "final_ticks": outcome.final_ticks, "max_error_ticks": outcome.max_error_ticks}
-        details = {"policy_run": policy_details, "home_return": home_details}
-        if outcome.outcome == "SUCCEEDED":
-            # The arm is home; grasp and placement were not observed, so success cannot be claimed.
-            self.send(command, "RESULT_UNKNOWN", reason_code="PLACE_NOT_VERIFIED", pose_reached=True,
-                      message="정책 동작 뒤 home 복귀 완료. 집기·적재는 확인하지 않았습니다.", details=details)
-        else:
-            self.send(command, "FAILED" if outcome.outcome == "FAILED" else "RESULT_UNKNOWN",
-                      reason_code=outcome.reason_code or "HOME_RETURN_FAILED", message=outcome.message or None,
-                      details=details)
 
     def report_policy_error(self, command: dict, message: str, policy_details: dict | None = None) -> None:
         print(f"  정책 실행 오류: {message}", flush=True)
@@ -334,34 +184,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--server", default="http://127.0.0.1:8000")
     parser.add_argument("--robot-id", default="arm-01")
+    robot_id = parser.parse_known_args()[0].robot_id  # the per-arm defaults below depend on it
     parser.add_argument("--worker-id", default="omx-lerobot-worker")
     parser.add_argument("--wait-s", type=float, default=20)
     parser.add_argument("--once", action="store_true", help="exit after one command")
     add_motion_arguments(parser)
-    # Resolve defaults after --robot-id is known; add_motion_arguments also serves one-arm ROS tools.
-    parser.set_defaults(port=None, poses=None)
-    policy = parser.add_argument_group("PICK_WITH_POLICY (LeRobot ACT)")
-    policy.add_argument("--policies", type=Path, default=DEFAULT_POLICIES, help="object -> trained policy file")
-    policy.add_argument("--policy-server", default="127.0.0.1:8080", help="lerobot.async_inference.policy_server address")
-    policy.add_argument("--overhead-camera", help="camera seeing the shelf from above, as in training")
-    policy.add_argument("--gripper-camera", help="camera on the gripper")
-    policy.add_argument("--policy-start-ticks", type=int, default=400,
-                        help="refuse to start the policy when a joint is farther than this from home")
-    policy.add_argument("--policy-depart-ticks", type=int, default=300, help="a joint this far from home = policy started moving")
-    policy.add_argument("--policy-rest-ticks", type=int, default=150, help="all joints this close to home = back at rest")
-    policy.add_argument("--policy-settle-s", type=float, default=1.5, help="seconds at rest before stopping the policy")
-    policy.add_argument("--policy-device", default="cuda",
-                        help="where the policy server runs the model (cpu while another job fills the GPU)")
-    policy.add_argument("--policy-any-start", action="store_true",
-                        help="EXPERIMENT: also start the policy away from rest (e.g. after MOVE_TO_SLOT); needs a step limit")
-    policy.add_argument("--policy-max-step-ticks", type=int, default=None,
-                        help="limit each policy goal to present ± this many ticks per 1/30 s step (default: none, "
-                             "40 with --policy-any-start)")
+    add_policy_arguments(parser, robot_id)
     parser.add_argument("--release-torque", action="store_true", help="turn arm torque off and exit (hold the arm first)")
+    if arm_env(robot_id, "FOLLOWER_PORT"):
+        parser.set_defaults(port=arm_env(robot_id, "FOLLOWER_PORT"))
+    # This arm's pose file (CONTROL_STATION_ARM01_OMX_POSES or _LEFT_OMX_POSES); SlotMotion refuses a pose file
+    # recorded on another board, so a wrong default stops instead of moving.
+    if arm_env(robot_id, "OMX_POSES"):
+        parser.set_defaults(poses=Path(arm_env(robot_id, "OMX_POSES")))
     args = parser.parse_args()
-    configure_arm_devices(args, parser)
-    if args.policy_any_start and args.policy_max_step_ticks is None:
-        args.policy_max_step_ticks = 40  # about 1,200 ticks/s at 30 Hz; the first actions from an unseen pose may jump
+    finish_policy_arguments(args)
     args.result = "succeeded"
     args.phase_delay = 0.0
 

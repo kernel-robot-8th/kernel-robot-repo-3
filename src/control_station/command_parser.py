@@ -84,18 +84,6 @@ _GENERIC_TARGET_HEAD_PATTERN = re.compile(
 )
 
 
-def canonicalize_color(value: str) -> str | None:
-    normalized = value.strip().casefold()
-    return next(
-        (
-            canonical
-            for canonical, aliases in _COLORS.items()
-            if normalized in {alias.casefold() for alias in aliases}
-        ),
-        None,
-    )
-
-
 def _contains_term(text: str, term: str) -> bool:
     if term.isascii() and term.replace(" ", "").isalnum():
         return re.search(rf"(?<![A-Za-z0-9]){re.escape(term)}(?![A-Za-z0-9])", text, re.I) is not None

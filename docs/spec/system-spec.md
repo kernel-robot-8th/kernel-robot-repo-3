@@ -21,7 +21,6 @@
 - 작업·단계별 오류, timeout, 취소 및 결과 불명 처리
 - Head Camera와 Joint Camera의 개별 연결·영상 상태 관리 및 영상 표시
 - 설정된 detector가 반환한 클래스·confidence·픽셀 후보의 관측 전용 조회 및 작업 이력 연결
-- 측정 보정 파일이 제공된 경우 고정 선반 평면 2D 좌표를 `DRAFT_ONLY`로 계산하는 오프라인 검토 경로
 - 실제 로봇이 없는 환경의 모의 어댑터
 
 ### MVP에서 제외할 기능
@@ -42,15 +41,15 @@
 | 관제 UI | 사용자 입력, API 응답 | 작업 요청, 명시적 실행·취소, 로봇·카메라·작업 상태 표시 |
 | HTTP API | UI 요청 | 입력 검증, 명령 접수, 리소스 조회; 로봇 동작 완료까지 HTTP 요청을 붙잡지 않음 |
 | 작업 오케스트레이터 | task ID, 어댑터 이벤트 | 작업 선점, 순서·전이 관리, 단계 실행, 결과 기록 |
-| 이동 로봇 어댑터 | 목적지, command ID | ROS 2/Nav2 action goal 전달 및 수락·feedback·최종 결과를 공통 이벤트로 변환 |
+| 핑키 관제 연동 | 핑키 ID, 주문 단계 | 핑키 팀 관제(HTTP)에서 임무 단계를 읽고 도킹완료·수령 완료 신호를 보냄. 주행(Nav2)은 핑키 팀 관제가 맡음 |
 | 로봇팔 어댑터 | 팔 작업, command ID | 팔 작업 전달 및 수락·진행·최종 결과를 공통 이벤트로 변환 |
 | 로봇 상태 관리자 | heartbeat, 장치 상태 | 로봇별 연결·준비·실행 상태 및 마지막 갱신 시각 관리 |
 | 카메라 관리자 | 카메라 프레임과 연결 이벤트 | 카메라마다 연결·스트림·신선도 상태 관리 및 프레임 전달 |
 | 이력 저장소 | 작업 및 이벤트 | 작업·단계 상태, 타임스탬프, 결과, 오류 저장 |
-| 대상 관측/좌표 초안 | camera frame, task `pick_request`, 검토된 보정 파일 | 최신 detector 후보를 관측 전용으로 분류하고, 선택된 색상/층 ROI 조건을 후보별 검토 상태로 비교하며, 명시적으로 선택한 후보의 고정 평면 2D 좌표를 초안으로 저장; 실행 허가를 만들지 않음 |
+| 선반 칸 확인 | 정면 카메라 검출, 선반 위치 보정의 칸 영역 | 물체가 한 칸에서만 보이는지 판정해 팔 명령의 근거로 기록하고 칸별 개수를 셈; 좌표를 만들지 않음 |
 | 자연어 parser (현재 제한 초안) | 사용자 자연어, 가능한 detector 클래스 목록 | 제한된 규칙으로 task 폼 후보를 채우고 누락·모호 값을 표시; 저장이나 장치 명령 없음 |
 
-자연어 parser는 제한 문법의 검토용 초안만 지원하며 일반 문장 이해, 물체 속성 grounding, 누락 목적지 보완은 하지 않는다. 현재 카메라 후보 조회는 클래스를 분류하고, 선택적으로 미보정 색상 힌트 및 명시적 영상 ROI 초안과 요청 조건을 비교해 검토 상태만 표시한다. 비교 결과는 후보를 필터링하거나 선택하지 않으며 3D shelf localization이나 보정된 색상 판정은 제공하지 않는다.
+자연어 parser는 제한 문법의 검토용 초안만 지원하며 일반 문장 이해, 물체 속성 grounding, 누락 목적지 보완은 하지 않는다. 카메라 검출은 좌표로 바꾸지 않고 칸 영역 안의 개수와 칸 근거로만 쓴다(2026-11-11 결정).
 
 이동 로봇, 로봇팔, 카메라는 서로 다른 상태 리소스입니다. 예를 들어 카메라 끊김을 로봇 연결 끊김으로 바꾸거나, 프로세스 생존을 팔 준비 완료로 해석하지 않습니다.
 
@@ -216,7 +215,7 @@ NEEDS_INTERVENTION → CANCELED | FAILED | RUNNING
 | `POST` | `/api/tasks/{task_id}/cancel` | 취소 요청 접수; 진행 중 작업은 `202 Accepted`; 미실행 작업의 즉시 취소 또는 반복 취소는 현재 상태와 `200 OK` 반환; 실행 중 정지 결과는 별도 확인 |
 
 
-`destination`, `arm_task`의 세부 JSON 스키마, 페이지네이션, 인증, API 버저닝은 실제 목적지 표현과 배포 범위를 확정한 후 정합니다. 현재 `pick_request` 입력은 `category`(필수 문자열), `color`(선택 문자열), `shelf_level`(선택 1–999,999,999 정수)를 저장합니다. category는 `TARGET_OBSERVED` 감사 이벤트로 카메라 후보 분류에 사용됩니다. 색상은 미보정 HSV hint와, 선반 층은 명시적으로 활성화된 camera ROI draft와 비교한 검토 상태를 선택적으로 기록할 수 있지만 두 결과 모두 후보를 필터링·선택하지 않습니다. 이 감사 기록은 실행 단계 완료·3D 위치 추정·로봇 제어에 연결되지 않습니다. 로컬 개발 단계의 localhost 바인딩을 외부 네트워크 접근이 가능한 서비스로 간주하지 않습니다.
+`destination`, `arm_task`의 세부 JSON 스키마, 페이지네이션, 인증, API 버저닝은 실제 목적지 표현과 배포 범위를 확정한 후 정합니다. 현재 `pick_request` 입력은 `category`(필수 문자열), `color`(선택 문자열), `shelf_level`(선택 1–999,999,999 정수)를 저장합니다. category는 팔 단계의 학습 정책을 고르는 데 쓰고, 색상과 선반 층은 저장만 합니다. 로컬 개발 단계의 localhost 바인딩을 외부 네트워크 접근이 가능한 서비스로 간주하지 않습니다.
 
 ## 7. 로봇 상태 계약
 
@@ -230,17 +229,11 @@ NEEDS_INTERVENTION → CANCELED | FAILED | RUNNING
 
 상태 snapshot은 `robot_id`, `last_heartbeat_at`, `active_task_id`, 선택적 오류 정보를 포함합니다. heartbeat 허용 주기와 stale 임계값은 실제 장치가 제공하는 주기를 확인해 설정합니다. Nav2 서버 discovery는 통신 상대 발견일 뿐 `READY`나 작업 성공 근거가 아닙니다.
 
-### 7.1 ROS 2/Nav2 action과 lifecycle의 역할
+### 7.1 핑키 주행과 Nav2의 역할
 
-Nav2가 로봇 쪽 action server를 제공하고 관제 백엔드의 이동 어댑터가 action client가 되는 구성을 기본으로 합니다. 관제 UI와 백엔드 사이에는 이미 HTTP API가 있으므로, 관제 자체를 감싸는 ROS 2 action server는 현재 범위에서 만들지 않습니다. 다른 ROS 2 노드가 관제 작업 전체를 ROS action으로 시작·취소해야 한다는 요구가 생기면, 동일한 오케스트레이터를 호출하는 별도 ROS 인터페이스로 검토합니다.
+핑키 주행은 핑키 팀 관제(`pinky_fleet_dashboard`)가 Nav2로 맡습니다. 관제는 Nav2 action client가 아니며, 핑키 관제의 `GET /api/status`로 임무 단계를 읽고 `POST /api/robots/<id>/operator-confirm`으로 `dock_complete`·`received`만 보냅니다([주문 흐름](../implementation/order-flow.md#핑키-관제-연결-http)). 202 응답은 신호 접수일 뿐이고, 핑키가 실제로 움직였는지는 다음 단계 조회로 확인합니다. 결과가 불명확하면 신호를 자동으로 다시 보내지 않습니다.
 
-모바일 로봇의 목적지 이동은 확인된 Nav2 action(현재 후보는 `NavigateToPose`)의 goal로 요청하고, action goal handle의 수락/거부, feedback, 최종 result를 관제 공통 이벤트로 변환합니다. ROS 2 action의 goal ID는 ROS 통신 추적에 사용하고, 관제의 `task_id`, `step_id`, `command_id`와 함께 저장해 어느 작업에서 나온 결과인지 연결합니다. ROS goal ID를 관제 명령 ID 대신 사용하지 않습니다.
-
-관제의 이동 단계는 action의 최종 성공 result와 현재 활성 명령 식별자가 일치할 때만 성공합니다. goal 수락은 실행 시작의 근거일 뿐 도착 완료가 아니며, feedback과 거리/진행률도 최종 성공을 대신하지 않습니다. 취소는 action cancel 요청을 보내고 cancel 응답만으로 정지 완료로 보지 않습니다. 최종 action 결과와 로봇 상태를 확인해 취소 결과를 기록합니다. 결과 대기 중 관제 timeout이 발생해도 action을 무조건 재전송하지 않습니다.
-
-ROS 2 lifecycle 상태는 Nav2의 `lifecycle_manager`와 실제 노드 구성을 확인할 수 있을 때만 readiness 진단에 사용합니다. 필요한 노드가 `active`인지 상태 화면과 작업 시작 전 조건에 반영할 수 있지만, action server 발견이나 lifecycle `active`만으로 로봇이 안전하거나 이동을 성공했다고 판정하지 않습니다. 관제가 lifecycle 전이를 임의로 호출해 Nav2를 configure/activate/shutdown하는 것은 기본 범위에 포함하지 않습니다. 운영자가 Nav2 수명 주기를 명시적으로 관제해야 한다는 요구와 지원 인터페이스가 확인될 때 별도 기능으로 계획합니다.
-
-Nav2 action 이름·타입, namespace, goal frame 및 좌표/방향 변환, result 성공 판정, feedback 사용 범위, lifecycle node 목록과 상태 조회 방법은 실제 로봇의 ROS 2 배포판과 Nav2 구성을 확인한 후 확정합니다. 현재 구현된 action server discovery는 이 계약을 확인하는 사전 탐색이며 실제 goal 전송은 하지 않습니다.
+`CONTROL_STATION_MODE=ros2`의 Nav2 action server 발견은 연결 진단일 뿐 핑키 준비나 이동 성공의 근거가 아닙니다. 관제 자체를 감싸는 ROS 2 action server는 만들지 않습니다.
 
 ## 8. 카메라 및 영상 계약
 
@@ -301,7 +294,7 @@ Nav2 action 이름·타입, namespace, goal frame 및 좌표/방향 변환, resu
 
 ## 12. 확정 전 결정사항
 
-- 이동 로봇의 배포 환경, Nav2 목표/결과 및 상태 신선도 판정 기준
+- 핑키 관제의 외부 접속·인증과 핑키 상태 신선도 판정 기준
 - 팔 로봇 자동 작업 명령과 장치 준비·작업 완료 이벤트 경로
 - 현재 LeRobot 수동 텔레오퍼레이션을 최종 관제 기능에 포함할지 여부
 - 목적지의 waypoint/좌표 표현, 좌표계, 허용 범위

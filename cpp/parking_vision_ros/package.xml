@@ -2,7 +2,7 @@
 <package format="3">
   <name>parking_vision_ros</name>
   <version>0.1.0</version>
-  <description>ROS 2 component that judges Pinky's parking alignment from a ceiling camera image topic: display-only /pinky_parking/state and the /pinky_parking/check service. Observation only; sends no robot command and does not open the camera.</description>
+  <description>ROS 2 components for Pinky's parking alignment: ParkingVisionNode judges it from a ceiling camera image topic (display-only /pinky_parking/state and the /pinky_parking/check service), and CeilingCameraNode captures that camera read-only and publishes /ceiling_camera/image_raw and its compressed JPEG. Observation only; sends no robot command.</description>
   <maintainer email="maintainer@example.com">Kernel Robotics</maintainer>
   <license>Apache-2.0</license>
 

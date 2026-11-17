@@ -11,7 +11,7 @@
     <div class="brand"><span class="brand-mark">P</span><div><strong>Pinky Fleet</strong><small>3-robot fleet console</small></div></div>
     <div class="top-actions">
       <a class="button button-quiet" href="/ir-calibration">IR 캘리브레이션 수집</a>
-      <span id="bridge-status" class="system-pill"><i></i> 브릿지 확인 중</span>
+      <span id="bridge-status" class="system-pill"><i></i> 로봇 데이터 확인 중</span>
       <label class="password-box"><span>SSH 접속</span><input id="ssh-password" type="password" autocomplete="current-password" placeholder="비밀번호 입력"><button id="save-password" class="button button-quiet">연결 설정</button></label>
     </div>
   </header>
@@ -38,6 +38,7 @@
       <div class="fleet-legend"><span style="color:#ff3686">➤ P0 · DOMAIN 10</span><span style="color:#27b86d">➤ P1 · DOMAIN 11</span><span style="color:#3988ff">➤ P2 · DOMAIN 12</span></div>
       <p class="waypoint-hint">공용 map 좌표 · 단위 m · 화살표는 위치와 방향, 원은 AMCL 95% 오차 반경입니다. 최신 위치가 없는 로봇은 지도에 표시하지 않습니다. 사각형은 기체별 주차장입니다. 코스 완주 후 주행완료 버튼을 누르면 자기 주차장으로 복귀합니다.</p>
     </section>
+    <section id="traffic-panel" class="route-panel" aria-live="polite"></section>
     <section id="robot-grid" class="robot-grid" aria-live="polite">
       <div class="loading">로봇 상태를 불러오는 중…</div>
     </section>

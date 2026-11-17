@@ -170,7 +170,7 @@ class RosParkingSource:
             from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
         except ImportError as exc:
             raise RuntimeError(
-                "CONTROL_STATION_PARKING_SOURCE=ros에는 ROS 2 Jazzy와 cpp/install/setup.bash를 source해야 합니다"
+                "CONTROL_STATION_PARKING_SPOT에는 ROS 2 Jazzy와 cpp/install/setup.bash를 source해야 합니다"
                 " (parking_vision_interfaces)."
             ) from exc
         self.spot_id = spot_id

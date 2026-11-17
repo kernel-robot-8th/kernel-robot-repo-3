@@ -24,7 +24,6 @@ This does not replace the hardware power cut.
 from __future__ import annotations
 
 import argparse
-import math
 import threading
 from datetime import datetime, timezone
 
@@ -37,8 +36,6 @@ from rclpy.node import Node
 from omx_interfaces.action import MoveToSlot
 from omx_slot_motion import ARM_JOINTS, Outcome, Rejected, SlotMotion, add_motion_arguments
 
-
-SHELF_FRAME = "shelf_front"
 
 
 class OmxActionServer(Node):
@@ -67,18 +64,14 @@ class OmxActionServer(Node):
         if not self.busy.acquire(blocking=False):
             return self.finish(goal_handle, Outcome("REJECTED", self.motion.simulated, "WORKER_BUSY"))
         try:
-            return self.finish(goal_handle, *self.run(goal_handle, request))
+            return self.finish(goal_handle, self.run(goal_handle, request))
         finally:
             self.busy.release()
 
-    def run(self, goal_handle, request: MoveToSlot.Goal) -> tuple[Outcome, dict | None]:
-        if request.object_position.header.frame_id not in ("", SHELF_FRAME):
-            return Outcome("REJECTED", self.motion.simulated, "FRAME_UNSUPPORTED",
-                           f"object_position must be in {SHELF_FRAME}"), None
+    def run(self, goal_handle, request: MoveToSlot.Goal) -> Outcome:
         if request.valid_until.sec == 0 and request.valid_until.nanosec == 0:
-            return Outcome("REJECTED", self.motion.simulated, "VALID_UNTIL_MISSING"), None
+            return Outcome("REJECTED", self.motion.simulated, "VALID_UNTIL_MISSING")
         valid_until = datetime.fromtimestamp(request.valid_until.sec + request.valid_until.nanosec / 1e9, timezone.utc)
-        # lateral_offset_m is ignored: shoulder-pan correction from camera coordinates was dropped (2026-11-11).
 
         def progress(present: dict[str, int], max_error: int) -> None:
             feedback = MoveToSlot.Feedback()
@@ -93,13 +86,13 @@ class OmxActionServer(Node):
                 try:
                     goal = self.motion.plan(request.slot_id, request.slot_map_version, valid_until)
                 except Rejected as rejected:
-                    return Outcome("REJECTED", self.motion.simulated, rejected.reason_code, rejected.message), None
-                return self.motion.move(goal, lambda: goal_handle.is_cancel_requested, progress), None
+                    return Outcome("REJECTED", self.motion.simulated, rejected.reason_code, rejected.message)
+                return self.motion.move(goal, lambda: goal_handle.is_cancel_requested, progress)
         except (ConnectionError, OSError, RuntimeError) as error:
             # The port may be in use by the policy or teleoperation; nothing was sent to the motors.
-            return Outcome("REJECTED", self.motion.simulated, "FOLLOWER_PORT_UNAVAILABLE", str(error)[:300]), None
+            return Outcome("REJECTED", self.motion.simulated, "FOLLOWER_PORT_UNAVAILABLE", str(error)[:300])
 
-    def finish(self, goal_handle, outcome: Outcome, correction: dict | None = None) -> MoveToSlot.Result:
+    def finish(self, goal_handle, outcome: Outcome) -> MoveToSlot.Result:
         result = MoveToSlot.Result()
         result.outcome = outcome.outcome
         result.pose_reached = outcome.pose_reached
@@ -108,7 +101,6 @@ class OmxActionServer(Node):
         result.joint_names = list(outcome.final_ticks)
         result.final_ticks = list(outcome.final_ticks.values())
         result.max_error_ticks = outcome.max_error_ticks
-        result.pan_correction_degrees = correction["pan_degrees"] if correction else math.nan
         result.simulated = outcome.simulated
         if outcome.outcome == "SUCCEEDED":
             goal_handle.succeed()

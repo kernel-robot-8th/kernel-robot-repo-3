@@ -3,32 +3,30 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from control_station.command_parser import MAX_SHELF_LEVEL
+from control_station.json_files import unique_keys
 
 if TYPE_CHECKING:
     from control_station.app import ControlStationHandler
 
-SHA256 = re.compile(r"[0-9a-f]{64}")
+
+# Errors that say "not now" rather than "not this": the same request can succeed once a Pinky or a receiving zone is
+# free, or the Pinky has reached the zone. Everything else needs a different request (or a person) to change.
+RETRYABLE_ERROR_CODES = frozenset({"ZONE_BUSY", "PINKY_UNAVAILABLE", "PICKUP_NOT_READY"})
+
+
+def is_retryable(status: int, error_code: str) -> bool:
+    """Whether sending the same request again later can succeed (the `retryable` field of every error answer)."""
+    return status in {408, 429} or status >= 500 or error_code in RETRYABLE_ERROR_CODES
 
 
 def is_cross_origin(handler: ControlStationHandler) -> bool:
     """다른 출처(브라우저) 요청인지"""
     origin = handler.headers.get("Origin")
     return bool(origin) and urlsplit(origin).netloc != handler.headers.get("Host")
-
-
-def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    """중복 키를 거부하는 JSON 객체 읽기"""
-    value: dict[str, Any] = {}
-    for key, item in pairs:
-        if key in value:
-            raise ValueError(f"duplicate JSON object key: {key}")
-        value[key] = item
-    return value
 
 
 def read_json_object(handler: ControlStationHandler) -> dict[str, Any] | None:
@@ -45,7 +43,7 @@ def read_json_object(handler: ControlStationHandler) -> dict[str, Any] | None:
         handler._json(400, {"error": "Request body must be between 1 and 4096 bytes"})
         return None
     try:
-        body = json.loads(handler.rfile.read(length), object_pairs_hook=_unique_json_object)
+        body = json.loads(handler.rfile.read(length), object_pairs_hook=unique_keys)
     except (ValueError, UnicodeDecodeError, RecursionError):
         handler._json(400, {"error": "Request body must be valid JSON with unique object keys"})
         return None

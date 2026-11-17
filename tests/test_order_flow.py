@@ -26,7 +26,7 @@ CARROT_APPLE = [{"object_class": "carrot", "quantity": 1}, {"object_class": "app
 
 def devices(world: MockWorld) -> OrderDevices:
     return OrderDevices(world.shelf_stock, world.pinky_load, world.fleet_status, world.fleet_confirm, world.parking,
-                        world.pick, world.dispatch)
+                        world.pick, world.dispatch, world.mission_complete)
 
 
 class OrderFlowTests(unittest.TestCase):
@@ -76,12 +76,15 @@ class OrderFlowTests(unittest.TestCase):
         task = self.wait(self.order())
         self.assertEqual(task["status"], "SUCCEEDED", task["error"])
         plan = self.step(task, "PLAN_ARM_SEQUENCE")["result"]["sequence"]
-        # Default mock stock: left shelf has carrot 3 and apple 1, right shelf apple 3 -> left arm takes carrot and
-        # one apple, right arm the other apple; one arm finishes before the other starts.
+        # Default mock stock: left shelf carrot 3 / tissue 1, right shelf apple 4 / carrot 1 / tissue 2. The apple
+        # policy was recorded on the right arm, so both apples are the right arm's (its only option); the carrot then
+        # goes to the arm with fewer units (left). The busier arm goes first and finishes before the other starts.
         self.assertEqual([(unit["arm_id"], unit["object_class"]) for unit in plan],
-                         [("arm-01", "carrot"), ("arm-01", "apple"), ("arm-02", "apple")])
+                         [("arm-02", "apple"), ("arm-02", "apple"), ("arm-01", "carrot")])
+        self.assertEqual([unit["reason"] for unit in plan],
+                         ["오른쪽 팔 쪽에서만 집을 수 있음", "오른쪽 팔 쪽에서만 집을 수 있음", "맡은 개수 0 vs 2"])
         picks = [step for step in task["steps"] if step["step_type"] == "PICK_ITEM"]
-        self.assertEqual([step["robot_id"] for step in picks], ["arm-01", "arm-01", "arm-02"])
+        self.assertEqual([step["robot_id"] for step in picks], ["arm-02", "arm-02", "arm-01"])
         self.assertEqual(Counter(self.world.loads["10"]), Counter({"carrot": 1, "apple": 2}))
         self.assertEqual([event["payload"]["action"] for event in self.events(task, "PINKY_SIGNAL_SENT")],
                          ["dock_complete", "received"])
@@ -214,7 +217,7 @@ class OrderFlowTests(unittest.TestCase):
         states = {stage["key"]: stage["state"] for stage in summary["stages"]}
         self.assertEqual(states, {"ORDER": "done", "STOCK": "done", "PLAN": "done", "PINKY": "done",
                                   "LOAD": "failed", "TOTAL": "skipped", "SIGNAL": "skipped"})
-        self.assertEqual((summary["loaded"], summary["total"]), (1, 3))
+        self.assertEqual((summary["loaded"], summary["total"]), (0, 3))  # the first pick (an apple) was lost
         self.assertEqual((summary["alert"]["level"], summary["alert"]["title"]), ("error", "물건 분실"))
         self.store.acknowledge_alert(task["id"], "확인")
         self.assertIsNone(summarize_order(self.store.get_task(task["id"]))["alert"])

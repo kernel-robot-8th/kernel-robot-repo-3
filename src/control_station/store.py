@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -15,6 +17,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
 from control_station.database import (
+    OrderRequestRecord,
     TaskEventRecord,
     TaskRecord,
     TaskStepRecord,
@@ -49,33 +52,73 @@ DEFAULT_TASK_STEPS = (
     ("FINALIZE_TASK", None),
 )
 
+# Order steps carried out by (and so tagged with) the order's Pinky.
+PINKY_STEP_TYPES = frozenset({"WAIT_PINKY_ARRIVAL", "CONFIRM_DOCKING", "NOTIFY_PINKY_RECEIVED",
+                              "WAIT_AT_RECEIVING_ZONE", "CONFIRM_PICKUP", "WAIT_PINKY_PARKED"})
+
+
+def pinky_robot_id(pinky_id: str | None) -> str | None:
+    return None if pinky_id is None else f"pinky-{pinky_id}"
+
+
 def order_step_definitions(
-    order_items: list[dict[str, object]], pinky_id: str
+    order_items: list[dict[str, object]], pinky_id: str | None, *, receiving_zone: bool = False,
+    shipments: list[list[dict[str, object]]] | None = None,
 ) -> list[tuple[str, str | None, dict[str, object] | None]]:
     """Steps of one order: (step_type, robot_id, detail). One PICK_ITEM + VERIFY_TRANSFER pair per object unit;
-    the arm of each pair is filled in by PLAN_ARM_SEQUENCE after the shelf stock check."""
-    pinky = f"pinky-{pinky_id}"
+    the arm of each pair is filled in by PLAN_ARM_SEQUENCE after the shelf stock check. Without a Pinky yet (an
+    order waiting in the intake), the Pinky steps carry no robot until assign_pinky fills them in.
+
+    `shipments` splits a larger order into Pinky loads (assignment.split_into_shipments, unit dicts). They run one
+    after another: the loading-to-parking steps repeat per shipment, each tagged {"shipment": k, "shipments": n},
+    and shipment k > 1 opens with START_SHIPMENT, which waits for the previous Pinky to be parked, picks the Pinky
+    for this load and sends it off. Only one Pinky drives at a time and the order keeps its receiving zone until
+    the last load is picked up. A shipped order needs the receiving-zone steps (each load is picked up there)."""
+    pinky = pinky_robot_id(pinky_id)
     units = [
         {"object_class": item["object_class"], "unit": index, "of": item["quantity"]}
         for item in order_items
         for index in range(1, int(item["quantity"]) + 1)  # type: ignore[call-overload]
     ]
+    loads = [list(load) for load in shipments] if shipments else [units]
+    if len(loads) > 1 and not receiving_zone:
+        raise ValueError("an order split into shipments needs the receiving-zone steps")
     steps: list[tuple[str, str | None, dict[str, object] | None]] = [
         ("VALIDATE_ORDER", None, None),
         ("CHECK_SHELF_STOCK", None, None),
         ("PLAN_ARM_SEQUENCE", None, None),
-        ("WAIT_PINKY_ARRIVAL", pinky, None),
-        ("CONFIRM_DOCKING", pinky, None),
     ]
-    for unit in units:
-        steps.append(("PICK_ITEM", None, dict(unit)))
-        steps.append(("VERIFY_TRANSFER", None, dict(unit)))
-    steps += [
-        ("VERIFY_LOAD_TOTAL", None, None),
-        ("NOTIFY_PINKY_RECEIVED", pinky, None),
-        ("FINALIZE_TASK", None, None),
-    ]
+    for number, load in enumerate(loads, start=1):
+        tag: dict[str, object] | None = {"shipment": number, "shipments": len(loads)} if len(loads) > 1 else None
+        robot = pinky if number == 1 else None  # later loads get their Pinky when they start
+        if number > 1:
+            steps.append(("START_SHIPMENT", None, dict(tag or {})))
+        steps += [("WAIT_PINKY_ARRIVAL", robot, _tagged(None, tag)), ("CONFIRM_DOCKING", robot, _tagged(None, tag))]
+        for unit in load:
+            steps.append(("PICK_ITEM", None, _tagged(unit, tag)))
+            steps.append(("VERIFY_TRANSFER", None, _tagged(unit, tag)))
+        steps += [
+            ("VERIFY_LOAD_TOTAL", None, _tagged(None, tag)),
+            ("NOTIFY_PINKY_RECEIVED", robot, _tagged(None, tag)),
+        ]
+        if receiving_zone:
+            # The Pinky carries the load on to the receiving zone, waits for the customer, then returns home.
+            steps += [("WAIT_AT_RECEIVING_ZONE", robot, _tagged(None, tag)), ("CONFIRM_PICKUP", robot, _tagged(None, tag)),
+                      ("WAIT_PINKY_PARKED", robot, _tagged(None, tag))]
+    steps.append(("FINALIZE_TASK", None, None))
     return steps
+
+
+def _tagged(detail: dict[str, object] | None, tag: dict[str, object] | None) -> dict[str, object] | None:
+    if detail is None and tag is None:
+        return None
+    return {**(detail or {}), **(tag or {})}
+
+
+def shipment_of(step: dict[str, Any] | Any) -> int:
+    """Which shipment (1, 2, ...) a step belongs to; 1 for orders that are not split and for shared steps."""
+    detail = step.get("detail") if isinstance(step, dict) else getattr(step, "detail", None)
+    return int((detail or {}).get("shipment") or 1)
 
 
 TASK_TRANSITIONS = {
@@ -182,8 +225,35 @@ def _pinky_holding_orders():  # type: ignore[no-untyped-def]
     )
 
 
+def _zone_holding_orders():  # type: ignore[no-untyped-def]
+    """Orders that keep their receiving zone: started and not yet picked up there (every shipment of a split
+    order: the zone is kept between them). A waiting (PENDING) order holds no zone; a stopped (FAILED) one keeps it
+    until the operator acknowledged the alert, like its Pinky."""
+    acknowledged = exists().where(
+        TaskEventRecord.task_id == TaskRecord.id, TaskEventRecord.event_type == "ALERT_ACKNOWLEDGED"
+    )
+    pickup_left = exists().where(
+        TaskStepRecord.task_id == TaskRecord.id, TaskStepRecord.step_type == "CONFIRM_PICKUP",
+        TaskStepRecord.status != StepStatus.SUCCEEDED.value,
+    )
+    started = tuple(status for status in _ORDER_HOLDING_STATUSES if status != TaskStatus.PENDING.value)
+    return select(TaskRecord.receiving_zone, TaskRecord.id).where(
+        TaskRecord.receiving_zone.is_not(None),
+        TaskRecord.order_items.is_not(None),
+        pickup_left,
+        or_(
+            TaskRecord.status.in_(started),
+            (TaskRecord.status == TaskStatus.FAILED.value) & ~acknowledged,
+        ),
+    )
+
+
 class PinkyUnavailable(RuntimeError):
     """Every Pinky (or the requested one) already carries an unfinished order."""
+
+
+class ZoneUnavailable(RuntimeError):
+    """The receiving zone is kept by another started order."""
 
 
 class TaskStore:
@@ -224,6 +294,8 @@ class TaskStore:
                     raise InvalidStateTransition(
                         f"Task cannot start from {current.value}"
                     )
+                if task.order_items is not None and task.pinky_id is None:
+                    raise InvalidStateTransition("핑키가 배정되지 않은 주문입니다. 주문 접수 창에서 시작하세요")
                 running = select(TaskRecord).where(
                     TaskRecord.status.in_(
                         [
@@ -346,6 +418,7 @@ class TaskStore:
             "pick_request": task.pick_request,
             "order_items": task.order_items,
             "pinky_id": task.pinky_id,
+            "receiving_zone": task.receiving_zone,
             "status": task.status,
             "created_at": task.created_at,
             "started_at": task.started_at,
@@ -407,6 +480,46 @@ class TaskStore:
         with self._sessions() as session:
             tasks = session.scalars(
                 select(TaskRecord).order_by(TaskRecord.created_at.desc(), TaskRecord.id.desc())
+            ).all()
+            return [self._present(task) for task in tasks]
+
+    def reserved_units(self) -> Counter:
+        """Units that open orders still need from the shelves: ordered minus already moved onto a Pinky.
+
+        Waiting and running orders reserve; a finished, failed or canceled order releases what it did not take."""
+        open_statuses = [TaskStatus.PENDING.value, TaskStatus.VALIDATING.value, TaskStatus.RUNNING.value,
+                         TaskStatus.CANCELING.value, TaskStatus.NEEDS_INTERVENTION.value]
+        reserved: Counter = Counter()
+        with self._sessions() as session:
+            orders = session.scalars(
+                select(TaskRecord).where(TaskRecord.order_items.is_not(None), TaskRecord.status.in_(open_statuses))
+            ).all()
+            for order in orders:
+                need = Counter({str(item["object_class"]): int(item["quantity"]) for item in order.order_items or []})
+                moved = Counter(
+                    str((step.detail or {}).get("object_class")) for step in order.steps
+                    if step.step_type == "VERIFY_TRANSFER" and step.status == StepStatus.SUCCEEDED.value
+                )
+                reserved.update(need - moved)
+        return reserved
+
+    def confirmed_transfers(self) -> list[tuple[str, str, str]]:
+        """(step id, shelf, object) of every unit the order flow confirmed moved from a shelf onto a Pinky."""
+        with self._sessions() as session:
+            steps = session.scalars(
+                select(TaskStepRecord).where(TaskStepRecord.step_type == "VERIFY_TRANSFER",
+                                             TaskStepRecord.status == StepStatus.SUCCEEDED.value)
+            ).all()
+            return [(step.id, str(step.detail["shelf_id"]), str(step.detail["object_class"]))
+                    for step in steps if (step.detail or {}).get("shelf_id") and (step.detail or {}).get("object_class")]
+
+    def pending_orders(self) -> list[dict[str, Any]]:
+        """Orders waiting in the intake (not started yet), oldest first."""
+        with self._sessions() as session:
+            tasks = session.scalars(
+                select(TaskRecord)
+                .where(TaskRecord.order_items.is_not(None), TaskRecord.status == TaskStatus.PENDING.value)
+                .order_by(TaskRecord.created_at, TaskRecord.id)
             ).all()
             return [self._present(task) for task in tasks]
 
@@ -695,8 +808,21 @@ class TaskStore:
         pick_request: dict[str, object] | None = None,
         order_items: list[dict[str, object]] | None = None,
         pinky_id: str | None = None,
+        *,
+        receiving_zone: str | None = None,
+        defer_pinky: bool = False,
+        zone_steps: bool | None = None,
+        idempotency: tuple[str, str] | None = None,
+        shipments: list[list[dict[str, object]]] | None = None,
     ) -> dict[str, Any]:
-        """Store a task. An order (order_items) is given a free Pinky, or the requested one if it is free."""
+        """Store a task. An order (order_items) is given a free Pinky, or the requested one if it is free.
+
+        With `defer_pinky` the order waits in the intake without a Pinky; assign_pinky gives it one when it starts,
+        so the choice is made with the fleet state of that moment. An order gets the receiving-zone steps when it
+        names its zone or with `zone_steps` (the zone is then given at start by assign_zone).
+
+        `idempotency` is (Idempotency-Key, request hash): it is stored with the task in the same transaction, so
+        a key is never left pointing at nothing and two requests with one key cannot both make a task."""
         created_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
         task = TaskRecord(
             id=f"TASK-{uuid.uuid4().hex[:8].upper()}",
@@ -705,42 +831,16 @@ class TaskStore:
             pick_request=pick_request,
             order_items=order_items,
             pinky_id=None,
+            receiving_zone=receiving_zone,
             status=TaskStatus.PENDING.value,
             created_at=created_at,
         )
         step_definitions: list[tuple[str, str | None, dict[str, object] | None]] = [
             (step_type, robot_id, None) for step_type, robot_id in DEFAULT_TASK_STEPS
         ]
-        task.steps = [
-            TaskStepRecord(
-                id=f"STEP-{uuid.uuid4().hex[:12].upper()}",
-                sequence=sequence,
-                step_type=step_type,
-                robot_id=robot_id,
-                status="PENDING",
-                detail=detail,
-            )
-            for sequence, (step_type, robot_id, detail) in enumerate(step_definitions, start=1)
-        ]
-        task.events = [
-            TaskEventRecord(
-                id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
-                event_type="TASK_CREATED",
-                previous_status=None,
-                new_status=TaskStatus.PENDING.value,
-                occurred_at=created_at,
-                received_at=created_at,
-                payload={
-                    "step_ids": [step.id for step in task.steps],
-                    "pick_request": pick_request,
-                    "order_items": order_items,
-                },
-            )
-        ]
-
         # The claim lock also serializes Pinky assignment inside this single server process.
         with self._claim_lock, self._sessions.begin() as session:
-            if order_items is not None:
+            if order_items is not None and not defer_pinky:
                 busy = {pinky_id for pinky_id, _ in session.execute(_pinky_holding_orders()).all()}
                 if pinky_id is not None:
                     if pinky_id in busy:
@@ -751,28 +851,232 @@ class TaskStore:
                     if not free:
                         raise PinkyUnavailable("모든 핑키에 끝나지 않은 주문이 있습니다")
                     task.pinky_id = free[0]
-                # An order runs its own step list, made once the Pinky is known.
-                task.steps = [
-                    TaskStepRecord(
-                        id=f"STEP-{uuid.uuid4().hex[:12].upper()}",
-                        sequence=sequence,
-                        step_type=step_type,
-                        robot_id=robot_id,
-                        status="PENDING",
-                        detail=detail,
-                    )
-                    for sequence, (step_type, robot_id, detail) in enumerate(
-                        order_step_definitions(order_items, task.pinky_id), start=1
-                    )
-                ]
-                task.events[0].payload = {
-                    **task.events[0].payload,
-                    "pinky_id": task.pinky_id,
-                    "step_ids": [step.id for step in task.steps],
-                }
+            if order_items is not None:
+                # An order runs its own step list; its Pinky steps are tagged once the Pinky is known.
+                with_zone = receiving_zone is not None if zone_steps is None else zone_steps
+                step_definitions = order_step_definitions(order_items, task.pinky_id, receiving_zone=with_zone,
+                                                          shipments=shipments)
+            task.steps = [
+                TaskStepRecord(
+                    id=f"STEP-{uuid.uuid4().hex[:12].upper()}",
+                    sequence=sequence,
+                    step_type=step_type,
+                    robot_id=robot_id,
+                    status="PENDING",
+                    detail=detail,
+                )
+                for sequence, (step_type, robot_id, detail) in enumerate(step_definitions, start=1)
+            ]
+            payload: dict[str, object] = {
+                "step_ids": [step.id for step in task.steps],
+                "pick_request": pick_request,
+                "order_items": order_items,
+            }
+            if order_items is not None:
+                payload["pinky_id"] = task.pinky_id
+                payload["receiving_zone"] = receiving_zone
+            task.events = [
+                TaskEventRecord(
+                    id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
+                    event_type="TASK_CREATED",
+                    previous_status=None,
+                    new_status=TaskStatus.PENDING.value,
+                    occurred_at=created_at,
+                    received_at=created_at,
+                    payload=payload,
+                )
+            ]
             session.add(task)
+            session.flush()  # the task row first: the key row points at it
+            if idempotency is not None:
+                key, request_hash = idempotency
+                session.add(OrderRequestRecord(
+                    idempotency_key=key, request_hash=request_hash, task_id=task.id, created_at=created_at))
+                session.flush()
+            return self._present_with_history(task)
+
+    def order_request(self, idempotency_key: str) -> tuple[str, str] | None:
+        """(request hash, order id) stored for an Idempotency-Key, or None when the key is new."""
+        with self._sessions() as session:
+            record = session.get(OrderRequestRecord, idempotency_key)
+            return None if record is None else (record.request_hash, record.task_id)
+
+    def assign_pinky(self, task_id: str, pinky_id: str, assignment: dict[str, object]) -> dict[str, Any]:
+        """Give a waiting order its Pinky, tag the Pinky steps with it and record why it was chosen."""
+        if pinky_id not in PINKY_IDS:
+            raise ValueError(f"unknown Pinky {pinky_id}")
+        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        with self._claim_lock, self._sessions.begin() as session:
+            task = session.get(TaskRecord, task_id)
+            if task is None:
+                raise TaskNotFoundError(task_id)
+            if task.order_items is None or task.status != TaskStatus.PENDING.value:
+                raise InvalidStateTransition("접수 상태의 주문에만 핑키를 배정할 수 있습니다")
+            if task.pinky_id is not None:
+                raise InvalidStateTransition(f"이미 핑키 {task.pinky_id}가 배정된 주문입니다")
+            holder = dict(session.execute(_pinky_holding_orders()).all()).get(pinky_id)
+            if holder is not None:
+                raise PinkyUnavailable(f"핑키 {pinky_id}는 끝나지 않은 주문 {holder}가 있습니다")
+            task.pinky_id = pinky_id
+            for step in task.steps:
+                if step.step_type in PINKY_STEP_TYPES and shipment_of(step) == 1:  # later loads choose when they start
+                    step.robot_id = pinky_robot_id(pinky_id)
+            task.events.append(TaskEventRecord(
+                id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
+                event_type="PINKY_ASSIGNED",
+                previous_status=task.status,
+                new_status=task.status,
+                occurred_at=now,
+                received_at=now,
+                payload={"pinky_id": pinky_id, "assignment": assignment, "shipment": 1},
+            ))
             session.flush()
             return self._present_with_history(task)
+
+    def assign_shipment_pinky(self, task_id: str, shipment: int, pinky_id: str,
+                              assignment: dict[str, object]) -> dict[str, Any]:
+        """Give the next shipment of a running order its Pinky: the order now holds that Pinky (it held the previous
+        one, which is parked again), its steps of that shipment are tagged with it, and the choice is recorded."""
+        if pinky_id not in PINKY_IDS:
+            raise ValueError(f"unknown Pinky {pinky_id}")
+        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        with self._claim_lock, self._sessions.begin() as session:
+            task = session.get(TaskRecord, task_id)
+            if task is None:
+                raise TaskNotFoundError(task_id)
+            if task.order_items is None or task.status not in {TaskStatus.RUNNING.value, TaskStatus.VALIDATING.value}:
+                raise InvalidStateTransition("진행 중인 주문의 다음 운송분에만 핑키를 배정할 수 있습니다")
+            holder = dict(session.execute(_pinky_holding_orders()).all()).get(pinky_id)
+            if holder is not None and holder != task_id:
+                raise PinkyUnavailable(f"핑키 {pinky_id}는 끝나지 않은 주문 {holder}가 있습니다")
+            task.pinky_id = pinky_id
+            for step in task.steps:
+                if step.step_type in PINKY_STEP_TYPES and shipment_of(step) == shipment:
+                    step.robot_id = pinky_robot_id(pinky_id)
+            task.events.append(TaskEventRecord(
+                id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
+                event_type="PINKY_ASSIGNED",
+                previous_status=task.status,
+                new_status=task.status,
+                occurred_at=now,
+                received_at=now,
+                payload={"pinky_id": pinky_id, "assignment": assignment, "shipment": shipment},
+            ))
+            session.flush()
+            return self._present_with_history(task)
+
+    def busy_zones(self) -> dict[str, str]:
+        """Receiving zone ID -> the started order still using it (not yet picked up there)."""
+        with self._sessions() as session:
+            return {zone_id: task_id for zone_id, task_id in session.execute(_zone_holding_orders()).all()}
+
+    def zone_usage(self, since: str) -> dict[str, int]:
+        """Receiving zone ID -> orders started since `since` (ISO time) that went there."""
+        with self._sessions() as session:
+            rows = session.execute(
+                select(TaskRecord.receiving_zone).where(
+                    TaskRecord.receiving_zone.is_not(None), TaskRecord.order_items.is_not(None),
+                    TaskRecord.started_at.is_not(None), TaskRecord.started_at >= since,
+                )
+            ).scalars().all()
+        usage: dict[str, int] = {}
+        for zone_id in rows:
+            usage[zone_id] = usage.get(zone_id, 0) + 1
+        return usage
+
+    def assign_zone(self, task_id: str, zone_id: str, label: str, assignment: dict[str, object]) -> dict[str, Any]:
+        """Give a waiting order its receiving zone (and the zone's name as its destination), recording why."""
+        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        with self._claim_lock, self._sessions.begin() as session:
+            task = session.get(TaskRecord, task_id)
+            if task is None:
+                raise TaskNotFoundError(task_id)
+            if task.order_items is None or task.status != TaskStatus.PENDING.value:
+                raise InvalidStateTransition("접수 상태의 주문에만 수령 구역을 배정할 수 있습니다")
+            if task.receiving_zone is not None:
+                raise InvalidStateTransition(f"이미 수령 구역 {task.receiving_zone}이 정해진 주문입니다")
+            holder = dict(session.execute(_zone_holding_orders()).all()).get(zone_id)
+            if holder is not None:
+                raise ZoneUnavailable(f"수령 구역({label})은 주문 {holder}이 사용 중입니다")
+            task.receiving_zone = zone_id
+            task.destination = label
+            task.events.append(TaskEventRecord(
+                id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
+                event_type="ZONE_ASSIGNED",
+                previous_status=task.status,
+                new_status=task.status,
+                occurred_at=now,
+                received_at=now,
+                payload={"receiving_zone": zone_id, "label": label, "assignment": assignment},
+            ))
+            session.flush()
+            return self._present_with_history(task)
+
+    def pinky_usage(self, since: str) -> dict[str, dict[str, object]]:
+        """Per Pinky: trips it started since `since` (ISO time) and when its last trip ended.
+
+        A trip is one PINKY_ASSIGNED event: a big order sends one per shipment, possibly with different Pinkys. A
+        shipment's trip ends when the next shipment takes its Pinky, the last one when the order ends. Tasks made
+        before these events (a Pinky given at creation) count once by their own start and end."""
+        usage: dict[str, dict[str, object]] = {pinky: {"trips": 0, "last_finished_at": None} for pinky in PINKY_IDS}
+
+        def count(pinky_id: str, started_at: str | None, ended_at: str | None) -> None:
+            entry = usage.setdefault(pinky_id, {"trips": 0, "last_finished_at": None})
+            if started_at is not None and started_at >= since:
+                entry["trips"] = int(entry["trips"]) + 1  # type: ignore[call-overload]
+            if ended_at is not None and (entry["last_finished_at"] is None or ended_at > entry["last_finished_at"]):
+                entry["last_finished_at"] = ended_at
+
+        with self._sessions() as session:
+            tasks = session.execute(
+                select(TaskRecord.id, TaskRecord.pinky_id, TaskRecord.started_at, TaskRecord.finished_at).where(
+                    TaskRecord.pinky_id.is_not(None), TaskRecord.order_items.is_not(None)
+                )
+            ).all()
+            assigned: dict[str, list[tuple[str, str]]] = {}
+            for task_id, payload, occurred_at in session.execute(
+                select(TaskEventRecord.task_id, TaskEventRecord.payload, TaskEventRecord.occurred_at)
+                .where(TaskEventRecord.event_type == "PINKY_ASSIGNED")
+                .order_by(TaskEventRecord.occurred_at, TaskEventRecord.id)
+            ).all():
+                pinky_id = (payload or {}).get("pinky_id")
+                if pinky_id:
+                    assigned.setdefault(task_id, []).append((str(pinky_id), occurred_at))
+        for task_id, pinky_id, started_at, finished_at in tasks:
+            trips = assigned.get(task_id)
+            if not trips:
+                count(pinky_id, started_at, finished_at)
+                continue
+            for index, (trip_pinky, trip_started) in enumerate(trips):
+                ended = trips[index + 1][1] if index + 1 < len(trips) else finished_at
+                count(trip_pinky, trip_started, ended)
+        return usage
+
+    def pick_success_stats(self, *, simulated: bool) -> dict[tuple[str, str], tuple[int, int]]:
+        """(policy_id, arm_id) -> (successes, attempts) from finished transfer checks.
+
+        A check counts as mock or real by the pick right before it, so mock runs never shape the choice of a
+        real arm. A failed check is an attempt without success."""
+        finished = [StepStatus.SUCCEEDED.value, StepStatus.FAILED.value]
+        stats: dict[tuple[str, str], tuple[int, int]] = {}
+        with self._sessions() as session:
+            steps = session.scalars(
+                select(TaskStepRecord)
+                .where(TaskStepRecord.step_type.in_(["PICK_ITEM", "VERIFY_TRANSFER"]))
+                .order_by(TaskStepRecord.task_id, TaskStepRecord.sequence)
+            ).all()
+            picks = {(step.task_id, step.sequence): step for step in steps if step.step_type == "PICK_ITEM"}
+            for check in steps:
+                pick = picks.get((check.task_id, check.sequence - 1))
+                if check.step_type != "VERIFY_TRANSFER" or check.status not in finished or pick is None:
+                    continue
+                detail = check.detail or {}
+                if bool((pick.result or {}).get("simulated")) != simulated or not detail.get("policy_id"):
+                    continue
+                key = (str(detail["policy_id"]), str(detail.get("arm_id")))
+                successes, attempts = stats.get(key, (0, 0))
+                stats[key] = (successes + (check.status == StepStatus.SUCCEEDED.value), attempts + 1)
+        return stats
 
     def close(self) -> None:
         self.engine.dispose()

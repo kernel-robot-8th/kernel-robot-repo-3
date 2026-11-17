@@ -1,0 +1,397 @@
+"""Order desk: receive from the order window, preview the assignment, start with a chosen Pinky, reject."""
+
+from __future__ import annotations
+
+import os
+import tempfile
+import time
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from control_station.act_policies import load_act_policies
+from control_station.arms import load_arms
+from control_station.mock_world import MockWorld
+from control_station.order_desk import OrderDesk, OrderDeskError
+from control_station.order_flow import OrderFlow
+from control_station.receiving_zones import ReceivingZone
+from control_station.store import TaskStore
+from control_station.task_orchestrator import MockTaskOrchestrator, TaskExecutionConflict
+from test_api_routes import ApiTestCase
+from test_order_flow import CARROT_APPLE, TERMINAL, devices
+
+ZONES = {"zone_a": ReceivingZone("zone_a", "수령 구역 A", ("1", "5", "9"))}
+TWO_ZONES = {**ZONES, "zone_b": ReceivingZone("zone_b", "수령 구역 B", ("1", "5", "7", "10"))}
+
+
+def finish(desk: OrderDesk, store: TaskStore, order_id: str, *, pickup: bool = True) -> dict:
+    """Run an order to its end, confirming pickup when its Pinky waits at the receiving zone."""
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        order = store.get_task(order_id)
+        if order["status"] in TERMINAL:
+            return order
+        active = next((step for step in order["steps"] if step["id"] == order.get("active_step_id")), None)
+        if pickup and active is not None and active["step_type"] == "CONFIRM_PICKUP" and desk.flow_waiting(order_id):
+            desk.confirm_pickup(order_id)
+        time.sleep(0.02)
+    raise AssertionError(f"order did not finish: {store.get_task(order_id)['status']}")
+
+
+def make_desk(store: TaskStore, *, zones=ZONES) -> tuple[OrderDesk, MockWorld, MockTaskOrchestrator]:
+    world = MockWorld(drive_s=0.2, pick_s=0.05)
+    flow = OrderFlow(load_arms(), load_act_policies(), devices(world), dwell_s=0.0, poll_s=0.02,
+                     arrival_timeout_s=10.0, signal_timeout_s=2.0,
+                     route_for=lambda zone_id: list(zones[zone_id].route_labels) if zone_id in zones else None)
+    orchestrator = MockTaskOrchestrator(store, order_flow=flow)
+    desk = OrderDesk(store, orchestrator, devices(world), load_arms(), load_act_policies(), zones,
+                     pick_stats=lambda: store.pick_success_stats(simulated=True), pickup=flow.confirm_pickup)
+    flow.choose_shipment_pinky = desk.assign_next_shipment  # as app.py wires it
+    desk.flow_waiting = lambda order_id: order_id in flow._pickups  # test helper: is the step waiting yet
+    return desk, world, orchestrator
+
+
+class OrderDeskTest(unittest.TestCase):
+    def setUp(self) -> None:
+        patcher = mock.patch.dict(os.environ, {"CONTROL_STATION_MOCK_STEP_DELAY": "0.05"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.store = TaskStore(str(Path(directory.name) / "t.sqlite3"))
+        self.addCleanup(self.store.close)
+        self.desk, self.world, orchestrator = make_desk(self.store)
+        self.addCleanup(orchestrator.close)
+
+    def wait(self, order_id: str) -> dict:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            order = self.store.get_task(order_id)
+            if order["status"] in TERMINAL:
+                return order
+            time.sleep(0.02)
+        self.fail(f"order did not finish: {self.store.get_task(order_id)['status']}")
+
+    def test_a_resent_order_with_the_same_key_is_not_a_second_order(self) -> None:
+        items = [{"object_class": "사과", "quantity": 2}]
+        first, made = self.desk.receive_once(items, None, "key-1")
+        again, made_again = self.desk.receive_once(items, None, "key-1")
+        self.assertEqual((made, made_again, again["id"]), (True, False, first["id"]))
+        self.assertEqual([order["id"] for order in self.desk.pending()], [first["id"]])
+        with self.assertRaises(OrderDeskError) as raised:
+            self.desk.receive_once([{"object_class": "사과", "quantity": 1}], None, "key-1")
+        self.assertEqual((raised.exception.error_code, raised.exception.status), ("IDEMPOTENCY_KEY_REUSED", 422))
+        other, made_other = self.desk.receive_once(items, None, "key-2")  # a new key is a new order
+        self.assertTrue(made_other)
+        self.assertNotEqual(other["id"], first["id"])
+
+    def test_received_order_waits_without_a_pinky_or_a_zone(self) -> None:
+        order = self.desk.receive([{"object_class": "사과", "quantity": 2}])  # the customer app sends no zone
+        self.assertEqual((order["status"], order["pinky_id"], order["receiving_zone"]), ("PENDING", None, None))
+        self.assertEqual((order["destination"], order["arm_job"]), ("수령 구역 (시작 때 배정)", "사과 2 적재"))
+        self.assertEqual({step["robot_id"] for step in order["steps"] if step["step_type"] == "CONFIRM_DOCKING"}, {None})
+        # The zone steps are there from the start; the zone itself comes with the start.
+        self.assertIn("CONFIRM_PICKUP", [step["step_type"] for step in order["steps"]])
+        track = self.desk.track(order["id"])
+        self.assertEqual((track["zone"], track["zone_note"]), (None, "받을 곳은 로봇이 출발할 때 알려 드려요"))
+        self.assertEqual([o["id"] for o in self.desk.pending()], [order["id"]])
+        self.assertNotIn("10", self.store.busy_pinkies())  # a waiting order holds no Pinky
+
+    def test_catalog_lists_products_stock_and_zones(self) -> None:
+        catalog = self.desk.catalog()
+        stock = {item["object_class"]: item["available"] for item in catalog["products"]}
+        # mock stock over both shelves; watermelon has a policy but no stock
+        self.assertEqual(stock, {"carrot": 4, "tissue": 3, "apple": 4, "watermelon": 0})
+        self.assertEqual([zone["zone_id"] for zone in catalog["zones"]], ["zone_a"])
+
+    def test_bad_items_and_unknown_zone_are_refused(self) -> None:
+        with self.assertRaises(OrderDeskError) as bad_item:
+            self.desk.receive([{"object_class": "바나나", "quantity": 1}], "zone_a")
+        self.assertEqual((bad_item.exception.error_code, bad_item.exception.status), ("ORDER_INVALID", 400))
+        with self.assertRaises(OrderDeskError) as bad_zone:
+            self.desk.receive(CARROT_APPLE, "zone_z")
+        self.assertEqual(bad_zone.exception.error_code, "RECEIVING_ZONE_UNKNOWN")
+
+    def test_preview_explains_and_changes_nothing(self) -> None:
+        order = self.desk.receive(CARROT_APPLE, "zone_a")
+        preview = self.desk.preview(order["id"])
+        self.assertEqual(preview["pinky"]["pinky_id"], "10")  # mock batteries: P0 92 %, P1 78 %, P2 64 %
+        self.assertEqual(preview["pinky"]["summary"], "P0 · 배터리 90%대 · 오늘 0회")
+        # The apple policy is the right arm's, so the two apples go right and the carrot left.
+        self.assertEqual(preview["arms"]["summary"], "오른쪽 팔 2개 → 왼쪽 팔 1개")
+        self.assertIsNone(self.store.get_task(order["id"])["pinky_id"])
+
+    def use_two_zones(self) -> None:
+        self.desk, self.world, orchestrator = make_desk(self.store, zones=TWO_ZONES)
+        self.addCleanup(orchestrator.close)
+
+    def test_start_assigns_the_zone_and_the_pinky_and_runs_the_order(self) -> None:
+        self.use_two_zones()
+        first = self.desk.receive(CARROT_APPLE)
+        second = self.desk.receive([{"object_class": "carrot", "quantity": 1}])
+        self.assertEqual(self.desk.preview(first["id"])["zone"]["summary"], "수령 구역 A · 오늘 0회 · 경로 3곳")
+        self.desk.start(first["id"])
+        preview = self.desk.preview(second["id"])["zone"]  # zone A is the first order's until its pickup
+        self.assertEqual([(v["zone_id"], v["eligible"]) for v in preview["verdicts"]],
+                         [("zone_a", False), ("zone_b", True)])
+        self.desk.start(second["id"])  # P0 and zone A are held by the first order now
+        done = finish(self.desk, self.store, first["id"])
+        self.assertEqual((done["status"], done["pinky_id"], done["receiving_zone"], done["destination"]),
+                         ("SUCCEEDED", "10", "zone_a", "수령 구역 A"))
+        assigned = [event for event in done["events"] if event["event_type"] == "PINKY_ASSIGNED"]
+        self.assertEqual(assigned[0]["payload"]["assignment"]["pinky_id"], "10")
+        zoned = [event for event in done["events"] if event["event_type"] == "ZONE_ASSIGNED"]
+        self.assertEqual(zoned[0]["payload"]["assignment"]["zone_id"], "zone_a")
+        self.assertEqual({step["robot_id"] for step in done["steps"] if step["step_type"] == "CONFIRM_DOCKING"},
+                         {"pinky-10"})
+        second_done = finish(self.desk, self.store, second["id"])
+        self.assertEqual((second_done["pinky_id"], second_done["receiving_zone"]), ("11", "zone_b"))
+        self.assertEqual(self.desk.track(second["id"])["zone"], "수령 구역 B")
+        # Both zones are free again; B was used as often as A today and has the longer route, so A comes first.
+        third = self.desk.receive([{"object_class": "apple", "quantity": 1}])
+        self.assertEqual(self.desk.preview(third["id"])["zone"]["zone_id"], "zone_a")
+
+    def test_a_zone_in_use_keeps_the_next_order_waiting(self) -> None:
+        first = self.desk.receive([{"object_class": "carrot", "quantity": 1}])
+        second = self.desk.receive([{"object_class": "apple", "quantity": 1}])
+        self.desk.start(first["id"])
+        with self.assertRaises(OrderDeskError) as busy:
+            self.desk.start(second["id"])
+        self.assertEqual((busy.exception.error_code, busy.exception.status), ("ZONE_BUSY", 409))
+        self.assertIn("수령 구역이 모두 사용 중이에요", str(busy.exception))
+        waiting = self.store.get_task(second["id"])
+        self.assertEqual((waiting["status"], waiting["pinky_id"], waiting["receiving_zone"]), ("PENDING", None, None))
+        finish(self.desk, self.store, first["id"])  # the pickup frees zone A
+        self.desk.start(second["id"])
+        self.assertEqual(finish(self.desk, self.store, second["id"])["receiving_zone"], "zone_a")
+
+    def test_an_operators_zone_is_kept(self) -> None:
+        self.use_two_zones()
+        first = self.desk.receive([{"object_class": "carrot", "quantity": 1}], "zone_b")  # A would rank first
+        second = self.desk.receive([{"object_class": "apple", "quantity": 1}], "zone_b")
+        self.assertEqual(first["destination"], "수령 구역 B")
+        self.assertEqual(self.desk.preview(first["id"])["zone"]["summary"], "수령 구역 B · 작업자 지정")
+        self.desk.start(first["id"])
+        with self.assertRaises(OrderDeskError) as busy:
+            self.desk.start(second["id"])  # zone A is free, but the operator's zone B is not swapped for it
+        self.assertEqual(busy.exception.error_code, "ZONE_BUSY")
+        self.assertEqual(finish(self.desk, self.store, first["id"])["receiving_zone"], "zone_b")
+
+    def test_the_pinky_goes_to_the_receiving_zone_and_home_after_pickup(self) -> None:
+        order = self.desk.receive([{"object_class": "carrot", "quantity": 1}], "zone_a")
+        with self.assertRaises(OrderDeskError) as early:
+            self.desk.confirm_pickup(order["id"])
+        self.assertEqual(early.exception.error_code, "PICKUP_NOT_READY")
+        self.desk.start(order["id"])
+        deadline = time.monotonic() + 15
+        while not self.desk.flow_waiting(order["id"]) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        track = self.desk.track(order["id"])
+        self.assertEqual((track["stage"], track["can_confirm_pickup"], track["title"]),
+                         ("arrived", True, "수령 구역 A에 도착했어요"))
+        self.assertEqual(self.world.fleet_status("10")["phase"], "course_complete")
+        self.desk.confirm_pickup(order["id"])
+        done = finish(self.desk, self.store, order["id"], pickup=False)
+        self.assertEqual(done["status"], "SUCCEEDED")
+        self.assertEqual(self.world.fleet_status("10")["phase"], "parked")
+        actions = [e["payload"]["action"] for e in done["events"] if e["event_type"] == "PINKY_SIGNAL_SENT"]
+        self.assertEqual(actions, ["dock_complete", "received", "mission-complete"])
+        self.assertEqual(self.desk.track(order["id"])["stage"], "done")
+
+    def test_no_free_pinky_keeps_the_order_waiting(self) -> None:
+        for pinky_id in ("10", "11", "12"):
+            self.store.create_task("A", "B", order_items=CARROT_APPLE, pinky_id=pinky_id)
+        order = self.desk.receive(CARROT_APPLE, "zone_a")
+        with self.assertRaises(OrderDeskError) as error:
+            self.desk.start(order["id"])
+        self.assertEqual(error.exception.error_code, "PINKY_UNAVAILABLE")
+        self.assertEqual([v["reason"][:3] for v in error.exception.details["assignment"]["verdicts"]], ["주문 "] * 3)
+        self.assertEqual(self.store.get_task(order["id"])["status"], "PENDING")
+
+    def test_an_order_cannot_start_without_its_pinky_by_the_old_route(self) -> None:
+        order = self.desk.receive(CARROT_APPLE, "zone_a")
+        with self.assertRaises(TaskExecutionConflict):
+            self.desk.orchestrator.start(order["id"])
+
+    def large_order(self) -> dict:
+        # Tray capacity 4 (config/fleet-planning.json): six units go as two shipments of three.
+        return self.desk.receive([{"object_class": "carrot", "quantity": 3}, {"object_class": "apple", "quantity": 3}])
+
+    @staticmethod
+    def steps_of(order: dict, step_type: str) -> list[dict]:
+        return [step for step in order["steps"] if step["step_type"] == step_type]
+
+    def test_large_order_is_planned_as_shipments_one_after_another(self) -> None:
+        order = self.large_order()
+        self.assertEqual(len(self.steps_of(order, "START_SHIPMENT")), 1)
+        self.assertEqual([step["detail"]["shipment"] for step in self.steps_of(order, "WAIT_PINKY_ARRIVAL")], [1, 2])
+        fleet = self.desk.preview(order["id"])["fleet"]
+        self.assertTrue(fleet["sequential"])
+        # One Pinky drives at a time, so each later shipment is chosen again when it starts; the preview guesses
+        # with the earlier trip counted. The mock P0 has the most battery, so it is the guess both times.
+        self.assertEqual([trip["pinky_id"] for trip in fleet["trips"]], ["10", "10"])
+        self.assertTrue(fleet["summary"].startswith("운송 2번으로 나눠 차례로"))
+        self.assertIn("앞 운송이 끝나면 다시 고름", fleet["trips"][1]["reason"])
+        # The screen draws each tray: its slot count and, per unit, the name and the slots it takes.
+        self.assertEqual(fleet["capacity"], 4)
+        self.assertEqual({(unit["label"], unit["size"]) for trip in fleet["trips"] for unit in trip["units"]},
+                         {("당근", 1), ("사과", 1)})
+        for trip in fleet["trips"]:
+            schedule = trip["schedule"]
+            self.assertEqual(len(schedule["picks"]), 3)
+            # ACT runs grasp -> place -> rest in one go, so overlap is off: one whole pick after another.
+            self.assertEqual((schedule["overlap"], schedule["total_s"]), (False, schedule["one_arm_at_a_time_s"]))
+
+    def test_shipments_run_in_turn_each_picked_up_on_its_own(self) -> None:
+        order = self.large_order()
+        self.desk.start(order["id"])
+        tracks: dict[str, dict] = {}
+        zone_refusal = None
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            current = self.store.get_task(order["id"])
+            if current["status"] in TERMINAL:
+                break
+            active = next((step for step in current["steps"] if step["id"] == current.get("active_step_id")), None)
+            kind = active["step_type"] if active else None
+            if kind == "CONFIRM_PICKUP" and self.desk.flow_waiting(order["id"]):
+                tracks[f"arrived{active['detail']['shipment']}"] = self.desk.track(order["id"])
+                self.desk.confirm_pickup(order["id"])
+            elif kind in {"WAIT_PINKY_PARKED", "START_SHIPMENT"} and active["detail"]["shipment"] in {1, 2} \
+                    and "between" not in tracks and (kind == "START_SHIPMENT" or active["detail"]["shipment"] == 1):
+                tracks["between"] = self.desk.track(order["id"])
+                # The order keeps its receiving zone between its shipments: another order cannot take it.
+                other = self.desk.receive([{"object_class": "tissue", "quantity": 1}])
+                try:
+                    self.desk.start(other["id"])
+                except OrderDeskError as exc:
+                    zone_refusal = exc.error_code
+            time.sleep(0.01)
+        done = self.store.get_task(order["id"])
+        self.assertEqual(done["status"], "SUCCEEDED", done.get("error"))
+        self.assertEqual(zone_refusal, "ZONE_BUSY")
+        # Shipment 2 opened only after shipment 1's Pinky was picked up and back in its parking spot.
+        parked_1 = self.steps_of(done, "WAIT_PINKY_PARKED")[0]
+        opened_2 = self.steps_of(done, "START_SHIPMENT")[0]
+        self.assertGreaterEqual(opened_2["started_at"], parked_1["finished_at"])
+        assigned = [event["payload"] for event in done["events"] if event["event_type"] == "PINKY_ASSIGNED"]
+        self.assertEqual([(entry["shipment"], entry["pinky_id"]) for entry in assigned], [(1, "10"), (2, "10")])
+        # Each Pinky carried exactly its own shipment.
+        totals = [step["result"]["loaded"] for step in self.steps_of(done, "VERIFY_LOAD_TOTAL")]
+        self.assertEqual([sum(loaded.values()) for loaded in totals], [3, 3])
+        # The customer saw each shipment arrive and could confirm it, and the gap between them.
+        first, gap, second = tracks["arrived1"], tracks["between"], tracks["arrived2"]
+        self.assertEqual((first["shipment"], first["shipments"], first["stage"], first["can_confirm_pickup"]),
+                         (1, 2, "arrived", True))
+        self.assertEqual(sum(item["quantity"] for item in first["shipment_items"]), 3)
+        self.assertEqual((gap["shipment"], gap["stage"], gap["title"], gap["can_confirm_pickup"]),
+                         (2, "pinky_coming", "남은 물건을 가지러 가요", False))
+        self.assertEqual((second["shipment"], second["stage"], second["loaded"], second["total"]), (2, "arrived", 3, 3))
+        final = self.desk.track(order["id"])
+        self.assertEqual((final["stage"], final["shipment"], final["shipments"]), ("done", 2, 2))
+
+    def test_a_stopped_shipment_leaves_the_rest_unstarted(self) -> None:
+        self.world.inject("PICK_FAILED", "carrot")  # the first carrot pick, in shipment 1
+        order = self.large_order()
+        self.desk.start(order["id"])
+        done = finish(self.desk, self.store, order["id"])
+        self.assertEqual((done["status"], done["error"]["code"]), ("FAILED", "PICK_FAILED_STILL_ON_SHELF"))
+        self.assertNotEqual(self.steps_of(done, "START_SHIPMENT")[0]["status"], "SUCCEEDED")
+        self.assertEqual([event["payload"]["shipment"] for event in done["events"] if event["event_type"] == "PINKY_ASSIGNED"],
+                         [1])
+
+    def test_an_order_received_unsplit_is_not_started_overloaded(self) -> None:
+        items = [{"object_class": "carrot", "quantity": 3}, {"object_class": "apple", "quantity": 3}]
+        old = self.store.create_task("수령 구역 (시작 때 배정)", "적재", order_items=items, defer_pinky=True, zone_steps=True)
+        with self.assertRaises(OrderDeskError) as error:
+            self.desk.start(old["id"])
+        self.assertEqual(error.exception.error_code, "ORDER_NEEDS_SHIPMENTS")
+        self.assertIsNone(self.store.get_task(old["id"])["pinky_id"])
+
+    def test_the_window_sells_only_what_is_available(self) -> None:
+        def inventory(apple_status: str = "available", apples: int | None = 2) -> dict:
+            return {"state": "live" if apple_status != "unknown" else "unknown", "reason": "선반 카메라의 새 값이 없습니다",
+                    "products": [{"object_class": "apple", "label": "사과", "available": apples, "status": apple_status},
+                                 {"object_class": "carrot", "label": "당근", "available": 0, "status": "sold_out"},
+                                 {"object_class": "tissue", "label": "물티슈", "available": 0, "status": "closed"}]}
+        self.desk.inventory = inventory
+        catalog = self.desk.catalog()
+        self.assertEqual([p["notice"] for p in catalog["products"]], [None, "품절", "판매 중지"])
+        self.assertEqual(self.desk.receive([{"object_class": "apple", "quantity": 2}], "zone_a")["status"], "PENDING")
+        with self.assertRaises(OrderDeskError) as short:
+            self.desk.receive([{"object_class": "apple", "quantity": 3}, {"object_class": "carrot", "quantity": 1}],
+                              "zone_a")
+        self.assertEqual((short.exception.error_code, str(short.exception)),
+                         ("OUT_OF_STOCK", "사과는 2개 남았습니다 · 당근은 품절입니다"))
+        with self.assertRaises(OrderDeskError) as closed:
+            self.desk.receive([{"object_class": "tissue", "quantity": 1}], "zone_a")
+        self.assertEqual((closed.exception.error_code, str(closed.exception)), ("ITEM_CLOSED", "물티슈는 지금 판매하지 않습니다"))
+        self.desk.inventory = lambda: inventory("unknown", None)
+        self.assertIn("재고를 확인하지 못해", self.desk.catalog()["notice"])
+        with self.assertRaises(OrderDeskError) as unknown:
+            self.desk.receive([{"object_class": "apple", "quantity": 1}], "zone_a")
+        self.assertEqual((unknown.exception.error_code, str(unknown.exception)),
+                         ("ITEM_CLOSED", "사과는 재고를 확인하지 못해 주문을 닫았습니다"))
+
+    def test_reject_only_waiting_orders(self) -> None:
+        order = self.desk.receive(CARROT_APPLE, "zone_a")
+        self.assertEqual(self.desk.reject(order["id"])["status"], "CANCELED")
+        with self.assertRaises(OrderDeskError) as error:
+            self.desk.reject(order["id"])
+        self.assertEqual(error.exception.error_code, "ORDER_NOT_PENDING")
+
+
+class OrderApiTest(ApiTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.server.order_desk, _, orchestrator = make_desk(self.task_store)
+        self.addCleanup(orchestrator.close)
+
+    def test_order_window_round_trip(self) -> None:
+        status, catalog, _ = self.request("GET", "/api/catalog")
+        self.assertEqual((status, catalog["zones"][0]["label"]), (200, "수령 구역 A"))
+        status, created, _ = self.request("POST", "/api/orders", {"items": CARROT_APPLE})  # no zone from the app
+        self.assertEqual((status, created["order"]["receiving_zone"]), (201, None))
+        order_id = created["order"]["id"]
+        status, pending, _ = self.request("GET", "/api/orders")
+        self.assertEqual((status, [order["id"] for order in pending["orders"]]), (200, [order_id]))
+        status, preview, _ = self.request("GET", f"/api/orders/{order_id}/assignment")
+        self.assertEqual((status, preview["pinky"]["pinky_id"], preview["zone"]["zone_id"]), (200, "10", "zone_a"))
+        status, started, _ = self.request("POST", f"/api/orders/{order_id}/start")
+        self.assertEqual((status, started["order"]["pinky_id"], started["order"]["receiving_zone"]),
+                         (202, "10", "zone_a"))
+        status, created, _ = self.request("POST", "/api/orders", {"items": [{"object_class": "apple", "quantity": 1}]})
+        status, body, _ = self.request("POST", f"/api/orders/{created['order']['id']}/start")
+        self.assertEqual((status, body["error_code"], body["zone"]["zone_id"]), (409, "ZONE_BUSY", None))
+
+    def test_a_resent_post_returns_the_order_it_made(self) -> None:
+        key = {"Idempotency-Key": "a1b2c3d4e5f60718"}
+        status, created, _ = self.request("POST", "/api/orders", {"items": CARROT_APPLE}, headers=key)
+        self.assertEqual((status, created["replayed"]), (201, False))
+        status, again, _ = self.request("POST", "/api/orders", {"items": CARROT_APPLE}, headers=key)
+        self.assertEqual((status, again["replayed"], again["order"]["id"]), (200, True, created["order"]["id"]))
+        status, pending, _ = self.request("GET", "/api/orders")
+        self.assertEqual(len(pending["orders"]), 1)
+        status, body, _ = self.request("POST", "/api/orders", {"items": CARROT_APPLE}, headers={"Idempotency-Key": "has space"})
+        self.assertEqual((status, body["error_code"]), (400, "IDEMPOTENCY_KEY_INVALID"))
+
+    def test_errors_say_whether_to_retry_and_carry_a_request_id(self) -> None:
+        status, body, headers = self.request("GET", "/api/orders/TASK-NOPE/assignment")
+        self.assertEqual((status, body["retryable"], body["request_id"]), (404, False, headers["x-request-id"]))
+        _, first, _ = self.request("POST", "/api/orders", {"items": CARROT_APPLE})
+        self.request("POST", f"/api/orders/{first['order']['id']}/start")
+        _, second, _ = self.request("POST", "/api/orders", {"items": [{"object_class": "apple", "quantity": 1}]})
+        status, body, _ = self.request("POST", f"/api/orders/{second['order']['id']}/start")
+        self.assertEqual((status, body["error_code"], body["retryable"]), (409, "ZONE_BUSY", True))
+
+    def test_errors_carry_codes(self) -> None:
+        status, body, _ = self.request("POST", "/api/orders", {"items": CARROT_APPLE, "note": "x"})
+        self.assertEqual((status, body["error_code"]), (400, "ORDER_INVALID"))
+        status, body, _ = self.request("GET", "/api/orders/TASK-NOPE/assignment")
+        self.assertEqual((status, body["error_code"]), (404, "ORDER_NOT_FOUND"))
+        status, _, _ = self.request("POST", "/api/orders", {"items": CARROT_APPLE}, origin="http://evil.example")
+        self.assertEqual(status, 403)
+
+
+if __name__ == "__main__":
+    unittest.main()

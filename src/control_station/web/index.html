@@ -3,31 +3,104 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
   <title>로봇 관제 서버</title>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/manual.css">
+  <link rel="stylesheet" href="/intake-plan.css">
+  <link rel="stylesheet" href="/dashboard.css">
   <script src="/app.js" defer></script>
+  <script src="/intake-plan.js" defer></script>
+  <script src="/route-strip.js" defer></script>
+  <script src="/pinky-map.js" defer></script>
+  <script src="/pinky.js" defer></script>
+  <script src="/pinky-detail.js" defer></script>
+  <script src="/inventory.js" defer></script>
+  <script src="/dashboard.js" defer></script>
+  <script src="/ros-monitor.js" defer></script>
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand"><h1>로봇 관제</h1><p>로컬 제어 서버</p></div>
       <nav class="main-nav" aria-label="주 메뉴">
-        <button type="button" class="nav-item active" data-view="flow" aria-current="page">주문 진행</button>
-        <button type="button" class="nav-item" data-view="overview">현황</button>
-        <button type="button" class="nav-item" data-view="manual">수동 조작</button>
+        <button type="button" class="nav-item active" data-view="dashboard" aria-current="page">종합</button>
+        <button type="button" class="nav-item" data-view="flow"><span>주문 진행</span><span id="intakeBadge" class="nav-badge" hidden></span></button>
+        <button type="button" class="nav-item" data-view="pinky">핑키</button>
+        <button type="button" class="nav-item" data-view="inventory">재고</button>
         <button type="button" class="nav-item" data-view="tasks">작업 이력</button>
-        <button type="button" class="nav-item" data-view="api">API</button>
+        <button type="button" class="nav-item" data-view="overview" data-dev-only>장비·카메라</button>
+        <button type="button" class="nav-item" data-view="manual" data-dev-only>수동 조작</button>
+        <button type="button" class="nav-item" data-view="ros" data-dev-only>ROS 모니터</button>
+        <button type="button" class="nav-item" data-view="api" data-dev-only>API</button>
       </nav>
-      <div id="serverStatus" class="server-status" role="status"><span class="dot"></span> 서버 확인 중</div>
+      <a id="screenModeSwitch" class="screen-mode-switch" href="?dev=1">개발자 화면</a>
+      <div id="serverStatus" class="server-status" role="status"><span class="dot"></span><span><strong>서버 확인 중</strong></span></div>
     </aside>
 
     <main class="main-content">
       <header class="header">
-        <div><h2 id="viewTitle">주문 진행</h2><p id="updatedAt" class="updated">갱신 전</p></div>
+        <div><h2 id="viewTitle">종합</h2><p id="updatedAt" class="updated">갱신 전</p></div>
+        <button type="button" id="pinkyStopAll" class="stop-all" title="확인 창 없이 핑키 3대에 바로 정지 요청을 보냅니다">핑키 전체 정지</button>
       </header>
 
-      <div class="view" id="view-flow">
+      <div class="view" id="view-dashboard">
+    <div class="dash">
+      <section id="dashNow" class="dash-now" aria-live="polite">
+        <span class="dash-now-mark" aria-hidden="true"></span>
+        <div class="dash-now-text"><p id="dashNowTitle" class="dash-now-title">상태를 모으고 있어요</p><p id="dashNowDetail" class="dash-now-detail"></p></div>
+        <a class="dash-app-link" href="/order" target="_blank" rel="noopener">고객 주문 앱 열기</a>
+      </section>
+      <div id="dashTiles" class="dash-tiles" aria-label="한눈에 보는 숫자"></div>
+      <div class="dash-grid">
+        <section class="dash-card dash-map-card" aria-labelledby="dash-map-title">
+          <div class="dash-card-head"><h3 id="dash-map-title">전체 지도</h3><span class="updated">누르면 크게</span></div>
+          <button type="button" id="dashMapOpen" class="dash-map-open" aria-label="전체 지도 크게 보기">
+            <svg id="dashMap" class="pinky-map compact" role="img" aria-label="핑키 지도"></svg>
+            <span id="dashMapEmpty" class="map-empty">지도를 불러오는 중…</span>
+          </button>
+          <p id="dashMapNote" class="dash-map-note" hidden></p>
+        </section>
+        <section class="dash-card dash-progress-card" aria-labelledby="dash-progress-title">
+          <div class="dash-card-head"><h3 id="dash-progress-title">진행 중인 주문</h3><span id="dashProgressCount" class="updated"></span></div>
+          <div id="dashProgress" class="dash-progress"></div>
+        </section>
+        <section class="dash-card dash-devices-card" aria-labelledby="dash-devices-title">
+          <div class="dash-card-head"><h3 id="dash-devices-title">장비 상태</h3><button type="button" class="link-button" data-dash-goto="overview">카메라 보기</button></div>
+          <div id="dashDevices" class="dash-devices"></div>
+        </section>
+        <section class="dash-card dash-todo-card" aria-labelledby="dash-todo-title">
+          <div class="dash-card-head"><h3 id="dash-todo-title">처리할 일</h3><span id="dashTodoCount" class="updated"></span></div>
+          <div id="dashTodo" class="dash-todo-list"></div>
+        </section>
+        <section class="dash-card dash-events-card" aria-labelledby="dash-events-title">
+          <div class="dash-card-head"><h3 id="dash-events-title">최근 일</h3><span class="updated">오늘</span></div>
+          <div id="dashEvents" class="dash-events"></div>
+        </section>
+        <section class="dash-card dash-stock-card" aria-labelledby="dash-stock-title">
+          <div class="dash-card-head"><h3 id="dash-stock-title">재고</h3><span id="dashStockNote" class="updated"></span></div>
+          <div id="dashStock" class="dash-stock"></div>
+        </section>
+      </div>
+    </div>
+      </div>
+
+      <div class="view" id="view-flow" hidden>
+    <section class="summary-card" aria-labelledby="flowSummaryTitle">
+      <p id="flowSummaryTitle" class="summary-title">주문 상황을 불러오고 있어요</p>
+      <dl class="summary-stats">
+        <div class="stat" id="flowStatWaiting"><dt>시작을 기다리는 주문</dt><dd>–</dd></div>
+        <div class="stat" id="flowStatRunning"><dt>진행 중인 주문</dt><dd>–</dd></div>
+        <div class="stat" id="flowStatStopped"><dt>멈춘 주문</dt><dd>–</dd></div>
+        <div class="stat" id="flowStatPinkies"><dt>연결된 핑키</dt><dd>–</dd></div>
+      </dl>
+    </section>
     <div id="flowAlerts" class="alert-band" aria-live="polite"></div>
+    <section aria-labelledby="intake-title">
+      <div class="section-heading"><h2 id="intake-title">주문 접수</h2><span id="intakeUpdated" class="updated">불러오는 중</span></div>
+      <div id="intakeOrders" class="intake-list"><p class="loading">접수된 주문을 불러오는 중…</p></div>
+      <p class="note">배정 미리보기는 지금 상태로 계산한 안내이며 아무것도 예약하지 않습니다. 시작을 누르면 그때 핑키를 다시 고르고, 팔 순서는 선반 재고를 확인한 뒤 다시 정합니다.</p>
+    </section>
     <section aria-labelledby="flow-robots-title">
       <div class="section-heading"><h2 id="flow-robots-title">로봇 상태</h2><span id="flowUpdated" class="updated">불러오는 중</span></div>
       <div id="flowRobots" class="robot-strip"><p class="loading">상태를 불러오는 중…</p></div>
@@ -36,26 +109,8 @@
       <div class="section-heading"><h2 id="flow-orders-title">주문 목록</h2><span id="flowStation" class="updated"></span></div>
       <div id="flowOrders" class="order-board"><p class="loading">주문을 불러오는 중…</p></div>
     </section>
-    <section aria-labelledby="flow-new-title">
-      <div class="section-heading"><h2 id="flow-new-title">새 주문</h2></div>
-      <form id="commandParseForm" class="command-parse-form">
-        <label>주문 문장<textarea name="text" rows="2" maxlength="500" required placeholder="예: 당근 1개랑 사과 2개 핑키에 실어줘"></textarea></label>
-        <button type="submit">문장 해석</button>
-      </form>
-      <p id="commandParseMessage" class="note" role="status">학습 정책이 있는 물체 이름(당근·물티슈·사과…)과 수량을 찾아 아래 주문 초안을 채웁니다. 확인한 뒤 주문 등록을 눌러야 저장됩니다.</p>
-      <form id="orderForm" class="order-form">
-        <div class="order-items" id="orderItems"></div>
-        <div class="order-actions">
-          <button type="button" id="orderAddItem" class="secondary">+ 물체 추가</button>
-          <label>핑키<select name="pinky_id" id="orderPinky"><option value="">자동 배정</option><option value="10">P0 (10)</option><option value="11">P1 (11)</option><option value="12">P2 (12)</option></select></label>
-          <label class="inline-check"><input type="checkbox" name="start_now" checked> 등록하면 바로 시작</label>
-          <button type="submit">주문 등록</button>
-        </div>
-      </form>
-      <p id="orderMessage" class="note" role="status">물체마다 종류와 수량(1–5)을 고릅니다. 핑키를 고르지 않으면 진행 중인 주문이 없는 핑키를 P0→P1→P2 순서로 배정합니다. 등록만 하며 로봇 명령은 보내지 않습니다.</p>
-    </section>
     <section id="mockPanel" aria-labelledby="mock-title" hidden>
-      <div class="section-heading"><h2 id="mock-title">모의 세계 (화면 점검용)</h2><span class="updated">로봇·카메라 없이 흉내 냄</span></div>
+      <div class="section-heading"><h2 id="mock-title">모의 세계 (화면 점검용)</h2><span class="updated">로봇과 카메라 없이 흉내 내요</span></div>
       <div class="mock-panel">
         <div id="mockStock" class="mock-stock"></div>
         <form id="mockFaultForm" class="mock-fault-form">
@@ -69,7 +124,90 @@
     </section>
       </div>
 
+      <div class="view" id="view-pinky" hidden>
+    <section id="pinkySummary" class="summary-card" aria-labelledby="pinkyLinkTitle">
+      <div class="pinky-summary-grid">
+        <div class="pinky-summary-main">
+          <div class="pinky-summary-head">
+            <div id="pinkyLink" class="pinky-link">
+              <span class="pinky-link-dot" aria-hidden="true"></span>
+              <div><strong id="pinkyLinkTitle" class="summary-title">핑키 관제를 확인하고 있어요</strong><small id="pinkyLinkDetail">핑키 상태를 불러오는 중…</small></div>
+            </div>
+            <button type="button" id="pinkyPasswordOpen" class="link-button">SSH 비밀번호 보내기</button>
+          </div>
+          <dl class="summary-stats">
+            <div class="stat" id="pinkyStatConnected"><dt>연결된 핑키</dt><dd>–</dd></div>
+            <div class="stat" id="pinkyStatReady"><dt>주행 가능</dt><dd>–</dd></div>
+            <div class="stat" id="pinkyStatStopping"><dt>정지 적용 중</dt><dd>–</dd></div>
+          </dl>
+          <div class="pinky-prepare">
+            <button type="button" id="pinkyPrepareAll" disabled>주행준비하고 위치 잡기</button>
+            <small id="pinkyPrepareHint">준비 안 된 핑키만 한 대씩 차례로 준비하고, 끝나면 라이다로 각자 지도 위치를 찾아요. 못 찾은 핑키는 상세에서 후보를 골라 주세요.</small>
+          </div>
+          <p id="pinkyMapOff" class="route-off"></p>
+          <p id="pinkyMapNote" class="gentle-note" hidden></p>
+        </div>
+        <figure class="map-figure">
+          <button type="button" id="pinkyMapOpen" class="map-open" aria-label="전체 지도 크게 보기">
+            <svg id="pinkyMapSmall" class="pinky-map compact" role="img" aria-label="핑키 지도"></svg>
+            <span id="pinkyMapSmallEmpty" class="map-empty">지도를 불러오는 중…</span>
+          </button>
+          <figcaption><strong>전체 지도</strong><span id="pinkyMapTag"></span><span class="map-hint">누르면 크게 볼 수 있어요</span></figcaption>
+        </figure>
+      </div>
+      <div class="route-strip">
+        <div class="route-strip-head"><h3>경로에서 지금 위치</h3><span class="updated">축척 없음, 경로 순서만</span></div>
+        <div id="routeScroll" class="route-scroll" tabindex="0" aria-label="경로 노선도, 옆으로 넘겨 볼 수 있어요">
+          <svg id="routeStrip" class="route-svg" role="img" aria-label="경로 노선도"></svg>
+        </div>
+        <p id="routeOffStrip" class="route-off"></p>
+      </div>
+    </section>
+    <section aria-labelledby="pinky-cards-title">
+      <div class="section-heading"><h2 id="pinky-cards-title">핑키</h2><span class="updated">카드를 누르면 센서와 작업이 열려요</span></div>
+      <div id="pinkyCards" class="pinky-grid"><p class="loading">핑키 상태를 불러오는 중…</p></div>
+      <p class="note">정지는 핑키 관제를 거쳐 보내는 소프트웨어 정지 요청이며 확인 창 없이 바로 보냅니다. <strong>접수</strong>는 핑키 관제가 요청을 받았다는 뜻일 뿐이니, 핑키가 실제로 멈췄는지는 상세의 안전 감시 상태와 현장에서 확인하세요. 비상정지 스위치를 대신하지 않습니다.</p>
+    </section>
+    <section aria-labelledby="pinky-log-title">
+      <details class="pinky-log-box" data-dev-only>
+        <summary><h2 id="pinky-log-title">최근 명령</h2><span id="pinkyLogCount" class="updated"></span></summary>
+        <ol id="pinkyLog" class="pinky-log"><li class="pinky-log-empty">보낸 명령이 없습니다.</li></ol>
+        <p class="note">최근 30건이며 관제 서버 메모리에만 있어 다시 켜면 비워집니다.</p>
+      </details>
+    </section>
+      </div>
+
+      <div class="view" id="view-inventory" hidden>
+    <section class="summary-card" aria-labelledby="inventorySummaryTitle">
+      <p id="inventorySummaryTitle" class="summary-title">재고를 불러오고 있어요</p>
+      <p id="inventorySummaryDetail" class="summary-detail"></p>
+      <div id="inventoryBanner" class="attention-banner" role="alert" hidden></div>
+      <dl class="summary-stats">
+        <div class="stat" id="inventoryStatOpen"><dt>주문 받는 물건</dt><dd>–</dd></div>
+        <div class="stat" id="inventoryStatSoldOut"><dt>품절</dt><dd>–</dd></div>
+        <div class="stat" id="inventoryStatUnknown"><dt>재고를 모르는 물건</dt><dd>–</dd></div>
+        <div class="stat" id="inventoryStatReserved"><dt>주문이 잡아 둔 개수</dt><dd>–</dd></div>
+      </dl>
+    </section>
+    <section aria-labelledby="inventory-products-title">
+      <div class="section-heading"><h2 id="inventory-products-title">물건별 재고</h2><span class="updated">보이는 동안 2초마다 읽어요</span></div>
+      <div id="inventoryProducts" class="inventory-list"><p class="loading">재고를 불러오는 중…</p></div>
+      <p class="note">주문 가능은 선반에 있는 개수에서 시작 전·진행 중 주문이 잡아 둔 개수를 뺀 값입니다. 카메라 값은 같은 개수가 세 번 이어서 읽혀야 바뀌고, 팔이 일하는 동안에는 마지막 확인값을 씁니다. 재고를 모르는 물건은 0개로 치지 않고 주문을 닫습니다. <strong>직접 수량</strong>은 카메라 대신 작업자가 센 개수로 팔고, <strong>카메라 기준으로</strong>를 누르면 다시 카메라 값을 씁니다.</p>
+    </section>
+    <section aria-labelledby="inventory-events-title">
+      <div class="section-heading"><h2 id="inventory-events-title">최근 변화</h2><span class="updated">최근 40건, 관제 서버를 다시 켜면 비워져요</span></div>
+      <ol id="inventoryEvents" class="inventory-events"><li class="inventory-events-empty">아직 바뀐 것이 없어요.</li></ol>
+    </section>
+      </div>
+
       <div class="view" id="view-overview" hidden>
+    <section class="summary-card" aria-labelledby="overviewSummaryTitle">
+      <p id="overviewSummaryTitle" class="summary-title">서버 상태를 불러오고 있어요</p>
+      <dl class="summary-stats">
+        <div class="stat" id="overviewStatRobots"><dt>통신되는 로봇 인터페이스</dt><dd>–</dd></div>
+        <div class="stat" id="overviewStatCameras"><dt>영상이 들어오는 카메라</dt><dd>–</dd></div>
+      </dl>
+    </section>
     <section aria-labelledby="robots-title">
       <div class="section-heading"><h2 id="robots-title">로봇 인터페이스</h2></div>
       <div class="table-wrap">
@@ -82,14 +220,7 @@
     </section>
     <section aria-labelledby="cameras-title">
       <div class="section-heading"><h2 id="cameras-title">카메라 관측</h2><span class="updated">실행 모드별</span></div>
-      <form id="targetObservationForm" class="task-form target-observation-form">
-        <label>관측 대상 클래스<input name="class_name" list="detectorClassOptions" maxlength="80" required placeholder="검출 모델 클래스 이름"></label>
-        <label>색상 조건 (검토용)<select name="color"><option value="">선택 안 함</option><option value="red">빨강</option><option value="blue">파랑</option><option value="green">초록</option><option value="yellow">노랑</option><option value="black">검정</option><option value="white">흰색</option></select></label>
-        <label>선반 층 (검토용)<input name="shelf_level" type="number" min="1" max="999999999" step="1" placeholder="예: 2"></label>
-        <button type="submit">카메라 관측</button>
-      </form>
       <datalist id="detectorClassOptions"></datalist>
-      <p class="note">색상은 미보정 HSV 픽셀 힌트와, 선반 층은 명시적으로 설정한 영상 영역 초안과 비교해 검토 상태만 표시합니다. 결과는 후보를 필터링하거나 자동 선택하지 않으며, 관측 결과는 팔 명령을 보내지 않습니다.</p>
       <div id="cameraGrid" class="camera-grid"><p class="loading">상태를 불러오는 중…</p></div>
       <p class="note">설정된 카메라(탑 캠, 선반 캠, --arm 모드의 손목 캠) 입력을 관측합니다. 프리뷰와 검출 후보는 검토용이며 로봇 제어에 연결되지 않습니다.</p>
     </section>
@@ -104,7 +235,7 @@
         </div>
         <div class="parking-info">
           <ol id="parkingSteps" class="parking-steps" aria-label="Pinky 도착 진행 단계">
-            <li data-step="NOT_IN_VIEW">화면 밖</li><li data-step="MOVING">이동 중</li><li data-step="STOPPED">정지 · 위치 판정</li>
+            <li data-step="NOT_IN_VIEW">화면 밖</li><li data-step="MOVING">이동 중</li><li data-step="STOPPED">정지, 위치 판정</li>
           </ol>
           <div id="parkingBanner" class="parking-banner unknown" role="status">
             <span class="parking-banner-dot" aria-hidden="true"></span>
@@ -135,50 +266,112 @@
       </div>
 
       <div class="view" id="view-manual" hidden>
-    <section aria-labelledby="arm-title">
-      <div class="section-heading"><h2 id="arm-title">팔 텔레오퍼레이션</h2><span id="armState" class="updated">상태 확인 중</span></div>
-      <div class="arm-control">
-        <div><p id="armDetail" class="arm-detail">프로세스 상태를 불러오는 중…</p><p class="note">프로세스 실행 중 표시는 로봇 준비 완료나 작업 완료를 보장하지 않습니다.</p></div>
-        <div class="arm-actions"><button id="armStart" type="button">텔레오퍼레이션 시작</button><button id="armStop" type="button" class="secondary" disabled>종료 요청</button></div>
+    <section class="manual" aria-labelledby="manual-title">
+      <div class="manual-head">
+        <div>
+          <h2 id="manual-title">팔 수동 조작</h2>
+          <p class="manual-lead">주문 흐름 밖에서 팔을 한 번씩 움직여요. 누르기 전에 팔 주변과 핑키 위를 비워 주세요.</p>
+        </div>
+        <div id="armPicker" class="arm-picker" role="radiogroup" aria-label="움직일 팔"></div>
       </div>
-      <div class="section-heading"><h3>액션 상한 진단 실행</h3><span id="policyRunState" class="updated">상태 확인 중</span></div>
-      <div class="arm-control">
-        <div><label for="policyProfile">진단 프로필</label><select id="policyProfile" disabled><option>불러오는 중…</option></select><p id="policyRunDetail" class="arm-detail">상태 확인 중…</p><p class="note">이 진단은 액션 상한으로 종료되며 home 복귀를 판정하지 않습니다. 운영용 1회 집기는 아래 OMX 명령의 물체별 정책 버튼을 사용하세요. 이 패널의 종료는 집기·배치 성공을 뜻하지 않습니다.</p></div>
-        <div class="arm-actions"><button id="policyRunStart" type="button">진단 시작</button><button id="policyRunStop" type="button" class="secondary" disabled>진단 중단</button></div>
+
+      <div id="manualConfirm" class="manual-confirm" role="alertdialog" aria-modal="false" aria-labelledby="manualConfirmTitle" aria-describedby="manualConfirmDetail" hidden>
+        <div>
+          <strong id="manualConfirmTitle"></strong>
+          <p id="manualConfirmDetail"></p>
+        </div>
+        <div class="manual-confirm-actions">
+          <button type="button" id="manualConfirmCancel" class="secondary">취소</button>
+          <button type="button" id="manualConfirmOk"></button>
+        </div>
+      </div>
+
+      <div class="manual-grid">
+        <article class="manual-card" aria-labelledby="pick-title">
+          <header class="manual-card-head"><h3 id="pick-title">정책으로 집기</h3><span id="armWorkerState" class="worker-state">워커 확인 중</span></header>
+          <p class="manual-hint">물건을 고르면 그 물건만 집도록 학습한 정책이 팔을 움직여 핑키 위에 올려요.</p>
+          <div id="policyButtons" class="pick-tiles"><span class="note">정책 목록 확인 중</span></div>
+          <div class="pick-checklist">
+            <p>누르기 전에</p>
+            <ol>
+              <li>팔이 쉬는 자세이고, 팔 주변에 사람 손이 없어요</li>
+              <li>핑키가 적재 자리에 서 있고 쟁반이 비어 있어요</li>
+              <li>집을 물건이 그 팔 앞 선반에 있어요</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="manual-card manual-now" aria-labelledby="now-title">
+          <header class="manual-card-head"><h3 id="now-title">지금 명령</h3><span id="manualNowArm" class="updated"></span></header>
+          <div id="manualNow" class="manual-now-body" aria-live="polite"><p class="manual-empty">보낸 명령이 없어요</p></div>
+          <p id="armCommandMessage" class="manual-message" role="status"></p>
+        </article>
+
+        <article class="manual-card manual-recover" aria-labelledby="recover-title">
+          <header class="manual-card-head"><h3 id="recover-title">복구</h3></header>
+          <p class="manual-hint">정책이 중간에 멈췄거나 팔이 어색한 자세일 때 기록해 둔 home 자세로 돌려보내요.</p>
+          <button type="button" id="armReturnHome" class="secondary wide">원상복귀</button>
+        </article>
+      </div>
+
+      <details class="manual-log">
+        <summary>명령 기록 <span id="armCommandCount" class="updated"></span></summary>
+        <div class="table-wrap">
+          <table class="arm-command-table">
+            <thead><tr><th>명령</th><th>상태</th><th>대상·칸</th><th>워커·마지막 이벤트</th><th></th></tr></thead>
+            <tbody id="armCommandRows"><tr><td colspan="5" class="loading">명령을 불러오는 중…</td></tr></tbody>
+          </table>
+        </div>
+      </details>
+
+      <details class="manual-help">
+        <summary>어떻게 동작하나요</summary>
+        <ul>
+          <li>명령은 관제 서버의 대기열에 들어가고, 그 팔의 워커(<code>scripts/omx_lerobot_worker.py</code>)가 가져가서 수락해야 팔이 움직여요. 워커가 없으면 명령은 기다리다 만료돼요.</li>
+          <li>정책으로 집기는 먼저 정면 캠에서 그 물건이 한 칸에 보이는지 확인해요. 못 찾으면 이유를 보여 주고, 확인 없이 실행할지 한 번 더 물어요. 정책은 위치를 입력으로 받지 않고 자기 카메라로 물건을 찾으므로, 칸은 물건이 있었다는 근거로만 남아요.</li>
+          <li>정책이 쉬는 자세로 돌아오면 멈추고 home 자세로 맞춰요. 실제로 집어서 놓았는지는 확인하지 않으므로 결과는 <strong>결과 불명</strong>으로 남고, 현장을 보고 <strong>현장 확인 완료</strong>로 닫아요.</li>
+          <li>화면의 정지는 하드웨어 비상 정지를 대신하지 않아요.</li>
+        </ul>
+      </details>
+
+      <div id="manualDirect" class="manual-direct" hidden>
+        <h3 class="manual-subtitle">직접 실행</h3>
+        <p class="manual-hint">워커를 거치지 않고 이 PC에서 LeRobot을 바로 실행해요. 관제 서버를 켤 때 설정한 경우에만 나타나요.</p>
+        <div id="manualTeleop" class="arm-control" hidden>
+          <div>
+            <p class="manual-row-title">텔레오퍼레이션 <span id="armState" class="updated">상태 확인 중</span></p>
+            <p id="armDetail" class="arm-detail">프로세스 상태를 불러오는 중…</p>
+            <p class="note">프로세스 실행 중 표시는 로봇 준비 완료나 작업 완료를 보장하지 않아요.</p>
+          </div>
+          <div class="arm-actions"><button id="armStart" type="button">시작</button><button id="armStop" type="button" class="secondary" disabled>종료 요청</button></div>
+        </div>
+        <div id="manualPolicyRun" class="arm-control" hidden>
+          <div>
+            <p class="manual-row-title">학습 정책 한 번 실행 <span id="policyRunState" class="updated">상태 확인 중</span></p>
+            <label for="policyProfile">실행할 정책</label><select id="policyProfile" disabled><option>불러오는 중…</option></select>
+            <p id="policyRunDetail" class="arm-detail">정책 실행 상태를 불러오는 중…</p>
+            <p class="note">설정한 총 액션 수에서 멈춰요. 액션 상한 도달은 집기·배치 성공을 뜻하지 않으니 영상과 실제 팔을 확인하세요.</p>
+          </div>
+          <div class="arm-actions"><button id="policyRunStart" type="button">한 번 실행</button><button id="policyRunStop" type="button" class="secondary" disabled>중단 요청</button></div>
+        </div>
+      </div>
+
+      <div class="manual-legacy dev-only">
+        <h3 class="manual-subtitle">칸으로 이동 <span class="chip">개발용 · ?dev=1</span></h3>
+        <p class="manual-hint">좌표·칸 방식(2026-11-11에 정책 흐름으로 바꾸며 접음)에서 쓰던 명령이에요. 칸 앞 자세로만 움직이고 집기로 이어지지 않아요.</p>
+        <form id="cameraCommandForm" class="camera-command-form">
+          <label>정면 캠에서 찾을 물건<input id="cameraCommandClass" name="object_class" list="detectorClassOptions" maxlength="80" required placeholder="예: ball"></label>
+          <button type="submit" id="cameraSlotCommand">정면 캠으로 칸 찾아 이동</button>
+        </form>
+        <form id="armCommandForm" class="slot-command-form arm-command-form">
+          <label>대상 종류(기록만)<input name="object_class" maxlength="80" placeholder="예: strawberry"></label>
+          <label>칸<select id="armCommandSlot" name="pick_slot_id" required></select></label>
+          <label>놓을 칸(기록만)<input name="slot_id" maxlength="40" required value="CART_1"></label>
+          <label>유효 시간(초)<input name="valid_for_s" type="number" min="5" max="600" step="1" required value="60"></label>
+          <button type="submit">칸 앞으로 이동</button>
+        </form>
       </div>
     </section>
-
-    <section aria-labelledby="arm-command-title">
-      <div class="section-heading"><h2 id="arm-command-title">OMX 명령 (HTTP 워커)</h2><span id="armWorkerState" class="updated">워커 상태 확인 중</span></div>
-      <div class="policy-pick">
-        <h3>학습 정책으로 집기</h3>
-        <label for="policyArm">실행 팔<select id="policyArm"><option value="" selected disabled>팔 선택</option><option value="arm-01">왼쪽 팔</option><option value="arm-02">오른쪽 팔</option></select></label>
-        <div id="policyButtons" class="policy-buttons"><span class="note">정책 목록 확인 중</span></div>
-      </div>
-      <p class="note">먼저 실행 팔을 선택하세요. 카메라가 찾은 선반의 담당 팔과 선택이 다르면 명령을 거부합니다. 버튼을 누르면 그 물체만 집도록 학습한 LeRobot ACT 정책을 OMX 워커가 실행해 Pinky 위에 올립니다. 먼저 정면 캠에서 그 물체가 한 칸에 보이는지 확인하고, 못 찾으면 이유를 보여 준 뒤 확인 없이 실행할지 묻습니다. 정책은 위치를 입력으로 받지 않고 자기 카메라로 물체를 찾으므로, 칸은 물체가 있다는 근거로만 기록됩니다. 정책이 실측 home 자세로 돌아오면 멈춥니다. 적재 성공은 별도 카메라 판정이 없으면 확인 불가로 남고, 현장을 보고 <strong>현장 확인 완료</strong>로 닫습니다.</p>
-      <form id="cameraCommandForm" class="camera-command-form">
-        <label>정면 캠에서 찾을 물건<input id="cameraCommandClass" name="object_class" list="detectorClassOptions" maxlength="80" required placeholder="예: ball"></label>
-        <button type="submit" id="cameraSlotCommand">정면 캠으로 칸 찾아 이동</button>
-      </form>
-      <p class="note">정면 캠 검출에서 이 물건이 정확히 한 칸 안에만 보일 때 그 칸으로 이동 명령을 만듭니다. 영상이 오래됐거나, 여러 칸에 있거나, 칸 경계에 걸리면 명령을 만들지 않고 이유를 보여 줍니다. 아래는 칸을 직접 고르는 수동 명령입니다.</p>
-      <form id="armCommandForm" class="coordinate-form arm-command-form">
-        <label>대상 종류<input name="object_class" maxlength="80" placeholder="예: strawberry"></label>
-        <label>칸<select id="armCommandSlot" name="pick_slot_id" required></select></label>
-        <label>놓을 칸<input name="slot_id" maxlength="40" required value="CART_1"></label>
-        <label>유효 시간(초)<input name="valid_for_s" type="number" min="5" max="600" step="1" required value="60"></label>
-        <button type="submit">칸 앞으로 이동</button>
-        <button type="button" id="armReturnHome" class="secondary">원상복귀</button>
-      </form>
-      <p class="note">칸 앞으로 이동은 워커가 그 칸에 기록해 둔 관절 자세를 재생하고, 원상복귀는 기록해 둔 home 자세로 팔을 돌려보냅니다. 워커가 가져가서 ACCEPTED를 보내야 실행됩니다. 연결된 워커가 실물 OMX면 팔이 움직이고, 모의 워커는 움직이지 않습니다.</p>
-      <p id="armCommandMessage" class="note" role="status"></p>
-      <div class="table-wrap">
-        <table class="arm-command-table">
-          <thead><tr><th>명령</th><th>상태</th><th>대상·좌표</th><th>워커·마지막 이벤트</th><th></th></tr></thead>
-          <tbody id="armCommandRows"><tr><td colspan="5" class="loading">명령을 불러오는 중…</td></tr></tbody>
-        </table>
-      </div>
-    </section>
-
       </div>
 
       <div class="view" id="view-tasks" hidden>
@@ -198,7 +391,7 @@
         <label>선반 층<input name="shelf_level" type="number" min="1" max="999999999" step="1" placeholder="예: 2"></label>
         <button type="submit">작업 등록</button>
       </form>
-      <p class="note">대상 필드는 선택 입력입니다. 하나라도 입력하면 대상 종류가 필요합니다. 색상 힌트 비교는 빨강·파랑·초록·노랑·검정·흰색만 지원하며 미보정 검토용입니다.</p>
+      <p class="note">대상 필드는 선택 입력입니다. 하나라도 입력하면 대상 종류가 필요합니다. 색상·선반 층은 기록만 하며, 팔 단계는 대상 종류로 학습 정책을 고릅니다.</p>
       </details>
       <p id="taskMessage" class="note" role="status"></p>
       <div class="task-layout">
@@ -210,14 +403,32 @@
 
       </div>
 
+      <div class="view" id="view-ros" hidden>
+    <section aria-labelledby="ros-title">
+      <div class="section-heading"><h2 id="ros-title">ROS 모니터</h2><span class="updated" id="rosStatus">핑키를 고르세요</span></div>
+      <div class="ros-controls">
+        <label for="rosPinky">핑키</label>
+        <select id="rosPinky"></select>
+        <input id="rosFilter" type="search" placeholder="터미널 거르기 (예: 안전, /scan)" autocomplete="off">
+        <button type="button" class="secondary" id="rosPause">멈춤</button>
+        <button type="button" class="secondary" id="rosClear">지우기</button>
+        <button type="button" class="secondary" id="rosNavLog">Nav2 로그</button>
+      </div>
+      <div id="rosTerminal" class="ros-terminal" role="log" aria-label="ROS 변화 기록"></div>
+      <div class="ros-table-wrap">
+        <table class="ros-topics"><thead><tr><th>항목</th><th>ROS 토픽</th><th>수신</th><th>마지막 값</th></tr></thead><tbody id="rosTopics"></tbody></table>
+      </div>
+      <p class="note">핑키 관제(PC)가 로봇별 ROS 도메인에서 받는 값이에요. 1초마다 갱신하고, 터미널에는 바뀐 것만 시각과 함께 쌓여요. 최근 600줄이며 이 화면에만 남아요. 값에 마우스를 올리면 전체가 보여요.</p>
+    </section>
+      </div>
+
       <div class="view" id="view-api" hidden>
     <section aria-labelledby="api-title">
-      <h2 id="api-title">서버 API</h2>
-      <dl>
+      <div class="section-heading"><h2 id="api-title">서버 API</h2></div>
+      <dl class="api-list">
         <div><dt>GET</dt><dd><code>/api/health</code> 서버 상태</dd></div>
         <div><dt>GET</dt><dd><code>/api/robots</code> 로봇 통신 상태</dd></div>
         <div><dt>GET</dt><dd><code>/api/cameras</code> 카메라 통신 상태</dd></div>
-        <div><dt>GET</dt><dd><code>/api/cameras/{camera_id}/target-observation?class_name=...&amp;color=...&amp;shelf_level=...</code> 대상 관측 및 선택적 색상/층 영역 힌트 비교 (관측 전용)</dd></div>
         <div><dt>GET</dt><dd><code>/streams/{camera_id}.mjpg</code> 카메라 영상</dd></div>
         <div><dt>GET</dt><dd><code>/api/arm/status</code> 팔 프로세스 상태</dd></div>
         <div><dt>POST</dt><dd><code>/api/arm/start</code> 텔레오퍼레이션 시작</dd></div>
@@ -225,10 +436,15 @@
         <div><dt>POST</dt><dd><code>/api/arm/policy/start?profile_id=apple_pick</code> 선택한 학습 정책 1회 실행</dd></div>
         <div><dt>POST</dt><dd><code>/api/arm/policy/stop</code> 학습 정책 중단 요청</dd></div>
         <div><dt>POST</dt><dd><code>/api/arm/commands</code> OMX 명령 1건을 큐에 등록 (팔당 미완료 명령 1건)</dd></div>
-        <div><dt>GET</dt><dd><code>/api/arm/commands</code>, <code>/api/arm/commands/{command_id}</code> 명령 목록·워커 접속 상태 / 명령 상세·이벤트</dd></div>
+        <div><dt>GET</dt><dd><code>/api/arm/commands</code>, <code>/api/arm/commands/{command_id}</code> 명령 목록과 워커 접속 상태 / 명령 상세와 이벤트</dd></div>
         <div><dt>GET</dt><dd><code>/api/arm/{robot_id}/commands/next?worker_id=...&amp;wait_s=20</code> 워커 long-poll (200 명령 / 204 없음)</dd></div>
         <div><dt>POST</dt><dd><code>/api/arm/commands/{command_id}/events</code> 워커 이벤트 보고 (ACCEPTED에 200을 받아야 실행)</dd></div>
         <div><dt>POST</dt><dd><code>/api/arm/commands/{command_id}/cancel</code>, <code>.../clear-unknown</code> 취소 요청 / UNKNOWN 현장 확인 기록</dd></div>
+        <div><dt>GET</dt><dd><code>/api/pinky</code> 핑키 3대 상태·핑키 관제 연결·최근 명령</dd></div>
+        <div><dt>POST</dt><dd><code>/api/pinky/{id}/stop</code>, <code>/api/pinky/stop-all</code> 핑키 정지 요청 (202 접수, 207 일부 거절)</dd></div>
+        <div><dt>POST</dt><dd><code>/api/pinky/credentials</code> SSH 비밀번호를 핑키 관제로 전달 (저장 안 함)</dd></div>
+        <div><dt>GET</dt><dd><code>/api/inventory</code> 선반 재고: 물건별 선반 수량, 예약, 주문 가능 수량, 최근 변화</dd></div>
+        <div><dt>POST</dt><dd><code>/api/inventory/{object_class}</code> 재고 수정 <code>{mode: auto | closed | manual, count}</code></dd></div>
         <div><dt>GET</dt><dd><code>/api/tasks</code> 작업 목록</dd></div>
         <div><dt>GET</dt><dd><code>/api/tasks/{task_id}</code> 작업 상세·단계·이벤트</dd></div>
         <div><dt>POST</dt><dd><code>/api/tasks</code> 작업 등록 및 주문 물체(`pick_request`) 저장</dd></div>
@@ -241,8 +457,77 @@
 
       </div>
 
-      <footer>로컬 개발 서버 · <code>127.0.0.1</code></footer>
+      <footer>로컬 개발 서버 <code>127.0.0.1</code></footer>
     </main>
   </div>
+  <div id="toastStack" class="toast-stack" role="status" aria-live="polite"></div>
+
+  <div id="overlayScrim" class="overlay-scrim" hidden></div>
+
+  <aside id="pinkySheet" class="overlay-panel pinky-sheet" role="dialog" aria-labelledby="pinkySheetTitle" tabindex="-1" hidden>
+    <header class="panel-head">
+      <h2 id="pinkySheetTitle">핑키</h2>
+      <button type="button" class="secondary panel-close" data-overlay-close data-overlay-focus>닫기</button>
+    </header>
+    <div id="pinkySheetBody" class="panel-body"></div>
+  </aside>
+
+  <div id="mapViewer" class="overlay-panel map-viewer" role="dialog" aria-labelledby="mapViewerTitle" tabindex="-1" hidden>
+    <header class="panel-head">
+      <h2 id="mapViewerTitle">전체 지도</h2><span id="mapViewerTag"></span>
+      <button type="button" class="secondary panel-close" data-overlay-close data-overlay-focus>닫기</button>
+    </header>
+    <div class="map-viewer-body">
+      <div class="map-viewer-map">
+        <div id="mapPickBar" class="map-pick-bar" role="status" hidden>
+          <span id="mapPickText"></span>
+          <button type="button" class="secondary small" id="mapPickCancel">취소</button>
+        </div>
+        <svg id="pinkyMapLarge" class="pinky-map" role="img" aria-label="핑키 지도"></svg>
+        <p id="pinkyMapLargeEmpty" class="map-empty" hidden></p>
+      </div>
+      <div class="map-viewer-side">
+        <h3>핑키 위치</h3>
+        <ul id="mapPinkyList" class="map-pinky-list"></ul>
+        <p id="mapViewerOff" class="route-off"></p>
+        <p id="mapViewerNote" class="gentle-note" hidden></p>
+        <h3>지도 표시</h3>
+        <ul class="map-legend">
+          <li><i class="swatch free"></i>지나갈 수 있는 곳</li>
+          <li><i class="swatch occupied"></i>벽·물체</li>
+          <li><i class="swatch unknown"></i>모르는 곳</li>
+          <li><i class="swatch keepout"></i>금지 구역</li>
+          <li><i class="swatch spot"></i>주차 자리</li>
+          <li><i class="swatch station"></i>5번 적재</li>
+          <li><i class="swatch junction"></i>교차로 7</li>
+          <li><i class="swatch waypoint"></i>웨이포인트</li>
+          <li><i class="swatch zone"></i>수령 구역</li>
+          <li><i class="swatch pinky"></i>핑키, 화살표가 향한 방향</li>
+        </ul>
+        <p class="note">지도 좌표(m)를 그대로 그렸고 위쪽이 지도의 +y 방향입니다.</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="passwordPrompt" class="overlay-panel password-prompt" role="dialog" aria-labelledby="passwordPromptTitle" tabindex="-1" hidden>
+    <form id="pinkyPasswordForm" method="post" autocomplete="off" novalidate>
+      <h2 id="passwordPromptTitle">SSH 비밀번호가 필요해요</h2>
+      <p id="passwordPromptReason" class="prompt-reason">핑키 관제가 핑키에 SSH로 접속할 때 씁니다. 이 관제는 저장하지 않고 그대로 넘깁니다.</p>
+      <label for="pinkyPassword" class="visually-hidden">핑키 SSH 비밀번호</label>
+      <input id="pinkyPassword" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="256" placeholder="SSH 비밀번호" data-overlay-focus>
+      <p id="pinkyPasswordMessage" class="pinky-password-message" role="status"></p>
+      <div class="prompt-actions">
+        <button type="button" class="secondary" data-overlay-close>닫기</button>
+        <button type="submit">보내기</button>
+      </div>
+      <button type="button" id="passwordRetry" class="prompt-retry" hidden></button>
+    </form>
+  </div>
+
+  <datalist id="waypointLabelOptions">
+    <option value="1"></option><option value="2"></option><option value="3"></option><option value="4"></option>
+    <option value="5"></option><option value="6"></option><option value="7"></option><option value="8"></option>
+    <option value="9"></option><option value="수령 구역 A"></option>
+  </datalist>
 </body>
 </html>

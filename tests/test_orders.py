@@ -170,6 +170,17 @@ class PinkyAssignmentTests(unittest.TestCase):
             self.store.create_task("A", "B", order_items=self.items, pinky_id="12")
         self.assertEqual(self.store.busy_pinkies()["12"][:5], "TASK-")
 
+    def test_each_shipment_counts_as_a_trip_of_its_own_pinky(self) -> None:
+        task = self.store.create_task("A", "B", order_items=self.items, defer_pinky=True)
+        self.store.assign_pinky(task["id"], "10", {})
+        self.store.claim_task(task["id"])
+        self.store.transition_task(task["id"], TaskStatus.RUNNING, expected_status=TaskStatus.VALIDATING,
+                                   payload={"event": "TEST_RUNNING"})
+        self.store.assign_shipment_pinky(task["id"], 2, "11", {})
+        usage = self.store.pinky_usage("2000-01-01T00:00:00+00:00")
+        self.assertEqual((usage["10"]["trips"], usage["11"]["trips"], usage["12"]["trips"]), (1, 1, 0))
+        self.assertIsNotNone(usage["10"]["last_finished_at"])  # P0's trip ended when shipment 2 took P1
+
     def test_tasks_without_items_take_no_pinky(self) -> None:
         task = self.store.create_task("작업대 A", "상자 이동")
         self.assertIsNone(task["pinky_id"])

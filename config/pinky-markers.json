@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "notes": "핑키 위에 붙인 ArUco 마커(DICT_4X4_50)와 그 핑키의 5번 정차 위치 등록 파일(.control-station/parking-spots/<spot_id>.json). 마커를 붙이는 위치가 핑키마다 조금씩 달라서 핑키마다 따로 등록한다. 2026-11-14: P1 = 21번(pinky_dock_1)만 등록돼 있고, P0 = 20번, P2 = 22번은 등록이 필요하다(번호 배정은 사용자 확인 대기).",
+  "pinkies": {
+    "10": {"marker_id": 20, "spot_id": "pinky_dock_p0"},
+    "11": {"marker_id": 21, "spot_id": "pinky_dock_1"},
+    "12": {"marker_id": 22, "spot_id": "pinky_dock_p2"}
+  }
+}

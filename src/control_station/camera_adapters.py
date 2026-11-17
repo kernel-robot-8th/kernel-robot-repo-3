@@ -1,4 +1,15 @@
-"""Camera capture ownership and MJPEG frame access for the dashboard."""
+"""Camera capture ownership and MJPEG frame access for the dashboard.
+
+With two arms there are six cameras (docs/implementation/runbook.md, 카메라 6대):
+- head_camera: the ceiling camera that checks Pinky's parking; the parking launch opens it, this reads its topic
+- shelf_camera: the shelf camera that counts stock
+- arm01_gripper / arm02_gripper: each arm's gripper (joint) camera
+- arm01_overhead / arm02_overhead: each arm's overhead camera, an input of the ACT policies recorded on that arm
+The arm cameras come from arm_devices.py (CONTROL_STATION_ARM01_*_CAMERA, ARM02_*). A gripper camera is streamed
+like the older joint camera; an overhead camera belongs to the policy and is only checked for presence unless
+CONTROL_STATION_OVERHEAD_CAMERA_PREVIEW=1. While a policy runs, the feeds on its devices are closed (V4L2 lets only
+one program stream a device). All six share one USB controller, so every device is opened as MJPG.
+"""
 
 from __future__ import annotations
 
@@ -11,8 +22,10 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Callable, Protocol
+from typing import Callable, Mapping
 
+from control_station.arm_devices import ROLE_LABELS, ArmDevices, arm_devices, env_prefix
+from control_station.arms import ArmConfigError, load_arms
 from control_station.models import (
     CameraConnectionState,
     CameraSnapshot,
@@ -22,7 +35,6 @@ from control_station.models import (
 
 
 PIXEL_TRANSFORM_ID = "opencv-v4l2-capture-no-app-geometry-v1"
-COLOR_HINT_ALGORITHM_VERSION = "hsv-inner-box-thresholds-v1"
 
 
 def _sha256_file(path: str) -> str:
@@ -31,78 +43,6 @@ def _sha256_file(path: str) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def _estimate_color_hint(image, bbox_xyxy):  # type: ignore[no-untyped-def]
-    """Return an uncalibrated HSV color hint for the inner part of one detection box."""
-    try:
-        import cv2
-        import numpy as np
-
-        x1, y1, x2, y2 = (float(value) for value in bbox_xyxy)
-        height, width = image.shape[:2]
-        if not all(math.isfinite(value) for value in (x1, y1, x2, y2)):
-            raise ValueError("non-finite bbox")
-        left = max(0, min(width, math.floor(x1)))
-        top = max(0, min(height, math.floor(y1)))
-        right = max(0, min(width, math.ceil(x2)))
-        bottom = max(0, min(height, math.ceil(y2)))
-        box_width, box_height = right - left, bottom - top
-        inset_x, inset_y = int(box_width * 0.2), int(box_height * 0.2)
-        crop = image[top + inset_y : bottom - inset_y, left + inset_x : right - inset_x]
-        if crop.size == 0:
-            raise ValueError("bbox crop is empty")
-        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-        hue, saturation, value = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
-        colored = saturation >= 65
-        masks = {
-            "black": value <= 45,
-            "white": (saturation <= 45) & (value >= 200),
-            "red": colored & ((hue <= 10) | (hue >= 170)) & (value >= 50),
-            "yellow": colored & (hue >= 16) & (hue <= 37) & (value >= 50),
-            "green": colored & (hue >= 38) & (hue <= 85) & (value >= 50),
-            "blue": colored & (hue >= 90) & (hue <= 130) & (value >= 50),
-        }
-        total = int(hue.size)
-        counts = {name: int(np.count_nonzero(mask)) for name, mask in masks.items()}
-        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
-        color_name, color_pixels = ranked[0]
-        fraction = color_pixels / total
-        if fraction < 0.2:
-            status, estimate = "LOW_COLOR_COVERAGE", None
-        elif len(ranked) > 1 and (color_pixels - ranked[1][1]) / total < 0.05:
-            status, estimate = "MIXED_COLOR", None
-        else:
-            status, estimate = "ESTIMATED", color_name
-        return {
-            "method": "UNCALIBRATED_HSV_PIXEL_FRACTION",
-            "algorithm_version": COLOR_HINT_ALGORITHM_VERSION,
-            "status": status,
-            "color": estimate,
-            "pixel_fraction": round(fraction, 3),
-            "sampled_pixel_count": total,
-            "review_required": True,
-            "used_for_selection": False,
-        }
-    except Exception:
-        return {
-            "method": "UNCALIBRATED_HSV_PIXEL_FRACTION",
-            "algorithm_version": COLOR_HINT_ALGORITHM_VERSION,
-            "status": "UNAVAILABLE",
-            "color": None,
-            "pixel_fraction": None,
-            "sampled_pixel_count": 0,
-            "review_required": True,
-            "used_for_selection": False,
-        }
-
-
-class CameraStreamManager(Protocol):
-    def snapshots(self) -> list[CameraSnapshot]: ...
-
-    def frame_for(self, camera_id: str) -> bytes | None: ...
-
-    def close(self) -> None: ...
 
 
 @dataclass
@@ -135,12 +75,18 @@ class _CameraFeed:
     released: threading.Event = field(default_factory=threading.Event)
     # Requested capture size. Some sensors crop the field of view at 4:3, so a wider mode may show more.
     capture_size: tuple[int, int] = (640, 480)
+    role: str | None = None
+    opened_by: str = "control_station"
+    setting: str | None = None
+    # Only check that the device exists; the policy opens it (an overhead camera without preview).
+    watch_only: bool = False
 
 
 class _YoloDetector:
-    """Draw YOLO detections and compute advisory color hints for camera frames.
+    """Run YOLO on camera frames and draw the detections.
 
-    Results are shown on the dashboard and are not used as a robot-control signal.
+    The detections are shown on the dashboard, placed into shelf slots (shelf_slot_zones.py) and counted for the
+    order flow's stock and load checks. They are camera evidence only; they never move a robot by themselves.
     """
 
     def __init__(self, weights: str, env_prefix: str) -> None:
@@ -238,7 +184,7 @@ class _YoloDetector:
         self.state = "ready"
         return True
 
-    def _predict(self, image, *, render: bool = True):  # type: ignore[no-untyped-def]
+    def _predict(self, image):  # type: ignore[no-untyped-def]
         result = self._model.predict(
             source=image,
             conf=self.confidence,
@@ -253,13 +199,12 @@ class _YoloDetector:
                 "confidence": round(float(box.conf.item()), 3),
                 "center_px": [round(value, 1) for value in box.xywh[0][:2].tolist()],
                 "bbox_xyxy_px": [round(value, 1) for value in box.xyxy[0].tolist()],
-                "color_hint": _estimate_color_hint(image, box.xyxy[0].tolist()),
                 "frame_width": int(width),
                 "frame_height": int(height),
             }
             for box in result.boxes
         ]
-        return (result.plot() if render else image), detections
+        return result.plot(), detections
 
     def annotate(self, image):  # type: ignore[no-untyped-def]
         with self._inference_lock:
@@ -267,35 +212,25 @@ class _YoloDetector:
                 raise RuntimeError("YOLO detector is no longer ready")
             return self._predict(image)
 
-    def detect(self, image) -> list[dict[str, object]]:  # type: ignore[no-untyped-def]
-        with self._inference_lock:
-            if self.state != "ready" or self._model is None:
-                raise RuntimeError("YOLO detector is no longer ready")
-            _, detections = self._predict(image, render=False)
-            return detections
-
 
 class UnconfiguredArmCameraStreamManager:
-    """Report camera slots without opening any physical device."""
+    """Report the camera slots without opening any physical device."""
 
     def snapshots(self) -> list[CameraSnapshot]:
+        slots = [("head_camera", None, "HEAD", "핑키 정차 확인 (천장)", "CONTROL_STATION_HEAD_CAMERA"),
+                 ("shelf_camera", None, "SHELF", "선반 재고", "CONTROL_STATION_SHELF_CAMERA")]
+        for arm_id, label in (("arm-01", "왼쪽 팔"), ("arm-02", "오른쪽 팔")):
+            for role in ("GRIPPER", "OVERHEAD"):
+                slots.append((_arm_camera_id(arm_id, role), arm_id, role, _arm_role(label, role),
+                              f"{env_prefix(arm_id)}{role}_CAMERA"))
         return [
             CameraSnapshot(
-                id="head_camera",
-                robot_id="arm-01",
-                position="HEAD",
-                connection_state=CameraConnectionState.UNKNOWN,
-                stream_state=CameraStreamState.UNKNOWN,
-                error_message="Head Camera 장치 경로 미설정",
-            ),
-            CameraSnapshot(
-                id="joint_camera",
-                robot_id="arm-01",
-                position="JOINT",
-                connection_state=CameraConnectionState.UNKNOWN,
-                stream_state=CameraStreamState.UNKNOWN,
-                error_message="팔 카메라 스트림을 사용하려면 --arm 모드로 실행하세요",
-            ),
+                id=camera_id, robot_id=robot_id, position=position,
+                connection_state=CameraConnectionState.UNKNOWN, stream_state=CameraStreamState.UNKNOWN,
+                error_message="카메라 장치 경로 미설정", role=role, link_label="연결 전", setting=setting,
+                opened_by="policy" if position == "OVERHEAD" else "control_station",
+            )
+            for camera_id, robot_id, position, role, setting in slots
         ]
 
     def frame_for(self, camera_id: str) -> bytes | None:
@@ -303,6 +238,22 @@ class UnconfiguredArmCameraStreamManager:
 
     def close(self) -> None:
         return
+
+
+def _arm_camera_id(arm_id: str, role: str) -> str:
+    """arm-01, GRIPPER -> arm01_gripper"""
+    return f"{arm_id.replace('-', '')}_{role.lower()}"
+
+
+def _arm_role(label: str, role: str) -> str:
+    return f"{label} {ROLE_LABELS[role]}" + (" (ACT 정책)" if role == "OVERHEAD" else "")
+
+
+def _load_arm_devices() -> dict[str, ArmDevices]:
+    try:
+        return arm_devices(load_arms().arms)
+    except ArmConfigError:
+        return {}
 
 
 # CONTROL_STATION_*_CAMERA=ros:<image topic> reads that camera from a ROS camera driver node instead of V4L2.
@@ -392,13 +343,22 @@ class OpenCVArmCameraStreamManager:
     """Own configured V4L2 devices once and expose their latest JPEG frames."""
 
     def __init__(
-        self, joint_enabled: bool = True, policy_active: Callable[[], bool] | None = None
+        self,
+        joint_enabled: bool = True,
+        policy_active: Callable[[], bool] | None = None,
+        *,
+        policy_devices: Callable[[], list[str]] | None = None,
+        arm_cameras: Mapping[str, ArmDevices] | None = None,
     ) -> None:
         # The learned-policy client opens the Front Camera itself, and V4L2 lets only one
         # process stream it, so the dashboard gives it up while a policy run is requested or alive.
         self._policy_active = policy_active
         self._front_policy_hold = False
         self._policy_active_cache = (0.0, False)
+        # Devices of the live policy run (any arm) and devices held for a run about to start: closed meanwhile.
+        self._policy_devices = policy_devices
+        self._policy_devices_cache: tuple[float, frozenset[str]] = (0.0, frozenset())
+        self._held_devices: frozenset[str] = frozenset()
         joint_device = os.environ.get(
             "CONTROL_STATION_JOINT_CAMERA",
             os.environ.get(
@@ -421,7 +381,8 @@ class OpenCVArmCameraStreamManager:
         joint_weights = os.environ.get("CONTROL_STATION_JOINT_YOLO_WEIGHTS", "").strip()
         joint_prompts = os.environ.get("CONTROL_STATION_JOINT_YOLO_WORLD_PROMPTS", "").strip()
         joint_feed = _CameraFeed(
-            "joint_camera", "JOINT", (joint_device or None) if joint_enabled else None
+            "joint_camera", "JOINT", (joint_device or None) if joint_enabled else None,
+            role="그리퍼 캠 (예전 단일 팔 설정)", setting="CONTROL_STATION_JOINT_CAMERA",
         )
         if not joint_enabled:
             joint_feed.error_message = "팔 카메라 스트림을 사용하려면 --arm 모드로 실행하세요"
@@ -434,6 +395,9 @@ class OpenCVArmCameraStreamManager:
                 "head_camera",
                 "HEAD",
                 head_device or None,
+                role="핑키 정차 확인 (천장)",
+                opened_by="ros_node" if head_device.startswith(ROS_SOURCE_PREFIX) else "control_station",
+                setting="CONTROL_STATION_HEAD_CAMERA",
                 detector=(
                     _YoloDetector(head_weights, "CONTROL_STATION_HEAD_YOLO")
                     if head_weights or head_prompts
@@ -445,6 +409,8 @@ class OpenCVArmCameraStreamManager:
                 "front_camera",
                 "FRONT",
                 front_device or None,
+                role="정면 캠 (예전 정책 위 카메라 설정)",
+                setting="CONTROL_STATION_FRONT_CAMERA",
                 detector=(
                     _YoloDetector(front_weights, "CONTROL_STATION_FRONT_YOLO")
                     if front_weights or front_prompts
@@ -469,11 +435,15 @@ class OpenCVArmCameraStreamManager:
                     else None
                 ),
                 robot_id=None,  # a fixed view of the shelf, not a camera on the arm
+                role="선반 재고",
+                opened_by="ros_node" if shelf_device.startswith(ROS_SOURCE_PREFIX) else "control_station",
+                setting="CONTROL_STATION_SHELF_CAMERA",
             )
             self._feeds["shelf_camera"] = shelf_feed
         front_feed = self._feeds["front_camera"]
         if not front_feed.device:
             front_feed.error_message = "Front Camera 장치 경로 미설정 (CONTROL_STATION_FRONT_CAMERA)"
+        self._add_arm_feeds(_load_arm_devices() if arm_cameras is None else arm_cameras, joint_enabled)
         by_device: dict[str, list[_CameraFeed]] = {}
         for feed in self._feeds.values():
             if feed.device:
@@ -481,11 +451,12 @@ class OpenCVArmCameraStreamManager:
         for shared in by_device.values():
             if len(shared) < 2:
                 continue
-            labels = "와 ".join(f"{feed.position.title()} Camera" for feed in shared)
+            labels = "와 ".join(feed.role or f"{feed.position.title()} Camera" for feed in shared)
+            settings = ", ".join(feed.setting or feed.camera_id for feed in shared)
             message = (
-                f"{labels} 경로가 같은 V4L2 장치로 연결됩니다. 실제 장착을 확인한 뒤 "
-                "CONTROL_STATION_HEAD_CAMERA, CONTROL_STATION_JOINT_CAMERA, "
-                "CONTROL_STATION_FRONT_CAMERA, CONTROL_STATION_SHELF_CAMERA를 서로 다른 장치로 설정하세요."
+                f"{labels} 경로가 같은 V4L2 장치로 연결됩니다. 실제 장착을 확인한 뒤 {settings}를 서로 다른 "
+                "장치로 설정하세요. 같은 모델 카메라는 /dev/v4l/by-id 이름이 겹칠 수 있으니 꽂은 USB 자리로 정해지는 "
+                "/dev/v4l/by-path 경로를 쓰세요."
             )
             for feed in shared:
                 feed.device = None
@@ -514,7 +485,7 @@ class OpenCVArmCameraStreamManager:
             except ImportError:
                 pass  # each ros: feed reports the missing ROS environment itself
         for feed in self._feeds.values():
-            if feed.device:
+            if feed.device and not feed.watch_only:
                 feed.thread = threading.Thread(
                     target=self._capture_loop,
                     args=(feed,),
@@ -529,6 +500,32 @@ class OpenCVArmCameraStreamManager:
                         feed.stream_state = CameraStreamState.ERROR
                         feed.error_message = f"카메라 worker 시작 실패: {exc}"
                     feed.thread = None
+
+    def _add_arm_feeds(self, arm_cameras: Mapping[str, ArmDevices], joint_enabled: bool) -> None:
+        """One feed per arm camera. An older single-arm feed on the same device (joint/front) gives way to it."""
+        preview = os.environ.get("CONTROL_STATION_OVERHEAD_CAMERA_PREVIEW", "").strip().lower() in {"1", "true", "yes"}
+        added: list[_CameraFeed] = []
+        for devices in arm_cameras.values():
+            for role in ("GRIPPER", "OVERHEAD"):
+                device = devices.cameras.get(role)
+                streamed = joint_enabled if role == "GRIPPER" else preview
+                feed = _CameraFeed(
+                    _arm_camera_id(devices.arm_id, role), role, device or None, robot_id=devices.arm_id,
+                    role=_arm_role(devices.label, role), opened_by="control_station" if streamed else "policy",
+                    setting=f"{env_prefix(devices.arm_id)}{role}_CAMERA", watch_only=bool(device) and not streamed,
+                )
+                if not device:
+                    feed.error_message = f"장치 경로 미설정 ({feed.setting})"
+                added.append(feed)
+        taken = {os.path.realpath(feed.device) for feed in added if feed.device}
+        for legacy_id in ("joint_camera", "front_camera"):
+            legacy = self._feeds.get(legacy_id)
+            if legacy is not None and legacy.device and os.path.realpath(legacy.device) in taken:
+                del self._feeds[legacy_id]
+        legacy_joint = self._feeds.get("joint_camera")
+        if taken and legacy_joint is not None and not legacy_joint.device:
+            del self._feeds["joint_camera"]  # an empty older slot next to the arms' own gripper cameras
+        self._feeds.update((feed.camera_id, feed) for feed in added)
 
     def lend_devices(self, devices: list[str], reason: str, timeout_s: float = 3.0) -> list[str]:
         """Close the V4L2 feeds that open any of `devices` so another program can open them. Returns the ids of
@@ -562,33 +559,60 @@ class OpenCVArmCameraStreamManager:
 
     def _held_for_policy(self, feed: _CameraFeed) -> bool:
         """Return whether the learned-policy client should own this camera instead."""
-        if feed.camera_id != "front_camera":
+        if not feed.device or feed.device.startswith(ROS_SOURCE_PREFIX):
             return False
-        if self._front_policy_hold:
+        path = os.path.realpath(feed.device)
+        if path in self._held_devices:
             return True
-        if self._policy_active is None:
-            return False
-        checked_at, active = self._policy_active_cache
         now = time.monotonic()
+        if feed.camera_id == "front_camera":
+            # The older setting: the Front Camera is given up whenever any policy run is alive.
+            if self._front_policy_hold:
+                return True
+            if self._policy_active is not None:
+                checked_at, active = self._policy_active_cache
+                if now - checked_at >= 0.2:
+                    try:
+                        active = bool(self._policy_active())
+                    except Exception:
+                        active = False
+                    self._policy_active_cache = (now, active)
+                if active:
+                    return True
+        if self._policy_devices is None:
+            return False
+        checked_at, devices = self._policy_devices_cache
         if now - checked_at >= 0.2:
             try:
-                active = bool(self._policy_active())
+                devices = frozenset(os.path.realpath(device) for device in self._policy_devices() if device)
             except Exception:
-                active = False
-            self._policy_active_cache = (now, active)
-        return active
+                devices = frozenset()
+            self._policy_devices_cache = (now, devices)
+        return path in devices
 
-    def hold_front_for_policy(self, hold: bool, timeout: float = 5.0) -> bool:
-        """Close the dashboard Front Camera capture before a policy run opens the device.
+    def hold_for_policy(self, devices: list[str], hold: bool, timeout: float = 5.0) -> bool:
+        """Close the feeds on `devices` (and the older Front Camera) before a policy run opens them.
 
-        Returns False when the capture was not confirmed closed within ``timeout``.
-        """
+        Returns False when a capture was not confirmed closed within ``timeout``."""
         self._front_policy_hold = hold
         self._policy_active_cache = (0.0, False)
-        feed = self._feeds["front_camera"]
-        if not hold or not feed.device or feed.thread is None:
+        self._policy_devices_cache = (0.0, frozenset())
+        self._held_devices = frozenset(
+            os.path.realpath(device) for device in devices if device and not device.startswith(ROS_SOURCE_PREFIX)
+        ) if hold else frozenset()
+        if not hold:
             return True
-        return feed.released.wait(timeout)
+        deadline = time.monotonic() + timeout
+        feeds = [
+            feed for feed in self._feeds.values()
+            if feed.thread is not None and feed.device and (
+                feed.camera_id == "front_camera" or os.path.realpath(feed.device) in self._held_devices)
+        ]
+        return all(feed.released.wait(max(0.0, deadline - time.monotonic())) for feed in feeds)
+
+    def hold_front_for_policy(self, hold: bool, timeout: float = 5.0) -> bool:
+        """Close the dashboard Front Camera capture before a policy run opens the device (older single-arm path)."""
+        return self.hold_for_policy([], hold, timeout)
 
     def _capture_loop(self, feed: _CameraFeed) -> None:
         try:
@@ -632,7 +656,7 @@ class OpenCVArmCameraStreamManager:
                     feed.connection_state = CameraConnectionState.DISCONNECTED
                     feed.stream_state = CameraStreamState.STOPPED
                     feed.error_message = (
-                        "학습 정책 실행이 Front Camera를 사용하는 동안 관제 화면 수신을 멈췄습니다"
+                        "학습 정책 실행이 이 카메라를 쓰는 동안 관제 화면 수신을 멈췄습니다"
                     )
                 self._closed.wait(0.25)
                 continue
@@ -823,13 +847,35 @@ class OpenCVArmCameraStreamManager:
                 with feed.lock:
                     feed.error_message = f"카메라 프레임 처리 실패: {exc}"
 
+    @staticmethod
+    def _watch(feed: _CameraFeed) -> None:
+        """A policy-owned camera: only whether the device is plugged in."""
+        if not feed.device:
+            return  # refused at start (e.g. the same device as another camera); the error says why
+        present = os.path.exists(os.path.realpath(feed.device))
+        feed.connection_state = CameraConnectionState.CONNECTED if present else CameraConnectionState.DISCONNECTED
+        feed.stream_state = CameraStreamState.STOPPED if present else CameraStreamState.ERROR
+        how_to_view = ("CONTROL_STATION_OVERHEAD_CAMERA_PREVIEW=1" if feed.position == "OVERHEAD"
+                       else "팔 원격 조작 CONTROL_STATION_ARM_ENABLED=1")
+        feed.error_message = (
+            f"정책 실행 때 정책이 직접 엽니다 (관제 화면에서 보려면 {how_to_view})"
+            if present else f"카메라 장치 경로가 없습니다: {feed.device}"
+        )
+
     def snapshots(self) -> list[CameraSnapshot]:
         result = []
         for feed in self._feeds.values():
             if feed.camera_id == "front_camera" and not feed.device:
                 continue  # not configured on this PC: not shown (set CONTROL_STATION_FRONT_CAMERA to use it)
             with feed.lock:
+                if feed.watch_only:
+                    self._watch(feed)
                 configured = feed.device is not None
+                # Closed for a policy run still counts as plugged in.
+                linked = configured and (
+                    feed.connection_state == CameraConnectionState.CONNECTED
+                    or (feed.stream_state == CameraStreamState.STOPPED and os.path.exists(os.path.realpath(feed.device)))
+                )
                 freshness = FrameFreshness.UNKNOWN
                 if feed.last_frame_monotonic is not None:
                     freshness = (
@@ -895,6 +941,10 @@ class OpenCVArmCameraStreamManager:
                             if configured and feed.frame is not None
                             else None
                         ),
+                        role=feed.role,
+                        opened_by=feed.opened_by,
+                        link_label="연결됨" if linked else "연결 전",
+                        setting=feed.setting,
                     )
                 )
         return result

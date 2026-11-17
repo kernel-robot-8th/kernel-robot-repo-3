@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
-from control_station.api import arm, cameras, flow, status, tasks
+from control_station.api import arm, cameras, flow, orders, pinky, status, tasks
 
 if TYPE_CHECKING:
     from control_station.app import ControlStationHandler
@@ -48,7 +48,6 @@ GET_ROUTES: tuple[Route, ...] = (
     Route(_path("/api/health"), status.get_health),
     Route(_path("/api/robots"), status.get_robots),
     Route(_path("/api/cameras"), cameras.get_cameras),
-    Route(_prefix_suffix("/api/cameras/", "/target-observation"), cameras.get_camera_target_observation),
     Route(_path("/api/arm/status"), arm.get_status),
     Route(_path("/api/arm/commands"), arm.get_commands),
     Route(_path("/api/arm/shelf-slots"), arm.get_shelf_slots),
@@ -58,6 +57,18 @@ GET_ROUTES: tuple[Route, ...] = (
     Route(_prefix_suffix("/api/parking-spots/", "/live"), status.get_parking_live),
     Route(_prefix_suffix("/api/parking-spots/", "/check"), status.get_parking_check),
     Route(_path("/api/flow"), flow.get_flow),
+    Route(_path("/api/pinky"), pinky.get_pinky),
+    Route(_path("/api/pinky/map"), pinky.get_map),
+    Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "pinky"] and parts[3] == "locate", pinky.get_locate),
+    Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "pinky"] and parts[3] == "ros", pinky.get_ros),
+    Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "pinky"] and parts[3] == "nav-log", pinky.get_nav_log),
+    Route(_path("/api/catalog"), orders.get_catalog),
+    Route(_path("/api/inventory"), orders.get_inventory),
+    Route(_path("/api/orders"), orders.get_orders),
+    Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "orders"] and parts[3] == "assignment",
+          orders.get_assignment),
+    Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "orders"] and parts[3] == "track",
+          orders.get_track),
     Route(_path("/api/tasks"), tasks.get_tasks),
     Route(lambda route, parts: route.startswith("/api/tasks/"), tasks.get_task),
 )
@@ -83,6 +94,22 @@ POST_ROUTES: tuple[Route, ...] = (
         "Cross-origin arm-command request rejected",
     ),
     Route(_path("/api/tasks"), tasks.post_task),
+    Route(_path("/api/pinky/stop-all"), pinky.post_stop_all, "Cross-origin Pinky-stop request rejected",
+          reads_body=False),
+    Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "pinky"] and parts[3] == "stop",
+          pinky.post_stop, "Cross-origin Pinky-stop request rejected", reads_body=False),
+    Route(_path("/api/pinky/credentials"), pinky.post_credentials, "Cross-origin credentials request rejected"),
+    Route(_path("/api/pinky/prepare-all"), pinky.post_prepare_all, "Cross-origin Pinky request rejected"),
+    Route(lambda route, parts: parts[:2] == ["api", "pinky"] and (
+              (len(parts) == 4 and parts[3] in {"ready", "initial-pose", "localize", "set-pose", "nav-restart", "waypoints", "test-mission", "signal", "route-clear", "return-home", "reset"})
+              or (len(parts) == 6 and parts[3] == "waypoints" and parts[5] == "delete")),
+          pinky.post_action, "Cross-origin Pinky request rejected"),
+    Route(lambda route, parts: len(parts) == 3 and parts[:2] == ["api", "inventory"],
+          orders.post_inventory, "Cross-origin inventory request rejected"),
+    # The order window is a page of this server, so a browser order is same-origin like the operator screen.
+    Route(_path("/api/orders"), orders.post_order, "Cross-origin order request rejected"),
+    Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "orders"] and parts[3] in {"start", "reject", "pickup-confirm"},
+          orders.post_order_action, "Cross-origin order-control request rejected", reads_body=False),
 )
 
 

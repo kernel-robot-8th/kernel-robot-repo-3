@@ -1,5 +1,7 @@
 # Pinky Fleet Dashboard MVP
 
+현재 운영 기준은 [OPERATIONS.md](OPERATIONS.md)입니다. `fleet_control_v4`의 차선 복귀·예약·독립 최종 감시기·서비스 실행·로그 설정은 이 문서를 따릅니다. 아래에는 이전 구현의 변경 이력이 포함되어 있습니다.
+
 Local PC dashboard for preparing three Pinky Pro robots one at a time and watching bridged sensor data.
 
 ## What it does
@@ -11,13 +13,14 @@ Local PC dashboard for preparing three Pinky Pro robots one at a time and watchi
 - Uses best-effort QoS for LiDAR scans at the robot bridge and dashboard subscriber, matching sensor-data publishers.
 - Displays per-sensor freshness so a missing/stale feed is visible.
 - Records named waypoints from the live `map → odom → base_footprint` TF pose, per robot; exports CSV.
+- Applies the `map-proto` Keepout Filter mask to both Nav2 costmaps; the original map stays unchanged.
 - Sends Pinky 10's saved CSV waypoints to Nav2 in the order `1 → 2 → 3 → 7 → 4 → 5 → 6 → 7 → 9 → 8 → 1`; each goal is sent after the previous one succeeds.
 - Verifies Nav2 publishes the `/navigate_to_pose` action before marking navigation ready; the dashboard can restart Nav2 in non-composed mode if the action server is missing.
 - Listens on `127.0.0.1:8765` only. The SSH password is entered at runtime and held in memory only.
 
 The route start button sends navigation goals through Nav2. Nav2 plans around the active map and obstacles, so straight segments are followed where its planner considers them safe. Preparing Nav2 can energize the robot's base; keep the wheels clear during setup and use the physical stop if needed.
 
-Dashboard-managed Nav2 starts use a runtime copy of the installed configuration. Goal tolerances are 0.03 m and 0.12 rad; target forward speed is 0.048 m/s (24% of the package default), and the velocity smoother caps forward speed at 0.06 m/s. Inflation radius is reduced from 0.15 m to 0.08 m; global footprint padding is reduced from 0.03 m to 0.01 m while the robot footprint is preserved. The ultrasonic safety gate sits between Nav2 and `/cmd_vel`: a fresh reading at or below 0.10 m causes a 0.5 s stop, then a 0.25 rad/s turn until readings remain clear (at least 0.15 m, or positive infinity) for 0.75 s, followed by a 0.03 m/s forward creep for up to 0.5 s. A renewed obstacle interrupts the creep; stale ultrasound data commands zero velocity.
+Dashboard-managed Nav2 starts use a runtime copy of the installed configuration. Goal tolerances are 0.03 m and 0.12 rad; target forward speed is 0.048 m/s (24% of the package default), and the velocity smoother caps forward speed at 0.06 m/s. Inflation radius is reduced from 0.15 m to 0.08 m; global footprint padding is reduced from 0.03 m to 0.01 m while the robot footprint is preserved. The ultrasonic safety gate sits between Nav2 and `/cmd_vel`: a fresh reading at or below 0.10 m causes a 0.5 s stop, then a 0.25 rad/s turn until readings remain clear (at least 0.15 m, or positive infinity) for 0.75 s, followed by a 0.03 m/s forward creep for up to 0.5 s. A renewed obstacle interrupts motion; stale ultrasound data commands zero velocity. The updated detour described below replaces the original timed creep.
 
 The live Nav2 map shows the TF pose as the robot center and heading, plus the AMCL pose as a center point with a 95% covariance radius. The readout includes the TF-to-AMCL position difference and the estimated error radius when fresh covariance data is available. Nav2 readiness waits up to about 90 seconds for `/navigate_to_pose` during lifecycle activation. The initial-pose publisher waits for AMCL's `/initialpose` subscription and uses best-effort QoS, then publishes the origin estimate three times.
 
@@ -79,6 +82,12 @@ Recorded waypoints persist in `data/waypoints.json` in this directory. A waypoin
    ```
 
 3. Drive to a point, stop, enter a label in that robot's dashboard card, and click **현재 위치 기록**. Saved points can be removed individually or exported as CSV.
+
+## Keepout zones
+
+When `map-proto.yaml` is selected, Nav2 loads `config/keepout/keepout_mask.yaml` and applies the associated mask in both global and local costmaps. Dark cells in `keepout_mask.pgm` are forbidden cells; white cells remain traversable. The mask is aligned to the map's 5 cm resolution and `[-0.349, -0.295, 0]` origin. The yellow boxes from the supplied map screenshot are represented as filled zones. The original occupancy map is not edited.
+
+Regenerate the mask after changing the map frame or zone bounds with `python3 scripts/create_keepout_mask.py`. The script reads the source map metadata and derives the mask dimensions, resolution, and origin. Keepout is enabled only for `map-proto.yaml`; the other supported maps are not assumed to share its coordinates. This does not add charging or docking behavior.
 
 Routes are expanded to checkpoints at most 0.10 m apart. Measured anchor positions are preserved. Yaw is chosen per visit from the outgoing segment; the final stop retains the incoming heading. Intermediate yaw follows the segment tangent, avoiding turns caused by recorded headings on straight sections. Each successful Nav2 action must also have a fresh robot-local map TF within 0.05 m of its target before advancing. AMCL update_min_d is 0.05 m. The dashed preview is an intended geometric route; obstacle avoidance may change the actual path. Dense CSV exports are available from each route card.
 
@@ -179,4 +188,49 @@ Center-first policy: CH2 is the line reference. With only CH2 on the line, small
 
 - 로봇별 정지 버튼은 경로가 없거나 취소 대기 중이어도 사용할 수 있습니다. 전체 정지도 연결된 모든 로봇에 요청합니다. 정지 요청은 로봇의 `stop_latch.json`에 저장되며 안전 감시기는 다른 조건보다 먼저 0 속도를 발행합니다. 관리 중인 경로 프로세스를 종료하고 해당 ROS 도메인의 Nav2 목표만 취소합니다.
 - 정지 유지 해제는 새로운 명시적 경로 실행에서 새 Nav2 목표가 수락된 다음에만 합니다. 시작과 동시에 정지가 들어오면 run_id가 일치하는 정지 요청을 새 실행이 제거하지 않습니다. 경로 취소 상태는 원격 적용 응답으로 종료하며 SSH 로그의 끝을 무한히 기다리지 않습니다.
-- 위치 재설정 때 센서·지도·안전 감시기가 없거나 AMCL 구독자가 없으면 해당 기체의 주행준비를 한 번 복구하고 재시도합니다. 실패하면 준비 완료 대신 오류 상태로 표시합니다. 현재 위치가 지정 주차장과 일치할 때 위치 재설정 버튼을 사용해야 합니다.
+- 위치 재설정 때 센서·지도·안전 감시기가 없거나 AMCL 구독자가 없으면 해당 기체의 주행준비를 한 번 복구합니다(주행준비가 위치까지 잡음). 실패하면 준비 완료 대신 오류 상태로 표시합니다. 현재 위치가 지정 주차장과 일치할 때 위치 재설정 버튼을 사용해야 합니다.
+- 주행준비는 Nav2 액션 확인 뒤 자기 주차장 좌표(`config/parking.json`)를 AMCL `/initialpose`로 보내고, 그 뒤에 받은 `/amcl_pose` 또는 map 기준 TF 위치가 주차장에서 15 cm·약 20° 안에 12초 안에 들어오면 위치를 잡은 것으로 봅니다(`_localize_at_parking`). 오도메트리가 움직이는 중이면 보내지 않습니다. 실패해도 Nav2는 준비된 상태로 두고 오류 내용을 남기며, 지도 위치(`tf_pose`)가 없으므로 주행 가능으로 보이지 않습니다. 이 확인은 AMCL이 좌표를 받았다는 뜻이지 로봇이 실제로 그 칸에 있다는 증거가 아니므로, 주행준비 전에 로봇을 자기 주차 칸에 둡니다. Nav2 복구는 주행 중일 수 있어 위치를 넣지 않습니다.
+- `POST /api/prepare-all {map}`은 주행준비가 안 된 기체(주행 중·준비됨·SSH 포트 미응답 제외)를 하나의 작업(`busy_robot="all"`)으로 차례로 준비합니다. 한 기체가 실패해도 다음 기체를 계속 준비합니다. `GET /api/status`의 `password_set`은 SSH 비밀번호를 메모리에 갖고 있는지만 알려 줍니다.
+
+
+### 초음파 차체 폭 우회 및 정지 경합 수정 (2026-11-11)
+
+- 공통 감시기 `three_surface_pd_v3`: 10cm 이내 감지 → 0.5초 정지 → LiDAR로 덜 막힌 방향을 선택해 약 60도 회전 → 오도메트리 기준 원래 경로 옆으로 최소 10cm 확보 → 원래 진행 방향 복원 → 최초 감지 거리와 차체 여유를 포함해 전방 최소 22cm 통과 후 IR/Nav2에 인계합니다. 전진은 3cm/s입니다. 이전 0.5초/1.5cm 전진은 제거했습니다.
+- 차체는 기존 14cm 사각형으로 검사합니다. 요청한 센서 좌우 각 5cm를 포함하며, 회전·측면 확보·방향 복원·통과 모두 LiDAR와 초음파 감지점의 예상 궤적을 검사합니다. LiDAR에 보이지 않는 낮은 장애물도 초음파 감지 위치를 오도메트리 좌표로 기억해 검사합니다. 좁아서 회전/전진할 수 없으면 정지하며 60초 또는 출발점 반경 70cm 한도에서 실패 처리합니다. 단일 초음파만으로 장애물 전체 폭을 알 수 없으므로 실제 통과는 재연결 후 확인해야 합니다.
+- 오도메트리·LiDAR·초음파가 끊기면 정지합니다. 경로 신호 만료·작업자 정지가 회피보다 우선하며, 교차로 감시기는 회피 시간과 이동량을 별도로 취급합니다.
+- 완주 대기에서 잘못된 튜플 파일 경로를 수정했습니다. 정지 확인 전에는 `cancel_requested`를 유지하고 재출발을 차단하며, 확인 실패 시 정지 재시도를 허용합니다. 큐에 대기하던 출발 작업도 취소 상태에서는 실행하지 않습니다.
+- 오프라인 회귀 테스트는 ROS 모터 명령·SSH 없이 수행합니다. 로봇별 IR 보정값은 변경하지 않습니다. 재연결 후 세 기체의 주행준비로 새 공통 소스를 적용합니다.
+
+
+### 스펀지 도킹 스테이션 / 5번 기준 위치 보정
+
+- P0/P1/P2 모두 5번은 `(0.39, 1.64)m`, 진입 방향은 4→5의 −X(yaw 180°)입니다.
+- `도킹완료 확인` 후 (IR 사용 시 세 채널 연속 흰색 확인 후) AMCL `/initialpose`에 5번 위치와 진입 방향을 전달합니다. 최신 AMCL 및 map→base TF가 3cm/5° 안으로 반영되어야 수령 버튼이 활성화됩니다. 바퀴 `odom` 자체는 연속성을 유지합니다. 구독/반영 실패 시 오류 코드 18로 정지하며 수령 대기를 건너뛰지 않습니다.
+- `물건 수령 완료` 후 2cm/s로 약 20cm 직선 후진합니다. 바퀴 odom 진행량을 사용하며 횡방향 2cm/방향 약 7° 이탈 또는 30초 초과 시 정지합니다. 로봇 제어 프로세스가 후진 중 재시작되어도 후진 원점을 새로 잡아 추가 후진하지 않습니다.
+- 경로는 `5 (0.39,1.64) → 도킹 탈출 (0.59,1.64) → 6 (0.59,1.24)`입니다. 세 기체의 저장된 6번 좌표와 10cm 경로 미리보기/CSV가 함께 변경되었습니다. 후진 중에도 도킹 구역 예약과 독립 최종 충돌 감시를 유지합니다. 후방 장애물이나 오래된 센서 데이터가 있으면 후진하지 않습니다.
+- 새 소스 적용 여부는 `topics.line_control.value.dock_protocol == sponge_v1`로 확인하며, 이전 감시기로는 경로를 시작할 수 없습니다. 연결 후 각 기체의 주행준비 또는 Nav2 복구를 실행해야 합니다.
+- 통합 지도는 `config/keepout/keepout_mask.yaml`의 원점·해상도·회전과 PGM의 상하 방향을 반영해 금지 셀을 보라색 사선으로 표시합니다. 노란 웨이포인트, 청록색 도킹 후진 경로와 구분합니다. 이 표시는 마스크 파일의 표시이며 로봇 Nav2 필터의 실행 상태를 뜻하지 않습니다. 파일 변경은 다음 관제 갱신에 반영됩니다.
+
+
+### 네트워크 재연결 후 PC에서만 scan/odom이 안 보일 때
+
+로봇의 직접 DDS 샘플이 모두 정상인데 PC 관제의 센서가 전부 미수신이면 로봇 bringup보다 PC 수신 상태를 먼저 확인합니다. 오래 실행된 DDS 참여자는 네트워크 재연결 후 재시작이 필요할 수 있습니다. 다른 기체의 진행 중인 임무가 없는 상태에서 `systemctl --user restart pinky-fleet.service`를 실행한 후 SSH 연결 설정과 주행준비를 다시 실행합니다. 브라우저 새로고침만으로는 DDS 프로세스가 갱신되지 않습니다.
+
+
+### 목표 즉시 거부 / SSH 종료 코드 5
+
+2026-11-14 수정: keepout `lethal_override_cost`는 ROS 정수 파라미터이므로 `252`로 생성합니다. 실수 `252.0`은 local_costmap 활성화를 실패시키고 BT 액션을 inactive 상태로 남깁니다. 준비 확인은 액션 목록뿐 아니라 map_server/amcl/controller_server/planner_server/bt_navigator/behavior_server의 GetState가 모두 active인지 확인합니다. Nav2 정리 시 설치 패키지 launch와 캐시 경로 launch를 모두 종료합니다. 주행 준비 확인 과정에서는 이동 목표를 전송하지 않습니다.
+
+### Nav2 주행, 라이다·초음파 퓨전, IR은 보조값 (2026-11-14)
+
+- 주행은 Nav2가 맡습니다. `config/navigation.json`의 `ir_steering: false`이면 IR 보정 프로필이 켜져 있어도 경로의 `use_ir`은 false이고, IR 값은 화면과 기록에만 쓰입니다.
+- `ultrasonic_fusion: true`이면 주행준비 때 로봇에 `fusion_grid.py`를 띄웁니다(2026-11-16, 이전 `ultrasonic_cloud.py`를 대신함). 라이다와 초음파를 로봇 둘레 2 m 확률 점유 격자(log-odds, 2 cm 칸)에서 합칩니다. 칸마다 라이다 높이(약 12.5 cm)와 초음파 높이(약 3.7 cm) 두 층을 두고 각 센서는 자기 높이 층만 고칩니다. 초음파 반사 호에 라이다가 이미 보는 장애물이 있으면 반사를 그 장애물 칸에만 주고, 라이다가 그 호를 비었다고 보면 라이다 평면보다 낮은 장애물로 분류합니다. 자세한 모델·실험 방법은 [docs/implementation/sensor-fusion.md](../docs/implementation/sensor-fusion.md).
+- Nav2에는 낮은 층만 넘깁니다. 지역 costmap의 `VoxelLayer`(5 cm 높이 칸)에 `/scan`과 함께 `/fusion/low_marks`(낮은 층의 점유 칸, 표시)와 `/fusion/low_clear`(격자 가장자리 링, 지우기)를 넣어, Nav2의 맨 아래 칸이 퓨전 격자를 따릅니다. 전역 costmap에는 `ultrasonic_fusion_global: true`일 때만 넣습니다(기본 false): 전역에 잘못 찍힌 표시는 로봇이 그쪽을 다시 볼 때까지 남아 2.2 × 2.6 m 칸에서 경로를 막을 수 있습니다. `publish_voxel_map`은 끕니다. 높이는 URDF 설계값이며 실측이 아닙니다.
+- 설정은 `navigation.json`의 `fusion_grid`(기본값은 `scripts/fusion_grid.py`의 `DEFAULTS`). `lidar_sigma_m`·`us_sigma_m`은 임시값이며 노이즈 측정으로 바꿉니다. 잘못된 설정이면 주행준비가 시작 전에 알립니다. 상태는 `/fusion/status`(JSON), 격자는 `/fusion/grid`(`OccupancyGrid`, odom)로 나오고 브리지가 PC의 `/pinky_<id>/fusion/*`로 넘깁니다.
+- 녹화·평가: `scripts/fusion_record.py`(PC에서 브리지 토픽을 읽기만 함)로 기록하고 `scripts/fusion_eval.py noise|compare`로 노이즈와 세 방식(라이다만·초음파 단순 표시·퓨전) 비교를 냅니다. 검증: `python3 -m unittest tests.test_fusion_grid tests.test_fusion -v`, ROS 노드는 `source /opt/ros/jazzy/setup.bash && PYTHONPATH=".:$PYTHONPATH" python3 tests/ros_fusion_smoke.py`(도메인 83, 로봇 없음).
+- 최종 안전장치(`velocity_guard.py`)는 퓨전 노드를 쓰지 않고 라이다 점과 초음파 기억을 직접 봅니다. 퓨전 노드가 죽어도 마지막 정지는 따로 동작하게 하려는 것입니다.
+- `ultrasonic_detour: false`이면 `ultrasonic_safety`는 10 cm 이내에서 자체 우회를 하지 않고 전진 명령만 막습니다. 회전·후진은 Nav2 명령대로 통과합니다. 설정이 없으면 기존 우회 동작 그대로입니다.
+- 지역 위치는 라이다로 찾습니다(`scripts/scan_localizer.py`, `/api/robots/<id>/localize`, `/locate`). 경기장이 직사각형이라 180° 대칭 후보가 나오면 주차 칸·5번 같은 알려진 자리에 맞는 후보가 하나일 때만 자동으로 고르고, 아니면 운영자가 후보를 고릅니다.
+- 위치 다시 잡기: 주행준비 끝에 라이다로 자동으로 찾고, 지도에 보이는 자리가 틀리면 운영자가 관제 화면 큰 지도에서 핑키가 있는 곳을 누른 채 바라보는 방향으로 끌어 다시 잡습니다(RViz 2D Pose Estimate, 기똥차 관제와 같은 방식). `POST /api/robots/<id>/set-pose {pose}`는 그 자세 주변 30 cm·30° 안에서만 라이다로 다듬어 AMCL에 넣으므로 대칭인 반대편으로 튀지 않습니다. 경로 주행 중에는 거절합니다.
+- Nav2 bringup: Jazzy 1.3의 lifecycle 관리자는 노드 상태 응답을 2초만 기다리고, 바쁜 라즈베리파이가 늦으면 bringup을 통째로 그만둡니다. `scripts/nav_readiness.py`가 Nav2 로그에서 이를 보면 그 관리자의 `node_names`를 configure→activate 순서로 직접 이어서 켜고, 그것도 안 되면 관제가 Nav2를 한 번 다시 띄웁니다. 로그는 이어 쓰므로 실행마다 `=== PINKY_FLEET_START` 줄로 구분합니다.
+- 상태 램프: 관제가 `/fleet/indicator`로 색을 보내고 로봇의 `status_lamp.py`가 `set_lamp`/`set_led`에 반영합니다(주황 준비·위치 없음, 파랑 대기, 초록 주행, 빨강 정지·오류, 3초 끊기면 주황 깜빡임). `pinky_lamp_control`이 `WS2811_STRIP_GBR`이라 빨강·파랑을 바꿔 보냅니다.

@@ -7,20 +7,25 @@ from __future__ import annotations
 
 from typing import Any
 
-from control_station.store import PINKY_NAMES  # noqa: E402  (re-exported for the API)
+from control_station.pinky_fleet import STATION_PHASES
+from control_station.store import PINKY_NAMES, shipment_of  # noqa: E402  (re-exported for the API)
 PHASE_LABELS = {
     "parked": "주차장 대기", "driving": "이동 중", "docking_manual": "5번 도착 · 정지",
-    "docked_manual": "정지 유지 · 수령 대기", "course_complete": "코스 완주", "returning": "복귀 중",
+    "docking_anchor": "도킹완료 · 위치 재설정 중", "docked_manual": "정지 유지 · 수령 대기",
+    "dock_exit": "도킹 탈출 · 후진", "recovering": "장애물 우회 중",
+    "course_complete": "코스 완주", "returning": "복귀 중",
 }
 # The order pipeline on the screen, each stage made of step types.
 STAGES = (
     ("ORDER", "주문 접수", ("VALIDATE_ORDER",)),
     ("STOCK", "선반 확인", ("CHECK_SHELF_STOCK",)),
     ("PLAN", "팔 배정", ("PLAN_ARM_SEQUENCE",)),
-    ("PINKY", "핑키 도착", ("WAIT_PINKY_ARRIVAL", "CONFIRM_DOCKING")),
+    ("PINKY", "핑키 도착", ("START_SHIPMENT", "WAIT_PINKY_ARRIVAL", "CONFIRM_DOCKING")),
     ("LOAD", "적재", ("PICK_ITEM", "VERIFY_TRANSFER")),
     ("TOTAL", "총량 확인", ("VERIFY_LOAD_TOTAL",)),
     ("SIGNAL", "완료 신호", ("NOTIFY_PINKY_RECEIVED", "FINALIZE_TASK")),
+    # Only orders with a receiving zone have these steps; for the others the stage is left out.
+    ("DELIVER", "수령", ("WAIT_AT_RECEIVING_ZONE", "CONFIRM_PICKUP", "WAIT_PINKY_PARKED")),
 )
 ACTIVE_STEP = frozenset({"COMMAND_SENT", "ACCEPTED", "RUNNING"})
 ALERT_EVENTS = frozenset({"PINKY_POSITION_ABNORMAL", "PINKY_FLEET_UNREACHABLE"})
@@ -80,24 +85,45 @@ def _current_text(order: dict[str, Any], step: dict[str, Any] | None, events: li
         "PLAN_ARM_SEQUENCE": "물체별 팔 배정 중", "WAIT_PINKY_ARRIVAL": "핑키 도착 대기",
         "CONFIRM_DOCKING": "핑키에 도킹완료 전달 중", "VERIFY_LOAD_TOTAL": "핑키 위 총량 확인 중",
         "NOTIFY_PINKY_RECEIVED": "핑키에 수령 완료 전달 중", "FINALIZE_TASK": "마무리 중",
+        "WAIT_AT_RECEIVING_ZONE": "핑키가 수령 구역으로 가는 중", "CONFIRM_PICKUP": "수령 구역 도착 · 손님 수령 확인 대기",
+        "WAIT_PINKY_PARKED": "핑키 복귀 중", "START_SHIPMENT": "다음 운송 핑키 고르는 중",
     }
     return latest_message or defaults.get(kind, kind)
 
 
+def _shipments(order: dict[str, Any], active: dict[str, Any] | None) -> tuple[int, int]:
+    """(current shipment, shipments) of an order; (1, 1) when it is not split."""
+    steps = order.get("steps", [])
+    count = max((int((step.get("detail") or {}).get("shipments") or 1) for step in steps), default=1)
+    if count == 1:
+        return 1, 1
+    if active is not None:
+        return shipment_of(active), count
+    if order["status"] == "SUCCEEDED":
+        return count, count
+    stopped = next((step for step in steps if step["status"] == "FAILED"), None)
+    return (shipment_of(stopped) if stopped else 1), count
+
+
 def summarize_order(order: dict[str, Any]) -> dict[str, Any]:
     steps, events = order.get("steps", []), order.get("events", [])
+    active = next((step for step in steps if step["id"] == order.get("active_step_id") and step["status"] in ACTIVE_STEP), None)
+    current, count = _shipments(order, active)
+    # A split order shows the stages of the shipment under way; shared steps (stock, plan, finish) count for each.
+    steps_now = [step for step in steps if (step.get("detail") or {}).get("shipment") in (None, current)]
     by_type: dict[str, list[dict[str, Any]]] = {}
-    for step in steps:
+    for step in steps_now:
         by_type.setdefault(step["step_type"], []).append(step)
     stages = []
     for key, label, types in STAGES:
         stage_steps = [step for kind in types for step in by_type.get(kind, [])]
+        if key == "DELIVER" and not stage_steps:
+            continue
         stages.append({"key": key, "label": label, "state": _stage_state(stage_steps)})
     verified = [step for step in by_type.get("VERIFY_TRANSFER", []) if step["status"] == "SUCCEEDED"]
     total = len(by_type.get("VERIFY_TRANSFER", []))
     load_stage = next(stage for stage in stages if stage["key"] == "LOAD")
     load_stage["label"] = f"적재 {len(verified)}/{total}"
-    active = next((step for step in steps if step["id"] == order.get("active_step_id") and step["status"] in ACTIVE_STEP), None)
     plan = next((step.get("result", {}).get("sequence") for step in by_type.get("PLAN_ARM_SEQUENCE", [])
                  if step.get("result")), None)
     alert = None
@@ -112,6 +138,12 @@ def summarize_order(order: dict[str, Any]) -> dict[str, Any]:
                 alert = {"level": "warning", "code": event["event_type"], "message": event["payload"].get("message"),
                          "at": event["received_at"], "task_id": order["id"], "title": title}
                 break
+    if alert is None and active is not None and active["step_type"] == "CONFIRM_PICKUP":
+        # Not a fault: a person has to confirm the pickup (the customer's app, or the operator for them).
+        waiting = next((event for event in reversed(events) if event["event_type"] == "PICKUP_WAITING"), None)
+        alert = {"level": "action", "code": "PICKUP_WAITING", "title": "수령 확인 대기",
+                 "message": (waiting or {}).get("payload", {}).get("message") or "손님 수령 확인을 기다립니다",
+                 "at": (waiting or {}).get("received_at"), "task_id": order["id"], "pickup": True}
     acknowledged = any(event["event_type"] == "ALERT_ACKNOWLEDGED" for event in events)
     if order["status"] == "FAILED" and not acknowledged:
         error = order.get("error") or {}
@@ -127,7 +159,10 @@ def summarize_order(order: dict[str, Any]) -> dict[str, Any]:
         "order_items": order.get("order_items"), "created_at": order.get("created_at"),
         "started_at": order.get("started_at"), "finished_at": order.get("finished_at"),
         "stages": stages, "loaded": len(verified), "total": total,
-        "current": _current_text(order, active, events), "active_step": active["step_type"] if active else None,
+        "shipment": {"index": current, "count": count} if count > 1 else None,
+        "current": (f"운송 {current}/{count} · " if count > 1 and order["status"] in {"RUNNING", "VALIDATING"} else "")
+                   + _current_text(order, active, events),
+        "active_step": active["step_type"] if active else None,
         "plan": plan, "alert": alert, "error": order.get("error"), "simulated": simulated,
     }
 
@@ -149,11 +184,13 @@ def build_flow_view(
         latest = next((order for order in orders if order.get("pinky_id") == pinky_id), None)
         stopped = (
             latest["id"] if holder is None and latest is not None and latest["status"] == "FAILED"
-            and status.get("phase") in {"docking_manual", "docked_manual"} else None
+            and status.get("phase") in STATION_PHASES else None
         )
         pinkies.append({
             "pinky_id": pinky_id, "name": name, "phase": status.get("phase"),
-            "phase_label": PHASE_LABELS.get(status.get("phase"), status.get("phase") or "상태 모름"),
+            # Without a connection the fleet has no route for it, which would otherwise read as "parked".
+            "phase_label": "연결 끊김" if status.get("connected") is False
+            else PHASE_LABELS.get(status.get("phase"), status.get("phase") or "상태 모름"),
             "message": status.get("message") or status.get("error"), "location": status.get("location"),
             "order_id": holder, "stopped_order_id": stopped, "simulated": status.get("simulated", False),
             "reachable": bool(status) and "error" not in status,

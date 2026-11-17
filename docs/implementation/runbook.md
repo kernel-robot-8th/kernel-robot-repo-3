@@ -26,18 +26,20 @@ ros2 launch parking_vision_ros ceiling_parking.launch.py repository_root:=$PWD s
 ./run-control-station.sh
 ```
 
-브라우저의 **주문 진행** 탭에서 주문을 등록하면 바로 시작합니다. 관련 설정:
+주문은 주문 창(`http://<관제 주소>/order`)에서 넣고, 관제의 **주문 진행** 탭 맨 위 **주문 접수**에서 배정 미리보기를 본 뒤 **시작**합니다. 핑키는 시작할 때 정해집니다. 관련 설정:
 
 | 설정 | 뜻 |
 |---|---|
 | `CONTROL_STATION_PINKY_FLEET_URL` | 핑키 팀 관제 주소(예: `http://<핑키 관제 PC>:8765`). 없으면 모의 핑키 |
 | `CONTROL_STATION_ORDER_COUNTS=camera` | 선반 재고·핑키 위 개수를 카메라 YOLO로 셈. 없으면 모의 세계 |
+| `CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2` | 실제 팔 집기를 HTTP 워커 대신 ROS 2 액션 `/arm_0N/pick_object`로 보냄(팔마다 `scripts/omx_pick_action_server.py --robot-id arm-0N`). 기본 `http`. 액션 domain은 `CONTROL_STATION_ARM_ACTION_DOMAIN`, 없으면 `ROS_DOMAIN_ID`. 관제도 ROS·`cpp/install`을 source해야 함 |
+| `CONTROL_STATION_ORDER_REAL_ARM=1` | 주문의 집기를 실제 팔로: 계획된 팔에 `PICK_WITH_POLICY`(팔마다 `scripts/omx_lerobot_worker.py --robot-id arm-0N` 실행 필요). 카메라 개수가 꼭 있어야 하며, 모의 개수면 팔을 움직이기 전에 멈춤 |
 | `CONTROL_STATION_ORDER_PARKING=mock` | 주차 위치가 설정돼 있어도 핑키 도착을 모의로 판정 |
 | `CONTROL_STATION_LOAD_CAMERA`, `CONTROL_STATION_PINKY_TRAY_REGION`, `CONTROL_STATION_PINKY_TRAY_MARGIN`, `CONTROL_STATION_LOAD_IGNORE_CLASSES` | 핑키 위 물건을 셀 카메라(기본 `head_camera`), 쟁반 영역(픽셀 `x1,y1,x2,y2`, 없으면 등록 마커 둘레 1.6변), 세지 않을 클래스(기본 `car`) |
 | `CONTROL_STATION_ARRIVAL_TIMEOUT_S` | 핑키 도착을 기다리는 최대 시간(기본 600초) |
 | `CONTROL_STATION_MOCK_PINKY_DRIVE_S`, `CONTROL_STATION_MOCK_PICK_S`, `CONTROL_STATION_MOCK_SHELF_STOCK`, `CONTROL_STATION_MOCK_FAULTS` | 모의 핑키 이동 시간, 모의 집기 시간, 모의 선반 재고, 처음부터 넣을 모의 사고 |
 
-팔 집기는 아직 모의라서 실물 팔은 움직이지 않습니다. 카메라로 개수를 셀 때는 집기 단계 동안 사람이 물체를 핑키 위로 옮겨야 옮김 확인을 통과합니다.
+팔 집기는 기본이 모의라서 실물 팔은 움직이지 않습니다. `CONTROL_STATION_ORDER_REAL_ARM=1`이면 실제 팔이 움직이고, 이때는 카메라 개수가 필요합니다. 모의 팔에 카메라 개수를 쓸 때는 집기 단계 동안 사람이 물체를 핑키 위로 옮겨야 옮김 확인을 통과합니다.
 
 ## 모의 작업 흐름 실행
 
@@ -56,17 +58,17 @@ curl -sS -X POST http://127.0.0.1:8000/api/tasks/parse-command \
 
 API로도 확인할 수 있습니다.
 
-`POST /api/tasks`는 `destination`, `arm_job`, 선택적 `pick_request`만 받습니다. 그 밖의 최상위 필드는 오타나 미지원 입력으로 보고 HTTP 400을 반환합니다. Pick & Place 대상 조건은 `pick_request: {"category":"box","color":"red","shelf_level":2}`처럼 별도 객체로 보냅니다.
+이전 형식의 `POST /api/tasks`는 `destination`, `arm_job`, 선택적 `pick_request`를 받습니다(주문은 `order_items`, [주문 흐름](order-flow.md)). 그 밖의 최상위 필드는 오타나 미지원 입력으로 보고 HTTP 400을 반환합니다. 주문 물체 조건은 `pick_request: {"category":"carrot"}`처럼 별도 객체로 보냅니다.
 
 ```bash
 # 기존 이동·팔 작업 등록 예시
 curl -sS -X POST http://127.0.0.1:8000/api/tasks \
   -H 'Content-Type: application/json' \
   -d '{"destination":"작업대 A","arm_job":"상자 이동"}'
-# 대상 조건이 있는 Pick & Place 작업 등록 예시
+# 주문 물체 조건이 있는 작업 등록 예시
 curl -sS -X POST http://127.0.0.1:8000/api/tasks \
   -H 'Content-Type: application/json' \
-  -d '{"destination":"작업대 A","arm_job":"상자 이동","pick_request":{"category":"box","color":"red","shelf_level":2}}'
+  -d '{"destination":"작업대 A","arm_job":"당근 집기","pick_request":{"category":"carrot"}}'
 # 둘 중 하나의 응답에서 task.id를 복사해 사용
 curl -sS -X POST http://127.0.0.1:8000/api/tasks/TASK-ID/start
 curl -sS http://127.0.0.1:8000/api/tasks/TASK-ID
@@ -74,23 +76,13 @@ curl -sS http://127.0.0.1:8000/api/tasks/TASK-ID
 
 `TASK-ID`는 생성 응답의 실제 작업 ID로 바꿉니다. 진행 중인 작업은 `/api/tasks/{task_id}/cancel`로 취소할 수 있습니다. `CONTROL_STATION_MOCK_STEP_DELAY`는 모의 단계별 표시 대기 시간(초)이며 기본은 `0.25`, 허용 범위는 `0.05–2.0`입니다. 시작 접수나 mock 성공은 실물 동작을 의미하지 않습니다.
 
-모의 실패 종결 경로를 화면에서 확인해야 할 때만 서버 시작 환경에 `CONTROL_STATION_MOCK_FAIL_STEP`을 설정합니다. 예를 들어 `CONTROL_STATION_MOCK_FAIL_STEP=GRASP_TARGET ./run-control-station.sh`는 Pick & Place 작업의 해당 step이 `COMMAND_SENT → ACCEPTED → RUNNING`을 거친 뒤 `MOCK_SCENARIO_FAILURE`로 실패하고, 남은 step은 미실행으로 닫힙니다. 지원 값은 저장소의 표준 task step type입니다. 이 설정은 `mock` mode에서만 적용되며 실제 adapter·카메라·로봇 동작을 시험하거나 예측하지 않습니다. 기본값은 비활성입니다.
+모의 실패 종결 경로를 화면에서 확인해야 할 때만 서버 시작 환경에 `CONTROL_STATION_MOCK_FAIL_STEP`을 설정합니다. 예를 들어 `CONTROL_STATION_MOCK_FAIL_STEP=EXECUTE_ARM_TASK ./run-control-station.sh`는 이동·팔 작업의 해당 step이 `COMMAND_SENT → ACCEPTED → RUNNING`을 거친 뒤 `MOCK_SCENARIO_FAILURE`로 실패하고, 남은 step은 미실행으로 닫힙니다. 지원 값은 이동·팔 작업과 주문의 step type이며, 그 밖의 값이면 서버가 시작하지 않습니다. 이 설정은 `mock` mode에서만 적용되며 실제 adapter·카메라·로봇 동작을 시험하거나 예측하지 않습니다. 기본값은 비활성입니다.
 
 이동·팔 작업의 `VERIFY_LOAD`(적재 확인) 흐름은 `CONTROL_STATION_MOCK_LOAD_OBSERVED`로 확인합니다. 값은 수레 위에서 "보였다고 칠" 물건 개수(0 이상 정수)입니다. 기대 수량은 작업당 1개로 고정돼 있습니다. 예를 들어 `CONTROL_STATION_MOCK_LOAD_OBSERVED=0 ./run-control-station.sh`로 띄운 뒤 작업을 실행하면 `LOAD_OBSERVED`(덜 실림)가 남고 `LOAD_INCOMPLETE`로 실패하며 `FINALIZE_TASK`는 실행하지 않습니다. `1`이면 `LOAD_CONFIRMED`, `2` 이상이면 `LOAD_EXCESS`입니다. 이 관측은 카메라를 열지 않고 설정값을 그대로 보고하는 모의 관측(`simulated: true`)이며, 실제 적재 여부를 확인한 것이 아닙니다. 설정하지 않으면 `VERIFY_LOAD`는 다른 단계처럼 모의 성공입니다. `mock` mode에서만 적용됩니다.
 
 작업 상세에 “활성 상태지만 이 서버 프로세스에 실행 worker가 없습니다”가 표시되면 `/start`를 반복해 재실행하지 마세요. 해당 값은 현재 프로세스의 worker 소유만 보여 주며 다른 프로세스·장치 동작을 판단하지 않습니다. `.control-station/logs`의 해당 세션 로그와 저장된 task/step/event를 확인하고 운영 절차에 따라 처리합니다. 현재 UI에는 이런 활성 작업을 자동 복구·재생하는 기능이 없습니다.
 
-작업의 팔 단계는 주문 물체(`pick_request.category`, 예: `carrot`·`당근`)로 학습 정책을 고릅니다. 정책이 없는 물체면 팔 명령을 만들지 않고 `ARM_JOB_POLICY_NOT_FOUND`로 멈춥니다.
-
-카메라 화면에서 별도로 확인하려면 클래스와 선택 색상 조건을 넣습니다. 이 GET 요청은 이력을 저장하지 않습니다.
-
-```bash
-curl -sS 'http://127.0.0.1:8000/api/cameras/head_camera/target-observation?class_name=box&color=red&shelf_level=2'
-```
-
-`shelf_level_evaluation.status`가 `CALIBRATION_NOT_CONFIGURED`이면 활성 영역 파일이 없다는 뜻입니다. 영역 파일이 있어도 camera/frame 출처가 다르면 층 일치 비교를 만들지 않습니다. 활성 영역 파일 구성은 [선반 영역 초안 절차](shelf-image-regions.md)를 참고하세요.
-
-작업 관측 기록 기능을 2026-11-11에 지워서, 새 층 영역 초안의 입력인 저장 관측 PNG는 더 만들 수 없습니다. 이미 활성화한 영역 파일은 계속 읽습니다. 층별 영상 영역을 측정할 때는 저장된 event ID와 PNG를 확인한 뒤 [선반 영역 초안 절차](shelf-image-regions.md)의 입력 schema로 polygon을 기록하고 `scripts/calibrate_shelf_regions.py`를 실행합니다. editor의 `regions.json` schema v2는 원본 PNG file hash/해상도를 함께 저장하며 CLI는 task event 이미지와 원본 BGR frame hash를 대조합니다. CLI 산출물은 `DRAFT_ONLY`이며 자동 활성화되지 않습니다. 관측 UI/API에서 검토용 층 비교를 보려면 문서 절차에 따라 사람이 artifact를 검토한 뒤 활성 디렉터리에 `{camera_id}.json` 이름으로 명시 배치해야 합니다. 이 배치는 물리 측정의 승인이나 로봇 사용 허가가 아니며 결과는 후보 선택과 팔 제어에 쓰이지 않습니다.
+`CONTROL_STATION_TASK_REAL_ARM=1`이면 작업의 팔 단계가 주문 물체(`pick_request.category`, 예: `carrot`·`당근`)로 학습 정책을 고릅니다([HTTP 인터페이스](arm-command-api.md#학습-정책으로-집기-pick_with_policy)). 정책이 없는 물체면 팔 명령을 만들지 않고 `ARM_JOB_POLICY_NOT_FOUND`로 멈춥니다.
 
 런처로 시작할 때마다 `.control-station/logs/session-<시각>-<프로세스ID>.log`에 관제 서버 출력과 HTTP 요청 로그를 저장하고, 터미널에도 함께 표시합니다. `--arm` 실행의 LeRobot 출력은 같은 세션 ID를 가진 `arm-<시각>-<프로세스ID>.log`에 따로 저장합니다. 이 폴더는 Git에서 제외됩니다.
 
@@ -134,7 +126,7 @@ CONTROL_STATION_FRONT_CAMERA=/dev/v4l/by-path/pci-0000:00:14.0-usb-0:2:1.0-video
 
 카메라는 기본으로 640×480 MJPEG를 요청합니다. 센서가 4:3 모드에서 시야를 잘라내는 경우 `CONTROL_STATION_HEAD_CAMERA_RESOLUTION=1280x720`처럼 카메라별(`HEAD`, `JOINT`, `FRONT`)로 다른 모드를 요청할 수 있습니다. 해상도를 바꾸면 검출의 픽셀 좌표 기준도 그 해상도로 바뀌고, 처리량이 늘어 프레임률이 낮아질 수 있습니다. 실제 시야가 넓어지는지는 카메라마다 화면으로 확인해야 합니다.
 
-V4L2 장치는 한 프로세스만 영상을 받을 수 있어, 관제가 Front Camera를 열고 있으면 정책 client가 같은 장치를 열지 못합니다. 그래서 정책 시작 요청을 받으면 관제가 Front Camera capture를 먼저 닫고, 닫힌 것을 확인한 뒤 정책 client를 시작합니다. 정책 프로세스가 살아 있는 동안 카드는 `연결 끊김`/`중지`와 사용 중 안내를 표시하고, 프로세스가 끝나면 자동으로 다시 엽니다. 5초 안에 닫힘을 확인하지 못하면 정책을 시작하지 않고 409 오류를 반환합니다. 이 해제는 Front Camera만 대상으로 하며, 정책의 `wrist` 입력과 Joint Camera가 같은 장치인 경우는 처리하지 않습니다.
+V4L2 장치는 한 프로세스만 영상을 받을 수 있어, 관제가 Front Camera를 열고 있으면 정책 client가 같은 장치를 열지 못합니다. 그래서 정책 시작 요청을 받으면 관제가 Front Camera capture를 먼저 닫고, 닫힌 것을 확인한 뒤 정책 client를 시작합니다. 정책 프로세스가 살아 있는 동안 카드는 `연결 끊김`/`중지`와 사용 중 안내를 표시하고, 프로세스가 끝나면 자동으로 다시 엽니다. 5초 안에 닫힘을 확인하지 못하면 정책을 시작하지 않고 409 오류를 반환합니다. 이 해제는 Front Camera feed 하나만 대상으로 하며, 정책이 여는 다른 카메라(위·그리퍼 중 Front Camera가 아닌 쪽)를 관제의 다른 feed가 열고 있으면 처리하지 않습니다.
 
 실제 팔 제어는 운영체제의 장치 권한, LeRobot 의존성 및 사용자별 OMX 지원 코드가 있어야 합니다. 이 구성은 현재 관제 저장소에 포함되지 않습니다. 저장소만 복제한 환경에서는 첫 번째 절차로 대시보드와 API를 실행할 수 있습니다.
 
@@ -149,7 +141,7 @@ python -m lerobot.async_inference.policy_server --host=127.0.0.1 --port=8080 \
   --fps=30 --inference_latency=0.033 --obs_queue_timeout=1
 ```
 
-LeRobot client에 `--max_action_steps` 옵션이 포함되도록 `~/Desktop/lerobot/src/lerobot` checkout을 사용합니다. 관제 서버는 `opencv`와 `omx_follower` config를 client보다 먼저 import합니다. 정책 프로필은 저장소의 `config/policy_profiles.json`에서 읽습니다. 현재 **사과 집기**는 모델 `neverlish/omx_act_record-test-20261104-1`과 학습 당시 task 문자열 `Pick up Doll`을 사용합니다. 표시 이름과 학습 조건 문자열은 서로 다른 용도입니다. 서버를 다시 시작하지 않고 프로필 항목을 추가하려면 `CONTROL_STATION_POLICY_PROFILES`로 지정한 JSON 파일을 편집한 뒤 서버를 재시작하세요. 각 항목은 고유한 `id`, 화면 표시용 `name`, LeRobot `policy_type`, `model`, 학습 task 문자열 `task`를 가집니다. 프로필 선택 UI와 API는 이 목록을 읽어 실행하므로 코드 변경 없이 추가 정책을 등록할 수 있습니다. 관제 서버를 시작할 때 정책 실행을 활성화하고, 한 번의 시연에 맞는 총 액션 상한을 지정합니다.
+LeRobot client에 `--max_action_steps` 옵션이 포함되도록 `~/Desktop/lerobot/src/lerobot` checkout을 사용합니다. 관제 서버는 `opencv`와 `omx_follower` config를 client보다 먼저 import합니다. 실행할 정책 목록은 주문 흐름과 같은 `config/omx-act-policies.json`에서 읽습니다(`CONTROL_STATION_ACT_POLICIES`로 바꿀 수 있음). 화면에는 각 정책의 `label`이 보이고, 실행에는 `model`·`task`·`cameras`를 씁니다. 카메라는 역할별 장치 `CONTROL_STATION_POLICY_OVERHEAD_CAMERA`(선반을 위에서 본 카메라)와 `CONTROL_STATION_POLICY_GRIPPER_CAMERA`(그리퍼 카메라)로 지정하고, 정책의 `cameras`가 그중 어느 장치를 `front`/`wrist`에 넣을지 정합니다. 예전 이름 `CONTROL_STATION_POLICY_FRONT_CAMERA`/`_WRIST_CAMERA`는 각각 위·그리퍼 카메라로 읽습니다. 정책 클라이언트는 `--robot.disable_torque_on_disconnect=false`로 실행해 끝나도 팔 토크를 유지합니다. 관제 서버를 시작할 때 정책 실행을 활성화하고, 한 번의 시연에 맞는 총 액션 상한을 지정합니다.
 
 ```bash
 cd /경로/kernel-robot-repo-3
@@ -158,9 +150,9 @@ CONTROL_STATION_POLICY_MAX_ACTION_STEPS=300 \
 ./run-control-station.sh
 ```
 
-`300`은 설정 예시입니다. 실제 실행 전에 시연 한 회의 길이에 맞게 양의 정수로 바꾸세요. 이는 LeRobot이 로봇에 보낸 총 action 수이며 `actions_per_chunk=100`과는 별개입니다. 기본 프로필은 `neverlish/omx_act_record-test-20261104-1`, task `Pick up Doll`, follower `/dev/omx_follower`, 카메라 `/dev/video7` 및 `/dev/video9`, ACT/CUDA, 30 FPS, chunk 100, threshold 0.7입니다. 설정은 `CONTROL_STATION_POLICY_*` 환경변수로 바꿀 수 있습니다. Python은 기본 `~/Desktop/lerobot/venv/bin/python`을 사용하며 `CONTROL_STATION_LEROBOT_DIR`와 `CONTROL_STATION_LEROBOT_PYTHON`으로 checkout/환경 경로를 지정할 수 있습니다.
+`300`은 설정 예시입니다. 실제 실행 전에 시연 한 회의 길이에 맞게 양의 정수로 바꾸세요. 이는 LeRobot이 로봇에 보낸 총 action 수이며 `actions_per_chunk=100`과는 별개입니다. `profile_id`를 주지 않으면 정책 파일의 첫 정책(지금 `carrot_act_v2`)을 씁니다. 그 밖의 기본값은 follower `/dev/omx_follower`, 위·그리퍼 카메라 `/dev/video7`·`/dev/video9`, CUDA, 30 FPS, chunk 100, threshold 0.7입니다. 설정은 `CONTROL_STATION_POLICY_*` 환경변수로 바꿀 수 있습니다. Python은 기본 `~/Desktop/lerobot/venv/bin/python`을 사용하며 `CONTROL_STATION_LEROBOT_DIR`와 `CONTROL_STATION_LEROBOT_PYTHON`으로 checkout/환경 경로를 지정할 수 있습니다.
 
-관제의 **학습 정책 한 번 실행** 버튼 또는 `POST /api/arm/policy/start?profile_id=apple_pick`가 클라이언트를 시작합니다. 응답과 상태 조회의 `run_id`로 실행을 식별할 수 있습니다. client는 설정된 총 액션 수를 보내면 종료하고 관제 상태를 `LIMIT_REACHED`로 표시합니다. 이는 제한에 도달했다는 뜻이며 물체를 잡거나 놓았다는 결과가 아닙니다. **중단 요청** 또는 `POST /api/arm/policy/stop`은 실행을 멈추도록 요청하고 결과를 `INTERRUPTED`/미확정으로 표시합니다. 텔레오퍼레이션과 정책 client는 동시에 시작할 수 없습니다. 실행 로그는 `.control-station/logs/policy-run-<run_id>.log`에 남으므로 해당 로그와 카메라/실물 상태를 확인하세요. 관제 UI의 프로세스 상태만으로 팔 준비나 Pick & Place 성공을 판단하지 않습니다.
+관제의 **학습 정책 한 번 실행** 버튼 또는 `POST /api/arm/policy/start?profile_id=<정책 ID>`(예: `carrot_act_v2`)가 클라이언트를 시작합니다. 응답과 상태 조회의 `run_id`로 실행을 식별할 수 있습니다. client는 설정된 총 액션 수를 보내면 종료하고 관제 상태를 `LIMIT_REACHED`로 표시합니다. 이는 제한에 도달했다는 뜻이며 물체를 잡거나 놓았다는 결과가 아닙니다. **중단 요청** 또는 `POST /api/arm/policy/stop`은 실행을 멈추도록 요청하고 결과를 `INTERRUPTED`/미확정으로 표시합니다. 텔레오퍼레이션과 정책 client는 동시에 시작할 수 없습니다. 실행 로그는 `.control-station/logs/policy-run-<run_id>.log`에 남으므로 해당 로그와 카메라/실물 상태를 확인하세요. 관제 UI의 프로세스 상태만으로 팔 준비나 Pick & Place 성공을 판단하지 않습니다.
 
 ## OMX 읽기 전용 상태 조회
 
@@ -189,7 +181,7 @@ scripts/omx_act_policy_test.sh worker            # 그다음 관제 화면 원�
 ```
 
 - 준비: LeRobot 가상환경에 `grpcio==1.73.1`, `matplotlib`이 필요합니다(2026-11-07 이 PC에 설치, 기존 패키지 변경 없음). 계정 `dialout` 권한이 없으면 도우미가 `sg dialout`으로 실행합니다.
-- 장치는 환경 변수로 지정합니다: `CONTROL_STATION_ACT_OVERHEAD_CAMERA`(필수, 선반을 위에서 보는 카메라), `CONTROL_STATION_JOINT_CAMERA`(그리퍼 카메라), `CONTROL_STATION_FOLLOWER_PORT`, `CONTROL_STATION_OMX_POSES`(워커 자세 파일). 정책 입력 `front`/`wrist`에 어느 카메라를 넣을지는 정책 파일의 `cameras`가 정합니다(물티슈 정책은 녹화 때 이름이 뒤바뀌어 front에 그리퍼 카메라를 넣음). 카메라 번호(`/dev/videoN`)는 꽂을 때마다 바뀌므로 by-id/by-path를 씁니다. 같은 모델의 카메라라도 **학습 때와 같은 위치·시점**의 카메라를 줘야 합니다. 다른 PC의 명령에 있는 장치 번호를 그대로 쓰지 않습니다.
+- 팔 2대일 때는 [팔 2대 · 카메라 6대](#팔-2대--카메라-6대)의 팔별 변수를 씁니다. 팔 1대만 쓸 때는 장치를 환경 변수로 지정합니다: `CONTROL_STATION_ACT_OVERHEAD_CAMERA`(필수, 선반을 위에서 보는 카메라), `CONTROL_STATION_JOINT_CAMERA`(그리퍼 카메라), `CONTROL_STATION_FOLLOWER_PORT`, `CONTROL_STATION_OMX_POSES`(워커 자세 파일). 정책 입력 `front`/`wrist`에 어느 카메라를 넣을지는 정책 파일의 `cameras`가 정합니다(물티슈 정책은 녹화 때 이름이 뒤바뀌어 front에 그리퍼 카메라를 넣음). 카메라 번호(`/dev/videoN`)는 꽂을 때마다 바뀌므로 by-id/by-path를 씁니다. 같은 모델의 카메라라도 **학습 때와 같은 위치·시점**의 카메라를 줘야 합니다. 다른 PC의 명령에 있는 장치 번호를 그대로 쓰지 않습니다.
 - 정책에는 완료 신호가 없습니다. robot_client는 Ctrl+C를 누를 때까지 계속 동작하므로, 사람이 놓기가 끝난 것을 보고 멈춥니다.
 - LeRobot 기본값은 종료할 때 토크를 끄는 것(`disable_torque_on_disconnect=True`)이라 팔이 떨어집니다. 도우미는 `false`를 줘서 마지막 자세를 유지합니다. 연결할 때는 LeRobot이 모터 설정을 쓰느라 토크가 잠깐 꺼지므로 쉬는 자세에서 시작합니다. 시작 전에 `Goal_Position`이 현재 위치와 같은지 읽어 두면 토크가 켜질 때 팔이 튀지 않는지 알 수 있습니다.
 - 팔 포트는 배타적으로 열리지 않습니다(Dynamixel SDK가 pyserial exclusive를 쓰지 않음). 정책과 워커가 동시에 떠 있으면 둘 다 모터에 쓸 수 있으므로, 도우미는 다른 팔 프로세스가 있으면 시작하지 않습니다. 워커는 정책을 끈 뒤에 켭니다.
@@ -200,16 +192,36 @@ scripts/omx_act_policy_test.sh worker            # 그다음 관제 화면 원�
 - 연결한 팔은 follower 보드 `A9F93543…`로, [자세 파일](../../config/omx-slot-poses.json)을 기록한 `F58AE686…`과 다른 팔입니다. 시작 전 쉬는 자세(토크 꺼짐)를 [record_omx_pose.py](../../scripts/record_omx_pose.py)로 읽어 이 팔의 `home`으로 `.control-station/omx-poses-A9F93543.json`(Git 제외)에 기록했고, 워커의 home 계획이 dry-run으로 통과했습니다.
 - 정책을 실행해 팔이 집기 동작 뒤 쉬는 자세 근처로 돌아왔습니다(운영자 관찰). 종료 뒤 팔은 토크를 유지했고 home 대비 최대 74틱이었습니다. 이 복귀는 학습 데이터의 에피소드가 쉬는 자세에서 끝나도록 녹화돼 정책이 그대로 따라 한 것으로 보입니다. 관제에 원상복귀 명령 기록이 없으므로, **정책 종료 뒤 워커의 `RETURN_HOME`은 이 팔에서 아직 실행하지 않았습니다.** 물체를 Pinky 위에 실제로 놓았는지와 적재 성공 여부는 기록하지 않았습니다.
 
+## 팔 2대 · 카메라 6대
+
+팔 두 대를 모두 붙이면 카메라는 6대입니다. V4L2 카메라는 한 프로그램만 열 수 있고, 6대가 이 PC의 USB 컨트롤러 하나(`pci-0000:80:14.0`)를 나눠 쓰므로 모든 프로그램이 MJPG로 엽니다(관제·정책 실행기·워커·천장 노드 모두 이미 MJPG 요청). 같은 모델 카메라는 by-id 이름이 겹치므로(HCAM0 두 대가 일련번호가 같음) **꽂은 USB 자리로 정해지는 `/dev/v4l/by-path/...`** 를 씁니다(`ls -l /dev/v4l/by-path/`).
+
+| 카메라 (`/api/cameras` id) | 역할 | 여는 프로그램 | 환경 변수 |
+|---|---|---|---|
+| 천장 캠 (`head_camera`) | 핑키 정차(주차) 확인 + 핑키 위 적재 YOLO | 주차 판정 launch가 열고 관제는 토픽 | `CONTROL_STATION_CEILING_CAMERA`(launch), `CONTROL_STATION_HEAD_CAMERA=ros:/ceiling_camera/image_raw/compressed` |
+| 선반 캠 (`shelf_camera`) | 선반 재고 YOLO | 관제 | `CONTROL_STATION_SHELF_CAMERA` |
+| 왼쪽 팔 그리퍼 캠 (`arm01_gripper`) | arm-01 정책 입력 | 정책 실행 때 정책, 팔 원격 조작(`CONTROL_STATION_ARM_ENABLED=1`)이면 평소 관제 화면 | `CONTROL_STATION_ARM01_GRIPPER_CAMERA` |
+| 왼쪽 팔 탑 캠 (`arm01_overhead`) | arm-01 ACT 정책 입력(학습 때와 같은 위치·시점) | 정책. 관제는 꽂혀 있는지만 확인(`CONTROL_STATION_OVERHEAD_CAMERA_PREVIEW=1`이면 화면에 띄움) | `CONTROL_STATION_ARM01_OVERHEAD_CAMERA` |
+| 오른쪽 팔 그리퍼 캠 (`arm02_gripper`) | arm-02 정책 입력 | 위와 같음 | `CONTROL_STATION_ARM02_GRIPPER_CAMERA` |
+| 오른쪽 팔 탑 캠 (`arm02_overhead`) | arm-02 ACT 정책 입력 | 위와 같음 | `CONTROL_STATION_ARM02_OVERHEAD_CAMERA` |
+
+팔마다 팔로워 포트와 LeRobot 보정 이름도 따로 줍니다: `CONTROL_STATION_ARM01_FOLLOWER_PORT`, `CONTROL_STATION_ARM01_ROBOT_ID`(기본 `CONTROL_STATION_POLICY_ROBOT_ID` 또는 `omx_follower_arm`), ARM02도 같습니다. 어느 팔이 어느 보드인지는 [config/arms.json](../../config/arms.json)의 `board_serial`입니다(arm-01 왼쪽 `F58AE686…`, arm-02 오른쪽 `A9F93543…`).
+
+- `GET /api/cameras`의 각 카메라에 `role`(역할 문구), `robot_id`(팔), `opened_by`(`control_station`/`policy`/`ros_node`), `link_label`(`연결됨`/`연결 전`), `setting`(환경 변수 이름)이 붙습니다.
+- 두 설정이 같은 장치로 풀리면(심볼릭 링크 포함) 둘 다 쓰지 않고 오류로 알립니다. 예전 단일 팔 설정의 `joint_camera`·`front_camera`가 팔 카메라와 같은 장치면 팔 카메라 쪽만 남습니다.
+- 정책은 녹화한 팔에서만 돕니다([config/omx-act-policies.json](../../config/omx-act-policies.json)의 `arm_id`). 관제의 정책 한 번 실행은 그 팔의 포트·카메라 쌍으로 실행하고(`GET /api/arm/status`의 `policy_run.current_arm`, `policy_run.arms`에 팔별 준비 상태와 빠진 설정), 실행 중엔 그 두 카메라만 관제가 닫습니다. 워커는 팔마다 하나씩 `--robot-id arm-01`/`arm-02`로 띄우면 그 팔의 `CONTROL_STATION_ARMxx_*`를 기본값으로 쓰고, 다른 팔의 정책이나 다른 보드 포트면 `POLICY_WRONG_ARM`으로 거부합니다. `arm_id`가 없는 정책은 예전처럼 단일 팔 설정으로 돕니다.
+- 예전 단일 팔 설정(`CONTROL_STATION_FOLLOWER_PORT`/`POLICY_ROBOT_PORT`, `POLICY_*_CAMERA`, `ACT_OVERHEAD_CAMERA`, `JOINT_CAMERA`)은 계속 동작합니다. 다만 팔 지정 정책에는 그 포트 경로에 보드 시리얼이 들어 있는 팔에만, 그 팔의 `CONTROL_STATION_ARMxx_*`가 하나도 없을 때만 쓰입니다.
+
 ## 선반 카메라 표시
 
 선반과 팔을 앞에서 보는 선반 카메라(정면 카메라)를 관제 화면에 함께 띄우려면 `CONTROL_STATION_SHELF_CAMERA`에 장치 경로를 지정합니다. feed ID는 내부 보정 파일 `shelf_camera.json`과 같은 `shelf_camera`입니다. 2026-11-02 기준 이 카메라는 USB 포트 10의 HCAM0입니다. 천장 카메라와 모델이 같아 by-id로는 구분되지 않으므로 by-path를 씁니다.
 
 ```bash
-CONTROL_STATION_HEAD_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:4:1.0-video-index0 \
 CONTROL_STATION_SHELF_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:10:1.0-video-index0 \
-CONTROL_STATION_PARKING_CAMERA=head_camera CONTROL_STATION_PARKING_SPOT=pinky_dock_1 \
 ./run-control-station.sh
 ```
+
+포트 4의 천장 카메라(탑 캠)는 주차 판정 노드가 열기 때문에, 함께 띄울 때는 [C++ 주차 판정 노드로 관제 실행](#c-주차-판정-노드로-관제-실행)처럼 Head Camera를 `ros:` 토픽으로 받습니다.
 
 선반 카메라는 `shelf_camera`(`SHELF`) 카드로 영상과 연결 상태를 보여 줍니다. `CONTROL_STATION_SHELF_YOLO_WEIGHTS`(또는 `CONTROL_STATION_SHELF_YOLO_WORLD_PROMPTS`)를 주면 Head Camera와 같은 방식으로 YOLO 검출을 표시합니다. `_CONF`, `_DEVICE` 설정도 `CONTROL_STATION_SHELF_YOLO_` 접두어로 같습니다. 작업 관측 단계에는 연결하지 않습니다.
 
@@ -232,7 +244,7 @@ python -m pip install -r requirements-vision.txt   # 처음 한 번. PyTorch가 
 CONTROL_STATION_HEAD_YOLO_WEIGHTS=/경로/best.pt ./run-control-station.sh
 ```
 
-팔 카메라의 접근 직전 관측에도 detector를 켜려면 별도 가중치 경로를 지정합니다.
+Joint Camera에도 detector를 켜려면 별도 가중치 경로를 지정합니다.
 
 ```bash
 CONTROL_STATION_HEAD_YOLO_WEIGHTS=/경로/shelf-search.pt \
@@ -256,7 +268,7 @@ CONTROL_STATION_JOINT_YOLO_WEIGHTS=/경로/wrist-refine.pt \
 | `CONTROL_STATION_FRONT_YOLO_DEVICE` | 자동 | Front Camera detector device (`0` 또는 `cpu`) |
 
 
-YOLO-World는 별도 데이터셋 episode 수집이나 fine-tuning 없이 지정한 text vocabulary에 대한 open-vocabulary 후보를 생성합니다. `requirements-vision.txt`의 Ultralytics 의존성을 재사용합니다. 가중치 파일은 이 저장소에 포함되지 않으며 존재하는 파일 경로를 명시해야 합니다. 상시 카메라 검출의 prompt list는 관제 프로세스 시작 시 고정됩니다. 대기 task에서 **카메라에서 대상 관측**을 명시적으로 요청하면, YOLO-World에서만 설정 vocabulary에 없는 task category를 일회성 prompt로 적용해 정확히 캡처한 raw frame을 추론하고 기존 vocabulary를 복원합니다. 일반 `GET` 관측은 모델 prompt를 변경하지 않으며, closed-set YOLO에는 요청별 prompt 기능이 없습니다. 프롬프트 class 후보는 관측/대상 명령 초안에 제공되지만 정확도 보정, 자동 후보 선택 또는 로봇 제어에 쓰이지 않습니다. 검증된 저장 가중치가 준비되면 다음처럼 opt-in으로 켤 수 있습니다.
+YOLO-World는 별도 데이터셋 episode 수집이나 fine-tuning 없이 지정한 text vocabulary에 대한 open-vocabulary 후보를 생성합니다. `requirements-vision.txt`의 Ultralytics 의존성을 재사용합니다. 가중치 파일은 이 저장소에 포함되지 않으며 존재하는 파일 경로를 명시해야 합니다. prompt 목록은 관제 프로세스 시작 시 고정되며, 요청마다 prompt를 바꾸는 기능은 없습니다. 검증된 저장 가중치가 준비되면 다음처럼 opt-in으로 켤 수 있습니다.
 
 ```bash
 CONTROL_STATION_HEAD_YOLO_WEIGHTS=/경로/yolov8s-worldv2.pt \
@@ -271,7 +283,7 @@ Ultralytics는 YOLO-World prompt class를 `set_classes()`로 지정하는 API를
 
 ## C++ 주차 판정 노드로 관제 실행
 
-관제의 주차 판정과 Head Camera 영상을 C++ ROS 2 노드 쪽으로 옮겨 실행하는 방법입니다([전환 계획](../plans/pinky-parking-ros2-node.md)). 천장 카메라는 드라이버 컨테이너가 열고, 관제는 영상과 판정을 ROS로 받습니다. 판정 규칙과 API 응답 형식은 아래 Python 판정과 같습니다.
+Pinky 주차 판정은 C++ ROS 2 노드만 합니다. 관제에는 판정 코드가 없습니다. 천장 카메라는 노드 컨테이너의 캡처 컴포넌트가 열고, 관제는 영상과 판정을 ROS 토픽·서비스로 받습니다. 노드 내부는 [cpp/README.md](../../cpp/README.md)에 있습니다.
 
 ```bash
 cd cpp && source /opt/ros/jazzy/setup.bash && colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release && cd ..
@@ -286,10 +298,11 @@ CONTROL_STATION_SHELF_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:10:1.0-vide
 ```
 
 - 천장 카메라 경로는 `video_device:=...`, 없으면 환경 변수 `CONTROL_STATION_CEILING_CAMERA`, 없으면 기본값(포트 4)을 씁니다. HCAM0 두 대는 by-id와 일련번호가 같아 USB 포트(by-path)로만 구분되므로, 포트 구성이 다른 PC는 Git에서 제외되는 `.control-station/control-station.env`에 `CONTROL_STATION_CEILING_CAMERA`를 두고 두 터미널에서 `set -a; source .control-station/control-station.env; set +a`를 먼저 실행합니다. 등록 CLI `pinky_parking`도 같은 변수를 씁니다.
-- `run-control-station.sh`는 위 설정이 있으면 ROS와 `cpp/install/setup.bash`를 source합니다. `/api/health`의 `parking.source`가 `ros`이면 판정 노드에 연결된 구성입니다.
-- Head Camera는 `/compressed` 토픽으로 받습니다. 같은 PC라도 raw 640×480 영상을 프로세스 사이로 보내면 대부분 전달되지 않았습니다(2026-11-02).
+- `run-control-station.sh`는 위 설정이 있으면 ROS와 `cpp/install/setup.bash`를 source합니다. 관제는 `CONTROL_STATION_MOBILE_DOMAIN`, 없으면 `ROS_DOMAIN_ID`의 domain으로 노드에 붙고, 둘 다 없으면 시작하지 않습니다. `/api/health`의 `parking.spot_id`와 `parking.live_tracking`으로 설정을 확인합니다.
+- Head Camera는 `/compressed` 토픽으로 받습니다(raw 영상의 프로세스 간 전달 문제는 [cpp/README.md](../../cpp/README.md)).
+- `CONTROL_STATION_PARKING_CAMERA`는 판정과 상관없이 주차 패널이 보여 줄 feed ID만 정합니다(기본 `head_camera`).
 - 판정 노드가 꺼지면 웹 주차 패널은 `NODE_UNAVAILABLE`, 확정 판정과 `VERIFY_ARRIVAL`은 `PARKING_NODE_UNAVAILABLE`로 팔 단계를 시작하지 않습니다.
-- 관제에는 주차 판정이 없습니다. `CONTROL_STATION_PARKING_SPOT`을 주지 않으면 주차 판정 없이 뜨고 `VERIFY_ARRIVAL`은 모의 성공입니다.
+- `CONTROL_STATION_PARKING_SPOT`을 주지 않으면 주차 판정 없이 뜨고, `VERIFY_ARRIVAL`은 모의 성공, 주문의 핑키 도착은 모의 판정입니다.
 - 2026-11-03 같은 영상에 두 판정을 동시에 30초 돌린 비교, `usb_cam` 대신 자체 캡처 노드를 쓰는 이유는 [cpp/README.md](../../cpp/README.md)에 있습니다.
 
 ## 천장 카메라 Pinky 주차 판정
@@ -303,7 +316,7 @@ CONTROL_STATION_SHELF_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:10:1.0-vide
 - (선택) 화면에 함께 보이는 바닥 고정 ArUco 마커. 이 마커로 카메라 시야가 등록할 때와 같은지 확인합니다. 쓰려면 바닥에 테이프로 고정하고, Pinky가 지나가거나 서는 자리와 사람이 가리는 자리에서 떨어뜨려 둡니다. 놓아만 둔 카드나 Pinky 바퀴 옆 마커는 밀려서 판정이 멈춥니다. 쓰지 않으면 `--no-anchors`로 등록합니다.
 - `cpp/`를 빌드하고 `source cpp/install/setup.bash`한 셸. `check --once`와 `register --headless`는 창을 띄우지 않고, 창이 있는 `register`와 실시간 `check`는 시스템 OpenCV(highgui) 창을 씁니다.
 - 카메라 경로. `--camera` 또는 환경 변수 `CONTROL_STATION_CEILING_CAMERA`로 지정합니다. 천장 카메라는 관제의 Head Camera와 같은 실물 카메라(HCAM0)입니다. 2026-11-02 현장에서는 USB 포트 4에 연결됐고, 이름은 Head Camera 기본 by-id(`usb-Jieli_Technology_USB_Composite_Device-video-index0`)로 잡혔습니다. 같은 모델이 여러 대 꽂혀 있으면 by-id로는 구분되지 않으므로 포트 기준 `/dev/v4l/by-path/...` 경로를 씁니다. 실제로 19:36에 다른 HCAM0이 USB 포트 10에 연결되자 by-id 링크가 그 카메라(선반을 옆에서 보는 시점)로 바뀌었습니다. by-path는 꽂은 USB 포트가 바뀌면 달라집니다.
-- 카메라는 한 프로그램만 열 수 있습니다. 관제 서버가 Head Camera로 이 카메라를 열고 있으면 서버를 먼저 종료합니다. 점유 여부는 `fuser -v /dev/videoN`으로 확인합니다.
+- 카메라는 한 프로그램만 열 수 있습니다. 주차 노드(`ceiling_parking.launch.py`)나 관제 서버가 이 카메라를 열고 있으면 먼저 끕니다. 점유 여부는 `fuser -v /dev/videoN`으로 확인합니다.
 
 ### 정답 위치 등록
 
@@ -380,55 +393,38 @@ ros2 run parking_vision pinky_parking check --spot-id pinky_dock_1 \
 
 ### 관제 API로 판정
 
-관제 서버를 켤 때 `CONTROL_STATION_PARKING_CAMERA`에 판정에 쓸 feed ID를 지정하면, 관제가 그 실물 카메라를 열고 주차 판정 API를 제공합니다. 천장 카메라는 Head Camera와 같은 카메라이므로 `head_camera`를 쓰고, Head Camera 경로는 포트 기준 by-path로 지정합니다. 2026-11-02 기준 Head Camera 기본 by-id 경로는 포트 10에 연결된 다른 HCAM0을 가리킵니다.
+[C++ 주차 판정 노드로 관제 실행](#c-주차-판정-노드로-관제-실행)처럼 노드와 관제를 띄운 뒤 확정 판정을 요청합니다.
 
 ```bash
-CONTROL_STATION_HEAD_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:4:1.0-video-index0 \
-CONTROL_STATION_PARKING_CAMERA=head_camera \
-./run-control-station.sh
-
 curl -s http://127.0.0.1:8000/api/parking-spots/pinky_dock_1/check
 ```
 
-- 요청을 받은 뒤에 찍힌 프레임만 최대 3초 동안 15프레임까지 모아 CLI와 같은 방식으로 판정합니다. 판정에 쓴 프레임이 5장보다 적으면 `NOT_FOUND`입니다.
-- 응답은 `{"observation": {...}}`이며, 필드는 [주차 정렬 관측 계약 초안](../spec/interface-contracts.md#pinky-주차-정렬-관측-초안)을 따릅니다. 오류는 `error_code`/`message`/`error`로 반환합니다.
+- 관제가 노드의 `/pinky_parking/check`를 부릅니다. 노드는 요청 뒤에 찍힌 프레임만 최대 3초 동안 15프레임까지 모아 CLI와 같은 방식으로 판정하고, 5장보다 적으면 `NOT_FOUND`입니다.
+- 응답은 `{"observation": {...}}`이며, 필드와 오류 코드는 [주차 정렬 관측 계약 초안](../spec/interface-contracts.md#pinky-주차-정렬-관측-초안)을 따릅니다.
 - 이 API 호출은 판정 결과를 작업 이력에 남기지 않고, 로봇 명령도 만들지 않습니다.
-- 관제가 카메라를 열고 있는 동안에는 CLI로 같은 카메라를 열 수 없습니다.
-- 코드의 기본 카메라 경로(by-id)는 바꾸지 않았습니다. 실습 PC의 포트 설정(포트 4 천장, 포트 10 선반)과 YOLO 모델 경로는 PC마다 다르므로 Git에서 제외되는 `.control-station/control-station.env`에 두고(`.control-station/control-station.env.example`을 복사해 고칩니다) `set -a; source .control-station/control-station.env; set +a; ./run-control-station.sh`로 실행합니다. 이 설정으로 띄운 화면은 [관제 화면 캡처](../images/control-station-overview-2026-11-02.png)에 있습니다.
-- 관제 가상환경의 `opencv-python-headless`와 CLI로 등록할 때 쓴 GUI OpenCV의 버전이 다르면 모서리 검출이 조금 달라집니다. 2026-11-02 같은 화면에서 OpenCV 4.6(등록)과 4.14(판정) 사이에 약 1 mm·0.2°·고정 마커 0.8 px 차이가 났습니다. 응답의 `opencv_version`과 `registration_opencv_version`으로 확인합니다.
-
-2026-11-02에 mock 모드, 임시 DB, 포트 8765로 관제를 띄워 실제 천장 카메라로 확인했습니다. `/api/cameras`의 `head_camera`는 640×480, 29.7 fps였습니다. 판정 API를 5회 호출했고 모두 약 0.5초 걸렸습니다. 결과는 모두 `ARRIVED`/`WITHIN`(앞 0.4 mm·왼쪽 1.5 mm·yaw 0.23° 이내)이었고, 15프레임 모두 요청 시각 이후 프레임이었으며, 호출 간 프레임 sequence는 겹치지 않았습니다. 없는 등록 ID는 404, 형식이 틀린 ID는 400으로 응답했습니다. 이때 밀림은 일어나지 않았습니다.
+- 노드가 카메라를 열고 있는 동안에는 CLI로 같은 카메라를 열 수 없습니다.
+- 실습 PC의 포트 설정(포트 4 천장, 포트 10 선반)과 YOLO 모델 경로는 PC마다 다르므로 Git에서 제외되는 `.control-station/control-station.env`에 두고(`.control-station/control-station.env.example`을 복사해 고칩니다) `set -a; source .control-station/control-station.env; set +a`로 읽습니다.
+- 등록 때와 판정 때의 OpenCV 버전은 응답의 `registration_opencv_version`, `opencv_version`으로 확인합니다(버전 차이의 영향은 [cpp/README.md](../../cpp/README.md)).
 
 ### 작업 흐름의 도착 확인 단계
 
-`CONTROL_STATION_PARKING_SPOT`에 주차 위치 ID를 더 지정하면, 모의 작업의 `VERIFY_ARRIVAL` 단계가 위 API와 같은 방식으로 판정합니다. 판정 결과는 그 단계의 `PARKING_OBSERVED` event로 작업 이력에 남고 화면의 이벤트 목록에 표시됩니다.
-
-```bash
-CONTROL_STATION_HEAD_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:4:1.0-video-index0 \
-CONTROL_STATION_PARKING_CAMERA=head_camera \
-CONTROL_STATION_PARKING_SPOT=pinky_dock_1 \
-./run-control-station.sh
-```
+`CONTROL_STATION_PARKING_SPOT`을 지정하면 이전 형식 작업의 `VERIFY_ARRIVAL` 단계와 주문의 `WAIT_PINKY_ARRIVAL` 단계([주문 흐름](order-flow.md))가 위 API와 같은 확정 판정을 씁니다. `VERIFY_ARRIVAL`은 판정 결과를 `PARKING_OBSERVED` event로 남기고 아래 표처럼 처리합니다. 주문은 `ARRIVED`가 나올 때까지 위치 이상 경보(`PINKY_POSITION_ABNORMAL`)를 띄우며 기다립니다.
 
 | 판정 | 단계·작업 | 오류 코드 |
 | --- | --- | --- |
 | `ARRIVED` | `VERIFY_ARRIVAL` 성공 → 팔 단계 진행 | 없음 |
 | `MISALIGNED` | `FAILED`, 팔 단계 미실행 | `PARKING_MISALIGNED` |
 | `NOT_FOUND`/`AMBIGUOUS`/`VIEW_UNVERIFIED` | `FAILED`, 팔 단계 미실행 | `PARKING_NOT_VERIFIED` |
-| 판정 시작 실패(등록 파일·카메라 오류) | `FAILED`, 팔 단계 미실행, `PARKING_OBSERVED` 없음 | 관측 오류 코드(예: `PARKING_CAMERA_UNAVAILABLE`) |
+| 판정 시작 실패(등록 파일·카메라 오류, 노드 연결 실패·timeout) | `FAILED`, 팔 단계 미실행, `PARKING_OBSERVED` 없음 | 관측 오류 코드(예: `PARKING_CAMERA_UNAVAILABLE`, `PARKING_NODE_UNAVAILABLE`) |
 
-자동 재주행이나 재판정은 하지 않습니다. 주차 위치만 지정하고 `CONTROL_STATION_PARKING_CAMERA`를 지정하지 않으면 서버가 시작을 거부합니다. 이동 단계는 아직 모의이므로, 판정은 Pinky가 실제로 서 있는 위치를 봅니다.
-
-2026-11-02 실제 천장 카메라로 확인했습니다. `pinky_dock_1`로 작업을 실행하면 `ARRIVED`(1.1 mm, 0.24°, 15프레임, 시야 확인 ON)로 모든 단계가 성공했습니다. 허용 오차를 0.1 mm/0.01°로 줄인 임시 등록으로 실행하면 `MISALIGNED`/`FAR`로 `VERIFY_ARRIVAL`이 실패하고, 팔 작업 이후 단계는 `NOT_EXECUTED_AFTER_FAILURE`로 끝났습니다.
+자동 재주행이나 재판정은 하지 않습니다. 이동 단계는 모의이므로, 판정은 Pinky가 실제로 서 있는 위치를 봅니다.
 
 관제 화면 **현황** 탭 아래쪽의 **Pinky 도착 확인** 패널에서 볼 수 있습니다.
 
-- **실시간 상태:** `CONTROL_STATION_PARKING_SPOT`까지 설정하면 관제가 그 위치를 계속 추적합니다(`GET /api/parking-spots/{spot_id}/live`, 화면은 0.5초마다 갱신). 상태는 화면 밖 → 이동 중 → 정상 위치 / 위치 벗어남이며, 같은 마커 여러 개·시야 미확인·카메라 없음·등록 파일 오류는 확인 불가로 표시합니다. 최근 1초 동안 5 mm·2° 안에서 멈춰 있어야 정상 위치/위치 벗어남을 판정합니다. 멈춘 Pinky도 프레임 하나하나는 약 ±1.5 mm·±0.55° 흔들려서, 처음 정한 2 mm·0.5°로는 계속 이동 중으로 나왔습니다(2026-11-02).
+- **실시간 상태:** 노드가 `spot_id` 위치를 10 Hz로 추적하고, 관제는 `/pinky_parking/state`를 받아 `GET /api/parking-spots/{spot_id}/live`로 보여 줍니다(화면은 0.5초마다 갱신). 상태는 화면 밖 → 이동 중 → 정상 위치 / 위치 벗어남이며, 같은 마커 여러 개·시야 미확인·카메라 없음·등록 파일 오류는 확인 불가로 표시합니다. 최근 1초 동안 5 mm·2° 안에서 멈춰 있어야 정상 위치/위치 벗어남을 판정합니다. 멈춘 Pinky도 프레임 하나하나는 약 ±1.5 mm·±0.55° 흔들려서, 처음 정한 2 mm·0.5°로는 계속 이동 중으로 나왔습니다(2026-11-02).
 - **화면 구성:** 왼쪽은 천장 카메라 실시간 영상입니다. 그 위에 등록 위치(흰 점선)와 지금 Pinky 마커·앞쪽 방향(상태 색)을 겹쳐 그립니다. 오른쪽은 진행 단계, 상태, 앞·왼쪽·회전 수치, 허용 오차 대비 배수, 위치 벗어남일 때의 보정 방향 안내, 위에서 본 그림입니다. 색은 정상 위치 초록, 조금 벗어남 주황, 많이 벗어남 빨강, 이동 중 파랑, 확인 불가 회색입니다.
-- **확정 판정:** 버튼을 누르면 `/check`로 요청 이후 프레임 15장을 판정해 결과를 한 줄로 보여 줍니다. 실시간 추적이 꺼져 있으면 이 결과로 패널 전체를 그립니다.
-- 실시간 상태는 화면 표시용입니다. 지나가는 도중 잠깐 범위 안에 든 프레임을 도착으로 착각하지 않도록, 팔 단계 진행은 작업 흐름의 도착 확인(도착 신호 이후 프레임으로 하는 판정)만 씁니다. 패널은 로봇 명령을 보내지 않습니다.
-
-2026-11-02에 실행 중인 관제의 천장 카메라 스트림을 추적기에 넣어 확인했습니다. 시작 약 1.8초 뒤 `IN_POSITION`(앞 −1.0 mm, 왼쪽 +1.0 mm, 회전 −0.3°)이 됐고 이후 유지됐습니다. 이동 중·위치 벗어남 화면은 예시 데이터로 렌더링만 확인했습니다.
+- **확정 판정:** 버튼을 누르면 `/check`로 요청 이후 프레임 15장을 판정해 결과를 한 줄로 보여 줍니다.
+- 실시간 상태는 화면 표시용입니다. 지나가는 도중 잠깐 범위 안에 든 프레임을 도착으로 착각하지 않도록, 팔 단계 진행은 확정 판정만 씁니다. 패널은 로봇 명령을 보내지 않습니다.
 
 ### 카메라 영상 밀림
 
@@ -473,7 +469,7 @@ CONTROL_STATION_MODE=ros2 CONTROL_STATION_MOBILE_DOMAIN=15 ./run-control-station
 
 domain을 지정하지 않으면 `ROS_DOMAIN_ID`, 없으면 `0`을 사용합니다. 관제 설정은 ROS 2 domain ID `0`–`232`만 허용합니다.
 
-`/api/robots`는 ROS 2 모드에서 Nav2 action-server 발견을 표시합니다. `CONTROL_STATION_ARM_TRAJECTORY_ACTION_NAME`을 설정하면 해당 `control_msgs/action/FollowJointTrajectory` endpoint의 server 발견 여부도 확인합니다. 이는 discovery-only이며 goal을 보내지 않고 controller readiness나 안전을 증명하지 않습니다. OMX 관절 상태를 함께 보려면 `CONTROL_STATION_ARM_JOINT_STATES_TOPIC`에 ROS graph에서 출처를 확인한 절대 토픽 이름을 지정합니다. 설정 전에는 팔 관절 topic을 구독하지 않습니다. 저장소 inventory에서 `/joint_states`가 주행 시뮬레이터 모델에도 사용되는 것을 확인했으므로, 토픽 이름만으로 OMX source를 판정하지 마세요. 관제는 지정 topic의 `sensor_msgs/msg/JointState`를 읽기만 하며 joint 이름·원본 position 숫자·원본 ROS stamp/frame ID·관제 수신 시각과 freshness를 표시합니다. 메시지에는 joint type이 없어 position 단위를 미확정으로 표시합니다. 배열 길이 불일치, 빈/중복 이름, 비유한 position은 `invalid`로 표시하고 position 배열을 응답에서 제외합니다. 기본 freshness 한계는 2초이고 `CONTROL_STATION_ARM_JOINT_STATES_MAX_AGE`로 조절할 수 있습니다. 원본 ROS stamp는 clock 기준을 확인하지 않으므로 카메라 시각과 비교하거나 TF 변환에 사용할 수 없습니다.
+`/api/robots`는 ROS 2 모드에서 Nav2 `navigate_to_pose` action server 발견 여부만 표시합니다. goal을 보내지 않으며 Nav2 준비나 안전을 증명하지 않습니다. 팔 칸은 항상 "미설정"이고, 팔 상태는 수동 조작 탭의 OMX 워커 표시로 봅니다.
 
 
 ```bash

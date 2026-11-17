@@ -1,15 +1,11 @@
 # Bring the OMX follower to the joint pose taught for one shelf slot. No grasping: a LeRobot-trained
-# policy takes over from that pose. Positions are in the shelf_front frame: origin at the bottom of the
-# seam between the two shelves on their front plane, x into the shelf, y to the left seen from the
-# front, z up, metres.
+# policy takes over from that pose. The goal carries no coordinates; the worker replays the recorded pose.
 
 # Goal
-string command_id                            # control-station command ID, kept for tracing
-string slot_id                               # e.g. slot_a_2_1 (config/shelf-slots.json)
-string slot_map_version                      # SHA-256 of the slot map the goal was made with
-geometry_msgs/PointStamped object_position   # bottom-centre of the object seen by the front camera; empty frame_id = not given
-float64 lateral_offset_m                     # object left(+)/right(-) of the slot centre line; NaN = not given
-builtin_interfaces/Time valid_until          # the worker does not start after this time
+string command_id                   # control-station command ID, kept for tracing
+string slot_id                      # e.g. slot_a_2_1 (config/shelf-slots.json)
+string slot_map_version             # SHA-256 of the slot map the goal was made with
+builtin_interfaces/Time valid_until # the worker does not start after this time
 ---
 # Result
 string outcome                 # SUCCEEDED, FAILED, RESULT_UNKNOWN, CANCELED, REJECTED (checks failed, nothing moved)
@@ -19,7 +15,6 @@ string message
 string[] joint_names
 int32[] final_ticks            # Dynamixel position ticks, 4096 per turn
 int32 max_error_ticks
-float64 pan_correction_degrees # shoulder-pan change applied for lateral_offset_m; NaN = not applied
 bool simulated                 # true when no real motor moved (--dry-run, --fake-follower)
 ---
 # Feedback

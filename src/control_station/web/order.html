@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#3182f6">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="로봇 주문">
+  <link rel="manifest" href="/order-manifest.json">
+  <link rel="icon" href="/icons/order-192.png">
+  <link rel="apple-touch-icon" href="/icons/order-180.png">
+  <title>로봇 주문</title>
+  <link rel="stylesheet" href="/order.css">
+  <script src="/order.js" defer></script>
+</head>
+<body>
+  <main class="order-page">
+    <header class="order-header">
+      <h1 id="pageTitle">무엇을 가져다 드릴까요?</h1>
+      <button id="myOrderLink" type="button" class="my-order-link" hidden>내 주문 보기</button>
+      <p id="pageLead">물건과 수량을 고르면 로봇이 수령 구역까지 가져다 드려요.</p>
+    </header>
+
+    <form id="orderForm" class="order-form" novalidate>
+      <section aria-labelledby="products-title">
+        <div class="section-title"><h2 id="products-title">물건</h2><span class="hint">물건마다 5개까지 고를 수 있어요</span></div>
+        <p id="stockNotice" class="notice" hidden></p>
+        <div id="products" class="product-list"><p class="placeholder">물건 목록을 불러오는 중…</p></div>
+      </section>
+
+      <div class="cart-bar">
+        <p id="formError" class="form-error" role="alert" hidden></p>
+        <div class="cart-row">
+          <p id="cartSummary" class="cart-summary" aria-live="polite">담은 물건이 없어요</p>
+          <button id="submitOrder" type="submit" class="primary" disabled>주문하기</button>
+        </div>
+        <p id="cartNote" class="cart-note">받을 곳은 로봇이 출발할 때 알려 드려요</p>
+      </div>
+    </form>
+
+    <section id="tracking" class="tracking" aria-labelledby="track-title" hidden>
+      <p class="track-eyebrow"><span id="trackPinky"></span><span id="trackShipment" class="track-shipment" hidden></span></p>
+      <h2 id="track-title" class="track-title" tabindex="-1">주문을 받았어요</h2>
+      <p id="trackDetail" class="track-detail" aria-live="polite"></p>
+      <ol id="trackStages" class="track-stages" aria-label="주문 진행"></ol>
+      <button id="pickupButton" type="button" class="primary pickup" hidden>받았어요</button>
+      <p id="trackError" class="form-error" role="alert" hidden></p>
+      <dl class="track-details">
+        <div id="trackShipmentRow" hidden><dt>이번 운송</dt><dd><ul id="trackShipmentItems" class="done-items"></ul></dd></div>
+        <div><dt id="trackItemsLabel">물건</dt><dd><ul id="trackItems" class="done-items"></ul></dd></div>
+        <div><dt>받을 곳</dt><dd id="trackZone"></dd></div>
+        <div><dt>주문 번호</dt><dd id="trackId"></dd></div>
+      </dl>
+      <button id="newOrder" type="button" class="secondary">새로 주문하기</button>
+    </section>
+
+  </main>
+</body>
+</html>

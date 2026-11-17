@@ -59,3 +59,9 @@ topics:
   line/status:
     type: std_msgs/msg/String
     remap: /pinky_11/line/status
+  fusion/status:
+    type: std_msgs/msg/String
+    remap: /pinky_11/fusion/status
+  fusion/grid:
+    type: nav_msgs/msg/OccupancyGrid
+    remap: /pinky_11/fusion/grid

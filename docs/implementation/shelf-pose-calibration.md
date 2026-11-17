@@ -16,7 +16,7 @@
 
 ## 절차
 
-1. **프레임 준비:** OMX 팔이 선반을 가리지 않게 홈 자세로 둔 상태에서 정면 카메라 원본 프레임을 저장합니다. 관제 MJPEG 스트림에는 YOLO 박스가 그려질 수 있으니, 검출을 끈 상태나 task 관측 저장 PNG처럼 원본 프레임을 씁니다. 해상도는 내부 보정과 같은 640×480이어야 합니다.
+1. **프레임 준비:** OMX 팔이 선반을 가리지 않게 홈 자세로 둔 상태에서 정면 카메라 원본 프레임을 저장합니다. 관제 MJPEG 스트림에는 YOLO 박스가 그려질 수 있으니, 검출을 끈 상태의 원본 프레임을 씁니다. 해상도는 내부 보정과 같은 640×480이어야 합니다.
 2. **기준점 찍기:** 브라우저에서 `scripts/shelf_pose_editor.html`을 엽니다(Web Crypto 때문에 `python3 -m http.server 8765 --bind 127.0.0.1` 뒤 `http://127.0.0.1:8765/scripts/shelf_pose_editor.html` 권장). 프레임과 `config/shelf-slots.json`을 고르고, 목록에서 점을 골라 사진의 그 모서리를 클릭합니다. 안 보이는 점은 건너뜁니다. 서로 다른 높이·깊이의 점(예: 이음새 위 앞, 이음새 계단 앞, 바닥판 앞 모서리, 양 끝 위 앞)을 섞어 찍어야 위치가 잘 정해집니다. **기준점 JSON 다운로드**로 `shelf-pose-points.json`을 받습니다.
 3. **계산:**
 
@@ -50,7 +50,7 @@ cp --update=none .control-station/camera-calibrations/shelf_camera-shelf-pose-<i
 - 파일이 바뀌면 다음 `/api/cameras` 요청부터 반영되므로 관제를 다시 시작하지 않아도 됩니다. 다만 칸 정의 파일(`config/shelf-slots.json`)이 바뀌면 관제를 다시 시작해야 합니다.
 - `/api/cameras`의 해당 카메라에 `slot_zones`가 붙습니다. 값은 `status`, 칸별 `polygon_px`, 재투영 RMS, 카메라 위치입니다. `status`가 `READY`가 아니면 이유를 함께 담고 칸은 쓰지 않습니다. 이유는 `SLOT_MAP_MISMATCH`(칸 정의 버전이 다름), `IMAGE_MISMATCH`(해상도·pixel transform이 다름), `INVALID`, `SLOT_MAP_UNAVAILABLE` 중 하나입니다.
 - 검출마다 `slot_assignment`가 붙습니다. bbox 아래 가운데 점(물건이 바닥판에 닿는 곳)이 한 칸 안에만 있으면 `IN_SLOT`과 칸 ID·이름, 칸 경계 위나 여러 칸에 걸치면 `AMBIGUOUS`, 어느 칸에도 없으면 `OUTSIDE`입니다.
-- 모든 결과는 `used_for_selection: false`인 표시용입니다. 대상을 자동으로 고르거나 팔 명령을 만들지 않습니다.
+- 응답의 칸 영역과 `slot_assignment`는 표시용(`used_for_selection: false`)입니다. 이 칸 배정을 쓰는 곳은 주문 흐름의 선반 재고 세기([주문 흐름](order-flow.md#카메라로-개수-세기))와, 물체가 한 칸에서만 보일 때 그 칸을 팔 명령의 근거로 남기는 `select_slot_for_class`("정면 캠으로 칸 찾기", 작업 흐름의 팔 단계)입니다.
 - 화면의 정면 카메라 카드는 영상 위에 칸 경계를 그립니다. 검출이 있는 칸은 초록, 검출의 기준점은 점으로 표시하고, 카드 아래에 "물건 → 칸" 목록을 보여 줍니다.
 - 카메라나 선반이 움직이면 이 영역은 맞지 않으니 다시 보정해야 합니다. 관제는 카메라가 움직였는지 감지하지 못합니다.
 
@@ -64,4 +64,3 @@ cp --update=none .control-station/camera-calibrations/shelf_camera-shelf-pose-<i
 - 3D 좌표는 모델 값입니다. 출력한 선반이 모델과 다르면 그만큼 어긋납니다. 실물 치수 확인 전입니다.
 - 카메라나 선반이 움직이면 다시 찍어야 합니다. 내부 보정을 다시 하면 이 결과도 다시 만듭니다.
 - 사진에서 오른쪽 선반은 위 단 바닥판이 보이지 않습니다. 그 단은 쓰지 않으므로 기준점에도 넣지 않았습니다.
-- 칸 polygon으로 검출 결과를 칸에 배정하는 단계(관측 → 칸 판정)는 다음 단위입니다.

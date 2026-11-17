@@ -153,7 +153,6 @@ activemq-data/
 .env
 .envrc
 .venv
-.venv-mujoco/
 # Local control-station data. Calibrations, registrations and arm poses that every PC needs are tracked;
 # photos, logs, models (scripts/check_setup.sh --vision), rejected/older results and the PC's env stay local.
 .control-station/*
@@ -237,6 +236,3 @@ __marimo__/
 
 # Local control-station data
 /data/
-
-# Local-only implementation experiment artifacts
-/docs/implementation/assets/

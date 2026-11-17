@@ -15,8 +15,8 @@ class ParkingMissionTest(unittest.TestCase):
         state.password='test-only'
         for rid in app.ROBOTS:
             state.robots[rid]['stage']='prepared'
-        telemetry={rid:{key:{'fresh':True,'value':{'recovery_policy':'parking_mission_v2'}} for key in
-                       ('map','tf_pose','scan','odom','ultrasonic','ir','line_control')} for rid in app.ROBOTS}
+        telemetry={rid:{key:{'fresh':True,'value':{'recovery_policy':'parking_mission_v2','line_algorithm':'fleet_control_v4','version':'final_gate_v1','traffic_config':app.TRAFFIC.zones}} for key in
+                       ('map','tf_pose','scan','odom','ultrasonic','ir','line_control','safety_status')} for rid in app.ROBOTS}
         class Monitor:
             def snapshot(self): return telemetry
         class Profiles:
@@ -72,7 +72,7 @@ class RunnerFlowTest(unittest.TestCase):
         import ast,base64,contextlib,io,math,tempfile,time,types,uuid
         source=(app.ROOT/'scripts/navigate_route.py').read_text()
         tree=ast.parse(source)
-        selected=[n for n in tree.body if isinstance(n,(ast.FunctionDef,ast.ClassDef)) and n.name in ('run','angle','checkpoint','RouteFailure')]
+        selected=[n for n in tree.body if isinstance(n,(ast.FunctionDef,ast.ClassDef)) and n.name in ('run','angle','checkpoint','RouteFailure','mission_feedback','detour_wait')]
         code=compile(ast.Module(body=selected,type_ignores=[]),'navigate_route_flow','exec')
         def exercise(rid):
             with tempfile.TemporaryDirectory() as directory:
@@ -95,7 +95,7 @@ class RunnerFlowTest(unittest.TestCase):
                     interrupted=False;active_goal=None;run_id=None
                     def __init__(self):self.position=(home['x_m'],home['y_m'],home['yaw_rad']);self.client=self
                     def wait_for_server(self,**kw):return True
-                    def get_publishers_info_by_topic(self,*a):return [types.SimpleNamespace(node_name='pinky_ultrasonic_safety')]
+                    def get_publishers_info_by_topic(self,*a):return [types.SimpleNamespace(node_name='pinky_final_guard')]
                     def pose(self,*a):return self.position
                     def cancel_active(self):self.active_goal=None
                     def get_clock(self):return types.SimpleNamespace(now=lambda:types.SimpleNamespace(to_msg=lambda:None))

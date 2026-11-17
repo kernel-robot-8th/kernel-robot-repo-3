@@ -1,0 +1,7 @@
+# Generate the user-specific unit with:
+# /usr/bin/python3 scripts/install_user_service.py
+# Start it when desired with:
+# systemctl --user enable --now pinky-fleet.service
+# Logs: journalctl --user -u pinky-fleet.service -f
+# Stop: systemctl --user stop pinky-fleet.service
+# No SSH credential is stored in the service. Enter it on the dashboard.

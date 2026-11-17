@@ -2,7 +2,8 @@
 
 The dashboard owns each Pinky's mission: it starts routes, follows the robot's mission phase and issues a fresh
 mission token per waiting phase. At station 5 the Pinky stops in `docking_manual` and waits for `dock_complete`,
-then holds in `docked_manual` until `received`, after which it drives on. Those two operator signals are the
+re-anchors its map pose at station 5 in `docking_anchor` (up to 18 s, no token; failing it stops the route), then
+holds in `docked_manual` until `received`, after which it backs out (`dock_exit`) and drives on. Those two operator signals are the
 dashboard's POST /api/robots/<id>/operator-confirm {"action", "token"}; the dashboard writes them to the robot
 over SSH, and the robot has no ROS interface for them, so the control station talks to the dashboard, not to the
 robot (decided 2026-11-11).
@@ -19,14 +20,64 @@ The dashboard listens on 127.0.0.1:8765 by default; reaching it from another PC 
 from __future__ import annotations
 
 import json
+import statistics
 import threading
 import time
+from collections import deque
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 # Route states of the dashboard that mean the Pinky is not on a mission.
 _IDLE_ROUTE_STATES = {None, "complete", "cancelled", "failed"}
+# Mission phases in which the Pinky stands on the loading spot at station 5.
+STATION_PHASES = frozenset({"docking_manual", "docking_anchor", "docked_manual"})
+
+
+# The Pinky publishes its battery every 4-5 s while the dashboard calls a topic stale after about 4 s, so a battery
+# value is kept for this long. A battery does not change faster than that.
+BATTERY_MAX_AGE_S = 15.0
+# The Pinky's own percentage jumps between readings (77 % then 99 % at a steady 7.49 V on 2026-11-14), so the
+# client reports the median of the readings it saw in this window.
+BATTERY_WINDOW_S = 60.0
+
+
+def _fresh_topic(robot: dict[str, Any], key: str, field: str, max_age_s: float | None = None) -> float | None:
+    """A live topic value; with `max_age_s`, also one the dashboard calls stale but is younger than that."""
+    topic = (robot.get("topics") or {}).get(key) or {}
+    age = topic.get("age_s")
+    recent = max_age_s is not None and isinstance(age, (int, float)) and age <= max_age_s
+    value = (topic.get("value") or {}).get(field) if topic.get("fresh") or recent else None
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _fresh_battery(robot: dict[str, Any]) -> tuple[float | None, float | None]:
+    """(percent, volts) from the dashboard's topics; None when missing or older than BATTERY_MAX_AGE_S.
+
+    The percentage is the Pinky's own (`/battery/percent`, computed from the voltage) and is used as is, including
+    0 %: on 2026-11-14 Pinky C76C read 0 % at a 6.59 V dip, so a low reading is the robot saying its battery is
+    low, not a missing value."""
+    return (_fresh_topic(robot, "battery_percent", "percent", BATTERY_MAX_AGE_S),
+            _fresh_topic(robot, "battery_voltage", "voltage_v", BATTERY_MAX_AGE_S))
+
+
+class BatteryHistory:
+    """Recent battery readings per Pinky; the median steadies a jumpy percentage without hiding a real drop."""
+
+    def __init__(self, window_s: float = BATTERY_WINDOW_S) -> None:
+        self.window_s = window_s
+        self._readings: dict[str, deque[tuple[float, float]]] = {}
+        self._lock = threading.Lock()
+
+    def add(self, pinky_id: str, at: float, percent: float | None) -> float | None:
+        """Record a reading (None adds nothing) and return the median of the window, or None if it is empty."""
+        with self._lock:
+            readings = self._readings.setdefault(pinky_id, deque())
+            if percent is not None:
+                readings.append((at, percent))
+            while readings and at - readings[0][0] > self.window_s:
+                readings.popleft()
+            return statistics.median(value for _, value in readings) if readings else None
 
 
 class PinkyFleetError(RuntimeError):
@@ -41,17 +92,20 @@ class PinkyFleetClient:
     def __init__(self, base_url: str, timeout_s: float = 3.0, status_max_age_s: float = 0.5) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
+        self._battery = BatteryHistory()
+        self._extras: dict[str, Any] = {}
         # Three Pinky cards and the waiting order poll the same status; share one answer for a moment.
         self.status_max_age_s = status_max_age_s
         self._cache: tuple[float, dict[str, Any]] | None = None
         self._lock = threading.Lock()
 
-    def _request(self, method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+    def _request(self, method: str, path: str, body: dict[str, Any] | None = None,
+                 timeout_s: float | None = None) -> tuple[int, dict[str, Any]]:
         data = None if body is None else json.dumps(body).encode("utf-8")
         request = Request(f"{self.base_url}{path}", data=data, method=method,
                           headers={"Content-Type": "application/json"} if data is not None else {})
         try:
-            with urlopen(request, timeout=self.timeout_s) as response:  # noqa: S310 (configured local URL)
+            with urlopen(request, timeout=timeout_s or self.timeout_s) as response:  # noqa: S310 (configured local URL)
                 status, raw = response.status, response.read()
         except HTTPError as error:
             status, raw = error.code, error.read()
@@ -73,7 +127,96 @@ class PinkyFleetClient:
         robots = {str(robot.get("id")): robot for robot in answer["robots"] if isinstance(robot, dict)}
         with self._lock:
             self._cache = (time.monotonic(), robots)
+            self._extras = {"keepout": answer.get("keepout"), "traffic": answer.get("traffic"),
+                            "password_set": answer.get("password_set"), "busy_robot": answer.get("busy_robot")}
         return robots
+
+    def extras(self) -> dict[str, Any]:
+        """Fleet-wide parts of the last status answer: the keepout mask and the shared-zone reservations."""
+        self._robots()
+        with self._lock:
+            return dict(self._extras)
+
+    def robots(self) -> dict[str, Any]:
+        """Pinky id -> the dashboard's own record (route, operational state, live topics), shared for a moment."""
+        return self._robots()
+
+    def stop(self, pinky_id: str) -> tuple[int, dict[str, Any]]:
+        """Ask the dashboard to stop this Pinky: it latches a stop on the robot and cancels its Nav2 goal.
+        202 = accepted (not yet applied), 401 = no SSH password yet, 409 = a stop is still being applied."""
+        return self._send("POST", f"/api/robots/{pinky_id}/route/cancel", {})
+
+    def prepare(self, pinky_id: str, map_name: str) -> tuple[int, dict[str, Any]]:
+        """Run preparation (주행준비): bringup, Nav2 and the robot-side safety monitor with the chosen map, then
+        AMCL is given the Pinky's own parking pose (the Pinky must stand there)."""
+        return self._send("POST", f"/api/robots/{pinky_id}/ready", {"map": map_name})
+
+    def prepare_all(self, map_name: str) -> tuple[int, dict[str, Any]]:
+        """주행준비 for every Pinky not yet prepared, one after another; each ends by localizing at its parking spot.
+        202 = started (answer lists `robots` and `skipped`), 401 = no SSH password, 409 = busy or nothing to do."""
+        return self._send("POST", "/api/prepare-all", {"map": map_name})
+
+    def initial_pose(self, pinky_id: str) -> tuple[int, dict[str, Any]]:
+        """Set AMCL's pose to the Pinky's own parking spot; the Pinky must stand there."""
+        return self._send("POST", f"/api/robots/{pinky_id}/initial-pose", {})
+
+    def localize(self, pinky_id: str, pose: dict[str, float] | None = None) -> tuple[int, dict[str, Any]]:
+        """Find the Pinky on its map with its LiDAR and give AMCL that pose (no SSH password; Nav2 must run).
+        With `pose` (a candidate from locate), that place is used. 202 = started; the result shows in the robot's
+        `localization` and message."""
+        return self._send("POST", f"/api/robots/{pinky_id}/localize", {} if pose is None else {"pose": pose})
+
+    def set_pose(self, pinky_id: str, pose: dict[str, float]) -> tuple[int, dict[str, Any]]:
+        """The operator's own pose for the Pinky (RViz's 2D Pose Estimate): the LiDAR polishes it only within 30 cm and
+        30 degrees, then AMCL is given it. Refused (409) while a route runs. 202 = started."""
+        return self._send("POST", f"/api/robots/{pinky_id}/set-pose", {"pose": pose})
+
+    def locate(self, pinky_id: str) -> tuple[int, dict[str, Any]]:
+        """Read only: where the LiDAR puts the Pinky now and the other places that fit (AMCL is not touched)."""
+        # Matching a scan against the whole map takes about a second, after waiting for a fresh scan.
+        return self._request("GET", f"/api/robots/{pinky_id}/locate", timeout_s=15.0)
+
+    def start_test_mission(self, pinky_id: str, dropoff: str, via: list[str] | None = None) -> tuple[int, dict[str, Any]]:
+        """A test run without an order: from where the Pinky stands to 5 (dock, load), to the drop-off waypoint
+        (hand over), back to its parking spot; Nav2 plans between the stops. 202 = started, not moved."""
+        return self._send("POST", f"/api/robots/{pinky_id}/mission", {"dropoff": dropoff, "via": list(via or [])})
+
+    def nav_log(self, pinky_id: str) -> tuple[int, dict[str, Any]]:
+        """Read only, for developers: the error lines and the tail of the Pinky's Nav2 log (over SSH)."""
+        return self._request("GET", f"/api/robots/{pinky_id}/nav-log", timeout_s=60.0)
+
+    def clear_route(self, pinky_id: str) -> tuple[int, dict[str, Any]]:
+        """기존 경로 날리기: a running route is stopped first; the route, its lines and any wait to go home are dropped."""
+        return self._send("POST", f"/api/robots/{pinky_id}/route/clear", {})
+
+    def return_home(self, pinky_id: str, via: list[str] | None = None) -> tuple[int, dict[str, Any]]:
+        """Drive from where the Pinky stands to its own parking spot (Nav2), through `via`. 202 = started."""
+        return self._send("POST", f"/api/robots/{pinky_id}/return-home", {"via": list(via or [])})
+
+    def reset(self, pinky_id: str, map_name: str) -> tuple[int, dict[str, Any]]:
+        """초기 세팅: hold it stopped, drop its route, then 주행준비 from the start even if it was prepared. 202 = started."""
+        return self._send("POST", f"/api/robots/{pinky_id}/reset", {"map": map_name})
+
+    def nav_restart(self, pinky_id: str) -> tuple[int, dict[str, Any]]:
+        """Restart Nav2 when its action server is missing; refused while a route runs."""
+        return self._send("POST", f"/api/robots/{pinky_id}/nav/restart", {})
+
+    def record_waypoint(self, pinky_id: str, label: str) -> tuple[int, dict[str, Any]]:
+        """Save the Pinky's current map pose as a named waypoint (needs a fresh map and pose)."""
+        return self._send("POST", f"/api/robots/{pinky_id}/waypoints", {"label": label})
+
+    def delete_waypoint(self, pinky_id: str, waypoint_id: str) -> tuple[int, dict[str, Any]]:
+        return self._send("DELETE", f"/api/robots/{pinky_id}/waypoints/{waypoint_id}", None)
+
+    def send_password(self, password: str) -> tuple[int, dict[str, Any]]:
+        """Hand the SSH password to the dashboard, which keeps it in its own memory only."""
+        return self._send("POST", "/api/credentials", {"password": password})
+
+    def _send(self, method: str, path: str, body: dict[str, Any] | None) -> tuple[int, dict[str, Any]]:
+        status, answer = self._request(method, path, body)
+        with self._lock:
+            self._cache = None  # the state is about to change
+        return status, answer
 
     def fleet_status(self, pinky_id: str) -> dict[str, Any]:
         """The Pinky's mission phase in the order flow's terms (parked, driving, docking_manual, docked_manual…)."""
@@ -88,12 +231,40 @@ class PinkyFleetClient:
             phase = "parked"
         else:
             phase = "driving"  # starting / running before the robot reported a mission phase
+        operational = robot.get("operational") if isinstance(robot.get("operational"), dict) else {}
+        battery_percent, battery_volts = _fresh_battery(robot)
+        battery_percent = self._battery.add(pinky_id, time.monotonic(), battery_percent)
         return {
             "source": "pinky_fleet", "simulated": False, "pinky_id": pinky_id, "phase": phase,
             "mission_token": route.get("mission_token"), "route_status": route_status,
             "message": route.get("message") or robot.get("message"),
             "location": route.get("current_label") or robot.get("stage"),
+            "connected": operational.get("state") != "disconnected",
+            "ready_for_motion": bool(operational.get("ready_for_motion")),
+            "readiness_label": operational.get("label"),
+            "battery_percent": battery_percent,
+            "battery_volts": battery_volts,
         }
+
+    def dispatch(self, pinky_id: str, route_labels: list[str] | None) -> dict[str, Any]:
+        """Start the Pinky's route (the dashboard prepends its parking spot): POST /api/robots/<id>/route.
+        202 means the dashboard accepted the start, not that the Pinky moved; the flow follows its phase."""
+        if not route_labels:
+            raise PinkyFleetError("RECEIVING_ZONE_MISSING", "수령 구역 경로가 없는 주문은 실제 핑키를 출발시킬 수 없습니다")
+        status, answer = self._send("POST", f"/api/robots/{pinky_id}/route", {"labels": list(route_labels)})
+        if status == 202 and answer.get("ok"):
+            return {"accepted": True, "simulated": False, "http_status": status, "labels": answer.get("labels")}
+        raise PinkyFleetError("PINKY_DISPATCH_REJECTED", answer.get("error") or answer.get("message") or f"HTTP {status}")
+
+    def mission_complete(self, pinky_id: str, token: str | None) -> dict[str, Any]:
+        """Pickup confirmed at the receiving zone: POST /api/robots/<id>/mission-complete {token}; the Pinky
+        returns to its own parking spot."""
+        status, answer = self._send("POST", f"/api/robots/{pinky_id}/mission-complete", {"token": token})
+        if status == 202 and answer.get("ok"):
+            return {"accepted": True, "simulated": False, "http_status": status, "message": answer.get("message")}
+        if status == 409:
+            raise PinkyFleetError("PINKY_SIGNAL_REJECTED", answer.get("error") or "코스 완주 단계·토큰과 맞지 않습니다")
+        raise PinkyFleetError("PINKY_SIGNAL_NOT_DELIVERED", answer.get("message") or answer.get("error") or f"HTTP {status}")
 
     def fleet_confirm(self, pinky_id: str, action: str, token: str | None) -> dict[str, Any]:
         status, answer = self._request(

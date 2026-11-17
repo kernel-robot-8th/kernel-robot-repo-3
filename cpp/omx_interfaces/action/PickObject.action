@@ -1,0 +1,29 @@
+# Pick one object with the LeRobot ACT policy recorded on this arm and put it on the Pinky. The policy picks,
+# places and goes back to rest in one run; the server then aligns the arm to its recorded home pose.
+# The goal carries no coordinates: the policy sees only its two cameras and the joints.
+# One server per arm (/arm_01/pick_object, /arm_02/pick_object); a policy recorded on another arm is refused.
+
+# Goal
+string command_id                   # control-station arm command ID (CMD-...), kept for tracing
+string arm_id                       # arm-01 or arm-02; must be this server's arm
+string object_class                 # YOLO class name of the object, e.g. carrot
+string policy_id                    # config/omx-act-policies.json policy, e.g. carrot_act_v2
+string policy_model                 # its model (Hugging Face repo id), checked against the server's file
+string policy_registry_version      # SHA-256 of the policy file the command was made with
+builtin_interfaces/Time valid_until # the server does not start the policy after this time
+---
+# Result
+string outcome                 # SUCCEEDED, HOME_REACHED_PLACE_NOT_VERIFIED, RESULT_UNKNOWN, FAILED, CANCELED,
+                               # REJECTED (checks failed, nothing moved)
+string reason_code             # e.g. PLACE_NOT_VERIFIED, POLICY_WRONG_ARM, POLICY_TIMEOUT_NOT_AT_REST, EXPIRED
+string message
+bool pose_reached              # back at the recorded home pose, measured
+bool simulated                 # true when no real motor moved (--fake-follower, --dry-run)
+float64 run_s                  # how long the policy ran
+---
+# Feedback
+string phase                   # CHECKING, STARTING_POLICY (motion may begin from here), RUNNING_POLICY,
+                               # RETURNING_HOME. Nothing moves before STARTING_POLICY.
+float64 elapsed_s              # since the goal was accepted
+string message
+bool simulated

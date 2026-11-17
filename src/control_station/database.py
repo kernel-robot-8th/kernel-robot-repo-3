@@ -25,6 +25,7 @@ class TaskRecord(Base):
     # [{"object_class", "quantity"}]; None for tasks made before orders carried several items.
     order_items: Mapped[list[dict[str, object]] | None] = mapped_column("order_items_json", JSON)
     pinky_id: Mapped[str | None] = mapped_column(String)
+    receiving_zone: Mapped[str | None] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
     started_at: Mapped[str | None] = mapped_column(String)
@@ -140,6 +141,17 @@ class ArmCommandEventRecord(Base):
     payload: Mapped[dict[str, object]] = mapped_column("payload_json", JSON, nullable=False)
 
     command: Mapped[ArmCommandRecord] = relationship(back_populates="events")
+
+
+class OrderRequestRecord(Base):
+    """The Idempotency-Key an order window sent with POST /api/orders, so a resent request (the answer was lost on
+    the way back) returns the order it already made instead of a second one."""
+    __tablename__ = "order_requests"
+
+    idempotency_key: Mapped[str] = mapped_column(String, primary_key=True)
+    request_hash: Mapped[str] = mapped_column(String, nullable=False)  # sha256 of the body, to catch a reused key
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
 
 
 def database_path() -> Path:

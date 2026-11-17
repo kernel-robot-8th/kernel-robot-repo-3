@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import uuid
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -12,10 +13,11 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from control_station.api import routes
-from control_station.api.common import is_cross_origin, read_json_object
-from control_station.api.observations import evaluate_color_hints, target_observation
+from control_station.api.common import is_cross_origin, is_retryable, read_json_object
 from control_station.act_policies import ActPolicyError, load_act_policies
 from control_station.arm_commands import ARM_ROBOT_IDS, ArmCommandStore
+from control_station.arm_action_ros import RosPickTransport
+from control_station.arm_pick import ArmActionPick, ArmQueuePick
 from control_station.arms import ArmConfigError, load_arms
 from control_station.arm_supervisor import ArmTeleopSupervisor
 from control_station.policy_run_supervisor import PolicyRunSupervisor
@@ -26,13 +28,18 @@ from control_station.camera_adapters import (
 )
 from control_station.load_check import mock_load_observer_from_env
 from control_station.mock_world import MockWorld
+from control_station.inventory import InventoryMonitor, InventoryOverrides
+from control_station.order_desk import OrderDesk
 from control_station.order_flow import OrderDevices, OrderFlow
+from control_station.receiving_zones import ReceivingZoneError, load_receiving_zones
 from control_station.pinky_fleet import PinkyFleetClient
+from control_station.pinky_gateway import PinkyGateway
+from control_station.pinky_markers import PinkyMarkerError, arrival_for, load_pinky_markers
 from control_station.parking_ros import RosParkingSource
 from control_station.robot_adapters import make_status_provider
 from control_station.shelf_slot_map import ShelfSlotMapError, load_shelf_slot_map
 from control_station.shelf_slot_zones import ShelfSlotZones, SlotSelectionError, select_slot_for_class
-from control_station.store import TaskStore
+from control_station.store import PINKY_NAMES, TaskStore
 from control_station.task_orchestrator import MockTaskOrchestrator
 
 
@@ -49,16 +56,22 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
     """요청을 api/routes.py 경로 표대로 처리 함수에 넘김"""
     server_version = "ControlStation/0.2"
 
-    # Kept on the handler for callers that classify observations directly.
-    _target_observation = staticmethod(target_observation)
-    _evaluate_color_hints = staticmethod(evaluate_color_hints)
-
     @property
     def app(self) -> ControlStationServer:
         return self.server  # type: ignore[return-value]
 
-    def log_message(self, format: str, *args: object) -> None:
-        super().log_message(format, *args)
+    def end_headers(self) -> None:
+        # The screens change while the station runs: a browser must ask again instead of keeping an old page or script
+        # (an old index.html had no ROS 모니터 menu, 2026-11-16).
+        self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
+
+    @property
+    def request_id(self) -> str:
+        """이 요청의 ID: 응답 머리글 X-Request-Id와 오류 본문 request_id로 돌려줘 서버 기록과 맞춰 볼 수 있게"""
+        if getattr(self, "_request_id", None) is None:
+            self._request_id = uuid.uuid4().hex[:12]
+        return self._request_id
 
     def _json(self, status: int, body: dict[str, Any]) -> None:
         """JSON 응답"""
@@ -67,6 +80,7 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Request-Id", self.request_id)
         self.end_headers()
         self.wfile.write(payload)
 
@@ -75,29 +89,26 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
         status: int,
         error_code: str,
         message: str,
+        *,
+        retryable: bool | None = None,
         **details: object,
     ) -> None:
-        """오류 응답 (error_code, message, error)"""
+        """오류 응답 (error_code, message, error, retryable, request_id)
+
+        retryable: 같은 요청을 나중에 다시 보내면 될 수 있는지(핑키·수령 구역이 비면 등). 기본은 상태 코드와 오류 코드로 판단."""
         body: dict[str, Any] = {
             "error_code": error_code,
             "message": message,
             "error": message,
+            "retryable": is_retryable(status, error_code) if retryable is None else retryable,
+            "request_id": self.request_id,
         }
         body.update(details)
         self._json(status, body)
 
-    def _image(self, payload: bytes) -> None:
-        """PNG 응답"""
-        self.send_response(200)
-        self.send_header("Content-Type", "image/png")
-        self.send_header("Content-Length", str(len(payload)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        self.wfile.write(payload)
-
     def do_GET(self) -> None:
         """GET 분배, 맞는 경로가 없으면 웹 화면 파일"""
+        self._request_id = None
         route = urlsplit(self.path).path
         parts = route.strip("/").split("/")
         entry = routes.find(routes.GET_ROUTES, route, parts)
@@ -106,6 +117,8 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
             return
         if route == "/":
             self.path = "/index.html"
+        elif route == "/order":  # the customer-side order window (mock)
+            self.path = "/order.html"
         elif route.startswith("/api/"):
             self._json(404, {"error": "API route not found"})
             return
@@ -113,6 +126,7 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         """POST 분배: 다른 출처 거부, JSON 본문 읽기"""
+        self._request_id = None
         route = urlsplit(self.path).path
         parts = route.strip("/").split("/")
         entry = routes.find(routes.POST_ROUTES, route, parts)
@@ -172,9 +186,6 @@ def main() -> None:
     # its own. Setting a spot gates VERIFY_ARRIVAL on a fresh check from the node and follows its live state.
     parking_spot_id = os.environ.get("CONTROL_STATION_PARKING_SPOT", "").strip() or None
     server.parking_spot_id = parking_spot_id
-    if os.environ.get("CONTROL_STATION_PARKING_SOURCE", "ros").strip().lower() not in {"", "ros"}:
-        raise RuntimeError("CONTROL_STATION_PARKING_SOURCE는 ros만 지원합니다 (관제 안의 Python 주차 판정은 제거됨).")
-    server.parking_source = "ros" if parking_spot_id else None
     # The feed the parking panel streams: the Head Camera shows the ceiling view, taken from the driver topic.
     server.parking_camera_id = os.environ.get("CONTROL_STATION_PARKING_CAMERA", "").strip() or (
         "head_camera" if parking_spot_id else None
@@ -195,12 +206,16 @@ def main() -> None:
         or server.parking_camera_id
         or os.environ.get("CONTROL_STATION_SHELF_CAMERA", "").strip()
         or os.environ.get("CONTROL_STATION_HEAD_CAMERA", "").strip().startswith("ros:")
+        or any(devices.devices for devices in server.policy_run_supervisor.arm_devices.values())
     ):
         server.camera_manager = UnconfiguredArmCameraStreamManager()
     else:
+        # Six cameras with two arms: ceiling (parking), shelf, and each arm's gripper and overhead camera.
         server.camera_manager = OpenCVArmCameraStreamManager(
             joint_enabled=server.arm_supervisor.enabled,
             policy_active=lambda: bool(server.policy_run_supervisor.snapshot()["process_alive"]),
+            policy_devices=server.policy_run_supervisor.active_devices,
+            arm_cameras=server.policy_run_supervisor.arm_devices,
         )
     server.task_store = task_store
     try:
@@ -228,19 +243,21 @@ def main() -> None:
     except ArmConfigError as exc:
         server.arms, server.arms_error = None, str(exc)
         print(f"팔 설정을 불러오지 못했습니다: {exc}", flush=True)
-    # Cameras the LeRobot policy opens itself; closed by the control station while a policy command runs.
-    server.policy_camera_devices = list(dict.fromkeys(
+    # Cameras the LeRobot policy opens itself, per arm; closed by the control station while that arm's policy
+    # command runs. Arms set with CONTROL_STATION_ARMxx_* use their own pair; "*" is the older single-arm pair.
+    legacy_policy_cameras = [
         device
-        for name in (
-            "CONTROL_STATION_ACT_OVERHEAD_CAMERA",
-            "CONTROL_STATION_JOINT_CAMERA",
-            "CONTROL_STATION_LEFT_CEILING_CAMERA",
-            "CONTROL_STATION_LEFT_JOINT_CAMERA",
-            "CONTROL_STATION_RIGHT_CEILING_CAMERA",
-            "CONTROL_STATION_RIGHT_JOINT_CAMERA",
+        for device in (
+            os.environ.get("CONTROL_STATION_ACT_OVERHEAD_CAMERA", "").strip(),
+            os.environ.get("CONTROL_STATION_JOINT_CAMERA", "").strip(),
         )
-        if (device := os.environ.get(name, "").strip())
-    ))
+        if device
+    ]
+    server.policy_camera_devices = {
+        **({"*": legacy_policy_cameras} if legacy_policy_cameras else {}),
+        **{arm_id: devices.devices for arm_id, devices in server.policy_run_supervisor.arm_devices.items()
+           if devices.source == "arm" and devices.devices},
+    }
     server.policy_camera_lock = threading.Lock()
     server.policy_cameras_lent = False
     server.shelf_slot_zones = ShelfSlotZones(slot_map)
@@ -266,21 +283,36 @@ def main() -> None:
     # every observation it makes says simulated.
     server.mock_world = MockWorld.from_env()
     world = server.mock_world
-    # Pinky arrival for orders: the real ceiling-camera judgment when a parking spot is configured (one registered
-    # spot, the loading spot between the two arms), else the mock. CONTROL_STATION_ORDER_PARKING=mock forces the mock.
+    # Pinky arrival for orders: the real ceiling-camera judgment when the parking node is configured, else the mock
+    # (CONTROL_STATION_ORDER_PARKING=mock forces it). Each Pinky carries its own marker and has its own
+    # registration of the loading spot (config/pinky-markers.json), and the check uses the assigned Pinky's.
+    try:
+        pinky_markers = load_pinky_markers()
+    except PinkyMarkerError as exc:
+        pinky_markers = {}
+        print(f"핑키 마커 파일을 읽지 못했습니다: {exc}", flush=True)
+    server.pinky_markers = pinky_markers
     order_parking = world.parking
     if server.parking_check is not None and os.environ.get("CONTROL_STATION_ORDER_PARKING", "").strip() != "mock":
-        def order_parking(pinky_id: str) -> dict[str, Any]:
-            return server.parking_check(parking_spot_id)
-        print(f"주문 흐름의 핑키 도착 판정: 실제 주차 판정 ({parking_spot_id})", flush=True)
+        order_parking = partial(arrival_for, pinky_markers, server.parking_check)
+        print("주문 흐름의 핑키 도착 판정: 실제 주차 판정, 핑키별 마커 " + ", ".join(
+            f"{PINKY_NAMES[pid]}={m.marker_id}({'등록' if m.registered else '미등록'})" for pid, m in pinky_markers.items()),
+            flush=True)
     # Pinky mission phases and the dock_complete / received signals: the Pinky team's fleet dashboard when its URL
     # is set (e.g. http://<pinky PC>:8765), else the mock world, which also sends the mock Pinky off for each order.
     fleet_url = os.environ.get("CONTROL_STATION_PINKY_FLEET_URL", "").strip()
-    fleet_status, fleet_confirm, dispatch = world.fleet_status, world.fleet_confirm, world.dispatch
+    # Starting an order starts the Pinky's route (parking -> station 5 -> the order's receiving zone); the
+    # receiving zone's pickup confirmation sends mission-complete so it drives home.
+    fleet_status, fleet_confirm = world.fleet_status, world.fleet_confirm
+    dispatch, mission_complete = world.dispatch, world.mission_complete
+    fleet = None
     if fleet_url:
         fleet = PinkyFleetClient(fleet_url)
-        fleet_status, fleet_confirm, dispatch = fleet.fleet_status, fleet.fleet_confirm, None
-        print(f"주문 흐름의 핑키 신호: 핑키 관제 {fleet_url}", flush=True)
+        fleet_status, fleet_confirm = fleet.fleet_status, fleet.fleet_confirm
+        dispatch, mission_complete = fleet.dispatch, fleet.mission_complete
+        print(f"주문 흐름의 핑키 신호: 핑키 관제 {fleet_url} (주문을 시작하면 실제 핑키가 출발합니다)", flush=True)
+    # The Pinky screen reads and commands through the same client, so it shares the client's status cache.
+    server.pinky_gateway = PinkyGateway(fleet, world.fleet_status, markers=pinky_markers)
     # Counting for the stock check and the per-object transfer check: the cameras' YOLO detections when
     # CONTROL_STATION_ORDER_COUNTS=camera (shelf cams with slot zones, the top cam inside the Pinky tray), else the
     # mock world. With camera counts but mock picks, a person has to move each object during the pick step.
@@ -292,17 +324,55 @@ def main() -> None:
         pinky_load = load_counter
         print(f"주문 흐름의 개수 세기: 카메라 YOLO (핑키 쟁반 {load_counter.camera_id} {load_counter.region_or_none()})",
               flush=True)
+    # Real picks in orders (CONTROL_STATION_ORDER_REAL_ARM=1): PICK_WITH_POLICY for the planned arm, through the
+    # arm command queue to one HTTP worker per arm, or with CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2 as a goal to
+    # one PickObject action server per arm (/arm_01/pick_object; domain CONTROL_STATION_ARM_ACTION_DOMAIN, else
+    # ROS_DOMAIN_ID). Each transfer is then judged by camera counts; with mock counts the order stops before the
+    # arm moves (TRANSFER_EVIDENCE_REQUIRED).
+    order_real_arm = os.environ.get("CONTROL_STATION_ORDER_REAL_ARM", "").strip() == "1"
+    arm_transport = os.environ.get("CONTROL_STATION_ORDER_ARM_TRANSPORT", "http").strip().lower() or "http"
+    if arm_transport not in {"http", "ros2"}:
+        raise RuntimeError("CONTROL_STATION_ORDER_ARM_TRANSPORT는 http 또는 ros2여야 합니다.")
+    order_pick: Any = world.pick
+    pick_hooks: dict[str, Any] = {}
+    if order_real_arm and arm_transport == "ros2":
+        raw_arm_domain = os.environ.get("CONTROL_STATION_ARM_ACTION_DOMAIN") or os.environ.get("ROS_DOMAIN_ID") or "0"
+        server.arm_action_transport = RosPickTransport(int(raw_arm_domain), sorted(ARM_ROBOT_IDS))
+        order_pick = ArmActionPick(server.arm_commands, server.arm_action_transport)
+        print(f"주문 흐름의 집기: 실제 팔, ROS 2 액션 /arm_0N/pick_object (domain {raw_arm_domain})", flush=True)
+    elif order_real_arm:
+        order_pick = ArmQueuePick(server.arm_commands)
+        print("주문 흐름의 집기: 실제 팔 (PICK_WITH_POLICY, 팔마다 HTTP 워커 필요)", flush=True)
+    elif arm_transport == "ros2":
+        print("CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2는 CONTROL_STATION_ORDER_REAL_ARM=1일 때만 씁니다 (지금은 모의 집기)",
+              flush=True)
+    if order_real_arm:
+        pick_hooks = {"pick_is_real": True, "pick_settle": order_pick.settle}
     server.order_devices = OrderDevices(
-        shelf_stock, pinky_load, fleet_status, fleet_confirm, order_parking, world.pick, dispatch,
+        shelf_stock, pinky_load, fleet_status, fleet_confirm, order_parking, order_pick, dispatch, mission_complete,
+        **pick_hooks,
     )
+    try:
+        receiving_zones = load_receiving_zones()
+    except ReceivingZoneError as exc:
+        receiving_zones = {}
+        print(f"수령 구역 파일을 읽지 못해 주문을 받을 수 없습니다: {exc}", flush=True)
+
+    def route_for(zone_id: str | None) -> list[str] | None:
+        zone = receiving_zones.get(zone_id or "")
+        return list(zone.route_labels) if zone else None
     try:
         arrival_timeout_s = float(os.environ.get("CONTROL_STATION_ARRIVAL_TIMEOUT_S", "600"))
     except ValueError:
         arrival_timeout_s = 600.0
+    # The arm choice learns from the kind of picks this server makes: real ones with real arms, else mock ones.
+    pick_stats = partial(task_store.pick_success_stats, simulated=not order_real_arm)
     server.order_flow = OrderFlow(
         server.arms, act_policies, server.order_devices,
         dwell_s=float(os.environ.get("CONTROL_STATION_ORDER_STEP_DWELL_S", "0.8") or 0.8),
         arrival_timeout_s=arrival_timeout_s,
+        pick_stats=pick_stats,
+        route_for=route_for,
     )
     server.task_orchestrator = MockTaskOrchestrator(
         task_store, mode=mode, arrival_check=arrival_check, load_check=load_check,
@@ -310,6 +380,29 @@ def main() -> None:
         target_evidence=partial(front_camera_evidence, server) if real_arm else None,
         order_flow=server.order_flow,
     )
+
+    def orderable_products() -> list[dict[str, str]]:
+        if act_policies is None:
+            return []
+        labels = {policy["object_class"]: policy["label"] for policy in act_policies.policies.values()}
+        return [{"object_class": name, "label": label} for name, label in labels.items()]
+
+    def arms_at_work() -> bool:
+        # An arm hides the shelf while it picks: the loading spot is held by an order, or a policy run is going.
+        return server.order_flow.station_owner is not None or bool(server.policy_run_supervisor.snapshot()["process_alive"])
+
+    overrides_path = Path(os.environ.get("CONTROL_STATION_INVENTORY_OVERRIDES")
+                          or Path(__file__).resolve().parents[2] / "data" / "inventory-overrides.json")
+    server.inventory = InventoryMonitor(
+        shelf_stock, arms_at_work, orderable_products, task_store.reserved_units, task_store.confirmed_transfers,
+        overrides=InventoryOverrides(overrides_path),
+    ).start()
+    server.order_desk = OrderDesk(
+        task_store, server.task_orchestrator, server.order_devices, server.arms, act_policies,
+        receiving_zones, pick_stats, inventory=server.inventory.snapshot, pickup=server.order_flow.confirm_pickup,
+    )
+    # A larger order runs as shipments; each later one gets its Pinky from the desk when it starts.
+    server.order_flow.choose_shipment_pinky = server.order_desk.assign_next_shipment
     if real_arm:
         print("작업 흐름의 팔 단계가 실제 팔 명령(PICK_WITH_POLICY)을 보냅니다", flush=True)
     mode_label = {"mock": "모의", "ros2": "ROS 2"}[mode]
@@ -326,6 +419,7 @@ def main() -> None:
         server.arm_supervisor.close()
         server.policy_run_supervisor.close()
         server.task_orchestrator.close()
+        server.inventory.close()
         task_store.close()
         provider.close()
 
