@@ -166,9 +166,39 @@ IR_CALIBRATION = IRCalibrationStore(ROOT / 'data' / 'ir_calibration')
 WORKERS = ThreadPoolExecutor(max_workers=8, thread_name_prefix="pinky-fleet")
 DOCK_COMMAND_LOCK = threading.Lock()
 _zones={'parking':{'bounds':[min(p['x_m'] for p in PARKING.values())-.2,max(p['x_m'] for p in PARKING.values())+.2,min(p['y_m'] for p in PARKING.values())-.2,max(p['y_m'] for p in PARKING.values())+.2]}}
-for _label,_name in [('7','junction7'),('5','dock5')]:
-    _anchor=next((p for p in STATE.waypoints['10'] if p.get('label')==_label),None)
-    if _anchor:_zones[_name]=dict(x_m=_anchor['x_m'],y_m=_anchor['y_m'],request_radius_m=.40)
+def _any_waypoint(label):
+    return next((p for rid in ROBOTS for p in STATE.waypoints[rid] if p.get('label')==label),None)
+# The rules, kept simple (2026-11-17, "only look at the narrow place a few seconds before going in, else just drive"):
+#   passage9   the 50 cm gap beside the middle wall: asked for within request_radius_m of it (about 3-4 s of driving);
+#              a Pinky waits in front of it only while another is in it
+#   dock5      station 5: asked for at the queue spot (the stretch to '5 정면'), in the order asked
+#   dock_queue the queue spot itself: one Pinky stands there; the next stops just short of it, outside the passage
+#   parking    one Pinky at a time in or out of the parking area
+# Nothing is asked for ahead of time from the parking spot, and junction 7 (inside the passage zone, a leftover of
+# the line course) is no longer a zone of its own when the passage zone is set.
+_traffic_settings=json.loads((ROOT/'config'/'navigation.json').read_text())
+_passage=_traffic_settings.get('passage_zone')
+_has_passage=isinstance(_passage,dict) and all(isinstance(_passage.get(k),(int,float)) for k in ('x_m','y_m'))
+for _label,_name,_radius in [('7','junction7',.25),('5','dock5',.40)]:
+    if _name=='junction7' and _has_passage:continue
+    _anchor=_any_waypoint(_label)
+    if _anchor:_zones[_name]=dict(x_m=_anchor['x_m'],y_m=_anchor['y_m'],request_radius_m=_radius)
+# 2026-11-17: one Pinky at a time through the passage beside the middle wall, one at the queue spot in front of
+# station 5, and station 5 in the order asked for (navigation.json passage_zone, dock_queue).
+if 'dock5' in _zones:
+    _zones['dock5'].update(request_labels=['5 정면','5'],release_radius_m=float(_traffic_settings.get('dock_release_radius_m',1.0)))
+if _has_passage:
+    _zones['passage9']=dict(x_m=float(_passage['x_m']),y_m=float(_passage['y_m']),request_radius_m=float(_passage.get('request_radius_m',.45)))
+_queue_label=(_traffic_settings.get('dock_queue') or {}).get('waypoint')
+_queue=_any_waypoint(_queue_label) if _queue_label else None
+if _queue:
+    _zones['dock_queue']=dict(x_m=_queue['x_m'],y_m=_queue['y_m'],request_radius_m=.22)
+# The waiting spot below the passage (navigation.json wait_low): the next Pinky drives up to it at once and goes on
+# when the queue spot and the passage are free, so all three are on the way instead of standing in the parking area.
+_low_label=(_traffic_settings.get('wait_low') or {}).get('waypoint')
+_low=_any_waypoint(_low_label) if _low_label else None
+if _low:
+    _zones['wait_low']=dict(x_m=_low['x_m'],y_m=_low['y_m'],request_radius_m=.30,request_labels=[_low_label])
 TRAFFIC=TrafficCoordinator(ROOT/'data/traffic_reservations.json',_zones)
 TRAFFIC_BOOT=uuid.uuid4().hex
 TRAFFIC_SEQUENCE=0
@@ -1415,7 +1445,7 @@ def _localize_with_lidar(robot_id: str, choice: tuple[float, float, float] | Non
 OPERATOR_REFINE_MIN_SCORE = 0.5
 
 
-def _set_operator_pose(robot_id: str, x: float, y: float, yaw: float) -> None:
+def _set_operator_pose(robot_id: str, x: float, y: float, yaw: float, refine: bool = True) -> None:
     """The operator put the Pinky's pose on the map (as RViz's 2D Pose Estimate). The LiDAR only polishes it within
     30 cm and 30 degrees, so it never jumps to the mirror place of the symmetric cell; then AMCL is given it."""
     try:
@@ -1427,7 +1457,11 @@ def _set_operator_pose(robot_id: str, x: float, y: float, yaw: float) -> None:
         grid = TELEMETRY.snapshot().get(robot_id, {}).get("map", {}).get("value") if TELEMETRY else None
         scan = TELEMETRY.scan_after(robot_id, time.time() - 1.0, 3.0) if TELEMETRY else None
         laser = TELEMETRY.frame_in_base(robot_id, scan["frame_id"]) if scan else None
-        if grid and grid.get("cells") and scan and laser:
+        if not refine:
+            # The pose comes from something surer than the scan here (the ceiling camera at station 5, where arms
+            # and shelves that are not in the map pull the LiDAR fit off by 17 cm, 2026-11-17).
+            note = "다듬지 않고 그대로"
+        elif grid and grid.get("cells") and scan and laser:
             score, rx, ry, ryaw = refine_in_map(grid, scan, laser, x, y, yaw)
             if score >= OPERATOR_REFINE_MIN_SCORE:
                 pose = (rx, ry, ryaw)
@@ -1552,6 +1586,18 @@ def _route_start_problem(robot_id: str) -> tuple[int, dict[str, str]] | None:
     if any(STATE.robots[rid]['map'] != STATE.robots[robot_id]['map'] for rid in active_peers):
         return 409, {'error': '동시 주행 로봇은 같은 공용 지도를 선택해야 합니다.'}
     return None
+
+
+def _mark_pass_through(goals: list[dict[str, Any]]) -> None:
+    """Stops the Pinky only passes: the passage points (10 cm) and, unless it is the last stop, the queue spot (6 cm)."""
+    queue_label = (NAVIGATION.get("dock_queue") or {}).get("waypoint")
+    for index, point in enumerate(goals):
+        if not point.get("anchor") or index == len(goals) - 1:
+            continue
+        if point["label"] in {"통로 아래", "통로 위"}:
+            point["pass_radius_m"] = 0.10
+        elif queue_label and point["label"] == queue_label:
+            point["pass_radius_m"] = 0.06
 
 
 def _shared_waypoint(robot_id: str, label: str) -> dict[str, Any] | None:
@@ -1715,8 +1761,14 @@ def _return_home_goals(robot_id: str, via: list[str]) -> tuple[list[dict[str, An
     if math.hypot(pose["x_m"] - parking["x_m"], pose["y_m"] - parking["y_m"]) < 0.08:
         return None, (409, {"error": "이미 자기 주차 칸에 있습니다."})
     start = dict(label="출발", map=map_name, frame_id="map", x_m=pose["x_m"], y_m=pose["y_m"], yaw_rad=pose["yaw_rad"])
+    dock = _shared_waypoint(robot_id, "5")
+    if (NAVIGATION.get("dock_exit_reverse", True) is not False and dock
+            and math.hypot(pose["x_m"] - dock["x_m"], pose["y_m"] - dock["y_m"]) < 0.12):
+        # Standing at station 5 between the arms: leave as a mission does, straight back first (2026-11-17), never by
+        # turning on the spot there.
+        start = dict(start, label="5", yaw_rad=dock["yaw_rad"])
     try:
-        goals = build_mission_route([start] + [dict(item) for _, item in passes] + [parking], passages=NAVIGATION.get('wall_passages'))
+        goals = build_mission_route([start] + [dict(item) for _, item in passes] + [parking], passages=NAVIGATION.get('wall_passages'), reverse_exit=NAVIGATION.get('dock_exit_reverse', True) is not False)
     except ValueError as exc:
         return None, (400, {"error": str(exc)})
     goals[0]["parking_yaw_rad"] = pose["yaw_rad"]
@@ -1724,6 +1776,7 @@ def _return_home_goals(robot_id: str, via: list[str]) -> tuple[list[dict[str, An
     goals[-1]["parking_return"] = True
     for point in goals:
         point["use_ir"] = _ir_steers(robot_id)
+    _mark_pass_through(goals)
     return goals, None
 
 
@@ -1798,7 +1851,18 @@ def _clear_route(robot_id: str) -> tuple[int, dict]:
     if TELEMETRY is not None:
         TELEMETRY.forget(robot_id, "plan")
         TELEMETRY.forget(robot_id, "trail")
-    return 200, {"ok": True, "message": "기존 경로·주행선·자동 복귀를 지웠습니다."}
+    # A Pinky that went off inside a shared zone keeps holding it for ever (2026-11-17: P2 died in the passage and
+    # P1 waited behind it). It is never released by itself, since the dead Pinky may still stand there; clearing its
+    # route is the operator saying it is gone. A live Pinky inside a zone takes it again at once (physical occupancy).
+    released = []
+    live = (TELEMETRY.snapshot().get(robot_id, {}).get("tf_pose") or {}).get("fresh") if TELEMETRY is not None else False
+    if not live:
+        try:
+            released = TRAFFIC.drop(robot_id)
+        except OSError as exc:
+            return 500, {"error": f"구역 예약을 풀지 못했습니다: {exc}"}
+    note = f" 잡고 있던 구역({', '.join(released)})도 풀었습니다." if released else ""
+    return 200, {"ok": True, "released": released, "message": "기존 경로·주행선·자동 복귀를 지웠습니다." + note}
 
 
 def _reset_robot(robot_id: str, map_name: str) -> None:
@@ -2447,7 +2511,8 @@ class Handler(BaseHTTPRequestHandler):
         operator_match = re.fullmatch(r'/api/robots/(10|11|12)/operator-confirm', path)
         if operator_match:
             robot_id=operator_match.group(1)
-            phases={'dock_complete':'docking_manual','received':'docked_manual'}
+            # redock: the ceiling camera judged the Pinky off the loading spot; it backs out and comes in again.
+            phases={'dock_complete':'docking_manual','redock':'docking_manual','received':'docked_manual'}
             action=data.get('action')
             with STATE.lock:
                 route=STATE.routes[robot_id] or {}
@@ -2489,6 +2554,8 @@ class Handler(BaseHTTPRequestHandler):
             dropoff = dropoff.strip()
             # "원점": load at 5, back out, and drive back to where it started (facing as it stood); no hand-over stop.
             return_to_start = dropoff == "원점"
+            # "주차장": load at 5, back out, and drive to its own parking spot (no receiving zone).
+            straight_home = dropoff == "주차장"
             via = data.get("via") or []
             if (not isinstance(via, list) or len(via) > 6
                     or any(not isinstance(label, str) or not label.strip() for label in via)):
@@ -2501,9 +2568,9 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(*problem)
                     return
                 pickup = _shared_waypoint(robot_id, "5")
-                target = None if return_to_start else _shared_waypoint(robot_id, dropoff)
+                target = None if return_to_start or straight_home else _shared_waypoint(robot_id, dropoff)
                 passes = [(label, _shared_waypoint(robot_id, label)) for label in via]
-                needed = [("5", pickup)] + ([] if return_to_start else [(dropoff, target)]) + passes
+                needed = [("5", pickup)] + ([] if return_to_start or straight_home else [(dropoff, target)]) + passes
                 missing = [label for label, item in needed if item is None]
                 if missing:
                     self._json(400, {"error": "저장되지 않은 웨이포인트: " + ", ".join(missing)})
@@ -2523,11 +2590,20 @@ class Handler(BaseHTTPRequestHandler):
                     # past the middle wall) and back the same way in reverse, so Nav2 does not pick another gap.
                     out = [dict(item) for _, item in passes]
                     back = [dict(item) for _, item in reversed(passes)]
+                    # Station 5 is entered from the queue spot (navigation.json dock_queue): one waits there in turn.
+                    # Before it, the waiting spot below the passage (wait_low), so the Pinkys line up in order.
+                    for setting in ("wait_low", "dock_queue"):
+                        label = (NAVIGATION.get(setting) or {}).get("waypoint")
+                        spot = _shared_waypoint(robot_id, label) if label and label not in via else None
+                        if spot:
+                            out.append(dict(spot))
                     if return_to_start:
                         home = dict(start, label="원점", arrival_yaw_rad=pose["yaw_rad"])
-                        goals = build_mission_route([start] + out + [dict(pickup)] + back + [home], passages=NAVIGATION.get('wall_passages'))
+                        goals = build_mission_route([start] + out + [dict(pickup)] + back + [home], passages=NAVIGATION.get('wall_passages'), reverse_exit=NAVIGATION.get('dock_exit_reverse', True) is not False)
+                    elif straight_home:
+                        goals = build_mission_route([start] + out + [dict(pickup)] + back + [parking], passages=NAVIGATION.get('wall_passages'), reverse_exit=NAVIGATION.get('dock_exit_reverse', True) is not False)
                     else:
-                        goals = build_mission_route([start] + out + [dict(pickup), dict(target)] + back + [parking], passages=NAVIGATION.get('wall_passages'))
+                        goals = build_mission_route([start] + out + [dict(pickup), dict(target)] + back + [parking], passages=NAVIGATION.get('wall_passages'), reverse_exit=NAVIGATION.get('dock_exit_reverse', True) is not False)
                 except ValueError as exc:
                     self._json(400, {"error": str(exc)})
                     return
@@ -2536,16 +2612,19 @@ class Handler(BaseHTTPRequestHandler):
                 if not return_to_start:
                     goals[-1]["yaw_rad"] = parking["yaw_rad"]
                     goals[-1]["parking_return"] = True
+                if not return_to_start and not straight_home:
                     drop_anchor = [p for p in anchors if p["label"] == dropoff][0]
                     drop_anchor["course_end"] = True  # the drop-off: wait for the hand-over signal
                 for point in goals:
                     point["use_ir"] = _ir_steers(robot_id)
+                _mark_pass_through(goals)
                 labels = [point["label"] for point in goals]
                 STATE.routes[robot_id] = {
                     "status": "starting", "run_id": uuid.uuid4().hex, "labels": labels, "current_index": 0,
                     "execution": "free_mission", "nav_goal_count": max(0, len(anchors)-1), "dropoff": dropoff, "via": via,
                     "current_label": None, "completed": 0,
                     "message": (f"시험 임무: {' → '.join(via) + ' 경유 → ' if via else ''}5번 적재 → 후진 → 원점 복귀" if return_to_start else
+                                f"시험 임무: {' → '.join(via) + ' 경유 → ' if via else ''}5번 적재 → 후진 → 주차장 복귀" if straight_home else
                                 f"시험 임무: {' → '.join(via) + ' 경유 → ' if via else ''}5번 적재 → {dropoff} 배달 → 주차장 복귀"), "detail": "",
                 }
             WORKERS.submit(_run_waypoint_route, robot_id, goals)
@@ -2623,7 +2702,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 STATE.busy_robot = robot_id
                 STATE.robots[robot_id].update(message="운영자가 지정한 위치를 넣습니다.", error=None)
-            WORKERS.submit(_set_operator_pose, robot_id, *[float(v) for v in values])
+            WORKERS.submit(_set_operator_pose, robot_id, *[float(v) for v in values], data.get("refine") is not False)
             self._json(202, {"ok": True, "message": "지정한 위치를 넣는 중입니다."})
             return
         localize_match = re.fullmatch(r"/api/robots/(10|11|12)/localize", path)
@@ -2758,11 +2837,15 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(409, {"error": f"Pinky {STATE.busy_robot} 작업이 끝날 때까지 기다려 주세요."})
                     return
                 targets, skipped = [], []
+                telemetry = TELEMETRY.snapshot() if TELEMETRY is not None else {}
                 for robot_id, info in STATE.robots.items():
                     route = STATE.routes[robot_id] or {}
+                    # "prepared" counts only while its Nav2 still gives a map pose: a Pinky switched off and on again
+                    # keeps the saved stage (it survives a dashboard restart) but has no Nav2 until prepared again.
+                    live = (telemetry.get(robot_id, {}).get("tf_pose") or {}).get("fresh")
                     if route.get("status") in {"starting", "running", "cancel_requested"}:
                         skipped.append(f"{robot_id} 주행 중")
-                    elif info["stage"] == "prepared":
+                    elif info["stage"] == "prepared" and live:
                         skipped.append(f"{robot_id} 이미 준비됨")
                     elif not info.get("ssh_reachable"):
                         skipped.append(f"{robot_id} 연결 안 됨")
@@ -2795,8 +2878,13 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(409, {"error": f"Pinky {STATE.busy_robot} 준비가 끝날 때까지 기다려 주세요."})
                     return
                 current = STATE.robots[robot_id]["stage"]
-                if current in {"base_starting", "sensors_starting", "nav_starting", "prepared"}:
-                    self._json(409, {"error": "이미 준비 중이거나 준비된 로봇입니다."})
+                if current in {"base_starting", "sensors_starting", "nav_starting"}:
+                    self._json(409, {"error": "이미 주행준비 중입니다."})
+                    return
+                # A prepared Pinky may be prepared again (after it was switched off, or to start clean); not mid-route.
+                route = STATE.routes[robot_id] or {}
+                if route.get("status") in {"starting", "running", "cancel_requested"}:
+                    self._json(409, {"error": "경로 주행을 정지한 뒤 주행준비하세요."})
                     return
                 STATE.busy_robot = robot_id
                 STATE.robots[robot_id].update(stage="base_starting", map=map_name, message="기본 bringup을 준비합니다.", error=None)

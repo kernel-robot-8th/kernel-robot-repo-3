@@ -223,7 +223,82 @@ def docking_wait(node, context, token, require_marker=False):
     raise RouteFailure(130, 'cancelled')
 
 
+REDOCK_BACK_M = .35  # back out this far before coming in again, so the square-up has room to correct the line
+REDOCK_LIMIT = 3
+
+
+def maneuver(node, context, token, key, kind, extra, limit_s):
+    """Run one behaviour-layer maneuver (dock_exit backs out, dock_entry drives in) under its own segment key, so its
+    latch is new, and wait until the behaviour layer reports it complete."""
+    started = time.monotonic()
+    while rclpy.ok() and not node.interrupted:
+        context(node.pose(.8), extra={**extra, 'segment': key})
+        status = (mission_feedback(token) or {}).get(kind, {})
+        if status.get('key') == [token, key]:
+            if status.get('state') == 'fault':
+                raise RouteFailure(19, status.get('message', '5번 다시 맞추기 실패'))
+            if status.get('state') == 'complete':
+                return
+        if time.monotonic()-started > limit_s:
+            raise RouteFailure(19, '5번 다시 맞추기 제한 시간 초과 · 주변을 확인하세요.')
+        rclpy.spin_once(node, timeout_sec=.05)
+    raise RouteFailure(130, 'cancelled')
+
+
+def nav_goal(node, context, extra, x, y, yaw, limit_s=90.):
+    """One Nav2 goal with a fixed arrival heading; the route context stays fresh (and not a dock maneuver) meanwhile."""
+    goal = NavigateToPose.Goal()
+    goal.pose = PoseStamped()
+    goal.pose.header.frame_id = 'map'
+    goal.pose.pose.position.x, goal.pose.pose.position.y = x, y
+    goal.pose.pose.orientation.z, goal.pose.pose.orientation.w = math.sin(yaw/2), math.cos(yaw/2)
+    context(node.pose(.8), extra=extra)
+    future = node.client.send_goal_async(goal)
+    rclpy.spin_until_future_complete(node, future, timeout_sec=10.)
+    if not future.done() or future.exception() is not None:
+        raise RouteFailure(4, 'Nav2 목표 전달 응답을 받지 못했습니다.')
+    node.active_goal = future.result()
+    if not node.active_goal.accepted:
+        node.active_goal = None
+        raise RouteFailure(5, '5번 정면 다시 맞추기 목표가 거부됐습니다.')
+    result = node.active_goal.get_result_async()
+    deadline = time.monotonic()+limit_s
+    while rclpy.ok() and not node.interrupted and not result.done():
+        if time.monotonic() > deadline:
+            raise RouteFailure(6, '5번 정면 다시 맞추기 시간 초과')
+        context(node.pose(.8), extra=extra)
+        rclpy.spin_once(node, timeout_sec=.075)
+    if node.interrupted: raise RouteFailure(130, 'cancelled')
+    response = result.result()
+    node.active_goal = None
+    if response.status != GoalStatus.STATUS_SUCCEEDED:
+        raise RouteFailure(7, f'5번 정면 다시 맞추기 실패 (status {response.status})')
+
+
+def redock(node, context, token, segment, square, dock, attempt):
+    """The ceiling camera judged the Pinky off its loading spot (2026-11-17): back out straight, square up at the
+    point in front of station 5 again with Nav2, and drive straight in once more."""
+    heading = dock.get('yaw_rad', 0.)
+    print('MISSION_STATUS '+json.dumps(dict(phase='redocking', token=token,
+          message=f'5번 위치가 어긋나 다시 맞추는 중 ({attempt}/{REDOCK_LIMIT}) · {REDOCK_BACK_M*100:.0f}cm 후진'), ensure_ascii=False), flush=True)
+    node.cancel_active()
+    maneuver(node, context, token, f'{segment}r{attempt}b', 'dock_exit',
+             dict(dock_exit=True, dock_exit_m=REDOCK_BACK_M, dock_entry=False), 40.)
+    print('MISSION_STATUS '+json.dumps(dict(phase='redocking', token=token,
+          message=f'5번 다시 맞추는 중 ({attempt}/{REDOCK_LIMIT}) · 정면 진입점에서 방향 맞추기'), ensure_ascii=False), flush=True)
+    nav_goal(node, context, dict(segment=f'{segment}r{attempt}n', dock_exit=False, dock_entry=False),
+             square['x_m'], square['y_m'], heading)
+    print('MISSION_STATUS '+json.dumps(dict(phase='redocking', token=token,
+          message=f'5번 다시 맞추는 중 ({attempt}/{REDOCK_LIMIT}) · 정면 직진'), ensure_ascii=False), flush=True)
+    node.cancel_active()
+    maneuver(node, context, token, f'{segment}r{attempt}e', 'dock_entry',
+             dict(dock_entry=True, dock_exit=False,
+                  dock_entry_m=math.hypot(dock['x_m']-square['x_m'], dock['y_m']-square['y_m'])), 40.)
+
+
 def operator_wait(node,context,token,phase,action,message):
+    """Hold still until the dashboard sends `action` (or one of several) for this gate; returns the one it sent."""
+    actions=(action,) if isinstance(action,str) else tuple(action)
     node.cancel_active()
     gate_id=uuid.uuid4().hex
     # A unique token per wait prevents a delayed/double click from releasing a later gate.
@@ -233,9 +308,9 @@ def operator_wait(node,context,token,phase,action,message):
         context(node.pose(.8),mission_wait=True)
         try:
             command=json.loads((CACHE/'operator_confirm.json').read_text())
-            if command.get('token')==gate_id and command.get('action')==action and float(command.get('monotonic',0))>=started and 0<=time.monotonic()-float(command['monotonic'])<=10.:
+            if command.get('token')==gate_id and command.get('action') in actions and float(command.get('monotonic',0))>=started and 0<=time.monotonic()-float(command['monotonic'])<=10.:
                 print('MISSION_STATUS '+json.dumps(dict(phase='driving',token=token,message='확인 완료 · 다음 단계 진행'),ensure_ascii=False),flush=True)
-                return
+                return command['action']
         except (OSError,ValueError,TypeError,KeyError):pass
         rclpy.spin_once(node,timeout_sec=.075)
     raise RouteFailure(130,'cancelled')
@@ -299,10 +374,10 @@ def run(node, points):
             end_turn = False  # Dock straight in; reverse exit owns the next maneuver.
         cursor = start_index+1
         print(f"WAYPOINT_START {cursor+1} {points[cursor]['label']}", flush=True)
-        def context(pose, dock_search=False, mission_wait=False):
+        def context(pose, dock_search=False, mission_wait=False, extra=None):
             near_start = math.hypot(pose[0]-start['x_m'], pose[1]-start['y_m']) < .12
             near_end = math.hypot(pose[0]-end['x_m'], pose[1]-end['y_m']) < .12
-            atomic_json('route_context.json', dict(token=token, segment=segment,
+            atomic_json('route_context.json', {**dict(token=token, segment=segment,
                 monotonic=time.monotonic(), dock_exit=bool(end.get('dock_exit')), dock_search=dock_search, mission_wait=mission_wait, use_ir=bool(end.get("use_ir")), transit=start["label"]=="주차장" or end["label"]=="주차장", corner=(start_turn and near_start) or (end_turn and near_end),
                 start_transition=not course_departure and (start_turn or start['label'] in junctions),
                 end_transition=end_turn or end['label'] in junctions,
@@ -314,7 +389,7 @@ def run(node, points):
                 dock_entry=start['label'] == '5 정면' and end['label'] == '5',
                 dock_entry_m=math.hypot(end['x_m']-start['x_m'], end['y_m']-start['y_m']),
                 outgoing_heading_rad=outgoing if end_turn else heading,
-                label=f"{start['label']}→{end['label']}", heading_rad=heading))
+                label=f"{start['label']}→{end['label']}", heading_rad=heading), **(extra or {})})
         pose = node.pose()
         context(pose)
         if not startup_armed and start["label"]!="주차장" and end.get("use_ir"):
@@ -367,7 +442,17 @@ def run(node, points):
                 checkpoint(cursor, points[cursor], pose, passing=True, sampling='end_pose_no_crossing_sample')
                 cursor += 1
             checkpoint(end_index, end, pose)
-            operator_wait(node,context,token,'docking_manual','dock_complete','5번 도착 · 정지 · 도킹완료 확인 대기')
+            attempt = 0
+            while True:
+                note = f' (다시 맞춘 {attempt}번째)' if attempt else ''
+                action = operator_wait(node, context, token, 'docking_manual', ('dock_complete', 'redock'),
+                                       '5번 도착 · 정지 · 도킹완료 확인 대기'+note)
+                if action == 'dock_complete':
+                    break
+                attempt += 1
+                if attempt > REDOCK_LIMIT:
+                    raise RouteFailure(19, f'5번 다시 맞추기를 {REDOCK_LIMIT}번 했는데도 또 요청받았습니다 · 현장을 확인하세요.')
+                redock(node, context, token, segment, start, end, attempt)
             node.anchor_dock(context, (end['x_m'],end['y_m'],end.get('yaw_rad',heading)), token)
             operator_wait(node,context,token,'docked_manual','received','도킹완료 · 정지 유지 · 물건 수령 완료 대기')
             continue
@@ -396,9 +481,15 @@ def run(node, points):
         deadline = time.monotonic()+240.
         previous_pose = pose
         dock_serviced = False
+        passed = False
         while rclpy.ok() and time.monotonic() < deadline and not node.interrupted:
             pose = node.pose(.8)
             context(pose)
+            # A pass-through stop (pass_radius_m: the passage points, the queue spot): close enough is there. The
+            # next goal then replaces this one, so the Pinky does not stop to meet Nav2's own 3 cm tolerance.
+            if end.get('pass_radius_m') and math.hypot(pose[0]-end['x_m'], pose[1]-end['y_m']) <= end['pass_radius_m']:
+                passed = True
+                break
             feedback = mission_feedback(token)
             if feedback and feedback.get('avoidance',{}).get('phase') not in {None,'idle','fault'}:
                 detour_wait(node,context,token)
@@ -435,9 +526,9 @@ def run(node, points):
             rclpy.spin_once(node, timeout_sec=.075)
         if node.interrupted:
             raise RouteFailure(130, 'cancelled')
-        if not result.done() and not dock_serviced:
+        if not passed and not result.done() and not dock_serviced:
             raise RouteFailure(6, f"{end['label']} 구간 주행 대기 시간 초과")
-        if not dock_serviced:
+        if not dock_serviced and not passed:
             response = result.result()
             node.active_goal = None
             if response.status != GoalStatus.STATUS_SUCCEEDED:
@@ -451,7 +542,7 @@ def run(node, points):
         while cursor < end_index:
             checkpoint(cursor, points[cursor], pose, passing=True, sampling='end_pose_no_crossing_sample')
             cursor += 1
-        checkpoint(end_index, end, pose, sampling='docking_service' if dock_serviced else None)
+        checkpoint(end_index, end, pose, passing=passed, sampling='docking_service' if dock_serviced else None)
         if end['label']=='5' and not end.get('use_ir'):
             operator_wait(node,context,token,'docking_manual','dock_complete','5번 도착 · 정지 · IR 보정 전 수동 도킹완료 확인 대기')
             # Re-anchor along the dock's own heading (route_geometry sets it), not the incoming segment: a free

@@ -50,7 +50,7 @@ def _through_passages(stops, passages):
     return result
 
 
-def build_mission_route(stops, spacing=10.0, passages=None):
+def build_mission_route(stops, spacing=10.0, passages=None, reverse_exit=True):
     """A free mission: Nav2 plans its own way between the stops; nothing in between is followed.
 
     `stops` are point dicts in order (start, '5', drop-off, parking). After station 5 the robot backs out
@@ -70,7 +70,9 @@ def build_mission_route(stops, spacing=10.0, passages=None):
                 x_m=stop['x_m']-DOCK_APPROACH_M*math.cos(heading), y_m=stop['y_m']-DOCK_APPROACH_M*math.sin(heading),
                 yaw_rad=heading, arrival_yaw_rad=heading))
         selected.append(stop)
-        if stop['label'] == '5' and index + 1 < len(stops):
+        # reverse_exit False (navigation.json dock_exit_reverse, 2026-11-17): no backing out of station 5; Nav2 turns
+        # the Pinky round where it stands and drives out forward.
+        if reverse_exit and stop['label'] == '5' and index + 1 < len(stops):
             heading = stop['yaw_rad']
             selected.append(dict(stop, label='도킹 탈출',
                 x_m=stop['x_m']-DOCK_EXIT_M*math.cos(heading), y_m=stop['y_m']-DOCK_EXIT_M*math.sin(heading),

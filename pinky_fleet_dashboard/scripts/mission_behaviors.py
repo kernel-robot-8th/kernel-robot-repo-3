@@ -422,6 +422,10 @@ class DockExit:
                 previous = {'key': key}
             self.state = 'fault' if previous.get('key') == key else 'reversing'
             try:
+                self.target = max(.10, min(.50, float(context.get('dock_exit_m') or .20)))
+            except (TypeError, ValueError):
+                self.target = .20
+            try:
                 temporary = persist.with_suffix('.tmp')
                 temporary.write_text(json.dumps(dict(key=key, state=self.state)))
                 temporary.replace(persist)
@@ -433,15 +437,17 @@ class DockExit:
         if self.state == 'reversing':
             if lateral > .02 or abs(angle(odom[2]-self.origin[2])) > .12 or now-self.started > 30.:
                 self.state = 'fault'
-            elif self.progress >= .198:
+            elif self.progress >= getattr(self, 'target', .20)-.002:
                 self.state = 'complete'
-        self.message = {'reversing':'도킹 스테이션 탈출 · 2cm/s로 20cm 후진',
-                        'complete':'20cm 후진 완료 · 6번 이동 준비',
+        target_cm = getattr(self, 'target', .20)*100
+        self.message = {'reversing':f'도킹 스테이션 탈출 · 2cm/s로 {target_cm:.0f}cm 후진',
+                        'complete':f'{target_cm:.0f}cm 후진 완료 · 다음 이동 준비',
                         'fault':'도킹 후진 중단 · 재시작/방향/이동 제한 확인'}[self.state]
         return Motion(-.02 if self.state == 'reversing' else 0., 0., 'docking_exit_'+self.state)
 
     def status(self):
-        return dict(key=self.key, state=self.state, progress_m=self.progress, target_m=.20, message=self.message)
+        return dict(key=self.key, state=self.state, progress_m=self.progress, target_m=getattr(self, 'target', .20),
+                    message=self.message)
 
 
 class DockEntry:
