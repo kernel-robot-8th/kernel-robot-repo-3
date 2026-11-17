@@ -15,6 +15,7 @@
   <script src="/pinky-map.js" defer></script>
   <script src="/pinky.js" defer></script>
   <script src="/pinky-detail.js" defer></script>
+  <script src="/pinky-test.js" defer></script>
   <script src="/inventory.js" defer></script>
   <script src="/dashboard.js" defer></script>
   <script src="/ros-monitor.js" defer></script>
@@ -161,6 +162,20 @@
           <svg id="routeStrip" class="route-svg" role="img" aria-label="경로 노선도"></svg>
         </div>
         <p id="routeOffStrip" class="route-off"></p>
+      </div>
+    </section>
+    <section aria-labelledby="fleet-test-title">
+      <div class="section-heading"><h2 id="fleet-test-title">전체 주행 테스트</h2><span class="updated">주문 없이 · 적재 자리 → 수령 구역 → 자기 주차 칸</span></div>
+      <div class="fleet-test-card">
+        <div class="fleet-test-actions">
+          <button type="button" id="fleetTestStart" disabled>전체 출발</button>
+          <button type="button" id="fleetTestHome" class="secondary" disabled>전체 주차장 복귀</button>
+          <button type="button" id="fleetTestBattery" class="secondary">배터리 확인</button>
+          <label class="fleet-test-auto"><input type="checkbox" id="fleetTestAuto"> 카메라가 OK면 도킹완료 자동으로 보내기</label>
+          <span id="fleetTestCamera" class="chip">적재 자리 카메라: 확인 중</span>
+        </div>
+        <ol id="fleetTestRows" class="fleet-test-rows"><li class="muted">핑키 상태를 불러오는 중…</li></ol>
+        <p class="note">순서대로 출발해요. 9번 통로는 한 대씩 지나가고, 다음 핑키는 대기 자리(4번)에서 기다렸다가 앞 핑키가 적재 자리를 떠나면 들어가요. 각 줄에 지금 눌러야 할 버튼만 나와요: <strong>도킹완료</strong>(적재 자리에 섰을 때) → <strong>적재 완료</strong>(물건을 실었을 때) → <strong>수령 완료</strong>(고객이 받았을 때, 자기 주차 칸으로 돌아가요).</p>
       </div>
     </section>
     <section aria-labelledby="pinky-cards-title">
@@ -498,7 +513,7 @@
           <li><i class="swatch unknown"></i>모르는 곳</li>
           <li><i class="swatch keepout"></i>금지 구역</li>
           <li><i class="swatch spot"></i>주차 자리</li>
-          <li><i class="swatch station"></i>5번 적재</li>
+          <li><i class="swatch station"></i>적재 자리</li>
           <li><i class="swatch junction"></i>교차로 7</li>
           <li><i class="swatch waypoint"></i>웨이포인트</li>
           <li><i class="swatch zone"></i>수령 구역</li>

@@ -270,8 +270,9 @@ function viaLabels() {
 function renderDropoffs() {
   const select = detailField('dropoff');
   // 원점: load at 5, back out, and drive back to where it started (no hand-over stop).
-  const labels = ['원점', ...dropoffLabels()];
-  const html = labels.map((label) => `<option value="${escapeHtml(label)}">${escapeHtml(label === '원점' ? '원점 (적재 후 후진·복귀)' : label)}</option>`).join('');
+  const labels = ['주차장', '원점', ...dropoffLabels()];
+  const names = { 주차장: '주차장 (적재 후 바로 복귀)', 원점: '원점 (적재 후 후진·복귀)' };
+  const html = labels.map((label) => `<option value="${escapeHtml(label)}">${escapeHtml(names[label] || label)}</option>`).join('');
   if (pinkyScreen.rendered.get(select) === html) return;
   const previous = select.value;
   select.innerHTML = html;
@@ -356,7 +357,7 @@ const pinkyDetailActions = {
   'test-mission': {
     path: 'test-mission', label: '시험 임무 시작',
     body: () => ({ dropoff: detailField('dropoff').value, via: viaLabels() }),
-    confirm: (name) => `${name} 핑키를 출발시킬까요?\n${viaLabels().length ? `${viaLabels().join(' → ')} 경유 → ` : ''}5번 적재 → ${detailField('dropoff').value === '원점' ? '후진 → 출발한 자리로 복귀' : `${detailField('dropoff').value} 배달 → 주차장 복귀`}\n로봇 옆에 지켜보는 사람이 있어야 해요.`,
+    confirm: (name) => `${name} 핑키를 출발시킬까요?\n${viaLabels().length ? `${viaLabels().join(' → ')} 경유 → ` : ''}5번 적재 → ${detailField('dropoff').value === '원점' ? '후진 → 출발한 자리로 복귀' : detailField('dropoff').value === '주차장' ? '후진 → 주차장 복귀' : `${detailField('dropoff').value} 배달 → 주차장 복귀`}\n로봇 옆에 지켜보는 사람이 있어야 해요.`,
   },
   'initial-pose': {
     path: 'initial-pose', label: '주차장 좌표로 맞추기', body: () => ({}),

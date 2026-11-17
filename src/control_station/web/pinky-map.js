@@ -159,9 +159,11 @@ function mapMarksSvg(data, frame) {
       <rect x="-12" y="-12" width="24" height="24" rx="7"/><text>${escapeHtml(spot.name)}</text></g>`);
   });
   const seen = new Set();
+  // A waypoint that a receiving zone or the loading spot is drawn on is not drawn twice.
+  const marked = new Set([...(data.zones || []).map((zone) => zone.waypoint), '5']);
   Object.values(data.waypoints || {}).flat().forEach((point) => {
     const key = `${point.label}@${point.x_m.toFixed(2)},${point.y_m.toFixed(2)}`;
-    if (seen.has(key)) return;
+    if (seen.has(key) || marked.has(point.label)) return;
     seen.add(key);
     parts.push(`<g class="map-waypoint" transform="translate(${frame.x(point.x_m)} ${frame.y(point.y_m)})">
       <circle r="4.5"/>${captionSvg(point.label, frame.x(point.x_m), frame, 8)}</g>`);
@@ -170,13 +172,13 @@ function mapMarksSvg(data, frame) {
     if (mark.x_m == null) return;
     const station = mark.key === 'dock5';
     parts.push(`<g class="map-landmark ${station ? 'station' : 'junction'}" transform="translate(${frame.x(mark.x_m)} ${frame.y(mark.y_m)})">
-      <circle r="${station ? 15 : 12}"/><text>${station ? '5' : '7'}</text>
+      <circle r="${station ? 15 : 12}"/><text>${station ? '적' : '7'}</text>
       ${captionSvg(mark.label, frame.x(mark.x_m), frame, station ? 21 : 18)}</g>`);
   });
   (data.zones || []).forEach((zone) => {
     if (zone.x_m == null) return;
     parts.push(`<g class="map-zone" transform="translate(${frame.x(zone.x_m)} ${frame.y(zone.y_m)})">
-      <circle r="14"/><text>${escapeHtml((zone.label || '').slice(-1))}</text>
+      <circle r="14"/><text>${escapeHtml(((zone.label || '').match(/[0-9A-Z]/) || ['·'])[0])}</text>
       ${captionSvg(zone.label, frame.x(zone.x_m), frame, 20)}</g>`);
   });
   return parts.join('');
@@ -251,6 +253,10 @@ function drawPinkyMap(svg, empty) {
     svg.querySelector('.map-marks').innerHTML = mapMarksSvg(data, frame);
   }
   const stopping = new Set((pinkyScreen.view?.pinkies || []).filter((pinky) => pinky.stop_pending).map((pinky) => pinky.pinky_id));
+  // The loading spot turns green while the ceiling camera judges the Pinky on it in position, orange when off it.
+  const station = svg.querySelector('.map-landmark.station');
+  station?.classList.toggle('arrived', pinkyMapState.dockState === 'IN_POSITION');
+  station?.classList.toggle('off', pinkyMapState.dockState === 'OFF_POSITION');
   drawMapPaths(svg.querySelector('.map-paths'), data.pinkies || [], frame);
   drawMapPinkies(svg.querySelector('.map-pinkies'), data.pinkies || [], frame, stopping);
   const placed = (data.pinkies || []).filter(mapPlaced);
