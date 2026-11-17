@@ -108,7 +108,7 @@ POST_ROUTES: tuple[Route, ...] = (
           orders.post_inventory, "Cross-origin inventory request rejected"),
     # The order window is a page of this server, so a browser order is same-origin like the operator screen.
     Route(_path("/api/orders"), orders.post_order, "Cross-origin order request rejected"),
-    Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "orders"] and parts[3] in {"start", "reject", "pickup-confirm"},
+    Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "orders"] and parts[3] in {"start", "reject", "pickup-confirm", "arrival-confirm"},
           orders.post_order_action, "Cross-origin order-control request rejected", reads_body=False),
 )
 

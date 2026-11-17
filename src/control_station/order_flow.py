@@ -7,7 +7,10 @@ Steps (made per order by store.order_step_definitions):
                        by arm; written into the PICK_ITEM/VERIFY_TRANSFER steps
   WAIT_PINKY_ARRIVAL   the loading spot is free for this order, the Pinky fleet reports the Pinky stopped at the
                        station (docking_manual) and the ceiling camera judges it ARRIVED. A misaligned Pinky raises
-                       PINKY_POSITION_ABNORMAL and the step keeps waiting; the arms never move before this passes.
+                       PINKY_POSITION_ABNORMAL; when the camera says MISALIGNED for redock_after_checks checks in a row
+                       the Pinky is sent back in (redock: it backs out, squares up and drives in again), up to
+                       max_redocks times, then the step keeps waiting for the operator. The arms never move before
+                       this passes.
   CONFIRM_DOCKING      dock_complete to the Pinky fleet, which then holds the Pinky (docked_manual)
   PICK_ITEM            the planned arm picks one unit with its trained policy and puts it on the Pinky
   VERIFY_TRANSFER      shelf count -1 and Pinky count +1; still on the shelf -> PICK_FAILED_STILL_ON_SHELF;
@@ -106,6 +109,8 @@ class OrderFlow:
         arrival_timeout_s: float = 600.0,
         # dock_complete -> docked_manual passes through docking_anchor, which the Pinky allows up to 18 s.
         signal_timeout_s: float = 30.0,
+        max_redocks: int = 3,
+        redock_after_checks: int = 3,
         pick_stats: Callable[[], PickStats] | None = None,
         route_for: Callable[[str | None], list[str] | None] | None = None,
         pickup_timeout_s: float = 1800.0,
@@ -120,6 +125,9 @@ class OrderFlow:
         self.pickup_timeout_s = pickup_timeout_s
         # Orders whose Pinky waits at the receiving zone: order id -> set when the customer confirms pickup.
         self._pickups: dict[str, threading.Event] = {}
+        # Orders whose Pinky stands at the loading spot without a registered marker: the operator confirms the
+        # arrival (confirm_arrival), since the ceiling camera cannot judge it.
+        self._arrivals: dict[str, threading.Event] = {}
         # Past pick results per (policy, arm) for the arm choice; none -> every arm starts at the same rate.
         self.pick_stats = pick_stats or dict
         self.policies = policies
@@ -127,6 +135,8 @@ class OrderFlow:
         self.dwell_s = dwell_s
         self.poll_s = poll_s
         self.arrival_timeout_s = arrival_timeout_s
+        self.max_redocks = max_redocks
+        self.redock_after_checks = redock_after_checks
         self.signal_timeout_s = signal_timeout_s
         # One Pinky can stand between the two arms, so one order at a time uses the arms and the spot.
         self.station_owner: str | None = None
@@ -326,6 +336,7 @@ class OrderFlow:
         pinky, task_id = self._pinky(ctx), ctx.task["id"]
         deadline = time.monotonic() + self.arrival_timeout_s
         last_phase = last_parking = waiting_for = fleet_error = None
+        misaligned_checks = redocks = 0
         while True:
             if ctx.cancel_event.is_set():
                 return None
@@ -380,6 +391,28 @@ class OrderFlow:
                     observation = self.devices.parking(pinky)
                 except Exception as exc:  # node down, view moved, no frame: keep waiting, show why
                     observation = {"status": getattr(exc, "error_code", "PARKING_CHECK_FAILED"), "reason": str(exc)}
+                if observation.get("status") == "NOT_REGISTERED":
+                    # No marker registration for this Pinky (2026-11-17: only P2 carries one): the camera cannot judge
+                    # it, so the operator looks and confirms. The arms still never move before that.
+                    with self._guard:
+                        waiting = self._arrivals.setdefault(task_id, threading.Event())
+                    if last_parking != "NOT_REGISTERED":
+                        last_parking = "NOT_REGISTERED"
+                        ctx.record("ARRIVAL_NEEDS_OPERATOR", {
+                            "pinky_id": pinky, "observation": observation,
+                            "message": f"핑키 {self._name(pinky)}가 적재 자리에 섰어요 · 마커가 없어 카메라로 확인할 수 없어요"
+                                       " · 제자리에 섰는지 보고 [도착 확인]을 눌러 주세요"})
+                    if waiting.is_set():
+                        with self._guard:
+                            self._arrivals.pop(task_id, None)
+                        self._tokens[task_id] = status.get("mission_token")
+                        ctx.record("PARKING_OBSERVED", {"observation": {**observation, "status": "OPERATOR_CONFIRMED"},
+                                                        "pinky_id": pinky,
+                                                        "message": f"핑키 {self._name(pinky)} 도착 · 운영자 확인 · 다음 단계로"})
+                        return {"source": "operator", "outcome": "PINKY_ARRIVED", "pinky_id": pinky,
+                                "parking": {**observation, "status": "OPERATOR_CONFIRMED"}, "simulated": False}
+                    ctx.cancel_event.wait(self.poll_s)
+                    continue
                 if observation.get("status") == "ARRIVED":
                     self._tokens[task_id] = status.get("mission_token")
                     ctx.record("PARKING_OBSERVED", {"observation": observation, "pinky_id": pinky,
@@ -388,6 +421,22 @@ class OrderFlow:
                             "parking": observation, "simulated": observation.get("simulated", False)}
                 offset = observation.get("offset") or {}
                 distance = offset.get("distance_mm")
+                # Wrong place, seen steadily: send the Pinky back in (it backs out, squares up, drives in again).
+                misaligned_checks = misaligned_checks + 1 if observation.get("status") == "MISALIGNED" else 0
+                if misaligned_checks >= self.redock_after_checks and redocks < self.max_redocks:
+                    redocks += 1
+                    misaligned_checks = 0
+                    try:
+                        answer = self.devices.fleet_confirm(pinky, "redock", status.get("mission_token"))
+                        ctx.record("PINKY_REDOCK", {
+                            "pinky_id": pinky, "attempt": redocks, "observation": observation, "answer": answer,
+                            "message": f"핑키 {self._name(pinky)} 위치 어긋남 · 다시 맞춰 들어가기 {redocks}/{self.max_redocks}"})
+                    except (PinkyFleetError, OSError) as exc:
+                        ctx.record("PINKY_REDOCK_FAILED", {"pinky_id": pinky, "attempt": redocks, "error": str(exc),
+                                                           "alert": True, "message": f"다시 맞추기 요청 실패: {exc}"})
+                    last_parking = None
+                    ctx.cancel_event.wait(self.poll_s)
+                    continue
                 # Real offsets move by a few mm every check: one alert per status and 1 cm band, not per check.
                 key = (observation.get("status"), None if distance is None else round(float(distance) / 10))
                 if key != last_parking:
@@ -499,6 +548,16 @@ class OrderFlow:
             raise OrderFlowError(code, f"핑키 위 물건이 주문과 다릅니다 · 부족 {missing or '없음'} · 초과 {extra or '없음'}", "cameras")
         return {"source": load.get("source"), "outcome": "LOAD_CONFIRMED", "loaded": dict(seen),
                 "simulated": load.get("simulated", False)}
+
+    def confirm_arrival(self, task_id: str) -> bool:
+        """The operator saw the order's marker-less Pinky standing right at the loading spot; False when the order is
+        not waiting for that."""
+        with self._guard:
+            waiting = self._arrivals.get(task_id)
+        if waiting is None:
+            return False
+        waiting.set()
+        return True
 
     def confirm_pickup(self, task_id: str) -> bool:
         """The customer (or the operator) confirmed pickup at the receiving zone; False if the order's Pinky is

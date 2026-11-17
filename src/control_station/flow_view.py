@@ -12,7 +12,8 @@ from control_station.store import PINKY_NAMES, shipment_of  # noqa: E402  (re-ex
 PHASE_LABELS = {
     "parked": "주차장 대기", "driving": "이동 중", "docking_manual": "5번 도착 · 정지",
     "docking_anchor": "도킹완료 · 위치 재설정 중", "docked_manual": "정지 유지 · 수령 대기",
-    "dock_exit": "도킹 탈출 · 후진", "recovering": "장애물 우회 중",
+    "dock_exit": "도킹 탈출 · 후진", "dock_entry": "5번 정면 직진 진입", "redocking": "5번 다시 맞추는 중",
+    "recovering": "장애물 우회 중",
     "course_complete": "코스 완주", "returning": "복귀 중",
 }
 # The order pipeline on the screen, each stage made of step types.
@@ -138,6 +139,15 @@ def summarize_order(order: dict[str, Any]) -> dict[str, Any]:
                 alert = {"level": "warning", "code": event["event_type"], "message": event["payload"].get("message"),
                          "at": event["received_at"], "task_id": order["id"], "title": title}
                 break
+    if (alert is None and order["status"] in {"RUNNING", "VALIDATING"} and active is not None
+            and active["step_type"] == "WAIT_PINKY_ARRIVAL"):
+        # Not a fault: the Pinky has no marker, so a person confirms that it stands at the loading spot.
+        asked = next((event for event in reversed(events) if event.get("step_id") == active["id"]
+                      and event["event_type"] == "ARRIVAL_NEEDS_OPERATOR"), None)
+        if asked is not None:
+            alert = {"level": "action", "code": "ARRIVAL_NEEDS_OPERATOR", "title": "도착 확인 대기",
+                     "message": asked["payload"].get("message"), "at": asked["received_at"], "task_id": order["id"],
+                     "arrival": True}
     if alert is None and active is not None and active["step_type"] == "CONFIRM_PICKUP":
         # Not a fault: a person has to confirm the pickup (the customer's app, or the operator for them).
         waiting = next((event for event in reversed(events) if event["event_type"] == "PICKUP_WAITING"), None)

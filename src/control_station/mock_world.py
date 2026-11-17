@@ -194,14 +194,17 @@ class MockWorld:
     def fleet_confirm(self, pinky_id: str, action: str, token: str | None) -> dict[str, Any]:
         with self._lock:
             pinky = self.pinkies[pinky_id]
-            wanted_phase = {"dock_complete": "docking_manual", "received": "docked_manual"}.get(action)
+            wanted_phase = {"dock_complete": "docking_manual", "redock": "docking_manual", "received": "docked_manual"}.get(action)
             if wanted_phase is None:
                 raise PinkyFleetError("PINKY_SIGNAL_INVALID", f"알 수 없는 신호 {action}")
             if self._take_fault("FLEET_REJECT", action) is not None:
                 raise PinkyFleetError("PINKY_SIGNAL_REJECTED", "현재 임무의 확인 단계와 신호가 일치하지 않습니다. (모의 거부)")
             if pinky["phase"] != wanted_phase or not token or token != pinky["token"]:
                 raise PinkyFleetError("PINKY_SIGNAL_REJECTED", "현재 임무의 확인 단계와 신호가 일치하지 않습니다.")
-            if action == "dock_complete":
+            if action == "redock":
+                pinky.update(phase="driving", token=None, message="5번 다시 맞추는 중 (모의)", location="5번 정류장",
+                             until=self.clock() + self.drive_s / 3, leg="to_station")
+            elif action == "dock_complete":
                 pinky.update(phase="docked_manual", token=uuid.uuid4().hex[:12],
                              message="도킹완료 · 정지 유지 · 물건 수령 완료 대기")
             else:

@@ -98,6 +98,9 @@ class PinkyFleetClient:
         self.status_max_age_s = status_max_age_s
         self._cache: tuple[float, dict[str, Any]] | None = None
         self._lock = threading.Lock()
+        # The virtual fleet (simulation/virtual_pinky_fleet) says "simulated": true in every answer; the real
+        # dashboard says nothing, so its Pinkys stay real.
+        self.simulated = False
 
     def _request(self, method: str, path: str, body: dict[str, Any] | None = None,
                  timeout_s: float | None = None) -> tuple[int, dict[str, Any]]:
@@ -127,6 +130,7 @@ class PinkyFleetClient:
         robots = {str(robot.get("id")): robot for robot in answer["robots"] if isinstance(robot, dict)}
         with self._lock:
             self._cache = (time.monotonic(), robots)
+            self.simulated = answer.get("simulated") is True
             self._extras = {"keepout": answer.get("keepout"), "traffic": answer.get("traffic"),
                             "password_set": answer.get("password_set"), "busy_robot": answer.get("busy_robot")}
         return robots
@@ -235,7 +239,7 @@ class PinkyFleetClient:
         battery_percent, battery_volts = _fresh_battery(robot)
         battery_percent = self._battery.add(pinky_id, time.monotonic(), battery_percent)
         return {
-            "source": "pinky_fleet", "simulated": False, "pinky_id": pinky_id, "phase": phase,
+            "source": "pinky_fleet", "simulated": self.simulated, "pinky_id": pinky_id, "phase": phase,
             "mission_token": route.get("mission_token"), "route_status": route_status,
             "message": route.get("message") or robot.get("message"),
             "location": route.get("current_label") or robot.get("stage"),
@@ -251,9 +255,17 @@ class PinkyFleetClient:
         202 means the dashboard accepted the start, not that the Pinky moved; the flow follows its phase."""
         if not route_labels:
             raise PinkyFleetError("RECEIVING_ZONE_MISSING", "수령 구역 경로가 없는 주문은 실제 핑키를 출발시킬 수 없습니다")
-        status, answer = self._send("POST", f"/api/robots/{pinky_id}/route", {"labels": list(route_labels)})
+        labels = list(route_labels)
+        if "5" in labels:
+            # Nav2 driving (2026-11-17): station 5 (square up, drive in, ceiling camera, redock) -> the receiving zone
+            # (the last label) -> its own parking spot; labels before 5 are passed on the way.
+            status, answer = self._send("POST", f"/api/robots/{pinky_id}/mission",
+                                        {"dropoff": labels[-1], "via": labels[:labels.index("5")]})
+        else:
+            status, answer = self._send("POST", f"/api/robots/{pinky_id}/route", {"labels": labels})
         if status == 202 and answer.get("ok"):
-            return {"accepted": True, "simulated": False, "http_status": status, "labels": answer.get("labels")}
+            return {"accepted": True, "simulated": answer.get("simulated") is True, "http_status": status,
+                    "labels": answer.get("labels")}
         raise PinkyFleetError("PINKY_DISPATCH_REJECTED", answer.get("error") or answer.get("message") or f"HTTP {status}")
 
     def mission_complete(self, pinky_id: str, token: str | None) -> dict[str, Any]:
@@ -261,7 +273,8 @@ class PinkyFleetClient:
         returns to its own parking spot."""
         status, answer = self._send("POST", f"/api/robots/{pinky_id}/mission-complete", {"token": token})
         if status == 202 and answer.get("ok"):
-            return {"accepted": True, "simulated": False, "http_status": status, "message": answer.get("message")}
+            return {"accepted": True, "simulated": answer.get("simulated") is True, "http_status": status,
+                    "message": answer.get("message")}
         if status == 409:
             raise PinkyFleetError("PINKY_SIGNAL_REJECTED", answer.get("error") or "코스 완주 단계·토큰과 맞지 않습니다")
         raise PinkyFleetError("PINKY_SIGNAL_NOT_DELIVERED", answer.get("message") or answer.get("error") or f"HTTP {status}")
@@ -273,7 +286,8 @@ class PinkyFleetClient:
         with self._lock:
             self._cache = None  # the phase is about to change
         if status == 202 and answer.get("ok"):
-            return {"accepted": True, "simulated": False, "http_status": status, "message": answer.get("message")}
+            return {"accepted": True, "simulated": answer.get("simulated") is True, "http_status": status,
+                    "message": answer.get("message")}
         if status == 409:
             raise PinkyFleetError("PINKY_SIGNAL_REJECTED", answer.get("error") or "현재 단계·토큰과 신호가 맞지 않습니다")
         if status == 502 or (status == 202 and not answer.get("ok")):

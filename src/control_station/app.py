@@ -400,6 +400,7 @@ def main() -> None:
     server.order_desk = OrderDesk(
         task_store, server.task_orchestrator, server.order_devices, server.arms, act_policies,
         receiving_zones, pick_stats, inventory=server.inventory.snapshot, pickup=server.order_flow.confirm_pickup,
+        arrival=server.order_flow.confirm_arrival,
     )
     # A larger order runs as shipments; each later one gets its Pinky from the desk when it starts.
     server.order_flow.choose_shipment_pinky = server.order_desk.assign_next_shipment

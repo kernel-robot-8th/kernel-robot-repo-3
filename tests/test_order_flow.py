@@ -134,6 +134,17 @@ class OrderFlowTests(unittest.TestCase):
         kinds = [event["event_type"] for event in task["events"]]
         self.assertLess(kinds.index("PINKY_POSITION_ABNORMAL"), kinds.index("ARM_PICK_STARTED"))
 
+    def test_a_steadily_misaligned_pinky_is_sent_back_in_then_the_arms_go(self) -> None:
+        self.start("PINKY_MISALIGNED:4")  # three checks in a row -> redock; the fourth after it, then ARRIVED
+        task = self.wait(self.order([{"object_class": "carrot", "quantity": 1}]))
+        self.assertEqual(task["status"], "SUCCEEDED", task["error"])
+        redocks = self.events(task, "PINKY_REDOCK")
+        self.assertEqual([event["payload"]["attempt"] for event in redocks], [1])
+        self.assertTrue(redocks[0]["payload"]["answer"]["accepted"])
+        kinds = [event["event_type"] for event in task["events"]]
+        self.assertLess(kinds.index("PINKY_REDOCK"), kinds.index("PARKING_OBSERVED"))
+        self.assertLess(kinds.index("PARKING_OBSERVED"), kinds.index("ARM_PICK_STARTED"))
+
     def test_parking_errors_and_offsets_keep_waiting_then_continue_on_arrival(self) -> None:
         self.start()
         answers = iter([
