@@ -32,7 +32,37 @@ Each prepared robot card has **초기 위치로 이동**. After physically placi
 - Network access from the PC to all three Pinky SSH servers.
 - The robot account must be able to run ROS 2 without a sudo prompt.
 
-The robots' ROS overlay is sourced remotely from `/home/pinky/pinky_pro/install/setup.bash`. When `map-proto.yaml` is selected, its YAML and PGM files are copied from `/home/gigi/Documents/Pinky_backup/` to each robot before Nav2 starts; the YAML image reference is rewritten to the deployed absolute path.
+The robots' ROS overlay is sourced remotely from `/home/pinky/pinky_pro/install/setup.bash`. When `map-proto.yaml` is selected, its YAML and PGM files are copied from `~/Documents/Pinky_backup/` on this PC to each robot before Nav2 starts; the YAML image reference is rewritten to the deployed absolute path.
+
+## 처음 세팅 (새 PC)
+
+1. **준비물**: Ubuntu, ROS 2 Jazzy, `python3-scipy`, OpenSSH 클라이언트. PC가 핑키 세 대와 같은 네트워크에 있어야 합니다.
+2. **핑키 주소 확인**: `app.py`의 `ROBOTS`에 IP가 적혀 있습니다(10번 `192.168.0.9`, 11번 `192.168.0.8`, 12번 `192.168.0.11`). 네트워크가 다르면 여기를 고칩니다.
+3. **지도 복사**: 관제는 지도를 저장소가 아니라 홈 폴더에서 읽습니다.
+
+   ```bash
+   mkdir -p ~/Documents/Pinky_backup
+   cp config/map/map-proto.yaml config/map/map-proto.pgm ~/Documents/Pinky_backup/
+   ```
+
+4. **실행**: `./run.sh` 뒤 <http://127.0.0.1:8765>를 엽니다.
+5. **SSH 비밀번호 입력**: 저장소에 없습니다. 팀원에게 받아 관제 화면에 넣습니다.
+6. **주행준비**: 핑키를 자기 주차 칸에 세우고 [주행준비]를 누릅니다. 전원만 켠 핑키는 ROS가 뜨지 않습니다.
+
+저장소에 이미 들어 있는 값:
+
+| 파일 | 내용 |
+|---|---|
+| `config/map/` | 셀 지도(`map-proto`) — 3번에서 복사하는 원본 |
+| `data/waypoints.json` | 웨이포인트: 5번 적재 자리, 4번 대기 자리, 수령 1·2 등 |
+| `config/parking.json` | 핑키별 주차 칸 좌표 |
+| `config/navigation.json` | Nav2·초음파·통로·대기 자리 설정 |
+| `config/robot_geometry.json` | 차체·센서 치수 |
+| `config/keepout/` | 들어가면 안 되는 구역 |
+
+웨이포인트와 주차 좌표는 이 지도의 좌표입니다. 지도를 새로 만들면 웨이포인트도 다시 기록해야 합니다. 지도를 고쳤을 때는 `~/Documents/Pinky_backup/`의 파일을 `config/map/`에도 복사해 커밋합니다.
+
+IR 보정값(`data/ir_profiles.json`, `data/ir_calibration/`)은 저장소에 없습니다. IR 조향(`ir_steering`)이 꺼져 있는 동안은 필요하지 않습니다.
 
 ## Run
 
