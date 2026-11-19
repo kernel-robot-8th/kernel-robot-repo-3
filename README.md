@@ -25,7 +25,7 @@ scripts/check_setup.sh --install --vision --dry-run  # 실행할 명령만 보�
 필수 항목이 빠지면 종료 코드 1로 끝나고, 빠진 항목마다 설치 명령을 보여 줍니다.
 
 - `--vision`을 쓰면 ultralytics가 `opencv-python` 5.x를 함께 설치해 `cv2`를 덮어씁니다. 이 저장소는 `opencv-python-headless` 4.x를 쓰므로 스크립트가 설치 뒤 4.x로 되돌립니다.
-- 팀 YOLO 모델은 커밋 `b3fcbbe`의 `yolo/models/best19.pt`를 Git에서 꺼내 `.control-station/models/best19_b3fcbbe.pt`에 둡니다. 이 폴더는 Git에서 제외됩니다.
+- 팀 YOLO 모델은 커밋 `d8687e1`의 `yolo/models/best24.pt`를 Git에서 꺼내 `.control-station/models/best24_d8687e1.pt`에 둡니다. 이 폴더는 Git에서 제외됩니다.
 - ROS 2 Jazzy 자체 설치, 카메라 내부 보정, 주차 위치 등록은 스크립트가 하지 않습니다. 각각 [ROS 2 설치 안내](https://docs.ros.org/en/jazzy/Installation.html), [카메라 내부 보정](docs/implementation/camera-intrinsic-calibration.md), [실행 방법](docs/implementation/runbook.md#천장-카메라-pinky-주차-판정)을 따릅니다.
 
 ## 빠른 실행
