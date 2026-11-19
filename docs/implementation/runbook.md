@@ -225,7 +225,9 @@ CONTROL_STATION_SHELF_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:10:1.0-vide
 
 선반 카메라는 `shelf_camera`(`SHELF`) 카드로 영상과 연결 상태를 보여 줍니다. `CONTROL_STATION_SHELF_YOLO_WEIGHTS`(또는 `CONTROL_STATION_SHELF_YOLO_WORLD_PROMPTS`)를 주면 Head Camera와 같은 방식으로 YOLO 검출을 표시합니다. `_CONF`, `_DEVICE` 설정도 `CONTROL_STATION_SHELF_YOLO_` 접두어로 같습니다. 작업 관측 단계에는 연결하지 않습니다.
 
-2026-11-11부터 두 카메라 모두 인웅님 모델 best19(12클래스)를 씁니다. `feat/yolo-object-detection` 브랜치 `b3fcbbe`의 `yolo/models/best19.pt`이고, `scripts/check_setup.sh --vision`이 `.control-station/models/best19_b3fcbbe.pt`로 받아 둡니다.
+2026-11-18부터 두 카메라 모두 인웅님 모델 best24(12클래스, Pinky 오라벨을 지우고 1,718장으로 학습)를 씁니다. `feat/yolo-object-detection` 브랜치 `d8687e1`의 `yolo/models/best24.pt`이고, `scripts/check_setup.sh --vision`이 `.control-station/models/best24_d8687e1.pt`로 받아 둡니다. 이 PC에서는 검출 신뢰도 기준을 두 카메라 모두 0.75로 둡니다(`CONTROL_STATION_HEAD_YOLO_CONF`, `CONTROL_STATION_SHELF_YOLO_CONF`). 클래스 이름과 순서는 best19와 같습니다.
+
+2026-11-11부터 11-18까지는 두 카메라 모두 인웅님 모델 best19(12클래스)를 썼습니다. `feat/yolo-object-detection` 브랜치 `b3fcbbe`의 `yolo/models/best19.pt`이고, `.control-station/models/best19_b3fcbbe.pt`에 두었습니다.
 
 2026-11-07 기준 두 카메라 모두 팀 기준 모델을 썼습니다. `feat/yolo-object-detection` 브랜치의 `2413f4c` "10클래스 YOLO26n 모델 best11.pt"(`yolo/models/best11.pt`, SHA-256 `c6850be0…`)입니다. 모델 파일은 Git에서 제외되는 `.control-station/models/best11_2413f4c.pt`에 두고, `CONTROL_STATION_HEAD_YOLO_WEIGHTS`와 `CONTROL_STATION_SHELF_YOLO_WEIGHTS`에 같은 경로를 지정합니다. 이전 기준 모델은 `e252f4e`의 3클래스 모델(`strawberry_car_ball_r2_e252f4e.pt`)이었습니다.
 

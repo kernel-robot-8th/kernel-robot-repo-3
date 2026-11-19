@@ -312,6 +312,28 @@ body:not(.dev) .sim-tag, body:not(.dev) .simulated { display: none; }
 .pinky-link.error .pinky-link-dot { background: var(--red); box-shadow: 0 0 0 4px rgba(240, 68, 82, .15); }
 .pinky-link.error strong { color: var(--red-ink); }
 .pinky-link.mock .pinky-link-dot { background: var(--text-3); }
+.fleet-test-card { display: grid; gap: 14px; padding: 18px 20px; border-radius: var(--radius-card, 20px); background: var(--card); margin-bottom: 20px; }
+.fleet-test-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.fleet-test-actions .chip { margin-left: auto; }
+.fleet-test-rows { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.fleet-test-rows li { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 10px 12px; border-radius: 14px; background: var(--card-muted); }
+.fleet-test-rows li.needs-you { background: #eaf2ff; box-shadow: inset 0 0 0 1.5px var(--blue); }
+.fleet-test-rows li.arrived { background: #e7f8ee; box-shadow: inset 0 0 0 1.5px #12a150; }
+.fleet-test-verdict { flex: 1 0 100%; justify-self: start; width: fit-content; font-weight: 700; }
+.fleet-test-auto { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 13px; white-space: nowrap; }
+.fleet-test-auto input { flex: none; width: 18px; height: 18px; min-height: 0; margin: 0; padding: 0; }
+.fleet-test-repeat input { width: 56px; height: 28px; padding: 0 6px; }
+.fleet-test-pick { flex: none; width: 18px; height: 18px; min-height: 0; margin: 0; padding: 0; }
+.fleet-test-battery { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fleet-test-battery.danger { background: #ffe1e1; color: #c62828; font-weight: 700; }
+.fleet-test-rows li.waiting { background: #fff6e0; box-shadow: inset 0 0 0 1.5px #e8a30c; }
+.fleet-test-rows li.waiting .fleet-test-where small { color: #8a5a00; white-space: normal; }
+.fleet-test-order { width: 22px; color: var(--text-3); font-weight: 700; text-align: center; }
+.fleet-test-where { display: grid; flex: 1 1 200px; min-width: 0; }
+.fleet-test-where strong { font-size: 14px; }
+.fleet-test-where small { color: var(--text-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fleet-test-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.fleet-test-rows select { flex: 0 0 auto; width: auto; min-width: 110px; }
 .pinky-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr)); gap: 12px; }
 .pinky-empty { grid-column: 1 / -1; margin: 0; padding: 22px; border-radius: var(--radius-card); background: var(--card-muted); color: var(--text-2); text-align: center; }
 /* A card opens its Pinky's detail when tapped anywhere outside its buttons. */
@@ -410,6 +432,8 @@ dl.pinky-facts { display: grid; margin: 0; padding: 0; }
 .map-landmark circle { stroke-width: 2.5; }
 .map-landmark.station circle { fill: var(--blue-soft); stroke: var(--blue); }
 .map-landmark.station > text:not(.map-caption) { fill: var(--blue-strong); }
+.map-landmark.station.arrived circle { fill: #c9f2d8; stroke: #12a150; stroke-width: 4; }
+.map-landmark.station.off circle { fill: #ffe3c2; stroke: #e8830c; stroke-width: 4; }
 .map-landmark.junction circle { fill: var(--card); stroke: var(--text-3); }
 .map-landmark.junction > text:not(.map-caption) { fill: var(--text-2); font-size: 12px; }
 .map-zone circle { fill: var(--yellow); }
@@ -421,9 +445,18 @@ dl.pinky-facts { display: grid; margin: 0; padding: 0; }
 .map-plan { fill: none; stroke-width: 4; stroke-dasharray: 10 8; stroke-linecap: round; opacity: .9; }
 .map-pinky { transition: transform .6s cubic-bezier(.2, .8, .2, 1); }
 .map-pinky-heading { transition: transform .4s ease; }
-.map-pinky circle { fill: var(--card); stroke: var(--blue); stroke-width: 2.5; }
-.map-pinky path { fill: var(--blue); }
-.map-pinky text { fill: var(--blue-strong); paint-order: stroke; stroke: var(--card); stroke-width: 4px; stroke-linejoin: round; }
+.map-pinky circle { fill: var(--card); stroke: var(--pinky-color, var(--blue)); stroke-width: 2.5; }
+.map-pinky path { fill: var(--pinky-color, var(--blue)); }
+.map-pinky text { fill: var(--pinky-color, var(--blue-strong)); paint-order: stroke; stroke: var(--card); stroke-width: 4px; stroke-linejoin: round; }
+.map-candidate { cursor: pointer; }
+.map-candidate circle { fill: var(--card); stroke: var(--pinky-color); stroke-width: 2.5; stroke-dasharray: 5 4; }
+.map-candidate path { fill: var(--pinky-color); }
+.map-candidate text { text-anchor: middle; font-weight: 700; fill: var(--pinky-color); paint-order: stroke; stroke: var(--card); stroke-width: 4px; stroke-linejoin: round; }
+.map-candidate-number { font-size: 15px; }
+.map-candidate-name { font-size: 12px; }
+.map-candidate:hover circle { fill: var(--pinky-color); stroke-dasharray: none; }
+.map-candidate:hover .map-candidate-number { fill: #fff; stroke: none; }
+.pinky-map.compact .map-candidate-name { display: none; }
 .map-pinky.stopping circle { stroke: var(--red); }
 .map-pinky.stopping path { fill: var(--red); }
 .pinky-map.compact .map-caption { display: none; }
@@ -495,7 +528,9 @@ button.small { min-height: 30px; padding: 4px 10px; font-size: 12px; }
 .map-pick-ray { stroke: currentColor; stroke-width: 5; stroke-linecap: round; }
 .map-pick-head { fill: currentColor; }
 .map-pinky-list li > button { margin-left: auto; white-space: nowrap; }
-.map-pinky-list li > button[aria-pressed="true"] { background: var(--blue); color: #fff; }
+.map-pinky-actions { display: grid; gap: 6px; margin-left: auto; }
+.map-pinky-actions button { white-space: nowrap; }
+.map-pinky-list button[aria-pressed="true"] { background: var(--blue); color: #fff; }
 .map-viewer-side { display: grid; align-content: start; gap: 10px; }
 .map-viewer-side h3 { color: var(--text-2); font-size: 14px; font-weight: 600; }
 .map-pinky-list, .map-legend { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }

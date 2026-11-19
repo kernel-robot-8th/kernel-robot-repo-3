@@ -111,7 +111,10 @@ def main():
         return True, ', '.join(names)
 
     handled = set()
-    names = ('map_server', 'amcl', 'controller_server', 'planner_server', 'bt_navigator', 'behavior_server')
+    names = ('map_server', 'amcl', 'controller_server', 'planner_server', 'bt_navigator', 'behavior_server',
+             'velocity_smoother')
+    bt_active_at = None
+    finished_tail = False
     clients = {name: node.create_client(GetState, '/'+name+'/get_state') for name in names}
     action = ActionClient(node, NavigateToPose, '/navigate_to_pose')
     states = {}
@@ -146,7 +149,22 @@ def main():
             # amcl is left out (2026-11-16): a fresh probe sometimes never finds amcl/get_state either, while AMCL
             # runs; the preparation's next step gives AMCL a pose and fails unless AMCL answers it.
             required = ('map_server', 'bt_navigator')
-            if all(states.get(name, (0,))[0] == 3 for name in required) and action.server_is_ready():
+            ready = all(states.get(name, (0,))[0] == 3 for name in required) and action.server_is_ready()
+            # The velocity smoother is the last node the manager activates, after bt_navigator. A manager that gave up
+            # at bt_navigator (it activated, its get_state answer came late) leaves the smoother inactive: Nav2 then
+            # plans and the wheels get nothing (Pinky 12, 2026-11-17). So ready also needs the smoother active; when
+            # it stays inactive 12 s after bt_navigator this probe activates the manager's remaining nodes itself.
+            if ready:
+                bt_active_at = bt_active_at or time.monotonic()
+                smoother = states.get('velocity_smoother', (0,))[0]
+                if smoother != 3 and time.monotonic()-bt_active_at < 40.:
+                    if smoother in (1, 2) and time.monotonic()-bt_active_at > 12. and not finished_tail:
+                        finished_tail = True
+                        ok, detail = finish_bringup('lifecycle_manager_navigation')
+                        print(('NAV_BRINGUP_FINISHED ' if ok else 'NAV_BRINGUP_FINISH_FAILED ')+'lifecycle_manager_navigation · '+detail, flush=True)
+                    ready = False
+                    pending.pop('velocity_smoother', None) if states.get('velocity_smoother') else None
+            if ready:
                 print('NAV_ACTION_READY · lifecycle active', flush=True)
                 return 0
             if log_path and time.monotonic() >= next_log_check:

@@ -1,0 +1,249 @@
+{
+  "10": [
+    {
+      "id": "5cfee4be028a4524986a93211e7f1328",
+      "label": "중간 구간",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "x_m": 1.493474794931739,
+      "y_m": 0.9660585851930955,
+      "yaw_rad": 2.1064379218697544,
+      "recorded_at": "2026-11-16T21:59:50+0900"
+    },
+    {
+      "id": "3cc5ec056c744e7c8fc76fa1c648ab02",
+      "label": "5",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "x_m": 0.33900190384679146,
+      "y_m": 1.62,
+      "yaw_rad": 3.1503192998497647,
+      "recorded_at": "2026-11-16T22:14:17+0900",
+      "note": "2026-11-17: 카메라 등록 자리 계산값 (0.389, 1.523)에서 팔 쪽으로 3 cm 앞당김(사용자 요청) → 2026-11-17: 2 cm 더 앞당김 (직전 x 0.3590, y 1.5227) → 2026-11-18: 사용자가 P2를 세우고 '여기까지 오면 좋겠다'고 한 자리를 라이다로 읽은 값 그대로 (직전 x 0.3390, y 1.5226; 방향은 그대로) → 2026-11-19: 앞뒤 깊이는 2026-11-17 값(x 0.3390)으로 되돌림. 사용자가 옮기라고 한 것은 좌우(책상 쪽)뿐이었고, x 0.396에서는 덜 들어와 섰음. 좌우 y 1.62는 그대로."
+    },
+    {
+      "id": "743c9dee0be44a84973e045c87b3d85a",
+      "label": "수령 1",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "x_m": 0.4668997806363109,
+      "y_m": 0.039975215871063244,
+      "yaw_rad": -1.594970916014752,
+      "recorded_at": "2026-11-17T20:30:40+0900"
+    }
+  ],
+  "11": [
+    {
+      "label": "1",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 0.0,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "id": "3a51389da1e843279cd618e5ca53b69a"
+    },
+    {
+      "label": "2",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 0.0,
+      "yaw_rad": 1.5,
+      "id": "cdc2e2a3731c4478b869429061af62e4"
+    },
+    {
+      "label": "3",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 0.77,
+      "yaw_rad": 1.5,
+      "id": "b87d0d5275d349b7a3f94dae5539e642"
+    },
+    {
+      "label": "4",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 1.64,
+      "yaw_rad": -3.0,
+      "id": "eeb17aa8713647908aacb4f999a85998"
+    },
+    {
+      "label": "5",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 0.33900190384679146,
+      "y_m": 1.62,
+      "yaw_rad": 3.1503192998497647,
+      "id": "6df30ed949734a80a56702643e1b1bf0",
+      "note": "2026-11-17: 카메라 등록 자리 계산값 (0.389, 1.523)에서 팔 쪽으로 3 cm 앞당김(사용자 요청) → 2026-11-17: 2 cm 더 앞당김 (직전 x 0.3590, y 1.5227) → 2026-11-18: 사용자가 P2를 세우고 '여기까지 오면 좋겠다'고 한 자리를 라이다로 읽은 값 그대로 (직전 x 0.3390, y 1.5226; 방향은 그대로) → 2026-11-19: 앞뒤 깊이는 2026-11-17 값(x 0.3390)으로 되돌림. 사용자가 옮기라고 한 것은 좌우(책상 쪽)뿐이었고, x 0.396에서는 덜 들어와 섰음. 좌우 y 1.62는 그대로."
+    },
+    {
+      "label": "6",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 0.59,
+      "y_m": 1.24,
+      "yaw_rad": 0.0,
+      "id": "d0de9f23ed094f1498f7a8510d66025a"
+    },
+    {
+      "label": "7",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 1.24,
+      "yaw_rad": -1.5,
+      "id": "7ce4af45afd642aa96f10254a49e4f93"
+    },
+    {
+      "label": "8",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 0.0,
+      "y_m": 0.77,
+      "yaw_rad": -3.0,
+      "id": "eb6aa36a27aa4a5cbd0c7b9ca9a52e1a"
+    },
+    {
+      "label": "9",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 0.77,
+      "yaw_rad": -3.0,
+      "id": "63e88a41ae1441cc825ab57c94202e81"
+    },
+    {
+      "id": "6860f6406c944759ba68c916d854282a",
+      "label": "수령 2",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "x_m": 0.949694850890587,
+      "y_m": 0.03720130701566054,
+      "yaw_rad": -1.5228775766786835,
+      "recorded_at": "2026-11-17T20:32:15+0900"
+    }
+  ],
+  "12": [
+    {
+      "label": "1",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 0.0,
+      "y_m": 0.0,
+      "yaw_rad": 0.0,
+      "id": "3a51389da1e843279cd618e5ca53b69a"
+    },
+    {
+      "label": "2",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 0.0,
+      "yaw_rad": 1.5,
+      "id": "cdc2e2a3731c4478b869429061af62e4"
+    },
+    {
+      "label": "3",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 0.77,
+      "yaw_rad": 1.5,
+      "id": "b87d0d5275d349b7a3f94dae5539e642"
+    },
+    {
+      "label": "4",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 1.64,
+      "yaw_rad": -3.0,
+      "id": "eeb17aa8713647908aacb4f999a85998"
+    },
+    {
+      "label": "5",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 0.33900190384679146,
+      "y_m": 1.62,
+      "yaw_rad": 3.1503192998497647,
+      "id": "6df30ed949734a80a56702643e1b1bf0",
+      "note": "2026-11-17: 카메라 등록 자리 계산값 (0.389, 1.523)에서 팔 쪽으로 3 cm 앞당김(사용자 요청) → 2026-11-17: 2 cm 더 앞당김 (직전 x 0.3590, y 1.5227) → 2026-11-18: 사용자가 P2를 세우고 '여기까지 오면 좋겠다'고 한 자리를 라이다로 읽은 값 그대로 (직전 x 0.3390, y 1.5226; 방향은 그대로) → 2026-11-19: 앞뒤 깊이는 2026-11-17 값(x 0.3390)으로 되돌림. 사용자가 옮기라고 한 것은 좌우(책상 쪽)뿐이었고, x 0.396에서는 덜 들어와 섰음. 좌우 y 1.62는 그대로."
+    },
+    {
+      "label": "6",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 0.59,
+      "y_m": 1.24,
+      "yaw_rad": 0.0,
+      "id": "d0de9f23ed094f1498f7a8510d66025a"
+    },
+    {
+      "label": "7",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 1.24,
+      "yaw_rad": -1.5,
+      "id": "7ce4af45afd642aa96f10254a49e4f93"
+    },
+    {
+      "label": "8",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 0.0,
+      "y_m": 0.77,
+      "yaw_rad": -3.0,
+      "id": "eb6aa36a27aa4a5cbd0c7b9ca9a52e1a"
+    },
+    {
+      "label": "9",
+      "map": "map-proto.yaml",
+      "frame_id": "map",
+      "recorded_at": "2026-11-07T15:58:40+0900",
+      "source": "measured_csv",
+      "x_m": 1.55,
+      "y_m": 0.77,
+      "yaw_rad": -3.0,
+      "id": "63e88a41ae1441cc825ab57c94202e81"
+    }
+  ]
+}

@@ -17,7 +17,8 @@ from control_station.json_files import load_json_file
 DEFAULT_ZONES_PATH = Path(__file__).resolve().parents[2] / "config" / "receiving-zones.json"
 MAX_ZONES_BYTES = 16 * 1024
 _ZONE_ID = re.compile(r"^[a-z0-9_]{1,32}$")
-_WAYPOINT = re.compile(r"^[0-9A-Za-z가-힣_-]{1,20}$")
+# A space inside the name is allowed: the fleet dashboard records names such as "수령 1" (2026-11-17).
+_WAYPOINT = re.compile(r"^[0-9A-Za-z가-힣_-](?:[0-9A-Za-z가-힣_ -]{0,18}[0-9A-Za-z가-힣_-])?$")
 
 
 class ReceivingZoneError(ValueError):

@@ -11,6 +11,7 @@ GET  /api/orders/{id}/assignment     which Pinky, arms and receiving zone would 
 POST /api/orders/{id}/start          assign the receiving zone and the Pinky, start the order flow
 POST /api/orders/{id}/reject         turn down a waiting order
 GET  /api/orders/{id}/track          the customer's view: stage in plain words, whether pickup can be confirmed
+POST /api/orders/{id}/arrival-confirm the operator saw the marker-less Pinky stand at the loading spot; loading starts
 POST /api/orders/{id}/pickup-confirm the customer took the order at the receiving zone; the Pinky goes home
 """
 
@@ -103,6 +104,8 @@ def post_order_action(h: ControlStationHandler, route: str, parts: list[str], bo
     try:
         if action == "pickup-confirm":
             h._json(202, h.app.order_desk.confirm_pickup(order_id))
+        elif action == "arrival-confirm":
+            h._json(202, h.app.order_desk.confirm_arrival(order_id))
         elif action == "start":
             order, changed = h.app.order_desk.start(order_id)
             h._json(202 if changed else 200, {"order": order})

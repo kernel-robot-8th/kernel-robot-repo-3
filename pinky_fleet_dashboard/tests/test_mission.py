@@ -35,6 +35,8 @@ class MissionRouteTests(unittest.TestCase):
 
 
 class MissionEndpointTests(unittest.TestCase):
+    NAVIGATION = {'ir_steering': False}  # no passage points, no queue spot, the reverse exit: the plain mission
+
     def post(self, state, body):
         server = ThreadingHTTPServer(('127.0.0.1', 0), app.Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -42,7 +44,7 @@ class MissionEndpointTests(unittest.TestCase):
         self.addCleanup(server.shutdown)
         submitted = []
         with patch.multiple(app, STATE=state, WORKERS=NS(submit=lambda fn, *a: submitted.append((fn, a))),
-                            _route_start_problem=lambda rid: None,
+                            _route_start_problem=lambda rid: None, NAVIGATION=dict(self.NAVIGATION),
                             TELEMETRY=NS(snapshot=lambda: {'12': {'tf_pose': {'value': {'x_m': 1.0, 'y_m': 0.45, 'yaw_rad': 0.1}}}}),
                             TRAFFIC=NS(zones={'parking': {'bounds': [0.2, 1.2, 0.2, 0.6]}})):
             request = urllib.request.Request(f'http://127.0.0.1:{server.server_port}/api/robots/12/mission',
@@ -230,3 +232,106 @@ class StopLeavesReadyTests(unittest.TestCase):
         monitor.data = {'10': {}}
         monitor.forget('10', 'trail')
         self.assertEqual(list(monitor.trails['10']), [])
+
+
+class BackOffTests(unittest.TestCase):
+    def test_backs_off_after_standing_then_stops_when_the_front_is_clear(self):
+        from scripts.mission_behaviors import BackOff
+        b = BackOff(distance_m=.12, clear_m=.15, hold_s=1.0)
+        self.assertIsNone(b.update(True, .04, (0., 0., 0.), 0.0, True))          # just stopped: wait first
+        self.assertIsNone(b.update(True, .04, (0., 0., 0.), 0.5, True))
+        m = b.update(True, .04, (0., 0., 0.), 1.1, True)
+        self.assertLess(m.linear, 0)                                               # reversing straight
+        self.assertEqual((m.angular, m.state), (0., 'ultrasonic_back_off'))
+        self.assertLess(b.update(False, .10, (-.06, 0., 0.), 2.6, True).linear, 0)  # goes on past the 8 cm line
+        self.assertIsNone(b.update(False, .16, (-.10, 0., 0.), 3.5, True))          # 15 cm in front: enough
+        self.assertFalse(b.active)
+
+    def test_never_reverses_into_something_and_gives_up_after_three_tries(self):
+        from scripts.mission_behaviors import BackOff
+        b = BackOff(hold_s=0.0)
+        self.assertIsNone(b.update(True, .04, (0., 0., 0.), 0.0, False))           # LiDAR: not clear behind
+        now = 1.0
+        for _ in range(3):
+            self.assertIsNotNone(b.update(True, .04, (0., 0., 0.), now, True))
+            self.assertIsNone(b.update(True, .04, (-.13, 0., 0.), now + 1, True))  # the 12 cm is done
+            now += 2
+        self.assertIsNone(b.update(True, .04, (0., 0., 0.), now, True))            # the fourth time it waits
+
+
+class ShippedCourseTests(MissionEndpointTests):
+    test_starts_from_where_it_stands_using_a_drop_off_recorded_by_another_pinky = None  # the plain mission's test
+
+    NAVIGATION = {'ir_steering': False, 'dock_exit_reverse': False, 'dock_queue': {'waypoint': '4'},
+                  'wall_passages': [{'x_m': 1.57, 'wall_y_m': 1.035, 'approach_m': 0.24}]}
+
+    def test_through_the_passage_to_the_queue_spot_then_in_and_out_forward(self):
+        state = self.state()
+        state.waypoints['11'] = [wp('4', 1.55, 1.64)]
+        status, answer, submitted = self.post(state, {'dropoff': '수령 A'})
+        self.assertEqual(status, 202, answer)
+        goals = submitted[0][1][1]
+        self.assertEqual([g['label'] for g in goals],
+                         ['주차장', '통로 아래', '통로 위', '4', '5 정면', '5', '수령 A', '통로 위', '통로 아래', '주차장'])
+        passing = {g['label']: g.get('pass_radius_m') for g in goals}
+        self.assertEqual((passing['통로 아래'], passing['통로 위'], passing['4'], passing['5 정면'], passing['5']),
+                         (0.10, 0.10, 0.06, 0.05, None))  # the passage points, the queue spot, and the square-up point (it turns itself)
+        self.assertFalse(any(g.get('dock_exit') for g in goals))  # out of station 5 forward, no backing out
+
+
+class CameraGuidedRedockTests(unittest.TestCase):
+    """2026-11-17: redock carries the ceiling camera's offset; the Pinky comes in corrected by it."""
+    DOCK = dict(label='5', x_m=.339, y_m=1.5226, yaw_rad=math.pi)
+
+    def test_the_spot_is_where_the_camera_says_it_is_from_where_the_pinky_stands(self):
+        from scripts.route_geometry import corrected_dock
+        # Heading -x (yaw pi). The camera: 30 mm too far forward, 45 mm to the right, turned 6 degrees left.
+        pose = (self.DOCK['x_m'], self.DOCK['y_m'], math.pi)
+        square, spot = corrected_dock(pose, dict(forward_mm=30., left_mm=-45., dyaw_deg=6.), self.DOCK, .25)
+        yaw = math.pi-math.radians(6.)
+        self.assertAlmostEqual(spot['yaw_rad'], yaw)
+        # Standing on the corrected spot and applying the same miss again puts the Pinky's body on the real spot.
+        self.assertAlmostEqual(spot['x_m']+(.030*math.cos(yaw)+.045*math.sin(yaw)), pose[0], places=6)
+        self.assertAlmostEqual(spot['y_m']+(.030*math.sin(yaw)-.045*math.cos(yaw)), pose[1], places=6)
+        self.assertAlmostEqual(math.hypot(square['x_m']-spot['x_m'], square['y_m']-spot['y_m']), .25)
+        self.assertAlmostEqual(math.atan2(spot['y_m']-square['y_m'], spot['x_m']-square['x_m']), yaw)  # straight in
+        self.assertEqual(spot['label'], '5')
+
+    def test_an_offset_that_is_missing_wrong_or_too_large_is_not_used(self):
+        from scripts.route_geometry import clean_dock_offset, corrected_dock
+        pose = (self.DOCK['x_m'], self.DOCK['y_m'], math.pi)
+        for offset in (None, {}, dict(forward_mm=10., left_mm=5.), dict(forward_mm='1', left_mm=0., dyaw_deg=0.),
+                       dict(forward_mm=True, left_mm=0., dyaw_deg=0.), dict(forward_mm=float('nan'), left_mm=0., dyaw_deg=0.),
+                       dict(forward_mm=200., left_mm=0., dyaw_deg=0.), dict(forward_mm=0., left_mm=0., dyaw_deg=40.)):
+            self.assertIsNone(clean_dock_offset(offset), offset)
+            self.assertIsNone(corrected_dock(pose, offset, self.DOCK, .25), offset)
+        # A usable offset, but the Pinky itself believes it is far from the waypoint: the corrected spot would be too.
+        self.assertIsNone(corrected_dock((self.DOCK['x_m']+.20, self.DOCK['y_m'], math.pi),
+                                         dict(forward_mm=10., left_mm=0., dyaw_deg=0.), self.DOCK, .25))
+        self.assertIsNone(corrected_dock(None, dict(forward_mm=10., left_mm=0., dyaw_deg=0.), self.DOCK, .25))
+
+    def test_the_dashboard_corrects_from_the_pinkys_fresh_pose_and_its_station_5(self):
+        telemetry = type('T', (), {'snapshot': lambda self: {'12': {'tf_pose': {
+            'fresh': True, 'value': {'x_m': .345, 'y_m': 1.520, 'yaw_rad': 3.10}}}}})()
+        offset = dict(forward_mm=20., left_mm=-30., dyaw_deg=4.)
+        with patch.object(app, 'TELEMETRY', telemetry), patch.object(app, '_shared_waypoint', lambda rid, label: dict(self.DOCK)):
+            correction = app._dock_correction('12', offset)
+            self.assertEqual(set(correction), {'square', 'dock'})
+            self.assertAlmostEqual(correction['dock']['yaw_rad'], 3.10-math.radians(4.), places=4)
+            self.assertLess(math.hypot(correction['dock']['x_m']-.345, correction['dock']['y_m']-1.520), .04)
+            self.assertIsNone(app._dock_correction('12', dict(offset, forward_mm=500.)))
+        stale = type('T', (), {'snapshot': lambda self: {'12': {'tf_pose': {'fresh': False, 'value': {'x_m': .345, 'y_m': 1.52, 'yaw_rad': 3.1}}}}})()
+        with patch.object(app, 'TELEMETRY', stale), patch.object(app, '_shared_waypoint', lambda rid, label: dict(self.DOCK)):
+            self.assertIsNone(app._dock_correction('12', offset))  # no fresh pose: come in again at the waypoint
+
+    def test_the_runner_takes_the_corrected_points_only_when_they_are_whole(self):
+        import ast
+        tree = ast.parse((app.ROOT/'scripts/navigate_route.py').read_text())
+        nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'guided_dock']
+        ns = {'math': math}
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), 'guided_dock', 'exec'), ns)
+        point = dict(x_m=.3, y_m=1.5, yaw_rad=3.1)
+        self.assertEqual(ns['guided_dock'](dict(square=point, dock=point)), [point, point])
+        for bad in (None, {}, dict(square=point), dict(square=point, dock=dict(point, x_m='a')),
+                    dict(square=point, dock=dict(point, yaw_rad=float('inf'))), dict(square=point, dock=[1, 2, 3])):
+            self.assertIsNone(ns['guided_dock'](bad), bad)

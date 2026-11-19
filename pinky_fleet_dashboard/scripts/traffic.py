@@ -4,13 +4,21 @@ from pathlib import Path
 
 
 def required_zones(context,pose,zones):
+    """The shared zones this Pinky needs now: by distance (request_radius_m), and, for a zone with request_labels,
+    from the start of any stretch whose end is one of those stops (2026-11-17: the next Pinky waits where it stands,
+    at its queue spot or parking spot, instead of 40 cm in front of the busy place)."""
     needed=[]
-    if context.get('transit'):needed.append('parking')
-    if context.get('dock_exit'):needed.append('dock5')
+    # The parking area is taken only while the Pinky is in or right beside it (2026-11-17), not for the whole stretch
+    # that starts or ends there: the others may leave as soon as this one is out, so all three can be on the way.
+    if context.get('transit'):
+        x0,x1,y0,y1=zones.get('parking',{}).get('bounds',[.2,1.2,.2,.6])
+        if x0-.10<=pose[0]<=x1+.10 and y0-.10<=pose[1]<=y1+.10:needed.append('parking')
+    if (context.get('dock_exit') or context.get('dock_entry')) and 'dock5' in zones:needed.append('dock5')
     for name,zone in zones.items():
         if name=='parking':continue
         if math.hypot(pose[0]-zone['x_m'],pose[1]-zone['y_m'])<=zone.get('request_radius_m',.40):needed.append(name)
-    return sorted(needed)
+        elif context.get('end_label') in zone.get('request_labels',()):needed.append(name)
+    return sorted(set(needed))
 
 
 def lease_allows(lease,token,zones,now):
@@ -35,7 +43,9 @@ class TrafficCoordinator:
             x0,x1,y0,y1=self.zones['parking'].get('bounds',[.2,1.2,.2,.6])
             return not (x0<=pose[0]<=x1 and y0<=pose[1]<=y1)
         z=self.zones[name]
-        return math.hypot(pose[0]-z['x_m'],pose[1]-z['y_m'])>z.get('request_radius_m',.4)+.05
+        # release_radius_m: a Pinky leaving station 5 keeps it until it is well on its way, so the next one, waiting
+        # at the queue spot, never drives into it.
+        return math.hypot(pose[0]-z['x_m'],pose[1]-z['y_m'])>z.get('release_radius_m',z.get('request_radius_m',.4)+.05)
     def update(self,observations):
         with self.lock:
             if self.storage_error:raise ValueError(self.storage_error)
@@ -59,7 +69,10 @@ class TrafficCoordinator:
                 if not o.get('fresh') or not o.get('token'):continue
                 needed=o.get('zones',[])
                 if any(n not in self.zones for n in needed):continue
-                conflict=[n for n in needed if n in self.owners and self.owners[n] != {'robot_id':rid,'token':o['token']}]
+                # Only another Pinky's hold is a conflict (2026-11-17): a Pinky that stood in a zone without a route
+                # holds it as 'occupied' (or under its last run), and its own new run takes that hold over instead of
+                # waiting for itself for ever.
+                conflict=[n for n in needed if n in self.owners and self.owners[n].get('robot_id') != rid]
                 if conflict:self.waiting[rid]=conflict;continue
                 for name in needed:self.owners[name]={'robot_id':rid,'token':o['token']}
             if self.owners!=before:
@@ -77,6 +90,18 @@ class TrafficCoordinator:
             try:self.save()
             except OSError:self.owners=previous;raise
 
+    def drop(self,robot_id):
+        """The operator says this Pinky is no longer in the zones it holds (it went off there and was carried away):
+        its holds are released. Returns the zone names released."""
+        with self.lock:
+            names=[n for n,o in self.owners.items() if o.get('robot_id')==robot_id]
+            if not names:return []
+            previous=dict(self.owners)
+            for n in names:del self.owners[n]
+            try:self.save()
+            except OSError:self.owners=previous;raise
+            return names
+
     def snapshot(self):
         with self.lock:return {'owners':dict(self.owners),'waiting':dict(self.waiting),'error':self.storage_error}
 
@@ -89,7 +114,7 @@ class LeaseReceiver:
         sequence=data.get('sequence')
         if not isinstance(sequence,int) or isinstance(sequence,bool):return False
         if not isinstance(data.get('token'),str) or not isinstance(data.get('zones'),list):return False
-        if len(data['zones'])>3 or any(not isinstance(z,str) for z in data['zones']):return False
+        if len(data['zones'])>6 or any(not isinstance(z,str) for z in data['zones']):return False
         if data['boot'] in self.retired:return False
         if data['boot']!=self.boot:
             if self.boot:self.retired.add(self.boot)

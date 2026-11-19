@@ -122,6 +122,8 @@ class OrderDesk:
     inventory: Callable[[], dict[str, Any]] | None = None
     # OrderFlow.confirm_pickup: True when the order's Pinky was waiting at its receiving zone.
     pickup: Callable[[str], bool] | None = None
+    # OrderFlow.confirm_arrival: True when the order was waiting for the operator to confirm its Pinky's arrival.
+    arrival: Callable[[str], bool] | None = None
     _intake: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     # ---- the order window ----------------------------------------------------------------------------------
@@ -360,6 +362,15 @@ class OrderDesk:
         except (PinkyUnavailable, InvalidStateTransition) as exc:
             return {"pinky_id": None, "summary": str(exc), "assignment": assignment.as_dict()}
         return {"pinky_id": assignment.pinky_id, "summary": assignment.summary, "assignment": assignment.as_dict()}
+
+    def confirm_arrival(self, order_id: str) -> dict[str, Any]:
+        """The operator confirms that the order's marker-less Pinky stands right at the loading spot."""
+        order = self.store.get_task(order_id)
+        if order is None or order.get("order_items") is None:
+            raise OrderDeskError("ORDER_NOT_FOUND", f"주문 {order_id}이 없습니다", status=404)
+        if self.arrival is None or not self.arrival(order_id):
+            raise OrderDeskError("ARRIVAL_NOT_WAITING", "이 주문은 지금 도착 확인을 기다리고 있지 않습니다")
+        return {"order_id": order_id, "accepted": True, "message": "도착 확인을 받았습니다. 적재를 시작합니다"}
 
     def confirm_pickup(self, order_id: str) -> dict[str, Any]:
         """The customer took the order at the receiving zone; the flow then sends the Pinky home."""

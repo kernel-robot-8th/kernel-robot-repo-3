@@ -1621,6 +1621,10 @@ let renderedAlerts = '';
 
 function alertActionsHtml(alert) {
   const id = escapeHtml(alert.task_id);
+  if (alert.arrival) {
+    const sending = pickupSending.has(`arrival:${alert.task_id}`);
+    return `<span class="alert-actions"><button type="button" class="pickup-confirm" data-arrival-confirm="${id}"${sending ? ' disabled' : ''}>${sending ? '보내는 중…' : '도착 확인'}</button></span>`;
+  }
   if (alert.pickup) {
     const sending = pickupSending.has(alert.task_id);
     return `<span class="alert-actions"><button type="button" class="pickup-confirm" data-pickup-confirm="${id}"${sending ? ' disabled' : ''}>${sending ? '보내는 중…' : '수령 확인'}</button></span>`;
@@ -1645,6 +1649,27 @@ function renderFlowAlerts(alerts) {
   flowAlerts.innerHTML = html;
 }
 
+// The operator confirms that a Pinky without a marker stands right at the loading spot: loading then starts.
+async function confirmArrival(orderId) {
+  const key = `arrival:${orderId}`;
+  if (pickupSending.has(key)) return;
+  pickupSending.add(key);
+  renderedAlerts = '';
+  await refreshFlow();
+  try {
+    const response = await fetch(`/api/orders/${encodeURIComponent(orderId)}/arrival-confirm`, { method: 'POST' });
+    const result = await response.json().catch(() => ({}));
+    if (response.ok) showToast('도착 확인을 보냈어요', `${orderId} · 적재를 시작해요`);
+    else showToast('도착 확인을 보내지 못했어요', result.message || `HTTP ${response.status}`, 'error');
+  } catch {
+    showToast('도착 확인 응답을 받지 못했어요', '주문 상태를 확인한 뒤 다시 눌러 주세요', 'warning');
+  } finally {
+    pickupSending.delete(key);
+    renderedAlerts = '';
+    await Promise.all([refreshFlow(), refreshIntake()]);
+  }
+}
+
 // The operator confirms for the customer (no phone, or the customer left): the Pinky then goes home.
 async function confirmPickup(orderId) {
   if (pickupSending.has(orderId)) return;
@@ -1667,6 +1692,11 @@ async function confirmPickup(orderId) {
 }
 
 flowAlerts.addEventListener('click', async (event) => {
+  const arrival = event.target.closest('[data-arrival-confirm]');
+  if (arrival) {
+    confirmArrival(arrival.dataset.arrivalConfirm);
+    return;
+  }
   const pickup = event.target.closest('[data-pickup-confirm]');
   if (pickup) {
     confirmPickup(pickup.dataset.pickupConfirm);

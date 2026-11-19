@@ -1,0 +1,157 @@
+from __future__ import annotations
+
+import json
+import math
+import sys
+import threading
+import time
+import unittest
+from pathlib import Path
+
+from control_station.pinky_fleet import PinkyFleetClient, PinkyFleetError
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+FLEET_DIR = REPOSITORY_ROOT / "simulation" / "virtual_pinky_fleet"
+sys.path.insert(0, str(FLEET_DIR))
+
+from virtual_pinky_fleet import VirtualFleet, read_map, serve  # noqa: E402
+
+ZONE_A = json.loads((REPOSITORY_ROOT / "config" / "receiving-zones.json").read_text(encoding="utf-8"))["zones"][0]["route_labels"]
+
+
+class VirtualFleetTests(unittest.TestCase):
+    def start(self, shared_waypoints: bool = False) -> PinkyFleetClient:
+        fleet = VirtualFleet(FLEET_DIR, speed_mps=0.15, time_scale=200.0, shared_waypoints=shared_waypoints)
+        server = serve(fleet, "127.0.0.1", 0)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(fleet.close)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return PinkyFleetClient(f"http://127.0.0.1:{server.server_address[1]}", status_max_age_s=0.0)
+
+    def wait_phase(self, client: PinkyFleetClient, pinky_id: str, phase: str) -> dict:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            status = client.fleet_status(pinky_id)
+            if status["phase"] == phase:
+                return status
+            time.sleep(0.02)
+        self.fail(f"Pinky {pinky_id} never reached {phase}; last {status}")
+
+    def test_order_mission_goes_through_every_phase_and_says_simulated(self) -> None:
+        client = self.start()
+        self.assertEqual(client.fleet_status("11")["phase"], "parked")
+        dispatched = client.dispatch("11", ZONE_A)
+        self.assertTrue(dispatched["accepted"] and dispatched["simulated"])
+        self.assertEqual(dispatched["labels"], ["주차장", *ZONE_A, "주차장"])
+
+        docking = self.wait_phase(client, "11", "docking_manual")
+        self.assertTrue(docking["simulated"])
+        with self.assertRaises(PinkyFleetError) as rejected:
+            client.fleet_confirm("11", "dock_complete", "not-the-token")
+        self.assertEqual(rejected.exception.error_code, "PINKY_SIGNAL_REJECTED")
+        with self.assertRaises(PinkyFleetError):  # right token, wrong signal for this phase
+            client.fleet_confirm("11", "received", docking["mission_token"])
+        self.assertTrue(client.fleet_confirm("11", "dock_complete", docking["mission_token"])["simulated"])
+
+        docked = self.wait_phase(client, "11", "docked_manual")
+        self.assertNotEqual(docked["mission_token"], docking["mission_token"])  # a fresh token per waiting phase
+        client.fleet_confirm("11", "received", docked["mission_token"])
+
+        course = self.wait_phase(client, "11", "course_complete")
+        self.assertEqual(course["location"], ZONE_A[-1])
+        client.mission_complete("11", course["mission_token"])
+        self.wait_phase(client, "11", "parked")
+        pose = client.robots()["11"]["topics"]["tf_pose"]["value"]
+        self.assertAlmostEqual(pose["x_m"], 0.7, places=3)
+        self.assertAlmostEqual(pose["y_m"], 0.4, places=3)
+
+    def test_a_pinky_off_the_spot_repeats_the_miss_on_a_plain_redock_and_lands_on_it_with_the_cameras_offset(self) -> None:
+        client = self.start()
+        client._request("POST", "/api/virtual/dock-bias", {"robot": "11", "forward_mm": 30, "left_mm": -45, "dyaw_deg": 6})
+        self.assertIsNone(client.virtual_parking("11"))  # before any status: not known to be a virtual fleet
+        client.dispatch("11", ZONE_A)
+        docking = self.wait_phase(client, "11", "docking_manual")
+        seen = client.virtual_parking("11")
+        self.assertEqual((seen["status"], seen["offset"]["forward_mm"], seen["offset"]["left_mm"]), ("MISALIGNED", 30.0, -45.0))
+
+        plain = client.fleet_confirm("11", "redock", docking["mission_token"])
+        self.assertFalse(plain["guided"])
+        again = self.wait_phase(client, "11", "docking_manual")
+        self.assertNotEqual(again["mission_token"], docking["mission_token"])
+        self.assertEqual(client.virtual_parking("11")["offset"]["distance_mm"], seen["offset"]["distance_mm"])  # same miss
+
+        guided = client.fleet_confirm("11", "redock", again["mission_token"], client.virtual_parking("11")["offset"])
+        self.assertTrue(guided["guided"])
+        fixed = self.wait_phase(client, "11", "docking_manual")
+        after = client.virtual_parking("11")
+        self.assertEqual(after["status"], "ARRIVED")
+        self.assertLess(after["offset"]["distance_mm"], 10.0)
+        self.assertLess(abs(after["offset"]["dyaw_deg"]), 1.0)
+
+        # A third and a fourth request: with the limit at three the fourth is one too many, as on the real Pinky
+        # (whose limit is 30 since 2026-11-19, far above the five the control station sends by itself).
+        import virtual_pinky_fleet
+        from unittest import mock
+        with mock.patch.object(virtual_pinky_fleet, "REDOCK_LIMIT", 3):
+            client.fleet_confirm("11", "redock", fixed["mission_token"])
+            last = self.wait_phase(client, "11", "docking_manual")
+            client.fleet_confirm("11", "redock", last["mission_token"])
+            self.assertEqual(client.robots()["11"]["route"]["status"], "failed")
+
+    def test_a_mission_crosses_the_middle_wall_through_the_passage_and_squares_up_in_front_of_5(self) -> None:
+        fleet = VirtualFleet(FLEET_DIR, speed_mps=0.15, time_scale=1.0, shared_waypoints=False)
+        self.addCleanup(fleet.close)
+        self.assertEqual(fleet.start_mission("11", "수령 2", [])[0], 202)
+        with fleet.lock:
+            drives = [(round(s["x"], 3), round(s["y"], 3)) for s in fleet.pinkies["11"].steps
+                      if s["kind"] == "drive" and "x" in s]
+        passage = fleet.passages[0]
+        below = (passage["x_m"], round(passage["wall_y_m"] - passage["approach_m"], 3))
+        above = (passage["x_m"], round(passage["wall_y_m"] + passage["approach_m"], 3))
+        dock = fleet.dock("11")
+        # parking (below the wall) -> passage up -> square-up point -> 5 -> passage down -> receiving zone -> parking
+        self.assertEqual(drives[:2], [below, above])
+        self.assertAlmostEqual(math.hypot(drives[2][0] - dock["x_m"], drives[2][1] - dock["y_m"]), 0.25, places=2)
+        self.assertEqual(drives[3], (round(dock["x_m"], 3), round(dock["y_m"], 3)))
+        self.assertEqual(drives[4:6], [above, below])
+        self.assertFalse(fleet.reverse_exit)  # navigation.json dock_exit_reverse false: no backing out of 5
+
+    def test_route_needs_the_pinkys_own_waypoints_like_the_real_dashboard(self) -> None:
+        client = self.start()
+        line_course = ["1", "2", "3"]  # no 5 in it: the old /route, where a Pinky drives only its own waypoints
+        with self.assertRaises(PinkyFleetError) as rejected:  # Pinky 10 has not recorded them
+            client.dispatch("10", line_course)
+        self.assertIn("저장되지 않은 웨이포인트", str(rejected.exception))
+        self.assertTrue(self.start(shared_waypoints=True).dispatch("10", line_course)["accepted"])
+        # An order's route has 5 in it and runs as the Nav2 mission, where any Pinky's recording of a place counts.
+        self.assertTrue(client.dispatch("10", ZONE_A)["accepted"])
+
+    def test_stop_cancels_the_route_and_a_second_route_waits_for_the_first(self) -> None:
+        client = self.start()
+        client.dispatch("12", ZONE_A)
+        with self.assertRaises(PinkyFleetError):
+            client.dispatch("12", ZONE_A)
+        status, answer = client.stop("12")
+        self.assertEqual((status, answer["simulated"]), (202, True))
+        self.assertEqual(client.fleet_status("12")["route_status"], "cancelled")
+        self.assertEqual(client.fleet_status("12")["phase"], "parked")
+
+    def test_map_is_read_like_nav2_map_server(self) -> None:
+        grid = read_map(FLEET_DIR / "map-proto.yaml")
+        self.assertEqual((grid["width"], grid["height"], grid["resolution_m"]), (44, 51, 0.05))
+        width = grid["width"]
+        row = lambda index: grid["cells"][index * width:(index + 1) * width]  # noqa: E731
+        # Row 0 is the bottom of the map (y = origin): unknown, then the wall; the obstacles are near the top.
+        self.assertTrue(all(cell == -1 for cell in row(0)))
+        self.assertTrue(all(cell == 100 for cell in row(1)[1:]))
+        self.assertIn(100, row(grid["height"] - 2)[2:-2])
+        self.assertNotIn(100, row(2)[2:-2])
+        parking = (0.7, 0.4)
+        col = math.floor((parking[0] - grid["origin_x_m"]) / grid["resolution_m"])
+        row = math.floor((parking[1] - grid["origin_y_m"]) / grid["resolution_m"])
+        self.assertEqual(grid["cells"][row * width + col], 0)  # P1's parking spot is free space
+
+
+if __name__ == "__main__":
+    unittest.main()

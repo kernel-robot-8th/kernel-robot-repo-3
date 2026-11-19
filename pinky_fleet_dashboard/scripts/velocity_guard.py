@@ -27,7 +27,8 @@ class FinalVelocityGuard(Node):
     def __init__(self):
         super().__init__('pinky_final_guard')
         self.runtime=json.loads((CACHE/'nav2/runtime_config.json').read_text())
-        self.config=geometry(self.runtime['geometry']);self.sensor_pose_source='configured' if self.config['sensor_pose_measured'] else 'unmeasured_default';self.memory=LowObstacleMemory(self.config)
+        self.config=geometry(self.runtime['geometry']);self.sensor_pose_source='configured' if self.config['sensor_pose_measured'] else 'unmeasured_default';_nav=self.runtime.get('navigation') or {};self.memory=LowObstacleMemory(self.config,
+            keep_s=min(90.,max(1.,float(_nav.get('ultrasonic_memory_s',90.)))),mark_m=min(.25,max(.05,float(_nav.get('ultrasonic_mark_m',.25)))))
         self.tf_buffer=Buffer();self.tf_listener=TransformListener(self.tf_buffer,self)
         self.scan_points=[];self.last_scan_at=0.;self.last_sensor_at=0.;self.valid_range=False;self.range_m=None
         self.command=Twist();self.command_at=0.;self.range_seq=0;self.memory_seq=-1

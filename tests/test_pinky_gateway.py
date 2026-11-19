@@ -22,6 +22,7 @@ class FakeFleet:
     def __init__(self, answers: dict[str, tuple[int, dict]] | None = None) -> None:
         self.answers = answers or {}
         self.sent: list[tuple[str, object]] = []
+        self.simulated = False  # a real dashboard (the virtual fleet says true)
 
     def robots(self) -> dict:
         return {"10": robot_record(status="running", labels=["1", "2", "5"], completed=1, current_label="2"),

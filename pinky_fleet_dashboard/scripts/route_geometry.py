@@ -27,6 +27,65 @@ DOCK_EXIT_M = .20
 DOCK_APPROACH_M = 0.25  # where the Pinky squares up before driving straight into station 5
 
 
+# A camera offset is used as a correction only when it is this small: a larger one means the camera or the
+# localization is far off, and then the Pinky just comes in again as before.
+DOCK_OFFSET_LIMIT_MM, DOCK_OFFSET_LIMIT_DEG = 150., 30.
+DOCK_CORRECTION_LIMIT_M, DOCK_CORRECTION_LIMIT_RAD = .12, math.radians(25.)
+
+
+def clean_dock_offset(offset):
+    """The ceiling camera's offset of the Pinky from its registered loading spot, as the control station sends it with
+    redock: forward_mm and left_mm along the spot's own axes, dyaw_deg (+ = turned left). None when it is missing,
+    not numbers, or larger than the limits above."""
+    if not isinstance(offset, dict):
+        return None
+    values = [offset.get(key) for key in ('forward_mm', 'left_mm', 'dyaw_deg')]
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in values):
+        return None
+    forward, left, dyaw = (float(v) for v in values)
+    if math.hypot(forward, left) > DOCK_OFFSET_LIMIT_MM or abs(dyaw) > DOCK_OFFSET_LIMIT_DEG:
+        return None
+    return dict(forward_mm=forward, left_mm=left, dyaw_deg=dyaw)
+
+
+def clean_dock_guide(offset):
+    """The same three numbers as a guide for the drive into station 5 (relayed live while the Pinky comes in): it is
+    still up to 45 cm short of the spot then, so forward has its own, longer limit. None when unusable."""
+    if not isinstance(offset, dict):
+        return None
+    values = [offset.get(key) for key in ('forward_mm', 'left_mm', 'dyaw_deg')]
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in values):
+        return None
+    forward, left, dyaw = (float(v) for v in values)
+    # Any heading: from the moment the camera sees the marker the Pinky may still be turned away (2026-11-19).
+    if abs(forward) > 500. or abs(left) > 250. or abs(dyaw) > 180.:
+        return None
+    return dict(forward_mm=round(forward, 1), left_mm=round(left, 1), dyaw_deg=round(dyaw, 2))
+
+
+def corrected_dock(pose, offset, dock, approach_m):
+    """Where the loading spot really is in the Pinky's own map estimate (2026-11-17).
+
+    The Pinky stands at `pose` (x, y, yaw as it believes) and the ceiling camera measured that this is `offset`
+    away from the registered spot. So the spot is the pose from which `pose` lies forward_mm ahead, left_mm to the
+    left and dyaw_deg turned: that is where to drive in again, whatever caused the miss (localization bias, a goal
+    reached at the edge of its tolerance, wheel slip). Returns (square-up point, corrected dock), or None when the
+    offset is unusable or the corrected spot is further from the saved waypoint than the correction limit."""
+    offset = clean_dock_offset(offset)
+    if offset is None or pose is None:
+        return None
+    yaw = pose[2]-math.radians(offset['dyaw_deg'])
+    forward, left = offset['forward_mm']/1000., offset['left_mm']/1000.
+    x = pose[0]-(forward*math.cos(yaw)-left*math.sin(yaw))
+    y = pose[1]-(forward*math.sin(yaw)+left*math.cos(yaw))
+    turn = (yaw-dock.get('yaw_rad', yaw)+math.pi) % (2*math.pi)-math.pi
+    if math.hypot(x-dock['x_m'], y-dock['y_m']) > DOCK_CORRECTION_LIMIT_M or abs(turn) > DOCK_CORRECTION_LIMIT_RAD:
+        return None
+    spot = dict(dock, x_m=x, y_m=y, yaw_rad=yaw)
+    square = dict(x_m=x-approach_m*math.cos(yaw), y_m=y-approach_m*math.sin(yaw), yaw_rad=yaw)
+    return square, spot
+
+
 def _through_passages(stops, passages):
     """Between two stops on opposite sides of a wall, the passage's two points: square up just before it, cross
     it straight through its middle (2026-11-16: Nav2's own path brushed the wall's end and the robot stopped there).
@@ -50,7 +109,7 @@ def _through_passages(stops, passages):
     return result
 
 
-def build_mission_route(stops, spacing=10.0, passages=None):
+def build_mission_route(stops, spacing=10.0, passages=None, reverse_exit=True):
     """A free mission: Nav2 plans its own way between the stops; nothing in between is followed.
 
     `stops` are point dicts in order (start, '5', drop-off, parking). After station 5 the robot backs out
@@ -70,7 +129,9 @@ def build_mission_route(stops, spacing=10.0, passages=None):
                 x_m=stop['x_m']-DOCK_APPROACH_M*math.cos(heading), y_m=stop['y_m']-DOCK_APPROACH_M*math.sin(heading),
                 yaw_rad=heading, arrival_yaw_rad=heading))
         selected.append(stop)
-        if stop['label'] == '5' and index + 1 < len(stops):
+        # reverse_exit False (navigation.json dock_exit_reverse, 2026-11-17): no backing out of station 5; Nav2 turns
+        # the Pinky round where it stands and drives out forward.
+        if reverse_exit and stop['label'] == '5' and index + 1 < len(stops):
             heading = stop['yaw_rad']
             selected.append(dict(stop, label='도킹 탈출',
                 x_m=stop['x_m']-DOCK_EXIT_M*math.cos(heading), y_m=stop['y_m']-DOCK_EXIT_M*math.sin(heading),
