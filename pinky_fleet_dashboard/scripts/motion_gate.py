@@ -46,7 +46,11 @@ def range_arc(distance, config):
 
 
 class LowObstacleMemory:
-    def __init__(self, config=None):self.config=geometry(config);self.points=[]
+    # keep_s / mark_m: how long a low obstacle the ultrasonic saw is remembered, and how close it must be to be
+    # remembered (90 s / 25 cm by default). On 2026-11-17 the remembered points, not the LiDAR, held Pinkys still
+    # for a minute after another Pinky had passed in front; navigation.json sets 6 s / 12 cm.
+    def __init__(self, config=None, keep_s=90., mark_m=.25):
+        self.config=geometry(config);self.points=[];self.keep_s=keep_s;self.mark_m=mark_m
     def update(self, pose, reading, now):
         x,y,yaw=pose;c,s=math.cos(yaw),math.sin(yaw);g=self.config
         sx=x+c*g['ultrasound_x_m']-s*g['ultrasound_y_m'];sy=y+s*g['ultrasound_x_m']+c*g['ultrasound_y_m']
@@ -56,9 +60,9 @@ class LowObstacleMemory:
             bearing=math.atan2(py-sy,px-sx)-yaw-g['ultrasound_yaw_rad']
             bearing=math.atan2(math.sin(bearing),math.cos(bearing))
             cleared=abs(bearing)<=g['ultrasound_fov_rad']/2+1e-6 and math.hypot(px-sx,py-sy)<limit-.02
-            if now-at<90 and not cleared:retained.append((px,py,at))
+            if now-at<self.keep_s and not cleared:retained.append((px,py,at))
         self.points=retained
-        if reading is not None and math.isfinite(reading) and 0 < reading <= .25:
+        if reading is not None and math.isfinite(reading) and 0 < reading <= self.mark_m:
             for bx,by in range_arc(reading,g):
                 px,py=x+c*bx-s*by,y+s*bx+c*by
                 if not any(math.hypot(px-qx,py-qy)<.008 for qx,qy,_ in self.points):self.points.append((px,py,now))

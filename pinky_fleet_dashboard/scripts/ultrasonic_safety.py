@@ -20,13 +20,13 @@ from rclpy.executors import ExternalShutdownException
 from tf2_ros import Buffer, TransformListener, TransformException
 if __package__:
     from .line_following import LineAssist, default_profile, swept_clear, TemplateEstimator, validate_profile, normalize, surface_observation
-    from .mission_behaviors import Crossing, Docking, DockEntry, DockExit, UltrasonicDetour
+    from .mission_behaviors import BackOff, Crossing, Docking, DockEntry, DockExit, UltrasonicDetour
     from .motion_gate import geometry, swept_footprint
     from .traffic import required_zones, lease_allows, LeaseReceiver
     from .control_journal import ControlJournal
 else:
     from line_following import LineAssist, default_profile, swept_clear, TemplateEstimator, validate_profile, normalize, surface_observation
-    from mission_behaviors import Crossing, Docking, DockEntry, DockExit, UltrasonicDetour
+    from mission_behaviors import BackOff, Crossing, Docking, DockEntry, DockExit, UltrasonicDetour
     from motion_gate import geometry, swept_footprint
     from traffic import required_zones, lease_allows, LeaseReceiver
     from control_journal import ControlJournal
@@ -90,6 +90,9 @@ class UltrasonicSafety(Node):
         self.docking = Docking()
         self.dock_exit = DockExit()
         self.dock_entry = DockEntry()
+        # navigation.json ultrasonic_back_off_m: how far to reverse when the ultrasonic holds the Pinky (0 = never).
+        _back = _nav.get('ultrasonic_back_off_m', 0.12)
+        self.back_off = BackOff(distance_m=min(0.25, max(0.0, float(_back))) if isinstance(_back, (int, float)) else 0.12)
         self.mission_token = None
         self.control_token = None
         self.dock_saved_signature = None
@@ -99,6 +102,10 @@ class UltrasonicSafety(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.line_status_publisher = self.create_publisher(String, '/line/status', 10)
         self.create_subscription(String,'/fleet/lease',self.on_lease,qos_profile_sensor_data)
+        # The ceiling camera's view of this Pinky near station 5, relayed by the dashboard (2026-11-18): its offset
+        # from the registered spot. Only the drive into the station steers on it, and only while it is fresh.
+        self.dock_guide = None
+        self.create_subscription(String,'/fleet/dock_guide',self.on_dock_guide,qos_profile_sensor_data)
         self.create_subscription(UInt16MultiArray, '/ir_sensor/range', self.on_ir, qos_profile_sensor_data)
         self.create_subscription(LaserScan, '/scan', self.on_scan, qos_profile_sensor_data)
         self.create_timer(1.0, self.reload_ir_profile)
@@ -184,14 +191,14 @@ class UltrasonicSafety(Node):
                 self.observer_model = TemplateEstimator(self.ir_profile['template'])
                 self.observer_revision = self.ir_profile.get('revision')
             estimate = self.observer_model.estimate([self.ir_raw[i] for i in self.ir_profile['channel_order']])
-        status = dict(version=1, policy='center_first', line_algorithm='fleet_control_v4', dock_protocol='sponge_v1', recovery_policy='parking_mission_v2', traffic_config=self.runtime['traffic_zones'], traffic_request=self.traffic_request, avoidance=self.detour.status(), crossing=self.crossing.status(), docking=self.docking.status(), dock_exit=self.dock_exit.status(), dock_entry=self.dock_entry.status(), classification=self.ir_profile.get('mode'), estimate=estimate, control_estimate=self.line_estimate, cruise_speed_mps=.1152, enabled=bool(self.ir_profile.get('enabled')), state=state,
+        status = dict(version=1, policy='center_first', line_algorithm='fleet_control_v4', dock_protocol='sponge_v1', recovery_policy='parking_mission_v2', traffic_config=self.runtime['traffic_zones'], traffic_request=self.traffic_request, avoidance=self.detour.status(), crossing=self.crossing.status(), docking=self.docking.status(), dock_exit=self.dock_exit.status(), dock_entry=self.dock_entry.status(), dock_guide_fresh=self.fresh_dock_guide(now) is not None, classification=self.ir_profile.get('mode'), estimate=estimate, control_estimate=self.line_estimate, cruise_speed_mps=.1152, enabled=bool(self.ir_profile.get('enabled')), state=state,
                       revision=self.ir_profile.get('revision'), normalized=normalize(self.ir_raw,self.ir_profile) if now-self.last_ir_at<=.6 else None, surface_reading=surface_observation(self.ir_raw,self.ir_profile) if self.ir_profile.get('mode')=='calibrated' and now-self.last_ir_at<=.6 else None,
                       error=self.line_error, ir_fresh=now-self.last_ir_at <= .6,
                       lidar_fresh=now-self.last_scan_at <= .6,
                       ultrasonic_fresh=self.sensor_fresh(now) and self.sensor_valid, profile_error=self.profile_error)
         self.line_status_publisher.publish(String(data=json.dumps(status, allow_nan=False)))
         self.write_json('route_feedback.json', dict(token=self.mission_token, monotonic=now,
-                        traffic_config=self.runtime['traffic_zones'], traffic_request=self.traffic_request, avoidance=self.detour.status(), crossing=self.crossing.status(), docking=self.docking.status(), dock_exit=self.dock_exit.status(), dock_entry=self.dock_entry.status(), state=self.line_state))
+                        traffic_config=self.runtime['traffic_zones'], traffic_request=self.traffic_request, avoidance=self.detour.status(), crossing=self.crossing.status(), docking=self.docking.status(), dock_exit=self.dock_exit.status(), dock_entry=self.dock_entry.status(), dock_guide=self.fresh_dock_guide(now), state=self.line_state))
 
     def write_json(self, name, data):
         path = Path('/home/pinky/.cache/pinky-fleet')/name
@@ -257,7 +264,7 @@ class UltrasonicSafety(Node):
                 self.send()
                 return True
             motion = self.dock_entry.update(context, odom, now,
-                Path('/home/pinky/.cache/pinky-fleet/dock_entry_latch.json'))
+                Path('/home/pinky/.cache/pinky-fleet/dock_entry_latch.json'), self.fresh_dock_guide(now))
             self.line_state = motion.state
             self.send(motion.linear, motion.angular)
             return True
@@ -579,6 +586,20 @@ class UltrasonicSafety(Node):
         command=self.forward_nav_command()
         self.send(command.linear.x,command.angular.z)
 
+    def on_dock_guide(self,msg):
+        """{"forward_mm","left_mm","dyaw_deg"} from the dashboard; kept with the time it arrived here."""
+        try:
+            data=json.loads(msg.data)
+            guide=(float(data['forward_mm'])/1000.,float(data['left_mm'])/1000.,math.radians(float(data['dyaw_deg'])))
+        except (ValueError,TypeError,KeyError):return
+        # Farther than the camera could mean near the station, or not a number: not a guide.
+        if all(math.isfinite(v) for v in guide) and abs(guide[0])<=.60 and abs(guide[1])<=.30 and abs(guide[2])<=math.pi+.01:
+            self.dock_guide=(guide,time.monotonic())
+
+    def fresh_dock_guide(self,now,max_age_s=.4):
+        guide=getattr(self,'dock_guide',None)
+        return guide[0] if guide is not None and 0<=now-guide[1]<=max_age_s else None
+
     def on_lease(self,msg):
         try:self.lease_receiver.receive(json.loads(msg.data),time.monotonic())
         except (ValueError,TypeError):pass
@@ -596,6 +617,16 @@ class UltrasonicSafety(Node):
             # motion is held back; Nav2's turns and reversing still pass so it can take its new path out.
             command = self.forward_nav_command()
             linear = command.linear.x
+            # Standing too close: back off a little (LiDAR must show the way back clear), then Nav2 goes round.
+            scan_fresh = now-self.last_scan_at <= .6
+            motion = self.back_off.update(
+                blocked=self.sensor_valid and not self.sensor_clear, range_m=self.range_m if self.sensor_valid else None,
+                odom=self.fresh_pose('odom'), now=now,
+                rear_clear=scan_fresh and swept_footprint(self.scan_points, -self.back_off.speed_mps, 0., self.geometry))
+            if motion is not None:
+                self.line_state = motion.state
+                self.send(motion.linear, 0.)
+                return
             if not self.sensor_clear and linear > 0.0:
                 linear = 0.0
                 self.line_state = 'ultrasonic_hold_forward'

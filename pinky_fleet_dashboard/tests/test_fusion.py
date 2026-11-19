@@ -64,10 +64,12 @@ class IrReadingOnlyTests(unittest.TestCase):
         with patch.multiple(app, IR_PROFILES=profiles, NAVIGATION={'ir_steering': True}):
             self.assertTrue(app._ir_steers('10'))
 
-    def test_the_shipped_settings_are_nav2_with_lidar_costmap_first_and_no_detour(self):
-        # 2026-11-16: LiDAR-only costmap first; the ultrasonic joins once that runs steadily.
-        self.assertEqual((app.NAVIGATION['ir_steering'], app.NAVIGATION['ultrasonic_fusion'], app.NAVIGATION['ultrasonic_detour']),
-                         (False, False, False))
+    def test_the_shipped_settings_are_nav2_with_fusion_in_both_costmaps_and_no_detour(self):
+        # 2026-11-17: the fused low layer goes to the local and the global costmap, so Nav2 plans round a low obstacle
+        # instead of stopping in front of it; the IR does not steer and the old ultrasonic detour stays off.
+        self.assertEqual((app.NAVIGATION['ir_steering'], app.NAVIGATION['ultrasonic_fusion'],
+                          app.NAVIGATION['ultrasonic_fusion_global'], app.NAVIGATION['ultrasonic_detour']),
+                         (False, True, True, False))
 
     def test_the_shipped_fusion_grid_settings_are_valid(self):
         validated(app.NAVIGATION['fusion_grid'])  # the robot node would refuse to start otherwise

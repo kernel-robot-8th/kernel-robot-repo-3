@@ -98,7 +98,9 @@ class TrafficTests(unittest.TestCase):
             with self.assertRaises(OSError):self.c.update({'10':self.obs()})
         self.assertFalse(self.c.owners)
     def test_range_gate_requests_before_entry(self):
-        self.assertEqual(required_zones({'transit':True},(0,0),self.zones),['parking'])
+        # The parking area is asked for in or right beside it (2026-11-17), not for the whole stretch from or to it.
+        self.assertEqual(required_zones({'transit':True},(.7,.4),self.zones),['parking'])
+        self.assertEqual(required_zones({'transit':True},(1.5,1.5),self.zones),[])
         self.assertEqual(required_zones({},(.65,1.),self.zones),['junction7'])
     def test_expiry_wrong_route_and_reordered_packets_stop(self):
         r=LeaseReceiver();data=dict(token='a',zones=['junction7'],boot='pc1',sequence=1)

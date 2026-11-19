@@ -136,6 +136,7 @@ function mapBaseSvg(svg, data, frame) {
     </g>
     <g class="map-paths"></g>
     <g class="map-pinkies"></g>
+    <g class="map-candidates"></g>
     <g class="map-pick"></g>`;
 }
 
@@ -159,9 +160,11 @@ function mapMarksSvg(data, frame) {
       <rect x="-12" y="-12" width="24" height="24" rx="7"/><text>${escapeHtml(spot.name)}</text></g>`);
   });
   const seen = new Set();
+  // A waypoint that a receiving zone or the loading spot is drawn on is not drawn twice.
+  const marked = new Set([...(data.zones || []).map((zone) => zone.waypoint), '5']);
   Object.values(data.waypoints || {}).flat().forEach((point) => {
     const key = `${point.label}@${point.x_m.toFixed(2)},${point.y_m.toFixed(2)}`;
-    if (seen.has(key)) return;
+    if (seen.has(key) || marked.has(point.label)) return;
     seen.add(key);
     parts.push(`<g class="map-waypoint" transform="translate(${frame.x(point.x_m)} ${frame.y(point.y_m)})">
       <circle r="4.5"/>${captionSvg(point.label, frame.x(point.x_m), frame, 8)}</g>`);
@@ -170,13 +173,13 @@ function mapMarksSvg(data, frame) {
     if (mark.x_m == null) return;
     const station = mark.key === 'dock5';
     parts.push(`<g class="map-landmark ${station ? 'station' : 'junction'}" transform="translate(${frame.x(mark.x_m)} ${frame.y(mark.y_m)})">
-      <circle r="${station ? 15 : 12}"/><text>${station ? '5' : '7'}</text>
+      <circle r="${station ? 15 : 12}"/><text>${station ? '적' : '7'}</text>
       ${captionSvg(mark.label, frame.x(mark.x_m), frame, station ? 21 : 18)}</g>`);
   });
   (data.zones || []).forEach((zone) => {
     if (zone.x_m == null) return;
     parts.push(`<g class="map-zone" transform="translate(${frame.x(zone.x_m)} ${frame.y(zone.y_m)})">
-      <circle r="14"/><text>${escapeHtml((zone.label || '').slice(-1))}</text>
+      <circle r="14"/><text>${escapeHtml(((zone.label || '').match(/[0-9A-Z]/) || ['·'])[0])}</text>
       ${captionSvg(zone.label, frame.x(zone.x_m), frame, 20)}</g>`);
   });
   return parts.join('');
@@ -193,6 +196,7 @@ function drawMapPinkies(layer, pinkies, frame, stopping) {
       mark.dataset.pinky = pinky.pinky_id;
       mark.innerHTML = `<g class="map-pinky-heading"><circle r="15"/><path d="M 13 0 L -8 -9 L -3 0 L -8 9 Z"/></g>
         <text y="-25">${escapeHtml(pinkyNames[pinky.pinky_id] || pinky.name)}</text>`;
+      mark.style.setProperty('--pinky-color', MAP_PATH_COLORS[pinky.pinky_id] || '#3182f6');
       layer.append(mark);
     }
     mark.setAttribute('class', `map-pinky${stopping.has(pinky.pinky_id) ? ' stopping' : ''}`);
@@ -225,8 +229,33 @@ function drawMapPaths(layer, pinkies, frame) {
   }
 }
 
+// A Pinky whose LiDAR left several places to pick from has no map pose yet: AMCL reports the map origin for it, so
+// two such Pinkys would be drawn on the same point. They are not drawn; their candidate places are, numbered.
+function mapCandidates(pinkyId) {
+  const pinky = (pinkyScreen.view?.pinkies || []).find((item) => item.pinky_id === pinkyId);
+  return pinky && pinky.connected && typeof candidatesFor === 'function' ? candidatesFor(pinky) : [];
+}
+
 function mapPlaced(pinky) {
-  return pinky.connected && pinky.x_m != null && pinky.y_m != null;
+  return pinky.connected && pinky.x_m != null && pinky.y_m != null && !mapCandidates(pinky.pinky_id).length;
+}
+
+// The places the LiDAR could not tell apart, in the Pinky's own colour: a numbered circle with a tip the way it would
+// face. On the enlarged map a click picks one (the same question and command as the 이 자리 button in the detail).
+function drawMapCandidates(layer, pinkies, frame) {
+  // Two Pinkys standing side by side get candidates side by side: one's names go above the circles, the next one's below.
+  const html = pinkies.filter((pinky) => mapCandidates(pinky.pinky_id).length).map((pinky, order) => mapCandidates(pinky.pinky_id).map((c, i) => `
+    <g class="map-candidate" data-candidate-pinky="${escapeHtml(pinky.pinky_id)}" data-candidate-index="${i}"
+       transform="translate(${frame.x(c.x_m).toFixed(1)} ${frame.y(c.y_m).toFixed(1)})" style="--pinky-color:${MAP_PATH_COLORS[pinky.pinky_id] || '#3182f6'}">
+      <title>${escapeHtml(`${pinkyNames[pinky.pinky_id] || pinky.name} 후보 ${i + 1} · 일치도 ${Number(c.score).toFixed(2)}`)}</title>
+      <g transform="rotate(${((-(c.yaw_rad || 0) * 180) / Math.PI).toFixed(1)})"><circle r="14"/><path d="M 27 0 L 16 -7 L 16 7 Z"/></g>
+      <text class="map-candidate-number" y="5">${i + 1}</text>
+      <text class="map-candidate-name" y="${order % 2 ? 32 : -21}">${escapeHtml(`${pinkyNames[pinky.pinky_id] || pinky.name} 후보 ${i + 1}`)}</text>
+    </g>`).join('')).join('');
+  if (layer.dataset.html !== html) {
+    layer.innerHTML = html;
+    layer.dataset.html = html;
+  }
 }
 
 // Draws the current map into `svg` (and shows `empty` with the reason when there is none).
@@ -251,8 +280,13 @@ function drawPinkyMap(svg, empty) {
     svg.querySelector('.map-marks').innerHTML = mapMarksSvg(data, frame);
   }
   const stopping = new Set((pinkyScreen.view?.pinkies || []).filter((pinky) => pinky.stop_pending).map((pinky) => pinky.pinky_id));
+  // The loading spot turns green while the ceiling camera judges the Pinky on it in position, orange when off it.
+  const station = svg.querySelector('.map-landmark.station');
+  station?.classList.toggle('arrived', pinkyMapState.dockState === 'IN_POSITION');
+  station?.classList.toggle('off', pinkyMapState.dockState === 'OFF_POSITION');
   drawMapPaths(svg.querySelector('.map-paths'), data.pinkies || [], frame);
   drawMapPinkies(svg.querySelector('.map-pinkies'), data.pinkies || [], frame, stopping);
+  drawMapCandidates(svg.querySelector('.map-candidates'), data.pinkies || [], frame);
   const placed = (data.pinkies || []).filter(mapPlaced);
   svg.setAttribute('aria-label', `핑키 지도${data.simulated ? devWord(' (모의)') : ''}: ${placed.length
     ? placed.map((pinky) => `${pinky.name} x ${pinky.x_m.toFixed(2)} m, y ${pinky.y_m.toFixed(2)} m`).join(', ')
@@ -296,9 +330,13 @@ function renderMapViewer() {
       <span><strong>${escapeHtml(pinky.phase_label || '단계 모름')}</strong>
       <small>${mapPlaced(pinky)
         ? `x ${pinky.x_m.toFixed(2)} m, y ${pinky.y_m.toFixed(2)} m, ${Math.round(((pinky.yaw_rad || 0) * 180) / Math.PI)}°`
-        : pinky.connected ? '위치를 받지 못했어요' : '연결 끊김'}</small></span>
-      ${pinky.connected ? `<button type="button" class="secondary small" data-map-set-pose="${escapeHtml(pinky.pinky_id)}"
-        ${mapPick.pinkyId === pinky.pinky_id ? 'aria-pressed="true"' : ''}>↗ 위치 다시 잡기</button>` : ''}
+        : !pinky.connected ? '연결 끊김' : mapCandidates(pinky.pinky_id).length
+          ? `위치 후보 ${mapCandidates(pinky.pinky_id).length}곳 · 지도에서 번호를 눌러 고르세요` : '위치를 받지 못했어요'}</small></span>
+      ${pinky.connected ? `<div class="map-pinky-actions">
+        <button type="button" class="secondary small" data-map-candidates="${escapeHtml(pinky.pinky_id)}"
+          title="라이다로 맞는 자리를 다시 찾아 지도에 번호로 보여 줘요. 위치가 이미 들어가 있어도 다시 고를 수 있어요">후보 다시 보기</button>
+        <button type="button" class="secondary small" data-map-set-pose="${escapeHtml(pinky.pinky_id)}"
+          ${mapPick.pinkyId === pinky.pinky_id ? 'aria-pressed="true"' : ''}>↗ 위치 다시 잡기</button></div>` : ''}
     </li>`).join('');
   renderMapPick();
 }
@@ -425,8 +463,27 @@ mapViewerSvg.addEventListener('pointercancel', () => {
   mapPick.start = mapPick.end = mapPick.startPx = mapPick.endPx = mapPick.toMap = null;
   renderMapPick();
 });
+mapViewerSvg.addEventListener('click', (event) => {
+  const mark = event.target.closest('.map-candidate');
+  if (!mark || mapPick.pinkyId) return;  // while 위치 다시 잡기 is on, a press places the Pinky instead
+  pickCandidate(mark.dataset.candidatePinky, Number(mark.dataset.candidateIndex));
+});
 document.querySelector('#mapPickCancel').addEventListener('click', endMapPick);
 mapViewerList.addEventListener('click', (event) => {
+  // 후보 다시 보기: a fresh LiDAR match for this Pinky, drawn as numbered places to pick from, whether or not a pose
+  // was already put in (an automatic choice in the symmetric cell can be the wrong one). Nothing changes until a
+  // number is picked.
+  const again = event.target.closest('[data-map-candidates]');
+  if (again) {
+    const pinkyId = again.dataset.mapCandidates;
+    again.disabled = true;
+    previewCandidates(pinkyId).then(() => {
+      const preview = pinkyDetail.preview?.pinkyId === pinkyId ? pinkyDetail.preview : null;
+      if (!preview?.candidates.length) showToast(preview?.error || '라이다가 맞는 자리를 찾지 못했어요. ↗ 위치 다시 잡기로 직접 넣어 주세요.');
+      renderMapViewer();
+    });
+    return;
+  }
   const button = event.target.closest('[data-map-set-pose]');
   if (!button) return;
   if (mapPick.pinkyId === button.dataset.mapSetPose) endMapPick();

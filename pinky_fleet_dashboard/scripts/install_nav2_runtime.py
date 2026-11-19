@@ -172,6 +172,35 @@ def main() -> None:
         # until the controller saw a collision ahead (2026-11-16). Pinky's own default is 0.15 m.
         for name in ('local_costmap', 'global_costmap'):
             parsed[name][name]['ros__parameters']['inflation_layer']['inflation_radius'] = float(inflation)
+    # Fitted to this 2.2 x 2.6 m cell with a 48 cm passage (2026-11-17). inflation_cost_scaling: a steeper fall-off, so
+    # the middle of the passage is a clear valley (the controller's own copy must be the same value). lookahead_m: the
+    # 0.3-0.9 m of the line course looked past the passage and cut its corner. goal_xy_tolerance_m: 2 cm made the
+    # Pinky shuffle at every stop.
+    controller_plugins = [plugin for plugin in parsed['controller_server']['ros__parameters'].values() if isinstance(plugin, dict)]
+    scaling = navigation_settings.get('inflation_cost_scaling')
+    if isinstance(scaling, (int, float)) and 1.0 <= scaling <= 20.0:
+        for name in ('local_costmap', 'global_costmap'):
+            parsed[name][name]['ros__parameters']['inflation_layer']['cost_scaling_factor'] = float(scaling)
+        for plugin in controller_plugins:
+            if 'inflation_cost_scaling_factor' in plugin:
+                plugin['inflation_cost_scaling_factor'] = float(scaling)
+    if isinstance(inflation, (int, float)) and 0.05 <= inflation <= 0.5:
+        for plugin in controller_plugins:
+            if 'cost_scaling_dist' in plugin:  # must not reach farther than the inflation the costmap holds
+                plugin['cost_scaling_dist'] = min(float(plugin['cost_scaling_dist']), float(inflation))
+    lookahead = navigation_settings.get('lookahead_m')
+    if isinstance(lookahead, dict) and all(isinstance(lookahead.get(k), (int, float)) for k in ('min', 'max')) \
+            and 0.1 <= lookahead['min'] <= lookahead['max'] <= 1.0:
+        for plugin in controller_plugins:
+            if 'min_lookahead_dist' in plugin:
+                plugin.update(min_lookahead_dist=float(lookahead['min']), max_lookahead_dist=float(lookahead['max']),
+                              lookahead_dist=float((lookahead['min'] + lookahead['max']) / 2),
+                              curvature_lookahead_dist=float(lookahead['max']))
+    goal_xy = navigation_settings.get('goal_xy_tolerance_m')
+    if isinstance(goal_xy, (int, float)) and 0.01 <= goal_xy <= 0.15:
+        for plugin in controller_plugins:
+            if 'xy_goal_tolerance' in plugin:
+                plugin['xy_goal_tolerance'] = float(goal_xy)
     rotate = navigation_settings.get('rotate_to_heading_min_angle_rad')
     if isinstance(rotate, (int, float)) and 0.1 <= rotate <= 1.6:
         # Wide turns (2026-11-16): below this heading error the controller curves onto the path instead of

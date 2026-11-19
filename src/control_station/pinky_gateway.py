@@ -76,6 +76,29 @@ def sensor_details(topics: dict[str, Any]) -> list[dict[str, Any]]:
              "age_s": _number((topics.get(key) or {}).get("age_s")), "text": texts[key]} for key in texts]
 
 
+# The fleet dashboard's shared zones in the operator's words, most telling first.
+ZONE_WORDS = {"dock5": "적재 자리", "dock_queue": "적재 대기 자리", "passage9": "통로", "parking": "주차장 출입",
+              "junction7": "교차로"}
+
+
+def waiting_view(pinky_id: str, robot: dict[str, Any], route: dict[str, Any]) -> dict[str, Any] | None:
+    """Why a driving Pinky stands still for another Pinky: the zones it asked for and who holds them, or None."""
+    traffic = robot.get("traffic") if isinstance(robot.get("traffic"), dict) else {}
+    zones = (traffic.get("waiting") or {}).get(pinky_id) or []
+    if not zones or route.get("status") not in {"starting", "running"}:
+        return None
+    owners = traffic.get("owners") or {}
+    zones = sorted(zones, key=lambda zone: list(ZONE_WORDS).index(zone) if zone in ZONE_WORDS else len(ZONE_WORDS))
+    holders = [PINKY_NAMES[holder] for zone in zones
+               if (holder := (owners.get(zone) or {}).get("robot_id")) in PINKY_NAMES and holder != pinky_id]
+    place = ZONE_WORDS.get(zones[0], zones[0])
+    by = f" · {', '.join(dict.fromkeys(holders))} 사용 중" if holders else ""
+    if holders and all((owners.get(zone) or {}).get("robot_id") != pinky_id for zone in zones):
+        by += " (그 핑키가 꺼져 있으면 치운 뒤 그 줄의 [자리 비우기]를 눌러 주세요)"
+    label = {"dock_queue": "앞 차례 대기 중"}.get(zones[0], f"{place} 대기 중")
+    return {"zones": zones, "label": label, "text": f"{place}에 자리가 없어 기다리는 중{by}. 비면 바로 들어가요"}
+
+
 def shape_pinky(pinky_id: str, robot: dict[str, Any], status: dict[str, Any]) -> dict[str, Any]:
     """One Pinky card: the dashboard's record (`robot`) plus the client's reading of it (`status`)."""
     topics = robot.get("topics") or {}
@@ -85,12 +108,19 @@ def shape_pinky(pinky_id: str, robot: dict[str, Any], status: dict[str, Any]) ->
     pose = (topics.get("tf_pose") or {}).get("value") or {}
     labels = route.get("labels") if isinstance(route.get("labels"), list) else []
     connected = bool(status.get("connected"))
+    waiting = waiting_view(pinky_id, robot, route) if connected else None
+    owners = ((robot.get("traffic") or {}).get("owners") or {}) if isinstance(robot.get("traffic"), dict) else {}
+    holding = [ZONE_WORDS.get(zone, zone) for zone, owner in owners.items() if (owner or {}).get("robot_id") == pinky_id]
     return {
         "pinky_id": pinky_id,
+        # Standing still for another Pinky (the loading spot is taken, the passage is in use...): shown as such.
+        "waiting": waiting,
+        # Shared zones this Pinky holds. A disconnected Pinky keeps them until the operator clears its route.
+        "holding": holding,
         "name": PINKY_NAMES[pinky_id],
         "robot_name": robot.get("name"),
         "ip": robot.get("ip"),
-        "simulated": False,
+        "simulated": bool(status.get("simulated")),
         "connected": connected,
         "ready": bool(status.get("ready_for_motion")),
         "readiness_label": status.get("readiness_label"),
@@ -99,7 +129,8 @@ def shape_pinky(pinky_id: str, robot: dict[str, Any], status: dict[str, Any]) ->
         "battery_percent": status.get("battery_percent"),
         "battery_volts": status.get("battery_volts"),
         "phase": status.get("phase"),
-        "phase_label": "연결 끊김" if not connected else PHASE_LABELS.get(status.get("phase"), status.get("phase")),
+        "phase_label": "연결 끊김" if not connected else waiting["label"] if waiting
+        else PHASE_LABELS.get(status.get("phase"), status.get("phase")),
         "message": status.get("message") or robot.get("message"),
         "route": {
             "status": route.get("status"),
@@ -141,7 +172,7 @@ def shape_mock_pinky(pinky_id: str, status: dict[str, Any]) -> dict[str, Any]:
 MOCK_PARKING = {"10": (0.4, 0.4), "11": (0.7, 0.4), "12": (1.0, 0.4)}
 MOCK_LANDMARKS = {"dock5": (0.39, 1.64), "junction7": (1.55, 1.24)}
 MOCK_GRID = {"width": 44, "height": 51, "resolution_m": 0.05, "origin_x_m": -0.349, "origin_y_m": -0.295}
-LANDMARK_LABELS = {"dock5": "5번 적재", "junction7": "교차로 7"}
+LANDMARK_LABELS = {"dock5": "적재 자리", "junction7": "교차로 7"}
 
 
 def _mock_grid() -> dict[str, Any]:
@@ -231,7 +262,7 @@ class PinkyGateway:
         waypoints = {pinky_id: _waypoints(robots.get(pinky_id) or {}) for pinky_id in PINKY_IDS}
         cards = {card["pinky_id"]: card for card in self.view()["pinkies"]}
         return {
-            "source": self.source, "simulated": False, "available": grid is not None,
+            "source": self.source, "simulated": self.client.simulated, "available": grid is not None,
             "reason": None if grid is not None else "핑키 관제가 아직 지도를 받지 못했습니다",
             "grid": grid, "keepout": extras.get("keepout"),
             "parking_area": (traffic.get("parking") or {}).get("bounds"),
@@ -378,7 +409,8 @@ class PinkyGateway:
         return {"ok": True, "match": answer["match"]}
 
     # The operator signals of a run, by mission phase: docked at 5, loaded at 5, handed over at the drop-off.
-    SIGNALS = {"dock_complete": "docking_manual", "received": "docked_manual", "mission_complete": "course_complete"}
+    SIGNALS = {"dock_complete": "docking_manual", "redock": "docking_manual", "received": "docked_manual",
+               "mission_complete": "course_complete"}
 
     def test_mission(self, pinky_id: str, dropoff: object, via: object = None) -> dict[str, Any]:
         """시운전 without an order: (`via` 경유 →) 5번 적재 → `dropoff` 배달 → 주차장 (and back through `via`)."""
@@ -392,7 +424,7 @@ class PinkyGateway:
         return self._command("test_mission", pinky_id,
                              lambda client: client.start_test_mission(pinky_id, dropoff.strip(), labels))
 
-    def signal(self, pinky_id: str, action: object) -> dict[str, Any]:
+    def signal(self, pinky_id: str, action: object, offset: object = None) -> dict[str, Any]:
         """도킹완료 / 적재 완료 / 수령 완료 for the Pinky's current phase, with the dashboard's mission token."""
         self._known(pinky_id)
         if action not in self.SIGNALS:
@@ -401,10 +433,13 @@ class PinkyGateway:
             return self._command(action, pinky_id, lambda client: (0, {}))
         def call(client: PinkyFleetClient) -> tuple[int, dict[str, Any]]:
             route = (client.robots().get(pinky_id) or {}).get("route") or {}
-            if route.get("phase") != self.SIGNALS[action]:
+            allowed = {self.SIGNALS[action]} | ({"docked_manual"} if action == "redock" else set())  # redock: also after dock_complete
+            if route.get("phase") not in allowed:
                 return 409, {"error": f"지금 단계({route.get('phase') or '없음'})에서는 보낼 수 없는 신호입니다"}
             try:
                 result = (client.mission_complete(pinky_id, route.get("mission_token")) if action == "mission_complete"
+                          else client.fleet_confirm(pinky_id, action, route.get("mission_token"), offset)
+                          if action == "redock" and isinstance(offset, dict)
                           else client.fleet_confirm(pinky_id, action, route.get("mission_token")))
             except PinkyFleetError as exc:
                 return 409 if exc.error_code == "PINKY_SIGNAL_REJECTED" else 502, {"error": str(exc)}
@@ -469,7 +504,8 @@ class PinkyGateway:
                 status, answer = call(self.client)
                 ok = status in {200, 201, 202} and bool(answer.get("ok", True))  # 201: a waypoint was saved
                 message = answer.get("message") or answer.get("error") or f"HTTP {status}"
-                result = {"ok": ok, "http_status": status, "simulated": False, "message": message}
+                result = {"ok": ok, "http_status": status, "simulated": answer.get("simulated") is True,
+                          "message": message}
             except OSError as exc:
                 result = {"ok": False, "http_status": None, "simulated": False, "message": str(exc)}
         entry = {"at": _now(), "action": action, "pinky_id": pinky_id, **result}
