@@ -168,6 +168,12 @@ class MockWorld:
                          until=self.clock() + self.drive_s, leg="to_home")
             return {"accepted": True, "simulated": True, "message": "주행완료 신호를 보냈습니다. (모의)"}
 
+    def unload(self, pinky_id: str) -> None:
+        """The customer took the order off this Pinky. The mock fleet does this itself at its receiving zone; with a
+        real or virtual fleet and mock counts the order flow's pickup confirmation calls it."""
+        with self._lock:
+            self.loads[pinky_id].clear()
+
     def fleet_status(self, pinky_id: str) -> dict[str, Any]:
         with self._lock:
             pinky = self.pinkies[pinky_id]
@@ -191,7 +197,8 @@ class MockWorld:
                 "ready_for_motion": True, "readiness_label": "모의 핑키", "battery_percent": pinky["battery"],
             }
 
-    def fleet_confirm(self, pinky_id: str, action: str, token: str | None) -> dict[str, Any]:
+    def fleet_confirm(self, pinky_id: str, action: str, token: str | None,
+                      offset: dict[str, Any] | None = None) -> dict[str, Any]:
         with self._lock:
             pinky = self.pinkies[pinky_id]
             wanted_phase = {"dock_complete": "docking_manual", "redock": "docking_manual", "received": "docked_manual"}.get(action)
@@ -199,11 +206,14 @@ class MockWorld:
                 raise PinkyFleetError("PINKY_SIGNAL_INVALID", f"알 수 없는 신호 {action}")
             if self._take_fault("FLEET_REJECT", action) is not None:
                 raise PinkyFleetError("PINKY_SIGNAL_REJECTED", "현재 임무의 확인 단계와 신호가 일치하지 않습니다. (모의 거부)")
-            if pinky["phase"] != wanted_phase or not token or token != pinky["token"]:
+            allowed = {wanted_phase, "docked_manual"} if action == "redock" else {wanted_phase}  # redock: also after dock_complete
+            if pinky["phase"] not in allowed or not token or token != pinky["token"]:
                 raise PinkyFleetError("PINKY_SIGNAL_REJECTED", "현재 임무의 확인 단계와 신호가 일치하지 않습니다.")
             if action == "redock":
                 pinky.update(phase="driving", token=None, message="5번 다시 맞추는 중 (모의)", location="5번 정류장",
                              until=self.clock() + self.drive_s / 3, leg="to_station")
+                return {"accepted": True, "simulated": True, "guided": offset is not None,
+                        "message": "다시 맞추기 신호를 보냈습니다. (모의)"}
             elif action == "dock_complete":
                 pinky.update(phase="docked_manual", token=uuid.uuid4().hex[:12],
                              message="도킹완료 · 정지 유지 · 물건 수령 완료 대기")
@@ -226,7 +236,8 @@ class MockWorld:
                 return {
                     "status": "MISALIGNED", "spot_id": "mock_station", "simulated": True, "pinky_id": pinky_id,
                     "reason": "모의: 정차 위치에서 벗어남", "captured_at": _now(),
-                    "offset": {"dx_mm": 48.0, "dy_mm": -21.0, "distance_mm": 52.4, "dyaw_deg": 6.5},
+                    "offset": {"dx_mm": 48.0, "dy_mm": -21.0, "distance_mm": 52.4, "dyaw_deg": 6.5,
+                               "forward_mm": 48.0, "left_mm": -21.0},
                     "tolerance": {"position_mm": 30.0, "yaw_deg": 5.0},
                 }
             return {

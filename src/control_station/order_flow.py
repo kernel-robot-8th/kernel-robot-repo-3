@@ -30,12 +30,14 @@ The devices behind the observers and the picker are plugged in from outside (the
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from control_station.dock_handshake import COMPLETE, OPERATOR, REDOCK, DockHandshake, _result_text, redock_offset  # noqa: F401
 from control_station.assignment import ArmPlanError, PickStats, plan_arms
 from control_station.pinky_fleet import STATION_PHASES, PinkyFleetError
 from control_station.store import PINKY_NAMES, shipment_of
@@ -67,6 +69,7 @@ class StepContext:
     cancel_event: threading.Event
     record: Callable[[str, dict[str, Any]], None]  # (event_type, payload) on this step
     set_plan: Callable[[str, str | None, dict[str, Any]], None]  # (step_id, robot_id, detail) for a pending step
+
 
 
 @dataclass
@@ -109,8 +112,14 @@ class OrderFlow:
         arrival_timeout_s: float = 600.0,
         # dock_complete -> docked_manual passes through docking_anchor, which the Pinky allows up to 18 s.
         signal_timeout_s: float = 30.0,
-        max_redocks: int = 3,
+        max_redocks: int = 5,
         redock_after_checks: int = 3,
+        # The camera has to say ARRIVED this many checks in a row; after a redock is sent the Pinky is given
+        # redock_wait_s to leave the spot before the same picture is judged again; a camera that cannot judge for
+        # camera_blind_s hands the arrival to the operator (dock_handshake.py).
+        arrived_checks: int = 2,
+        redock_wait_s: float = 15.0,
+        camera_blind_s: float = 20.0,
         pick_stats: Callable[[], PickStats] | None = None,
         route_for: Callable[[str | None], list[str] | None] | None = None,
         pickup_timeout_s: float = 1800.0,
@@ -137,6 +146,7 @@ class OrderFlow:
         self.arrival_timeout_s = arrival_timeout_s
         self.max_redocks = max_redocks
         self.redock_after_checks = redock_after_checks
+        self.arrived_checks, self.redock_wait_s, self.camera_blind_s = arrived_checks, redock_wait_s, camera_blind_s
         self.signal_timeout_s = signal_timeout_s
         # One Pinky can stand between the two arms, so one order at a time uses the arms and the spot.
         self.station_owner: str | None = None
@@ -144,6 +154,9 @@ class OrderFlow:
         # alert or that Pinky leaves the station: order id -> Pinky id.
         self.held_by_stopped: dict[str, str] = {}
         self._tokens: dict[str, str | None] = {}
+        # Pinkys an order's own flow is talking to at the loading spot (order id -> Pinky id), from its arrival wait
+        # until the order ends: the test screen's dock supervisor leaves these alone.
+        self._order_pinky: dict[str, str] = {}
         self._before: dict[str, dict[str, int]] = {}
         self._picked: dict[str, dict[str, Any]] = {}  # task id -> the last pick's result, settled by VERIFY_TRANSFER
         self._guard = threading.Lock()
@@ -166,6 +179,7 @@ class OrderFlow:
                 else:
                     self.station_owner = None
             self._tokens.pop(task_id, None)
+            self._order_pinky.pop(task_id, None)
             self._before.pop(task_id, None)
             self._picked.pop(task_id, None)
 
@@ -332,11 +346,21 @@ class OrderFlow:
         return {"source": "control_station", "outcome": "SHIPMENT_STARTED", "shipment": number, "shipments": count,
                 "pinky_id": pinky}
 
+    def holds_pinky(self, pinky_id: str) -> bool:
+        """True while a running order's flow handles this Pinky's arrival and signals itself."""
+        with self._guard:
+            return pinky_id in self._order_pinky.values()
+
     def _wait_pinky_arrival(self, ctx: StepContext) -> dict[str, Any] | None:
         pinky, task_id = self._pinky(ctx), ctx.task["id"]
+        with self._guard:
+            self._order_pinky[task_id] = pinky
         deadline = time.monotonic() + self.arrival_timeout_s
         last_phase = last_parking = waiting_for = fleet_error = None
-        misaligned_checks = redocks = 0
+        handshake = DockHandshake(arrived_checks=self.arrived_checks, misaligned_checks=self.redock_after_checks,
+                                  max_redocks=self.max_redocks, blind_s=self.camera_blind_s,
+                                  redock_wait_s=self.redock_wait_s)
+        name = self._name(pinky)
         while True:
             if ctx.cancel_event.is_set():
                 return None
@@ -357,6 +381,8 @@ class OrderFlow:
                 last_phase = status["phase"]
                 ctx.record("PINKY_STATUS", {"pinky_id": pinky, "phase": status["phase"], "message": status.get("message"),
                                             "location": status.get("location"), "simulated": status.get("simulated", False)})
+            if status["phase"] != "docking_manual":
+                handshake.step(status["phase"], None)  # a redock in flight: the Pinky has left the spot
             if status["phase"] == "docking_manual":
                 # The Pinky that stopped at the station first takes the loading spot; the lock is held only to
                 # look at and set the owner, never while waiting.
@@ -391,65 +417,104 @@ class OrderFlow:
                     observation = self.devices.parking(pinky)
                 except Exception as exc:  # node down, view moved, no frame: keep waiting, show why
                     observation = {"status": getattr(exc, "error_code", "PARKING_CHECK_FAILED"), "reason": str(exc)}
-                if observation.get("status") == "NOT_REGISTERED":
-                    # No marker registration for this Pinky (2026-11-17: only P2 carries one): the camera cannot judge
-                    # it, so the operator looks and confirms. The arms still never move before that.
+                # What to say back to the Pinky: dock_handshake.py (twice ARRIVED -> go on; steadily MISALIGNED ->
+                # redock with the camera's offset, then wait until it has left and come back; no registration, a
+                # blind camera or the redocks used up -> the operator looks and confirms).
+                decision = handshake.step("docking_manual", observation)
+                offset = observation.get("offset") or {}
+                distance = offset.get("distance_mm")
+                if decision.result is not None:
+                    ctx.record("PINKY_REDOCK_RESULT", {"pinky_id": pinky, **decision.result, "observation": observation,
+                                                       "message": f"핑키 {name} {_result_text(decision.result)}"})
+                if decision.not_applied:
+                    ctx.record("PINKY_REDOCK_NOT_APPLIED", {
+                        "pinky_id": pinky, "alert": True,
+                        "message": f"핑키 {name}에 다시 맞추기를 보냈지만 {int(self.redock_wait_s)}초 동안 움직이지 않았어요"})
+                if decision.action == COMPLETE:
+                    with self._guard:
+                        self._arrivals.pop(task_id, None)
+                    self._tokens[task_id] = status.get("mission_token")
+                    ctx.record("PARKING_OBSERVED", {"observation": observation, "pinky_id": pinky,
+                                                    "redocks": handshake.redocks,
+                                                    "message": f"핑키 {name} 정상 위치 · 다음 단계로"})
+                    return {"source": "parking_check", "outcome": "PINKY_ARRIVED", "pinky_id": pinky,
+                            "parking": observation, "redocks": handshake.redocks,
+                            "simulated": observation.get("simulated", False)}
+                if decision.action == OPERATOR:
+                    # The camera cannot settle it (2026-11-17: only P2 carries a registered marker), so the operator
+                    # looks and confirms. The arms still never move before that.
                     with self._guard:
                         waiting = self._arrivals.setdefault(task_id, threading.Event())
-                    if last_parking != "NOT_REGISTERED":
-                        last_parking = "NOT_REGISTERED"
+                    if last_parking != decision.reason:
+                        last_parking = decision.reason
+                        why = ("마커가 없어 카메라로 확인할 수 없어요" if decision.reason == "NOT_REGISTERED"
+                               else decision.message.split(" · ")[0])
                         ctx.record("ARRIVAL_NEEDS_OPERATOR", {
-                            "pinky_id": pinky, "observation": observation,
-                            "message": f"핑키 {self._name(pinky)}가 적재 자리에 섰어요 · 마커가 없어 카메라로 확인할 수 없어요"
+                            "pinky_id": pinky, "observation": observation, "reason": decision.reason,
+                            "message": f"핑키 {name}가 적재 자리에 섰어요 · {why}"
                                        " · 제자리에 섰는지 보고 [도착 확인]을 눌러 주세요"})
                     if waiting.is_set():
                         with self._guard:
                             self._arrivals.pop(task_id, None)
                         self._tokens[task_id] = status.get("mission_token")
-                        ctx.record("PARKING_OBSERVED", {"observation": {**observation, "status": "OPERATOR_CONFIRMED"},
-                                                        "pinky_id": pinky,
-                                                        "message": f"핑키 {self._name(pinky)} 도착 · 운영자 확인 · 다음 단계로"})
+                        confirmed = {**observation, "status": "OPERATOR_CONFIRMED", "camera_status": observation.get("status")}
+                        ctx.record("PARKING_OBSERVED", {"observation": confirmed, "pinky_id": pinky,
+                                                        "redocks": handshake.redocks,
+                                                        "message": f"핑키 {name} 도착 · 운영자 확인 · 다음 단계로"})
                         return {"source": "operator", "outcome": "PINKY_ARRIVED", "pinky_id": pinky,
-                                "parking": {**observation, "status": "OPERATOR_CONFIRMED"}, "simulated": False}
+                                "parking": confirmed, "redocks": handshake.redocks, "simulated": False}
                     ctx.cancel_event.wait(self.poll_s)
                     continue
-                if observation.get("status") == "ARRIVED":
+                with self._guard:
+                    # The camera judges again: the operator is no longer asked. A [도착 확인] pressed just before
+                    # this judgment still counts (one frame of NOT_FOUND must not swallow the click).
+                    pressed = self._arrivals.pop(task_id, None)
+                if pressed is not None and pressed.is_set():
                     self._tokens[task_id] = status.get("mission_token")
-                    ctx.record("PARKING_OBSERVED", {"observation": observation, "pinky_id": pinky,
-                                                    "message": f"핑키 {self._name(pinky)} 정상 위치 · 다음 단계로"})
-                    return {"source": "parking_check", "outcome": "PINKY_ARRIVED", "pinky_id": pinky,
-                            "parking": observation, "simulated": observation.get("simulated", False)}
-                offset = observation.get("offset") or {}
-                distance = offset.get("distance_mm")
-                # Wrong place, seen steadily: send the Pinky back in (it backs out, squares up, drives in again).
-                misaligned_checks = misaligned_checks + 1 if observation.get("status") == "MISALIGNED" else 0
-                if misaligned_checks >= self.redock_after_checks and redocks < self.max_redocks:
-                    redocks += 1
-                    misaligned_checks = 0
+                    confirmed = {**observation, "status": "OPERATOR_CONFIRMED", "camera_status": observation.get("status")}
+                    ctx.record("PARKING_OBSERVED", {"observation": confirmed, "pinky_id": pinky,
+                                                    "redocks": handshake.redocks,
+                                                    "message": f"핑키 {name} 도착 · 운영자 확인 · 다음 단계로"})
+                    return {"source": "operator", "outcome": "PINKY_ARRIVED", "pinky_id": pinky,
+                            "parking": confirmed, "redocks": handshake.redocks, "simulated": False}
+                if decision.action == REDOCK:
+                    # What the camera measured goes along, so the Pinky comes in corrected by that much instead of
+                    # repeating the same miss (2026-11-17). Without the Pinky-frame offset it just comes in again.
+                    guide = decision.guide
                     try:
-                        answer = self.devices.fleet_confirm(pinky, "redock", status.get("mission_token"))
+                        answer = (self.devices.fleet_confirm(pinky, "redock", status.get("mission_token"), guide)
+                                  if guide else self.devices.fleet_confirm(pinky, "redock", status.get("mission_token")))
+                        guided = bool(guide and answer.get("guided"))
+                        handshake.redock_sent(guided, None if distance is None else float(distance))
+                        how = (f"카메라가 본 만큼 고쳐서(앞 {guide['forward_mm']:+.0f} mm, 왼쪽 {guide['left_mm']:+.0f} mm, "
+                               f"{guide['dyaw_deg']:+.1f}°) " if guided else "")
                         ctx.record("PINKY_REDOCK", {
-                            "pinky_id": pinky, "attempt": redocks, "observation": observation, "answer": answer,
-                            "message": f"핑키 {self._name(pinky)} 위치 어긋남 · 다시 맞춰 들어가기 {redocks}/{self.max_redocks}"})
+                            "pinky_id": pinky, "attempt": decision.attempt, "observation": observation, "answer": answer,
+                            "guide": guide, "guided": guided,
+                            "message": (f"핑키 {name} 카메라에 안 보임 · 다시 들어오라고 함 {decision.attempt}/{self.max_redocks}"
+                                        if decision.reason == "NOT_SEEN" else
+                                        f"핑키 {name} 위치 어긋남 · {how}다시 맞춰 들어가기 {decision.attempt}/{self.max_redocks}")})
                     except (PinkyFleetError, OSError) as exc:
-                        ctx.record("PINKY_REDOCK_FAILED", {"pinky_id": pinky, "attempt": redocks, "error": str(exc),
+                        handshake.redocks -= 1  # not sent: it does not use up one of the redocks
+                        ctx.record("PINKY_REDOCK_FAILED", {"pinky_id": pinky, "attempt": decision.attempt, "error": str(exc),
                                                            "alert": True, "message": f"다시 맞추기 요청 실패: {exc}"})
                     last_parking = None
                     ctx.cancel_event.wait(self.poll_s)
                     continue
-                # Real offsets move by a few mm every check: one alert per status and 1 cm band, not per check.
-                key = (observation.get("status"), None if distance is None else round(float(distance) / 10))
-                if key != last_parking:
-                    last_parking = key
-                    detail = (
-                        f"오차 {float(distance):.0f} mm / {float(offset.get('dyaw_deg') or 0):.1f}°"
-                        if distance is not None else str(observation.get("reason") or "")
-                    )
-                    ctx.record("PINKY_POSITION_ABNORMAL", {
-                        "pinky_id": pinky, "observation": observation, "alert": True,
-                        "message": f"핑키 {self._name(pinky)} 위치 이상 · {observation.get('status')} · {detail}"
-                                   " · 정상 위치에 오면 자동으로 다음 단계로 넘어갑니다",
-                    })
+                if decision.reason in {"MISALIGNED", "CAMERA_BLIND"}:
+                    # Real offsets move by a few mm every check: one alert per status and 1 cm band, not per check.
+                    key = (observation.get("status"), None if distance is None else round(float(distance) / 10))
+                    if key != last_parking:
+                        last_parking = key
+                        detail = (
+                            f"오차 {float(distance):.0f} mm / {float(offset.get('dyaw_deg') or 0):.1f}°"
+                            if distance is not None else str(observation.get("reason") or "")
+                        )
+                        ctx.record("PINKY_POSITION_ABNORMAL", {
+                            "pinky_id": pinky, "observation": observation, "alert": True,
+                            "message": f"핑키 {name} 위치 이상 · {observation.get('status')} · {detail}"
+                                       " · 정상 위치에 오면 자동으로 다음 단계로 넘어갑니다",
+                        })
             ctx.cancel_event.wait(self.poll_s)
 
     def _confirm_docking(self, ctx: StepContext) -> dict[str, Any] | None:

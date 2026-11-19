@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
-from scripts.route_geometry import build_dense_route, build_mission_route
+from scripts.route_geometry import DOCK_APPROACH_M, build_dense_route, build_mission_route, clean_dock_guide, corrected_dock
 from scripts.line_following import default_profile, capture_profile, normalize, validate_profile
 from scripts.ir_profiles import IRProfiles
 from scripts.fleet_ops import operational_status, indicator
@@ -394,6 +394,7 @@ class Telemetry:
         self.traffic_publishers = {}
         self.initial_pose_publishers = {}
         self.indicator_publishers = {}
+        self.dock_guide_publishers = {}
         self.domain_nodes = {}
         self.domain_readers = []
         for rid, robot in ROBOTS.items():
@@ -408,6 +409,8 @@ class Telemetry:
             self.initial_pose_publishers[rid]=node.create_publisher(PoseWithCovarianceStamped,'/initialpose',QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE))
             self.domain_nodes[rid]=node
             self.indicator_publishers[rid]=node.create_publisher(String,'/fleet/indicator',QoSProfile(depth=1,reliability=ReliabilityPolicy.BEST_EFFORT))
+            # The ceiling camera's offset of this Pinky from its loading spot, relayed while it drives in (POST dock-guide).
+            self.dock_guide_publishers[rid]=node.create_publisher(String,'/fleet/dock_guide',QoSProfile(depth=1,reliability=ReliabilityPolicy.BEST_EFFORT))
             for key, msg_type in types.items():
                 topic = f"/{paths[key]}"
                 subscription_qos = QoSProfile(depth=10,reliability=ReliabilityPolicy.BEST_EFFORT,durability=DurabilityPolicy.VOLATILE)
@@ -1550,6 +1553,14 @@ def _set_initial_pose(robot_id: str) -> None:
             if STATE.busy_robot==robot_id:STATE.busy_robot=None
 
 
+def _runtime_outdated(robot_topics: dict[str, Any]) -> bool:
+    """The Pinky still runs what an earlier preparation installed: its traffic zones are not the dashboard's (a
+    waypoint moved since) or its behaviour layer is older than this dashboard's. Such a Pinky is "prepared" and yet
+    refused every start with "주행준비를 다시 실행하세요"; [주행준비하고 위치 잡기] skipped it as 이미 준비됨 (2026-11-19)."""
+    guard = (robot_topics.get('line_control') or {}).get('value') or {}
+    return bool(guard) and (guard.get('traffic_config') != TRAFFIC.zones or 'squaring' not in (guard.get('dock_entry') or {}))
+
+
 def _route_start_problem(robot_id: str) -> tuple[int, dict[str, str]] | None:
     """Why a route or mission may not start now, as (HTTP status, answer), or None. Call with STATE.lock held."""
     if STATE.password is None:
@@ -1589,7 +1600,8 @@ def _route_start_problem(robot_id: str) -> tuple[int, dict[str, str]] | None:
 
 
 def _mark_pass_through(goals: list[dict[str, Any]]) -> None:
-    """Stops the Pinky only passes: the passage points (10 cm) and, unless it is the last stop, the queue spot (6 cm)."""
+    """Stops the Pinky only passes: the passage points (10 cm), unless it is the last stop the queue spot (6 cm), and
+    the square-up point in front of station 5 (5 cm; it turns there itself)."""
     queue_label = (NAVIGATION.get("dock_queue") or {}).get("waypoint")
     for index, point in enumerate(goals):
         if not point.get("anchor") or index == len(goals) - 1:
@@ -1598,6 +1610,30 @@ def _mark_pass_through(goals: list[dict[str, Any]]) -> None:
             point["pass_radius_m"] = 0.10
         elif queue_label and point["label"] == queue_label:
             point["pass_radius_m"] = 0.06
+        elif point["label"] == "5 정면":
+            # Close enough (2026-11-19): Nav2 hunted for minutes to meet its 3 cm and the heading there, next to
+            # the station. The Pinky turns to the dock's heading itself (DockEntry). 0 in navigation.json: as before.
+            radius = float(NAVIGATION.get("dock_square_radius_m", 0.05))
+            if radius > 0:
+                point["pass_radius_m"] = min(radius, 0.08)
+
+
+def _dock_correction(robot_id: str, offset: object) -> dict[str, Any] | None:
+    """For a redock: the square-up point and loading spot corrected by the ceiling camera's offset, from where the
+    Pinky believes it stands right now (it is standing still at station 5). None when the offset, the pose or the
+    waypoint is unusable; the Pinky then comes in again at the saved waypoint as before."""
+    pose = TELEMETRY.snapshot().get(robot_id, {}).get("tf_pose", {}) if TELEMETRY else {}
+    value = pose.get("value") or {}
+    dock = _shared_waypoint(robot_id, "5")
+    if (not pose.get("fresh") or dock is None
+            or not all(isinstance(value.get(k), (int, float)) for k in ("x_m", "y_m", "yaw_rad"))):
+        return None
+    corrected = corrected_dock((value["x_m"], value["y_m"], value["yaw_rad"]), offset, dock, DOCK_APPROACH_M)
+    if corrected is None:
+        return None
+    square, spot = corrected
+    return {"square": {k: round(square[k], 4) for k in ("x_m", "y_m", "yaw_rad")},
+            "dock": {k: round(spot[k], 4) for k in ("x_m", "y_m", "yaw_rad")}}
 
 
 def _shared_waypoint(robot_id: str, label: str) -> dict[str, Any] | None:
@@ -2141,6 +2177,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt: str, *args: Any) -> None:
         # Avoid logging API payloads, which can include the runtime SSH password.
+        if '/dock-guide' in str(args[0] if args else ''):
+            return  # several a second while a Pinky drives in: not a line each
         print(f"{self.log_date_time_string()} {self.address_string()} {fmt % args}")
 
     def _json(self, status: int, body: dict[str, Any]) -> None:
@@ -2508,25 +2546,59 @@ class Handler(BaseHTTPRequestHandler):
             WORKERS.submit(_reset_all_robots)
             self._json(202, {"ok": True, "message": "세 핑키 초기화를 시작했습니다."})
             return
+        guide_match = re.fullmatch(r'/api/robots/(10|11|12)/dock-guide', path)
+        if guide_match:
+            # The ceiling camera's live offset of this Pinky from its loading spot (the control station sends it a few
+            # times a second while the Pinky is in view). It goes to the Pinky as it is, on /fleet/dock_guide; only the
+            # drive into station 5 steers on it there (mission_behaviors.DockEntry). navigation.json dock_camera_guide
+            # false turns the relay off, and the Pinky then drives in on odometry as before.
+            if not NAVIGATION.get('dock_camera_guide', True):
+                self._json(409, {'error': '카메라 안내가 꺼져 있습니다 (navigation.json dock_camera_guide).'})
+                return
+            if TELEMETRY is None:
+                self._json(503, {'error': 'ROS 연결이 아직 준비되지 않았습니다.'})
+                return
+            guide = clean_dock_guide(data)
+            if guide is None:
+                self._json(400, {'error': '안내 값은 앞 50 cm, 옆 25 cm 안의 숫자 세 개(앞, 왼쪽, 각도)여야 합니다.'})
+                return
+            from std_msgs.msg import String
+            try:
+                TELEMETRY.dock_guide_publishers[guide_match.group(1)].publish(String(data=json.dumps(guide)))
+            except Exception as exc:
+                self._json(500, {'error': f'안내를 보내지 못했습니다: {exc}'})
+                return
+            self._json(200, {'ok': True})
+            return
         operator_match = re.fullmatch(r'/api/robots/(10|11|12)/operator-confirm', path)
         if operator_match:
             robot_id=operator_match.group(1)
             # redock: the ceiling camera judged the Pinky off the loading spot; it backs out and comes in again.
-            phases={'dock_complete':'docking_manual','redock':'docking_manual','received':'docked_manual'}
+            # redock is also taken after dock_complete (docked_manual), until the load is confirmed (2026-11-19).
+            phases={'dock_complete':('docking_manual',),'redock':('docking_manual','docked_manual'),'received':('docked_manual',)}
             action=data.get('action')
             with STATE.lock:
                 route=STATE.routes[robot_id] or {}
                 token=route.get('mission_token')
-                if action not in phases or route.get('status')!='running' or route.get('phase')!=phases[action] or not token or data.get('token')!=token:
+                if action not in phases or route.get('status')!='running' or route.get('phase') not in phases[action] or not token or data.get('token')!=token:
                     self._json(409,{'error':'현재 임무의 확인 단계와 신호가 일치하지 않습니다.'})
                     return
             control=TELEMETRY.snapshot().get(robot_id,{}).get('line_control',{}) if TELEMETRY else {}
             if not control.get('fresh'):
                 self._json(409,{'error':'안전 감시기 수신을 확인하세요.'});return
-            payload=base64.b64encode(json.dumps({'token':token,'action':action}).encode()).decode()
+            command={'token':token,'action':action}
+            note=''
+            if action=='redock' and data.get('offset') is not None:
+                correction=_dock_correction(robot_id,data.get('offset'))
+                if correction:
+                    command['dock_correction']=correction
+                    note=' 카메라 오프셋만큼 고쳐서 다시 들어갑니다.'
+                else:
+                    note=' 카메라 오프셋은 쓰지 못해 같은 자리로 다시 들어갑니다.'
+            payload=base64.b64encode(json.dumps(command).encode()).decode()
             program="import base64,json,time,os;from pathlib import Path;d=json.loads(base64.b64decode('"+payload+"'));d['monotonic']=time.monotonic();p=Path('/home/pinky/.cache/pinky-fleet/operator_confirm.json');t=p.with_suffix('.tmp');t.write_text(json.dumps(d));os.replace(t,p)"
             ok,output=_ssh_run(robot_id,'python3 -c '+shlex.quote(program))
-            self._json(202 if ok else 502,{'ok':ok,'message':'현재 단계 확인 신호를 보냈습니다.' if ok else output});return
+            self._json(202 if ok else 502,{'ok':ok,'guided':'dock_correction' in command,'message':'현재 단계 확인 신호를 보냈습니다.'+note if ok else output});return
         completion_match = re.fullmatch(r'/api/robots/(10|11|12)/mission-complete', path)
         if completion_match:
             robot_id=completion_match.group(1)
@@ -2845,7 +2917,7 @@ class Handler(BaseHTTPRequestHandler):
                     live = (telemetry.get(robot_id, {}).get("tf_pose") or {}).get("fresh")
                     if route.get("status") in {"starting", "running", "cancel_requested"}:
                         skipped.append(f"{robot_id} 주행 중")
-                    elif info["stage"] == "prepared" and live:
+                    elif info["stage"] == "prepared" and live and not _runtime_outdated(telemetry.get(robot_id, {})):
                         skipped.append(f"{robot_id} 이미 준비됨")
                     elif not info.get("ssh_reachable"):
                         skipped.append(f"{robot_id} 연결 안 됨")

@@ -165,13 +165,14 @@
       </div>
     </section>
     <section aria-labelledby="fleet-test-title">
-      <div class="section-heading"><h2 id="fleet-test-title">전체 주행 테스트</h2><span class="updated">주문 없이 · 적재 자리 → 수령 구역 → 자기 주차 칸</span></div>
+      <div class="section-heading"><h2 id="fleet-test-title">전체 주행 테스트</h2><span class="updated">주문 없이 · 적재 자리 → 수령 구역 → 자기 주차 칸 · 체크한 핑키만 움직여요 (한 대만도 가능)</span></div>
       <div class="fleet-test-card">
         <div class="fleet-test-actions">
           <button type="button" id="fleetTestStart" disabled>전체 출발</button>
           <button type="button" id="fleetTestHome" class="secondary" disabled>전체 주차장 복귀</button>
           <button type="button" id="fleetTestBattery" class="secondary">배터리 확인</button>
-          <label class="fleet-test-auto"><input type="checkbox" id="fleetTestAuto"> 카메라가 OK면 도킹완료 자동으로 보내기</label>
+          <label class="fleet-test-auto"><input type="checkbox" id="fleetTestAuto"> 카메라 판정대로 자동 처리 (어긋나면 다시 맞추기, 맞으면 도킹완료)</label>
+          <label class="fleet-test-auto fleet-test-repeat">반복 진입 테스트 <input type="number" id="fleetTestRepeat" min="0" max="20" value="0" inputmode="numeric"> 번 성공할 때까지 나갔다 들어오기 (0이면 한 번에 도킹완료)</label>
           <span id="fleetTestCamera" class="chip">적재 자리 카메라: 확인 중</span>
         </div>
         <ol id="fleetTestRows" class="fleet-test-rows"><li class="muted">핑키 상태를 불러오는 중…</li></ol>

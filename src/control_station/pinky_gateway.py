@@ -424,7 +424,7 @@ class PinkyGateway:
         return self._command("test_mission", pinky_id,
                              lambda client: client.start_test_mission(pinky_id, dropoff.strip(), labels))
 
-    def signal(self, pinky_id: str, action: object) -> dict[str, Any]:
+    def signal(self, pinky_id: str, action: object, offset: object = None) -> dict[str, Any]:
         """도킹완료 / 적재 완료 / 수령 완료 for the Pinky's current phase, with the dashboard's mission token."""
         self._known(pinky_id)
         if action not in self.SIGNALS:
@@ -433,10 +433,13 @@ class PinkyGateway:
             return self._command(action, pinky_id, lambda client: (0, {}))
         def call(client: PinkyFleetClient) -> tuple[int, dict[str, Any]]:
             route = (client.robots().get(pinky_id) or {}).get("route") or {}
-            if route.get("phase") != self.SIGNALS[action]:
+            allowed = {self.SIGNALS[action]} | ({"docked_manual"} if action == "redock" else set())  # redock: also after dock_complete
+            if route.get("phase") not in allowed:
                 return 409, {"error": f"지금 단계({route.get('phase') or '없음'})에서는 보낼 수 없는 신호입니다"}
             try:
                 result = (client.mission_complete(pinky_id, route.get("mission_token")) if action == "mission_complete"
+                          else client.fleet_confirm(pinky_id, action, route.get("mission_token"), offset)
+                          if action == "redock" and isinstance(offset, dict)
                           else client.fleet_confirm(pinky_id, action, route.get("mission_token")))
             except PinkyFleetError as exc:
                 return 409 if exc.error_code == "PINKY_SIGNAL_REJECTED" else 502, {"error": str(exc)}

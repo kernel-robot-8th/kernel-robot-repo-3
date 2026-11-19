@@ -31,7 +31,11 @@ STAGES = (
 ACTIVE_STEP = frozenset({"COMMAND_SENT", "ACCEPTED", "RUNNING"})
 ALERT_EVENTS = frozenset({"PINKY_POSITION_ABNORMAL", "PINKY_FLEET_UNREACHABLE"})
 # Events after which a waiting alert no longer holds.
-ALERT_CLEARED_BY = frozenset({"PARKING_OBSERVED", "PINKY_STATUS", "ORDER_STEP_COMPLETED"})
+ALERT_CLEARED_BY = frozenset({"PARKING_OBSERVED", "PINKY_STATUS", "ORDER_STEP_COMPLETED", "ARRIVAL_NEEDS_OPERATOR"})
+# What the arrival wait last said about the Pinky at the loading spot: the operator is asked only while the newest
+# of these is the question itself (a later judgment, redock or phase change means the camera took over again).
+ARRIVAL_STATE_EVENTS = frozenset({"ARRIVAL_NEEDS_OPERATOR", "PINKY_POSITION_ABNORMAL", "PINKY_REDOCK", "PINKY_REDOCK_RESULT",
+                                  "PARKING_OBSERVED"})
 ERROR_TITLES = {
     "SHELF_STOCK_SHORT": "선반 재고 부족", "ITEM_LOST": "물건 분실", "PICK_FAILED_STILL_ON_SHELF": "집기 실패",
     "TRANSFER_NOT_VERIFIED": "옮김 확인 불가", "LOAD_INCOMPLETE": "적재 부족", "LOAD_EXTRA_ITEM": "주문 외 물건",
@@ -143,8 +147,8 @@ def summarize_order(order: dict[str, Any]) -> dict[str, Any]:
             and active["step_type"] == "WAIT_PINKY_ARRIVAL"):
         # Not a fault: the Pinky has no marker, so a person confirms that it stands at the loading spot.
         asked = next((event for event in reversed(events) if event.get("step_id") == active["id"]
-                      and event["event_type"] == "ARRIVAL_NEEDS_OPERATOR"), None)
-        if asked is not None:
+                      and event["event_type"] in ARRIVAL_STATE_EVENTS), None)
+        if asked is not None and asked["event_type"] == "ARRIVAL_NEEDS_OPERATOR":
             alert = {"level": "action", "code": "ARRIVAL_NEEDS_OPERATOR", "title": "도착 확인 대기",
                      "message": asked["payload"].get("message"), "at": asked["received_at"], "task_id": order["id"],
                      "arrival": True}

@@ -11,7 +11,7 @@ const FLEET_TEST_ORDER = ['12', '10', '11'];  // 12 carries the registered ArUco
 const FLEET_TEST_SPOT = 'pinky_dock_1';       // the ceiling camera's registered loading spot
 const FLEET_TEST_SIGNALS = {
   docking_manual: [['dock_complete', '도킹완료'], ['redock', '다시 맞추기', 'secondary']],
-  docked_manual: [['received', '적재 완료 · 출발']],
+  docked_manual: [['received', '적재 완료 · 출발'], ['redock', '다시 들어오기', 'secondary']],
   course_complete: [['mission_complete', '수령 완료 · 주차장으로']],
 };
 const FLEET_TEST_ACTIVE = new Set(['starting', 'running', 'cancel_requested']);
@@ -20,21 +20,37 @@ const PARKING_WORDS = { IN_POSITION: '도착 (정상 위치)', OFF_POSITION: '�
 const fleetTestRows = document.querySelector('#fleetTestRows');
 const fleetTestCamera = document.querySelector('#fleetTestCamera');
 const fleetTestAuto = document.querySelector('#fleetTestAuto');
-// okStreak: camera polls in a row that said IN_POSITION; told / sent: per Pinky, already announced or signalled for
-// this stop at the loading spot (cleared when it leaves the docking_manual phase).
-const fleetTest = { zone: {}, busy: false, camera: null, okStreak: 0, told: {}, sent: {} };
+const fleetTestRepeat = document.querySelector('#fleetTestRepeat');
+// dock: per Pinky, the server's last answer for its stop at the loading spot (POST /api/pinky/{id}/dock-handshake:
+// the camera's judgment at that Pinky's own registration, what to do about it, what was sent, the stop's log);
+// told: the log lines already shown as a toast. Both are cleared when the Pinky leaves the loading spot.
+// picked: which Pinkys the two buttons on top act on (all by default); one Pinky alone can be run this way.
+const fleetTest = { zone: {}, busy: false, camera: null, dock: {}, told: {}, picked: {} };
+const fleetTestPicked = (id) => fleetTest.picked[id] !== false;
+const FLEET_TEST_DOCK_PHASES = new Set(['docking_manual', 'redocking']);
+const FLEET_TEST_DOCK_TONE = { COMPLETE: 'good', OPERATOR: 'attention', REDOCK: 'attention' };
 
-// The ceiling camera's verdict for a Pinky standing at the loading spot: [tone, text], or null when it is not there.
+// What the camera <-> Pinky exchange says for a Pinky at the loading spot: [tone, text], or null when it is not there.
+// The deciding is the server's (control_station/dock_handshake.py), the same as an order's: seen in place twice ->
+// 도킹완료; steadily off -> 다시 맞추기 with the camera's offset, then wait until it is back; no registration, a blind
+// camera or three redocks used -> a person looks. With 자동 off the server only judges and the buttons send.
 function fleetTestVerdict(pinky) {
-  if (pinky.phase !== 'docking_manual' || !FLEET_TEST_ACTIVE.has(pinky.route?.status)) return null;
-  const live = fleetTest.camera;
-  const offset = live?.offset;
+  if (!FLEET_TEST_DOCK_PHASES.has(pinky.phase) || !FLEET_TEST_ACTIVE.has(pinky.route?.status)) return null;
+  const dock = fleetTest.dock[pinky.pinky_id];
+  if (!dock) return ['', '카메라 판정을 확인하는 중'];
+  if (dock.error) return ['', dock.error];
+  if (!dock.active) return ['', dock.message || '카메라 판정을 확인하는 중'];
+  const decision = dock.decision || {};
+  const offset = decision.offset;
   const numbers = offset?.distance_mm != null
     ? ` · ${(offset.distance_mm / 10).toFixed(1)} cm / ${Math.abs(offset.dyaw_deg ?? 0).toFixed(1)}°` : '';
-  if (live?.state === 'IN_POSITION') return ['good', `✓ 도착 위치 OK${numbers} · 도킹완료를 눌러도 돼요`];
-  if (live?.state === 'OFF_POSITION') return ['attention', `위치 어긋남${numbers} · 다시 맞추기를 눌러 주세요`];
-  if (live?.state === 'NOT_IN_VIEW') return ['', '카메라에 마커가 안 보여요 · 눈으로 확인하고 도킹완료'];
-  return ['', `카메라 판정: ${PARKING_WORDS[live?.state] || live?.state || '확인 중'}`];
+  const settled = decision.reason === 'SETTLING' || decision.reason === 'COMPLETE_SENT';
+  const hint = dock.auto || dock.done ? ''
+    : decision.action === 'COMPLETE' ? ' · 도킹완료를 눌러 주세요'
+    : decision.action === 'REDOCK' ? ' · 다시 맞추기를 눌러 주세요' : '';
+  const last = (dock.log || []).filter((entry) => entry.event === 'REDOCK_RESULT').at(-1);
+  return [settled ? 'good' : FLEET_TEST_DOCK_TONE[decision.action] || '',
+    `${decision.action === 'COMPLETE' || settled ? '✓ ' : ''}${decision.message || ''}${numbers}${hint}${last ? ` · ${last.message}` : ''}${dock.repeat ? ` · 반복 테스트 성공 ${dock.repeat.successes}/${dock.repeat.target} (들어온 횟수 ${dock.repeat.trials})` : ''}`];
 }
 
 function fleetTestZones() {
@@ -71,7 +87,7 @@ function fleetTestRowHtml(pinky, index, zones) {
   const buttons = signals.map(([action, label, tone]) =>
     `<button type="button" class="${tone || ''}" data-fleet-signal="${action}" data-pinky="${id}">${label}</button>`).join('')
     || (!active && pinky.connected && pinky.ready
-      ? `<button type="button" class="secondary" data-fleet-start="${id}">출발</button>` : '')
+      ? `<button type="button" data-fleet-start="${id}">이 핑키만 출발</button><button type="button" class="secondary" data-fleet-home="${id}">주차장으로</button>` : '')
     // A Pinky that went off while holding a zone (the passage, the loading spot): the others wait for it for ever.
     || (!pinky.connected && (pinky.holding || []).length
       ? `<button type="button" data-fleet-release="${id}">치웠어요 · 자리 비우기</button>` : '');
@@ -79,6 +95,7 @@ function fleetTestRowHtml(pinky, index, zones) {
     zones.map((label) => `<option value="${escapeHtml(label)}" ${label === zone ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')
     || '<option value="">수령 구역 없음</option>'}</select>`;
   return `<li class="${signals.length ? 'needs-you' : ''} ${fleetTestVerdict(pinky)?.[0] === 'good' ? 'arrived' : ''} ${pinky.waiting ? 'waiting' : ''}">
+    <input type="checkbox" class="fleet-test-pick" data-fleet-pick="${id}" aria-label="${escapeHtml(pinky.name)} 포함" title="위의 출발·복귀 버튼에 이 핑키를 포함" ${fleetTestPicked(pinky.pinky_id) ? 'checked' : ''}>
     <span class="fleet-test-order">${index + 1}</span>${pinkyBadge(pinky.pinky_id, { offline: !pinky.connected })}
     <span class="fleet-test-where"><strong>${pinky.waiting ? '⏳ ' : ''}${escapeHtml(pinky.phase_label && active ? pinky.phase_label : (active ? '주행 중' : '대기'))}</strong>
       <small>${escapeHtml(where)}</small></span>
@@ -93,7 +110,12 @@ function renderFleetTest() {
   const pinkies = fleetTestPinkies();
   setHtmlIfChanged(fleetTestRows, pinkies.map((pinky, index) => fleetTestRowHtml(pinky, index, zones)).join('')
     || '<li class="muted">핑키 상태를 불러오는 중…</li>');
-  const startable = pinkies.some((pinky) => pinky.connected && pinky.ready && !FLEET_TEST_ACTIVE.has(pinky.route?.status));
+  const ready = pinkies.filter((pinky) => fleetTestPicked(pinky.pinky_id) && pinky.connected && pinky.ready && !FLEET_TEST_ACTIVE.has(pinky.route?.status));
+  const startable = ready.length > 0;
+  const everyone = pinkies.every((pinky) => fleetTestPicked(pinky.pinky_id));
+  const who = everyone ? '전체' : ready.length === 1 ? `${ready[0].name}만` : `고른 ${ready.length}대`;
+  document.querySelector('#fleetTestStart').textContent = `${who} 출발`;
+  document.querySelector('#fleetTestHome').textContent = `${who} 주차장 복귀`;
   document.querySelector('#fleetTestStart').disabled = fleetTest.busy || !startable || !zones.length;
   document.querySelector('#fleetTestHome').disabled = fleetTest.busy || !startable;
   const live = fleetTest.camera;
@@ -115,7 +137,7 @@ async function fleetTestEach(run) {
   renderFleetTest();
   try {
     for (const pinky of fleetTestPinkies()) {
-      if (!pinky.connected || !pinky.ready || FLEET_TEST_ACTIVE.has(pinky.route?.status)) continue;
+      if (!fleetTestPicked(pinky.pinky_id) || !pinky.connected || !pinky.ready || FLEET_TEST_ACTIVE.has(pinky.route?.status)) continue;
       await run(pinky);
       await new Promise((resolve) => window.setTimeout(resolve, 1500));  // in order, so the first asks for the zones first
     }
@@ -126,13 +148,14 @@ async function fleetTestEach(run) {
 }
 
 document.querySelector('#fleetTestStart').addEventListener('click', () => {
-  const names = fleetTestPinkies().filter((pinky) => pinky.connected && pinky.ready && !FLEET_TEST_ACTIVE.has(pinky.route?.status))
+  const names = fleetTestPinkies().filter((pinky) => fleetTestPicked(pinky.pinky_id) && pinky.connected && pinky.ready && !FLEET_TEST_ACTIVE.has(pinky.route?.status))
     .map((pinky) => `${pinky.name} → ${fleetTest.zone[pinky.pinky_id]}`);
   if (!window.confirm(`핑키를 차례로 출발시킬까요?\n${names.join('\n')}\n적재 자리 → 수령 구역 → 자기 주차 칸. 로봇 옆에 지켜보는 사람이 있어야 해요.`)) return;
   fleetTestEach(fleetTestStartOne);
 });
 document.querySelector('#fleetTestHome').addEventListener('click', () => {
-  if (!window.confirm('서 있는 핑키를 모두 자기 주차 칸으로 보낼까요? 적재 자리에 있는 핑키는 먼저 20 cm 후진해요.')) return;
+  const names = fleetTestPinkies().filter((pinky) => fleetTestPicked(pinky.pinky_id) && pinky.connected && pinky.ready && !FLEET_TEST_ACTIVE.has(pinky.route?.status)).map((pinky) => pinky.name);
+  if (!window.confirm(`${names.join(', ')} 핑키를 자기 주차 칸으로 보낼까요? 적재 자리에 있는 핑키는 먼저 20 cm 후진해요.`)) return;
   fleetTestEach((pinky) => sendPinkyCommand(pinky.pinky_id, 'return_home', { path: 'return-home', label: '주차장 복귀', body: { via: [] } }));
 });
 document.querySelector('#fleetTestBattery').addEventListener('click', async () => {
@@ -146,11 +169,20 @@ document.querySelector('#fleetTestBattery').addEventListener('click', async () =
 fleetTestRows.addEventListener('change', (event) => {
   const select = event.target.closest('[data-fleet-zone]');
   if (select) fleetTest.zone[select.dataset.fleetZone] = select.value;
+  const pick = event.target.closest('[data-fleet-pick]');
+  if (pick) {
+    fleetTest.picked[pick.dataset.fleetPick] = pick.checked;
+    renderFleetTest();
+  }
 });
 fleetTestRows.addEventListener('click', (event) => {
   const signal = event.target.closest('[data-fleet-signal]');
   if (signal) {
     const action = signal.dataset.fleetSignal;
+    if (action === 'redock') {
+      fleetTestRedock(signal.dataset.pinky, signal.textContent);
+      return;
+    }
     sendPinkyCommand(signal.dataset.pinky, action, { path: 'signal', body: { action }, label: signal.textContent });
     return;
   }
@@ -162,13 +194,54 @@ fleetTestRows.addEventListener('click', (event) => {
     }
     return;
   }
+  const home = event.target.closest('[data-fleet-home]');
+  const homing = home && pinkyById(home.dataset.fleetHome);
+  if (homing) {
+    if (window.confirm(`${homing.name} 핑키만 자기 주차 칸으로 보낼까요? 적재 자리에 있으면 먼저 20 cm 후진해요.`)) {
+      sendPinkyCommand(homing.pinky_id, 'return_home', { path: 'return-home', label: '주차장 복귀', body: { via: [] } });
+    }
+    return;
+  }
   const start = event.target.closest('[data-fleet-start]');
   const pinky = start && pinkyById(start.dataset.fleetStart);
-  if (pinky && window.confirm(`${pinky.name} 핑키를 출발시킬까요?\n적재 자리 → ${fleetTest.zone[pinky.pinky_id]} → 자기 주차 칸`)) fleetTestStartOne(pinky);
+  if (pinky && window.confirm(`${pinky.name} 핑키만 출발시킬까요? 다른 핑키는 그대로 있어요.\n적재 자리 → ${fleetTest.zone[pinky.pinky_id]} → 자기 주차 칸`)) fleetTestStartOne(pinky);
 });
 
+// 다시 맞추기: a fresh camera judgment (the check over new frames, not the live preview) goes along, so the Pinky
+// comes in corrected by what the camera measured. The judgment is this Pinky's own: each carries its own marker with
+// its own registration of the loading spot (config/pinky-markers.json), and another Pinky's offset would send it to
+// the wrong place. Without a registration or a usable judgment it comes in again at the same spot, and the label says so.
+async function fleetTestRedock(id, label) {
+  const marker = pinkyById(id)?.marker;
+  let guide = null;
+  let why = '카메라 등록 없음';
+  if (marker?.registered && marker.spot_id) {
+    why = '카메라가 못 봄';
+    try {
+      const response = await fetch(`/api/parking-spots/${encodeURIComponent(marker.spot_id)}/check`, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+      const seen = response.ok ? (await response.json()).observation?.offset : null;
+      if (seen && [seen.forward_mm, seen.left_mm, seen.dyaw_deg].every(Number.isFinite)) {
+        guide = { forward_mm: seen.forward_mm, left_mm: seen.left_mm, dyaw_deg: seen.dyaw_deg };
+      }
+    } catch { /* no judgment: plain redock */ }
+  }
+  sendPinkyCommand(id, 'redock', {
+    path: 'signal', body: guide ? { action: 'redock', offset: guide } : { action: 'redock' },
+    label: guide ? `${label} (카메라 보정)` : `${label} (보정 없이 · ${why})`,
+  });
+}
+
 async function pollFleetTestCamera() {
-  if (activeView !== 'pinky' || document.hidden) return;
+  if (activeView !== 'pinky' || document.hidden || fleetTest.polling) return;
+  fleetTest.polling = true;  // a judgment takes several frames: the next tick waits for this one
+  try {
+    await pollFleetTestDock();
+  } finally {
+    fleetTest.polling = false;
+  }
+}
+
+async function pollFleetTestDock() {
   try {
     const response = await fetch(`/api/parking-spots/${FLEET_TEST_SPOT}/live`, { cache: 'no-store', signal: AbortSignal.timeout(4000) });
     const result = await response.json();
@@ -176,24 +249,29 @@ async function pollFleetTestCamera() {
   } catch {
     fleetTest.camera = { state: '관제 응답 없음' };
   }
-  fleetTest.okStreak = fleetTest.camera?.state === 'IN_POSITION' ? fleetTest.okStreak + 1 : 0;
   pinkyMapState.dockState = fleetTest.camera?.state || null;  // the map colours the loading spot with it
   for (const pinky of pinkyScreen.view?.pinkies || []) {
     const id = pinky.pinky_id;
-    if (!fleetTestVerdict(pinky)) {
+    if (!FLEET_TEST_DOCK_PHASES.has(pinky.phase) || !FLEET_TEST_ACTIVE.has(pinky.route?.status)) {
+      delete fleetTest.dock[id];
       delete fleetTest.told[id];
-      delete fleetTest.sent[id];
       continue;
     }
-    if (fleetTest.okStreak < 2) continue;  // two polls in a row, so one lucky frame is not an arrival
-    if (!fleetTest.told[id]) {
-      fleetTest.told[id] = true;
-      showToast(`${pinky.name} 적재 자리 도착 OK`, fleetTestAuto.checked ? '도킹완료를 자동으로 보내요' : '도킹완료를 눌러 주세요', 'info', 8000);
+    try {
+      const response = await fetch(`/api/pinky/${encodeURIComponent(id)}/dock-handshake`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auto: fleetTestAuto.checked, repeat: Math.max(0, Math.min(20, parseInt(fleetTestRepeat?.value, 10) || 0)) }), signal: AbortSignal.timeout(10000),
+      });
+      const result = await response.json();
+      fleetTest.dock[id] = response.ok ? result : { error: apiErrorMessage(result, '카메라 판정을 받지 못했어요') };
+    } catch {
+      fleetTest.dock[id] = { error: '관제 서버의 답을 받지 못했어요' };
     }
-    if (fleetTestAuto.checked && !fleetTest.sent[id]) {
-      fleetTest.sent[id] = true;
-      sendPinkyCommand(id, 'dock_complete', { path: 'signal', body: { action: 'dock_complete' }, label: '도킹완료 (카메라 OK, 자동)' });
-    }
+    // Each new line of the stop's log once, as a toast: what was sent, how a redock turned out, when a person is needed.
+    const log = fleetTest.dock[id].log || [];
+    const shown = fleetTest.told[id] || 0;
+    log.filter((entry) => entry.at > shown).forEach((entry) => showToast(`${pinky.name} · 적재 자리`, entry.message, 'info', 8000));
+    if (log.length) fleetTest.told[id] = log.at(-1).at;
   }
   renderFleetTest();
 }

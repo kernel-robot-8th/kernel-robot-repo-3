@@ -322,6 +322,8 @@ body:not(.dev) .sim-tag, body:not(.dev) .simulated { display: none; }
 .fleet-test-verdict { flex: 1 0 100%; justify-self: start; width: fit-content; font-weight: 700; }
 .fleet-test-auto { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 13px; white-space: nowrap; }
 .fleet-test-auto input { flex: none; width: 18px; height: 18px; min-height: 0; margin: 0; padding: 0; }
+.fleet-test-repeat input { width: 56px; height: 28px; padding: 0 6px; }
+.fleet-test-pick { flex: none; width: 18px; height: 18px; min-height: 0; margin: 0; padding: 0; }
 .fleet-test-battery { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .fleet-test-battery.danger { background: #ffe1e1; color: #c62828; font-weight: 700; }
 .fleet-test-rows li.waiting { background: #fff6e0; box-shadow: inset 0 0 0 1.5px #e8a30c; }
@@ -443,9 +445,18 @@ dl.pinky-facts { display: grid; margin: 0; padding: 0; }
 .map-plan { fill: none; stroke-width: 4; stroke-dasharray: 10 8; stroke-linecap: round; opacity: .9; }
 .map-pinky { transition: transform .6s cubic-bezier(.2, .8, .2, 1); }
 .map-pinky-heading { transition: transform .4s ease; }
-.map-pinky circle { fill: var(--card); stroke: var(--blue); stroke-width: 2.5; }
-.map-pinky path { fill: var(--blue); }
-.map-pinky text { fill: var(--blue-strong); paint-order: stroke; stroke: var(--card); stroke-width: 4px; stroke-linejoin: round; }
+.map-pinky circle { fill: var(--card); stroke: var(--pinky-color, var(--blue)); stroke-width: 2.5; }
+.map-pinky path { fill: var(--pinky-color, var(--blue)); }
+.map-pinky text { fill: var(--pinky-color, var(--blue-strong)); paint-order: stroke; stroke: var(--card); stroke-width: 4px; stroke-linejoin: round; }
+.map-candidate { cursor: pointer; }
+.map-candidate circle { fill: var(--card); stroke: var(--pinky-color); stroke-width: 2.5; stroke-dasharray: 5 4; }
+.map-candidate path { fill: var(--pinky-color); }
+.map-candidate text { text-anchor: middle; font-weight: 700; fill: var(--pinky-color); paint-order: stroke; stroke: var(--card); stroke-width: 4px; stroke-linejoin: round; }
+.map-candidate-number { font-size: 15px; }
+.map-candidate-name { font-size: 12px; }
+.map-candidate:hover circle { fill: var(--pinky-color); stroke-dasharray: none; }
+.map-candidate:hover .map-candidate-number { fill: #fff; stroke: none; }
+.pinky-map.compact .map-candidate-name { display: none; }
 .map-pinky.stopping circle { stroke: var(--red); }
 .map-pinky.stopping path { fill: var(--red); }
 .pinky-map.compact .map-caption { display: none; }
@@ -517,7 +528,9 @@ button.small { min-height: 30px; padding: 4px 10px; font-size: 12px; }
 .map-pick-ray { stroke: currentColor; stroke-width: 5; stroke-linecap: round; }
 .map-pick-head { fill: currentColor; }
 .map-pinky-list li > button { margin-left: auto; white-space: nowrap; }
-.map-pinky-list li > button[aria-pressed="true"] { background: var(--blue); color: #fff; }
+.map-pinky-actions { display: grid; gap: 6px; margin-left: auto; }
+.map-pinky-actions button { white-space: nowrap; }
+.map-pinky-list button[aria-pressed="true"] { background: var(--blue); color: #fff; }
 .map-viewer-side { display: grid; align-content: start; gap: 10px; }
 .map-viewer-side h3 { color: var(--text-2); font-size: 14px; font-weight: 600; }
 .map-pinky-list, .map-legend { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }

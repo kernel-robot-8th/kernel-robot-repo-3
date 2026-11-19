@@ -15,10 +15,21 @@ Same as the real dashboard (pinky_fleet_dashboard/app.py, scripts/navigate_route
   topics (map, tf_pose, battery, plan, trail...), waypoints, parking; keepout and traffic at the top level
 - POST /api/robots/<id>/route {labels}: parking -> labels -> parking with the robot's own waypoints (400 when one is
   missing, 409 while it is already on a route)
-- at "5": docking_manual (token) -> dock_complete -> docking_anchor -> docked_manual (token) -> received -> dock_exit
+- at "5": square up in front, drive in, docking_manual (token) -> dock_complete -> docking_anchor -> docked_manual
+  (token) -> received -> drive out forward (navigation.json dock_exit_reverse false; true: 20 cm back first)
+- redock at docking_manual (operator-confirm {action: redock, offset?}): back out 35 cm, square up, drive in again, at
+  most three times; with the ceiling camera's offset {forward_mm, left_mm, dyaw_deg} it comes in corrected by it
+  (the same route_geometry.corrected_dock the real dashboard uses)
+- between stops on opposite sides of the middle wall it goes through the passage points (navigation.json
+  wall_passages), as the real mission route does
 - at the last label: course_complete (token) -> mission-complete -> returning -> back at its parking spot
 - operator-confirm and mission-complete: 409 when the phase or token does not match, 202 otherwise
-Not simulated: Nav2 planning (straight lines between waypoints), obstacles and collisions, shared-zone reservations,
+Only here (the real dashboard has no such paths; the control station uses the first when the fleet is simulated):
+- GET /api/robots/<id>/parking-check: a virtual ceiling camera at station 5: ARRIVED / MISALIGNED / NOT_IN_VIEW with
+  the offset of where the Pinky really stands from the loading spot
+- POST /api/virtual/dock-bias {robot?, forward_mm, left_mm, dyaw_deg}: how far a Pinky really stands from where it
+  believes it stands at station 5 (a localization bias), to try the redock loop; also --dock-bias
+Not simulated: Nav2 planning (straight lines between points), obstacles and collisions, shared-zone reservations,
 IR line following, SSH, battery drain. Every sensor counts as present.
 """
 
@@ -28,6 +39,7 @@ import argparse
 import json
 import math
 import re
+import sys
 import threading
 import time
 import uuid
@@ -37,6 +49,16 @@ from typing import Any
 
 HERE = Path(__file__).resolve().parent
 REPOSITORY_ROOT = HERE.parents[1]
+DASHBOARD = REPOSITORY_ROOT / "pinky_fleet_dashboard"
+sys.path.insert(0, str(DASHBOARD / "scripts"))
+from route_geometry import DOCK_APPROACH_M, _through_passages, corrected_dock  # noqa: E402 - the real dashboard's math
+
+REDOCK_BACK_M, REDOCK_LIMIT = 0.35, 30  # scripts/navigate_route.py
+# The registered loading spot's tolerance (.control-station/parking-spots/pinky_dock_1.json, 2026-11-17) and how far
+# from the spot the virtual ceiling camera still sees a Pinky.
+CAMERA_TOLERANCE = {"position_mm": 40.0, "yaw_deg": 15.0}
+CAMERA_VIEW_M = 0.45
+PASS_LABELS = ("통로 아래", "통로 위")
 ROBOTS = {
     "10": {"name": "Pinky C76C", "domain": 10, "battery": 92.0},
     "11": {"name": "Pinky D631", "domain": 11, "battery": 78.0},
@@ -106,24 +128,37 @@ class Pinky:
         self.steps: list[dict[str, Any]] = []
         self.trail: list[list[float]] = []
         self.moving = 0.0
+        # (forward_mm, left_mm, dyaw_deg): where the Pinky really stands at station 5, from where it believes it
+        # stands. The pose it reports is what it believes, as a real Pinky's is.
+        self.bias = (0.0, 0.0, 0.0)
 
     # Steps: drive (to a point, maybe backwards), wait (for an operator signal), hold (a timed phase), phase (instant).
-    def start(self, goals: list[dict[str, Any]], labels: list[str], course_end: int | None, **route: Any) -> None:
+    def start(self, goals: list[dict[str, Any]], labels: list[str], course_end: int | None,
+              passes: dict[int, list[dict[str, Any]]] | None = None, reverse_exit: bool = False, **route: Any) -> None:
+        """`passes`: points driven through before goal i (the wall passage), which are not stops of the route."""
         steps: list[dict[str, Any]] = [{"kind": "phase", "phase": "driving", "message": "Nav2 경로 주행 중 (가상)"}]
         for index, goal in enumerate(goals[1:], start=1):
+            for point in (passes or {}).get(index, []):
+                steps.append({"kind": "drive", "x": point["x_m"], "y": point["y_m"]})
+            if goal["label"] == "5":
+                heading = goal["yaw_rad"]
+                steps.append({"kind": "drive", "x": goal["x_m"] - DOCK_APPROACH_M * math.cos(heading),
+                              "y": goal["y_m"] - DOCK_APPROACH_M * math.sin(heading), "yaw": heading,
+                              "phase": "driving", "message": "5번 정면에서 방향 맞추는 중 (가상)"})
             steps.append({"kind": "drive", "x": goal["x_m"], "y": goal["y_m"], "label": goal["label"], "index": index,
                           "yaw": goal.get("yaw_rad") if goal["label"] == "5" or index == len(goals) - 1 else None})
             if goal["label"] == "5":
                 steps += [
-                    {"kind": "wait", "phase": "docking_manual", "signal": "dock_complete",
+                    {"kind": "wait", "phase": "docking_manual", "signal": "dock_complete", "dock": dict(goal),
                      "message": "5번 도착 · 정지 · 수동 도킹완료 확인 대기"},
                     {"kind": "hold", "phase": "docking_anchor", "seconds": 2.0, "message": "5번 위치 다시 맞추는 중"},
                     {"kind": "wait", "phase": "docked_manual", "signal": "received",
                      "message": "도킹완료 · 정지 유지 · 물건 수령 완료 대기"},
-                    {"kind": "drive", "phase": "dock_exit", "back_m": 0.20, "label": "5", "index": index,
-                     "message": "수령 확인 · 20 cm 후진"},
-                    {"kind": "phase", "phase": "driving", "message": "Nav2 경로 주행 중 (가상)"},
                 ]
+                if reverse_exit:
+                    steps.append({"kind": "drive", "phase": "dock_exit", "back_m": 0.20,
+                                  "message": "수령 확인 · 20 cm 후진"})
+                steps.append({"kind": "phase", "phase": "driving", "message": "Nav2 경로 주행 중 (가상)"})
             if index == course_end:
                 steps += [
                     {"kind": "wait", "phase": "course_complete", "signal": "mission_complete",
@@ -151,6 +186,57 @@ class Pinky:
         self.steps.pop(0)
         self.route["mission_token"] = None
         return True
+
+    def redock(self, token: object, offset: object) -> bool | None:
+        """The ceiling camera judged the Pinky off the loading spot: back out, square up, drive in again, then wait
+        for dock_complete once more. With the camera's offset the spot is corrected by it. None when the phase or
+        token does not match, else whether the offset was used."""
+        step = self.steps[0] if self.steps else None
+        if (not self.route or self.route["status"] != "running" or not step or step["kind"] != "wait"
+                or step["signal"] != "dock_complete" or not token or token != self.route.get("mission_token")):
+            return None
+        attempt = step.get("redocks", 0) + 1
+        self.route["mission_token"] = None
+        if attempt > REDOCK_LIMIT:
+            self.steps = []
+            self.route.update(status="failed", phase="failed",
+                              message=f"5번 다시 맞추기를 {REDOCK_LIMIT}번 했는데도 또 요청받았습니다 · 현장을 확인하세요. (가상)")
+            return False
+        dock = step["dock"]
+        heading = dock["yaw_rad"]
+        square = {"x_m": dock["x_m"] - DOCK_APPROACH_M * math.cos(heading),
+                  "y_m": dock["y_m"] - DOCK_APPROACH_M * math.sin(heading), "yaw_rad": heading}
+        guided = corrected_dock((self.x, self.y, self.yaw), offset, dock, DOCK_APPROACH_M) if offset is not None else None
+        if guided:
+            square, dock = guided
+        note = f"({attempt}/{REDOCK_LIMIT}){' · 카메라 보정' if guided else ''}"
+        step.update(redocks=attempt, entered=None)
+        # The phase changes with the signal, not a tick later: a status read in between must not look like waiting.
+        self.route.update(phase="redocking", message=f"5번 위치가 어긋나 다시 맞추는 중 {note}")
+        self.steps[:0] = [
+            {"kind": "drive", "phase": "redocking", "back_m": REDOCK_BACK_M,
+             "message": f"5번 위치가 어긋나 다시 맞추는 중 {note} · {REDOCK_BACK_M * 100:.0f}cm 후진"},
+            {"kind": "drive", "phase": "redocking", "x": square["x_m"], "y": square["y_m"], "yaw": square["yaw_rad"],
+             "message": f"5번 다시 맞추는 중 {note} · 정면 진입점에서 방향 맞추기"},
+            {"kind": "drive", "phase": "redocking", "x": dock["x_m"], "y": dock["y_m"], "yaw": dock["yaw_rad"],
+             "message": f"5번 다시 맞추는 중 {note} · 정면 직진"},
+        ]
+        return bool(guided)
+
+    def seen_from(self, dock: dict[str, Any]) -> dict[str, float] | None:
+        """What a ceiling camera over station 5 measures: where the Pinky really stands (the pose it believes plus
+        its bias) from the loading spot `dock`, along the spot's own axes. None when it is out of the camera's view."""
+        heading = dock["yaw_rad"]
+        forward_m, left_m = self.bias[0] / 1000.0, self.bias[1] / 1000.0
+        x = self.x + forward_m * math.cos(heading) - left_m * math.sin(heading) - dock["x_m"]
+        y = self.y + forward_m * math.sin(heading) + left_m * math.cos(heading) - dock["y_m"]
+        if math.hypot(x, y) > CAMERA_VIEW_M:
+            return None
+        forward = (x * math.cos(heading) + y * math.sin(heading)) * 1000.0
+        left = (-x * math.sin(heading) + y * math.cos(heading)) * 1000.0
+        dyaw = math.degrees((self.yaw - heading + math.pi) % (2 * math.pi) - math.pi) + self.bias[2]
+        return {"forward_mm": round(forward, 1), "left_mm": round(left, 1), "dyaw_deg": round(dyaw, 2),
+                "distance_mm": round(math.hypot(forward, left), 1)}
 
     def tick(self, dt: float) -> None:
         self.moving = 0.0
@@ -184,7 +270,7 @@ class Pinky:
             if "back_m" in step:
                 step["x"] = self.x - step["back_m"] * math.cos(self.yaw)
                 step["y"] = self.y - step["back_m"] * math.sin(self.yaw)
-            else:
+            elif "index" in step:
                 route.update(current_index=step["index"], current_label=step["label"],
                              message=f"웨이포인트 {step['label']}로 이동 중 (가상)")
 
@@ -208,7 +294,7 @@ class Pinky:
     def _arrive(self, step: dict[str, Any]) -> None:
         if step.get("yaw") is not None:
             self.yaw = step["yaw"]
-        if "back_m" not in step:
+        if "index" in step:
             self.route.update(completed=step["index"], current_label=step["label"],
                               message=f"웨이포인트 {step['label']} 도착 (가상)")
 
@@ -232,7 +318,14 @@ class VirtualFleet:
         self.time_scale = time_scale
         self.lock = threading.Lock()
         self.pinkies = {pid: Pinky(pid, parking[pid], waypoints.get(pid, []), speed_mps) for pid in ROBOTS}
-        keepout_yaml = REPOSITORY_ROOT / "pinky_fleet_dashboard" / "config" / "keepout" / "keepout_mask.yaml"
+        # The real dashboard's settings: where the wall passage is, and whether the Pinky backs out of station 5.
+        try:
+            navigation = json.loads((DASHBOARD / "config" / "navigation.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            navigation = {}
+        self.passages = navigation.get("wall_passages") or []
+        self.reverse_exit = navigation.get("dock_exit_reverse", True) is not False
+        keepout_yaml = DASHBOARD / "config" / "keepout" / "keepout_mask.yaml"
         self.keepout = dict(read_map(keepout_yaml), map=MAP_NAME, frame_id="map", available=True,
                             source="keepout_mask.yaml", display_only=True) if keepout_yaml.is_file() else None
         spots = [p for p in parking.values()]
@@ -255,6 +348,56 @@ class VirtualFleet:
                 if item.get("label") == label and item.get("map") == MAP_NAME and item.get("frame_id") == "map":
                     return item
         return None
+
+    def _passes(self, goals: list[dict[str, Any]]) -> dict[int, list[dict[str, Any]]]:
+        """The wall-passage points to drive through before each goal (route_geometry, as the real mission route)."""
+        passes: dict[int, list[dict[str, Any]]] = {}
+        for index in range(1, len(goals)):
+            pair = [dict(goal, map=MAP_NAME, frame_id="map") for goal in goals[index - 1:index + 1]]
+            between = _through_passages(pair, self.passages)[1:-1]
+            if between:
+                passes[index] = between
+        return passes
+
+    def dock(self, pinky_id: str) -> dict[str, Any] | None:
+        return self.waypoint(pinky_id, "5", shared=True)
+
+    def parking_check(self, pinky_id: str) -> dict[str, Any]:
+        """The virtual ceiling camera's judgment of this Pinky at the loading spot (the shape of the control
+        station's parking observation)."""
+        with self.lock:
+            pinky, dock = self.pinkies[pinky_id], self.dock(pinky_id)
+            seen = pinky.seen_from(dock) if dock else None
+            moving = pinky.moving > 0
+        base = {"spot_id": "virtual_dock", "pinky_id": pinky_id, "tolerance": dict(CAMERA_TOLERANCE),
+                "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+        if seen is None:
+            return {**base, "status": "NOT_IN_VIEW", "offset": None, "reason": "가상 천장 캠: 적재 자리에 핑키가 보이지 않음"}
+        inside = (seen["distance_mm"] <= CAMERA_TOLERANCE["position_mm"]
+                  and abs(seen["dyaw_deg"]) <= CAMERA_TOLERANCE["yaw_deg"])
+        if moving:
+            return {**base, "status": "MOVING", "offset": seen, "reason": "가상 천장 캠: 핑키가 아직 움직이는 중"}
+        return {**base, "status": "ARRIVED" if inside else "MISALIGNED", "offset": seen,
+                "reason": "가상 천장 캠: 정차 위치 안" if inside else "가상 천장 캠: 정차 위치에서 벗어남"}
+
+    def set_bias(self, robot: object, values: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        numbers = [values.get(key, 0) for key in ("forward_mm", "left_mm", "dyaw_deg")]
+        if (robot not in (None, *ROBOTS)
+                or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in numbers)):
+            return 400, {"error": "robot(10, 11, 12 또는 생략)과 forward_mm, left_mm, dyaw_deg 숫자를 보내세요."}
+        with self.lock:
+            for pid in ([robot] if robot else list(ROBOTS)):
+                self.pinkies[pid].bias = tuple(float(v) for v in numbers)
+        return 200, {"ok": True, "bias": {pid: list(p.bias) for pid, p in self.pinkies.items()}}
+
+    def redock(self, pinky_id: str, token: object, offset: object) -> tuple[int, dict[str, Any]]:
+        with self.lock:
+            guided = self.pinkies[pinky_id].redock(token, offset)
+        if guided is None:
+            return 409, {"error": "현재 임무의 확인 단계와 신호가 일치하지 않습니다."}
+        note = (" 카메라 오프셋만큼 고쳐서 다시 들어갑니다." if guided
+                else " 카메라 오프셋은 쓰지 못해 같은 자리로 다시 들어갑니다." if offset is not None else "")
+        return 202, {"ok": True, "guided": guided, "message": "현재 단계 확인 신호를 받았습니다. (가상)" + note}
 
     def _run(self) -> None:
         last = time.monotonic()
@@ -325,7 +468,8 @@ class VirtualFleet:
             parking = dict(pinky.parking, label="주차장")
             goals = [parking] + [dict(item) for item in selected] + [parking]
             names = ["주차장"] + list(labels) + ["주차장"]
-            pinky.start(goals, names, course_end=len(goals) - 2, execution=execution)
+            pinky.start(goals, names, course_end=len(goals) - 2, passes=self._passes(goals),
+                        reverse_exit=self.reverse_exit, execution=execution)
         return 202, {"ok": True, "robot": pinky_id, "labels": names}
 
     def return_home(self, pinky_id: str, via: object) -> tuple[int, dict[str, Any]]:
@@ -342,7 +486,8 @@ class VirtualFleet:
             start = {"label": "출발", "x_m": pinky.x, "y_m": pinky.y, "yaw_rad": pinky.yaw}
             goals = [start] + [dict(item) for item in passes] + [dict(pinky.parking, label="주차장")]
             names = [g["label"] for g in goals]
-            pinky.start(goals, names, course_end=None, execution="free_mission", return_home=True, via=via)
+            pinky.start(goals, names, course_end=None, passes=self._passes(goals), reverse_exit=self.reverse_exit,
+                        execution="free_mission", return_home=True, via=via)
         return 202, {"ok": True, "robot": pinky_id, "labels": names}
 
     def confirm(self, pinky_id: str, signal: str, token: object) -> tuple[int, dict[str, Any]]:
@@ -390,6 +535,8 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path == "/api/status":
             self._json(200, self.fleet.status())
+        elif re.fullmatch(r"/api/robots/(10|11|12)/parking-check", path):
+            self._json(200, self.fleet.parking_check(path.split("/")[3]))
         elif re.fullmatch(r"/api/robots/(10|11|12)/nav-log", path):
             self._json(200, {"ok": True, "log": "가상 핑키 관제에는 Nav2 로그가 없습니다."})
         else:
@@ -411,6 +558,9 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/api/prepare-all", "/api/credentials", "/api/reset"):
             self._json(202, {"ok": True, "message": "가상 핑키는 늘 준비돼 있습니다."})
             return
+        if path == "/api/virtual/dock-bias":
+            self._json(*fleet.set_bias(data.get("robot"), data))
+            return
         match = re.fullmatch(r"/api/robots/(10|11|12)/(.+)", path)
         if not match:
             self._json(404, {"error": f"가상 핑키 관제에 없는 경로입니다: {path}"})
@@ -424,6 +574,8 @@ class Handler(BaseHTTPRequestHandler):
             with fleet.lock:
                 fleet.pinkies[pinky_id].stop("작업자 정지 (가상)")
             self._json(202, {"ok": True, "message": "정지했습니다. (가상)"})
+        elif action == "operator-confirm" and data.get("action") == "redock":
+            self._json(*fleet.redock(pinky_id, data.get("token"), data.get("offset")))
         elif action == "operator-confirm":
             signal = {"dock_complete": "dock_complete", "received": "received"}.get(data.get("action"))
             self._json(*fleet.confirm(pinky_id, signal, data.get("token")) if signal else
@@ -459,8 +611,13 @@ def main() -> int:
     parser.add_argument("--time-scale", type=float, default=1.0, help="2 = everything twice as fast")
     parser.add_argument("--shared-waypoints", action="store_true",
                         help="let a Pinky use waypoints another Pinky recorded (the real /route does not)")
+    parser.add_argument("--dock-bias", default="", metavar="FORWARD_MM,LEFT_MM,DYAW_DEG",
+                        help="every Pinky really stands this far from where it believes it stands at station 5")
     args = parser.parse_args()
     fleet = VirtualFleet(args.data, args.speed, args.time_scale, args.shared_waypoints)
+    if args.dock_bias:
+        forward, left, dyaw = (float(v) for v in args.dock_bias.split(","))
+        fleet.set_bias(None, {"forward_mm": forward, "left_mm": left, "dyaw_deg": dyaw})
     for pid, pinky in fleet.pinkies.items():
         labels = [w["label"] for w in pinky.waypoints]
         print(f"가상 핑키 {pid} ({ROBOTS[pid]['name']}): 웨이포인트 {labels}", flush=True)

@@ -15,6 +15,7 @@ POST /api/pinky/{id}/route-clear   기존 경로 날리기 (stops a running rout
 POST /api/pinky/{id}/return-home {via?}  drive to its own parking spot now
 POST /api/pinky/{id}/reset {map}   초기 세팅: hold stopped, drop the route, 주행준비 from the start
 POST /api/pinky/{id}/signal {action}  dock_complete | received | mission_complete for the current mission phase
+                                      (redock may carry offset {forward_mm, left_mm, dyaw_deg} from the ceiling camera)
 """
 
 from __future__ import annotations
@@ -106,7 +107,13 @@ def post_action(h: ControlStationHandler, route: str, parts: list[str], body: di
         elif action == "reset":
             entry = gateway.reset(pinky_id, body.get("map", "map-proto.yaml"))
         elif action == "signal":
-            entry = gateway.signal(pinky_id, body.get("action"))
+            flow = getattr(h.app, "order_flow", None)
+            if body.get("action") == "redock" and flow is not None and flow.holds_pinky(pinky_id):
+                # An order is loading this Pinky: sending it out from here would leave the arm an empty spot. The
+                # order's own flow redocks it when the camera says so.
+                h._json_error(409, "PINKY_IN_ORDER", "주문이 이 핑키를 쓰는 중이라 여기서 다시 들어오게 할 수 없어요")
+                return
+            entry = gateway.signal(pinky_id, body.get("action"), body.get("offset"))
         elif action == "nav-restart":
             entry = gateway.nav_restart(pinky_id)
         elif action == "waypoints" and len(parts) == 4:
@@ -117,6 +124,22 @@ def post_action(h: ControlStationHandler, route: str, parts: list[str], body: di
         h._json_error(400, "PINKY_ACTION_INVALID", str(exc))
         return
     _answer(h, entry)
+
+
+def post_dock_handshake(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:
+    """적재 자리에 선 핑키를 천장 캠으로 한 번 판정하고, auto면 그 결과대로 다시 맞추기·도킹완료를 보냄"""
+    pinky_id = parts[2]
+    if pinky_id not in PINKY_IDS:
+        h._json_error(404, "PINKY_UNKNOWN", f"핑키 {pinky_id}가 없습니다")
+        return
+    try:
+        repeat = body.get("repeat")
+        repeat = repeat if isinstance(repeat, int) and not isinstance(repeat, bool) else 0
+        result = h.app.dock_supervisor.step(pinky_id, body.get("auto") is True, repeat)
+    except Exception as exc:  # the fleet dashboard did not answer
+        h._json_error(502, "PINKY_FLEET_UNREACHABLE", f"핑키 상태를 읽지 못했습니다: {exc}")
+        return
+    h._json(200, result)
 
 
 def post_prepare_all(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:

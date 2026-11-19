@@ -231,6 +231,20 @@ function candidateRowsHtml(pinky) {
       <button type="button" class="small" data-pick-candidate="${i}">이 자리</button></li>`).join('');
 }
 
+// The operator says which candidate place the Pinky really stands on (the 이 자리 button, or its number on the map).
+function pickCandidate(pinkyId, index) {
+  const pinky = pinkyById(pinkyId);
+  const candidate = pinky && candidatesFor(pinky)[index];
+  if (!candidate) return;
+  const where = `${placeText(candidate.x_m, candidate.y_m)}, ${facingText(candidate.yaw_rad)}`;
+  if (!window.confirm(`${pinkyName(pinkyId)} 핑키가 지금 후보 ${index + 1} 자리에 있나요?\n${where}\n이 자리를 AMCL 시작 위치로 넣고, 그다음부터는 라이다로 따라가요.`)) return;
+  pinkyDetail.preview = null;
+  sendPinkyCommand(pinkyId, 'localize', {
+    path: 'localize', label: '고른 자리로 위치 넣기',
+    body: { pose: { x_m: candidate.x_m, y_m: candidate.y_m, yaw_rad: candidate.yaw_rad } },
+  });
+}
+
 async function previewCandidates(pinkyId) {
   pinkyDetail.previewing = true;
   renderPinkyDetail();
@@ -412,15 +426,7 @@ pinkySheetBody.addEventListener('click', (event) => {
   }
   const pick = event.target.closest('[data-pick-candidate]');
   if (pick) {
-    const candidate = candidatesFor(pinkyById(pinkyId))[Number(pick.dataset.pickCandidate)];
-    if (!candidate) return;
-    const where = `${placeText(candidate.x_m, candidate.y_m)}, ${facingText(candidate.yaw_rad)}`;
-    if (!window.confirm(`${name} 핑키가 지금 여기에 있나요?\n${where}\n이 자리를 AMCL 시작 위치로 넣고, 그다음부터는 라이다로 따라가요.`)) return;
-    pinkyDetail.preview = null;
-    sendPinkyCommand(pinkyId, 'localize', {
-      path: 'localize', label: '고른 자리로 위치 넣기',
-      body: { pose: { x_m: candidate.x_m, y_m: candidate.y_m, yaw_rad: candidate.yaw_rad } },
-    });
+    pickCandidate(pinkyId, Number(pick.dataset.pickCandidate));
     return;
   }
   const button = event.target.closest('[data-pinky-action]');

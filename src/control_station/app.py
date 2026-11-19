@@ -34,6 +34,8 @@ from control_station.order_flow import OrderDevices, OrderFlow
 from control_station.receiving_zones import ReceivingZoneError, load_receiving_zones
 from control_station.pinky_fleet import PinkyFleetClient
 from control_station.pinky_gateway import PinkyGateway
+from control_station.dock_guide import DockGuideRelay
+from control_station.dock_handshake import DockSupervisor
 from control_station.pinky_markers import PinkyMarkerError, arrival_for, load_pinky_markers
 from control_station.parking_ros import RosParkingSource
 from control_station.robot_adapters import make_status_provider
@@ -271,6 +273,7 @@ def main() -> None:
                 "(CONTROL_STATION_MOBILE_DOMAIN 또는 ROS_DOMAIN_ID)를 지정해야 합니다."
             )
         parking_node = RosParkingSource(int(raw_domain), parking_spot_id, server.parking_camera_id)
+        server.parking_node = parking_node
         server.parking_check = parking_node.check
         # Display-only live state of the same spot; VERIFY_ARRIVAL still decides only from a fresh check.
         server.parking_tracker = parking_node
@@ -311,8 +314,51 @@ def main() -> None:
         fleet_status, fleet_confirm = fleet.fleet_status, fleet.fleet_confirm
         dispatch, mission_complete = fleet.dispatch, fleet.mission_complete
         print(f"주문 흐름의 핑키 신호: 핑키 관제 {fleet_url} (주문을 시작하면 실제 핑키가 출발합니다)", flush=True)
+        if order_parking == world.parking:
+            # No parking node here: a virtual fleet judges its own Pinkys with its virtual ceiling camera (so a
+            # Pinky that stands off the spot there is sent back in); a real dashboard has none, and the mock stays.
+            def order_parking(pinky_id: str) -> dict[str, Any]:
+                return fleet.virtual_parking(pinky_id) or world.parking(pinky_id)
     # The Pinky screen reads and commands through the same client, so it shares the client's status cache.
     server.pinky_gateway = PinkyGateway(fleet, world.fleet_status, markers=pinky_markers)
+
+    # The same camera <-> Pinky exchange for a Pinky driven from the test screen, without an order (dock_handshake.py):
+    # judged at its own registration, redocked with the camera's offset, completed when it is seen in place twice.
+    def dock_signal(pinky_id: str, action: str, offset: dict[str, float] | None) -> dict[str, Any]:
+        token = fleet_status(pinky_id).get("mission_token")
+        return (fleet_confirm(pinky_id, action, token, offset) if offset is not None
+                else fleet_confirm(pinky_id, action, token))
+
+    # While the Pinky that carries the tracked marker drives in, the camera's live offset goes to it through the fleet
+    # dashboard, and its drive into the station steers on it (dock_guide.py). Only with a real dashboard and the
+    # parking node; CONTROL_STATION_DOCK_GUIDE=0 turns it off.
+    server.dock_guide = None
+    guided_pinky = next((pid for pid, marker in pinky_markers.items()
+                         if marker.registered and marker.spot_id == getattr(getattr(server, "parking_node", None), "spot_id", None)), None)
+    if (fleet is not None and guided_pinky is not None
+            and os.environ.get("CONTROL_STATION_DOCK_GUIDE", "1").strip() != "0"):
+        def send_guide(pinky_id: str, guide: dict[str, float]) -> bool:
+            status, _answer = fleet._request("POST", f"/api/robots/{pinky_id}/dock-guide", guide, timeout_s=0.5)
+            return status == 200
+
+        server.dock_guide = DockGuideRelay(server.parking_node.snapshot, guided_pinky,
+                                           lambda pinky_id: fleet.fleet_status(pinky_id).get("phase"), send_guide)
+        server.dock_guide.start()
+        print(f"적재 자리 진입 안내: 천장 캠 실시간 값 → 핑키 {PINKY_NAMES[guided_pinky]} (핑키 관제 경유)", flush=True)
+
+    dock_trials = Path(__file__).resolve().parents[2] / ".control-station" / "logs" / "dock-repeat.jsonl"
+    dock_trials_lock = threading.Lock()
+
+    def record_dock_trial(trial: dict[str, Any]) -> None:
+        # The repeat test of the entry: one line per entry as the ceiling camera judged it (kept across restarts).
+        with dock_trials_lock:
+            dock_trials.parent.mkdir(parents=True, exist_ok=True)
+            with dock_trials.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(trial, ensure_ascii=False) + "\n")
+
+    server.dock_supervisor = DockSupervisor(
+        fleet_status, lambda pinky_id: order_parking(pinky_id), dock_signal, record=record_dock_trial,
+        in_order=lambda pinky_id: getattr(server, "order_flow", None) is not None and server.order_flow.holds_pinky(pinky_id))
     # Counting for the stock check and the per-object transfer check: the cameras' YOLO detections when
     # CONTROL_STATION_ORDER_COUNTS=camera (shelf cams with slot zones, the top cam inside the Pinky tray), else the
     # mock world. With camera counts but mock picks, a person has to move each object during the pick step.
@@ -324,6 +370,16 @@ def main() -> None:
         pinky_load = load_counter
         print(f"주문 흐름의 개수 세기: 카메라 YOLO (핑키 쟁반 {load_counter.camera_id} {load_counter.region_or_none()})",
               flush=True)
+    if fleet is not None and pinky_load == world.pinky_load:
+        # Mock counts with real (or virtual) Pinkys: the mock tray is emptied when the customer takes the order, as
+        # the mock fleet does at its receiving zone. Without this the next order on that Pinky found the old load
+        # and stopped with LOAD_EXTRA_ITEM (seen in the virtual run, 2026-11-17).
+        fleet_complete = mission_complete
+
+        def mission_complete(pinky_id: str, token: str | None) -> dict[str, Any]:
+            answer = fleet_complete(pinky_id, token)
+            world.unload(pinky_id)
+            return answer
     # Real picks in orders (CONTROL_STATION_ORDER_REAL_ARM=1): PICK_WITH_POLICY for the planned arm, through the
     # arm command queue to one HTTP worker per arm, or with CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2 as a goal to
     # one PickObject action server per arm (/arm_01/pick_object; domain CONTROL_STATION_ARM_ACTION_DOMAIN, else

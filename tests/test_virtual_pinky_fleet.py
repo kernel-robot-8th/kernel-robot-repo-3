@@ -66,6 +66,57 @@ class VirtualFleetTests(unittest.TestCase):
         self.assertAlmostEqual(pose["x_m"], 0.7, places=3)
         self.assertAlmostEqual(pose["y_m"], 0.4, places=3)
 
+    def test_a_pinky_off_the_spot_repeats_the_miss_on_a_plain_redock_and_lands_on_it_with_the_cameras_offset(self) -> None:
+        client = self.start()
+        client._request("POST", "/api/virtual/dock-bias", {"robot": "11", "forward_mm": 30, "left_mm": -45, "dyaw_deg": 6})
+        self.assertIsNone(client.virtual_parking("11"))  # before any status: not known to be a virtual fleet
+        client.dispatch("11", ZONE_A)
+        docking = self.wait_phase(client, "11", "docking_manual")
+        seen = client.virtual_parking("11")
+        self.assertEqual((seen["status"], seen["offset"]["forward_mm"], seen["offset"]["left_mm"]), ("MISALIGNED", 30.0, -45.0))
+
+        plain = client.fleet_confirm("11", "redock", docking["mission_token"])
+        self.assertFalse(plain["guided"])
+        again = self.wait_phase(client, "11", "docking_manual")
+        self.assertNotEqual(again["mission_token"], docking["mission_token"])
+        self.assertEqual(client.virtual_parking("11")["offset"]["distance_mm"], seen["offset"]["distance_mm"])  # same miss
+
+        guided = client.fleet_confirm("11", "redock", again["mission_token"], client.virtual_parking("11")["offset"])
+        self.assertTrue(guided["guided"])
+        fixed = self.wait_phase(client, "11", "docking_manual")
+        after = client.virtual_parking("11")
+        self.assertEqual(after["status"], "ARRIVED")
+        self.assertLess(after["offset"]["distance_mm"], 10.0)
+        self.assertLess(abs(after["offset"]["dyaw_deg"]), 1.0)
+
+        # A third and a fourth request: with the limit at three the fourth is one too many, as on the real Pinky
+        # (whose limit is 30 since 2026-11-19, far above the five the control station sends by itself).
+        import virtual_pinky_fleet
+        from unittest import mock
+        with mock.patch.object(virtual_pinky_fleet, "REDOCK_LIMIT", 3):
+            client.fleet_confirm("11", "redock", fixed["mission_token"])
+            last = self.wait_phase(client, "11", "docking_manual")
+            client.fleet_confirm("11", "redock", last["mission_token"])
+            self.assertEqual(client.robots()["11"]["route"]["status"], "failed")
+
+    def test_a_mission_crosses_the_middle_wall_through_the_passage_and_squares_up_in_front_of_5(self) -> None:
+        fleet = VirtualFleet(FLEET_DIR, speed_mps=0.15, time_scale=1.0, shared_waypoints=False)
+        self.addCleanup(fleet.close)
+        self.assertEqual(fleet.start_mission("11", "수령 2", [])[0], 202)
+        with fleet.lock:
+            drives = [(round(s["x"], 3), round(s["y"], 3)) for s in fleet.pinkies["11"].steps
+                      if s["kind"] == "drive" and "x" in s]
+        passage = fleet.passages[0]
+        below = (passage["x_m"], round(passage["wall_y_m"] - passage["approach_m"], 3))
+        above = (passage["x_m"], round(passage["wall_y_m"] + passage["approach_m"], 3))
+        dock = fleet.dock("11")
+        # parking (below the wall) -> passage up -> square-up point -> 5 -> passage down -> receiving zone -> parking
+        self.assertEqual(drives[:2], [below, above])
+        self.assertAlmostEqual(math.hypot(drives[2][0] - dock["x_m"], drives[2][1] - dock["y_m"]), 0.25, places=2)
+        self.assertEqual(drives[3], (round(dock["x_m"], 3), round(dock["y_m"], 3)))
+        self.assertEqual(drives[4:6], [above, below])
+        self.assertFalse(fleet.reverse_exit)  # navigation.json dock_exit_reverse false: no backing out of 5
+
     def test_route_needs_the_pinkys_own_waypoints_like_the_real_dashboard(self) -> None:
         client = self.start()
         line_course = ["1", "2", "3"]  # no 5 in it: the old /route, where a Pinky drives only its own waypoints

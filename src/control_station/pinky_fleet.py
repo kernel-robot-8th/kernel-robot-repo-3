@@ -279,15 +279,27 @@ class PinkyFleetClient:
             raise PinkyFleetError("PINKY_SIGNAL_REJECTED", answer.get("error") or "코스 완주 단계·토큰과 맞지 않습니다")
         raise PinkyFleetError("PINKY_SIGNAL_NOT_DELIVERED", answer.get("message") or answer.get("error") or f"HTTP {status}")
 
-    def fleet_confirm(self, pinky_id: str, action: str, token: str | None) -> dict[str, Any]:
-        status, answer = self._request(
-            "POST", f"/api/robots/{pinky_id}/operator-confirm", {"action": action, "token": token}
-        )
+    def virtual_parking(self, pinky_id: str) -> dict[str, Any] | None:
+        """The virtual fleet's ceiling-camera judgment of this Pinky at the loading spot; None from a real dashboard,
+        which has no camera (the parking node judges there)."""
+        if not self.simulated:
+            return None
+        status, answer = self._request("GET", f"/api/robots/{pinky_id}/parking-check")
+        return answer if status == 200 and answer.get("simulated") is True and answer.get("status") else None
+
+    def fleet_confirm(self, pinky_id: str, action: str, token: str | None,
+                      offset: dict[str, Any] | None = None) -> dict[str, Any]:
+        """`offset` goes with redock: the ceiling camera's forward_mm, left_mm, dyaw_deg of the Pinky from its loading
+        spot, so it comes in again corrected by that much (the answer's `guided` says whether it was used)."""
+        body: dict[str, Any] = {"action": action, "token": token}
+        if offset is not None:
+            body["offset"] = offset
+        status, answer = self._request("POST", f"/api/robots/{pinky_id}/operator-confirm", body)
         with self._lock:
             self._cache = None  # the phase is about to change
         if status == 202 and answer.get("ok"):
             return {"accepted": True, "simulated": answer.get("simulated") is True, "http_status": status,
-                    "message": answer.get("message")}
+                    "message": answer.get("message"), "guided": answer.get("guided") is True}
         if status == 409:
             raise PinkyFleetError("PINKY_SIGNAL_REJECTED", answer.get("error") or "현재 단계·토큰과 신호가 맞지 않습니다")
         if status == 502 or (status == 202 and not answer.get("ok")):

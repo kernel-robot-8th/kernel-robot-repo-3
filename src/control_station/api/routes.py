@@ -100,6 +100,8 @@ POST_ROUTES: tuple[Route, ...] = (
           pinky.post_stop, "Cross-origin Pinky-stop request rejected", reads_body=False),
     Route(_path("/api/pinky/credentials"), pinky.post_credentials, "Cross-origin credentials request rejected"),
     Route(_path("/api/pinky/prepare-all"), pinky.post_prepare_all, "Cross-origin Pinky request rejected"),
+    Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "pinky"] and parts[3] == "dock-handshake",
+          pinky.post_dock_handshake, "Cross-origin Pinky request rejected"),
     Route(lambda route, parts: parts[:2] == ["api", "pinky"] and (
               (len(parts) == 4 and parts[3] in {"ready", "initial-pose", "localize", "set-pose", "nav-restart", "waypoints", "test-mission", "signal", "route-clear", "return-home", "reset"})
               or (len(parts) == 6 and parts[3] == "waypoints" and parts[5] == "delete")),

@@ -141,6 +141,10 @@ class OrderFlowTests(unittest.TestCase):
         redocks = self.events(task, "PINKY_REDOCK")
         self.assertEqual([event["payload"]["attempt"] for event in redocks], [1])
         self.assertTrue(redocks[0]["payload"]["answer"]["accepted"])
+        # What the camera measured goes along, so the Pinky comes in corrected instead of repeating the miss.
+        self.assertEqual(redocks[0]["payload"]["guide"], {"forward_mm": 48.0, "left_mm": -21.0, "dyaw_deg": 6.5})
+        self.assertTrue(redocks[0]["payload"]["guided"])
+        self.assertIn("카메라가 본 만큼", redocks[0]["payload"]["message"])
         kinds = [event["event_type"] for event in task["events"]]
         self.assertLess(kinds.index("PINKY_REDOCK"), kinds.index("PARKING_OBSERVED"))
         self.assertLess(kinds.index("PARKING_OBSERVED"), kinds.index("ARM_PICK_STARTED"))
@@ -152,6 +156,7 @@ class OrderFlowTests(unittest.TestCase):
             {"status": "MISALIGNED", "offset": {"distance_mm": 41.2, "dyaw_deg": 3.0}},
             {"status": "MISALIGNED", "offset": {"distance_mm": 43.9, "dyaw_deg": 3.1}},  # same 1 cm band: no new alert
             {"status": "ARRIVED", "offset": {"distance_mm": 3.0, "dyaw_deg": 0.2}},
+            {"status": "ARRIVED", "offset": {"distance_mm": 3.4, "dyaw_deg": 0.2}},  # seen twice in a row: arrived
         ])
 
         def parking(pinky_id: str) -> dict:

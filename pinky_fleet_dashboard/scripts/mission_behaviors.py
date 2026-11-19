@@ -456,8 +456,37 @@ class DockEntry:
     The station stands right in front there, so the ultrasonic and the LiDAR straight ahead are not looked at;
     the final guard keeps the LiDAR to both sides. The heading the Pinky squared up to (Nav2, within 3 degrees)
     is held. A restart during the maneuver fails closed, as DockExit does; drifting sideways 3 cm, turning
-    more than 0.15 rad or taking over 25 s stops it as a fault."""
+    more than 0.15 rad or taking over 25 s stops it as a fault.
+
+    With the ceiling camera's guide (2026-11-18) it steers on what the camera sees while it drives in: `guide` is
+    the Pinky's offset from its registered spot in its own axes, in metres and radians (forward, left, yaw; forward
+    negative while it is still short of the spot), fresh from /fleet/dock_guide. It turns toward the spot's line and
+    lines up on it (a second-order line follower: yaw rate = -(K_YAW * yaw + K_LEFT * left)), and stops where the
+    camera says the spot is instead of after a counted distance. The camera only moves the stop a few centimetres
+    either way of the counted one (GUIDE_SHORT_M before it, GUIDE_OVER_M past it). While no fresh guide arrives it drives
+    as before, back on the heading it squared up to, so a hidden marker or a silent PC costs nothing.
+
+    Taken over by the camera (context dock_capture, 2026-11-19): the route runner hands over as soon as the camera
+    sees the Pinky in front of the spot, wherever Nav2 had brought it and whichever way it faces. Then there is no
+    squared-up line to hold: it first turns on the spot until it faces the spot's line (the camera's yaw), then drives
+    in steering as above, and stops where the camera sees the spot. Only the camera moves it: while the guide is
+    silent it stands still (CAPTURE_BLIND_S at most), and it gives up after CAPTURE_TRAVEL_M or CAPTURE_TIME_S.
+
+    Squaring up by itself (context dock_turn_rad, 2026-11-19): Nav2 kept hunting for minutes to stand on the
+    square-up point to the centimetre and turn there (its collision check next to the station, its 3 cm tolerance).
+    Now the runner hands over once the Pinky is near that point, with how far it still has to turn to the dock's
+    heading; the Pinky turns that much on the spot on its odometry, then drives in as before."""
     SPEED_MPS = .03
+    SQUARE_DONE_RAD, SQUARE_TIME_S = .03, 20.        # its own turn to the dock's heading (context dock_turn_rad)
+    CAPTURE_FACE_RAD, CAPTURE_FACED_RAD = .35, .12   # turn on the spot above the first, drive again below the second
+    CAPTURE_TURN_LIMIT, CAPTURE_TURN_MIN = .5, .25   # rad/s on the spot; below the minimum the wheels only hum
+    CAPTURE_LEFT_LIMIT = .75       # rad/s: up to about 24 degrees of crab, there is more room to come back
+    CAPTURE_BLIND_S, CAPTURE_TIME_S, CAPTURE_TRAVEL_M = 8., 75., .70
+    K_YAW, K_LEFT = 1.8, 24.       # 1/s and rad/s per metre: settles a 3 cm miss within about 15 cm of travel
+    GUIDE_LEFT_LIMIT = .45         # rad/s the sideways term may ask for: at most about 14 degrees of crab
+    GUIDE_TURN_LIMIT = .35         # rad/s
+    GUIDE_SHORT_M, GUIDE_OVER_M = .08, .06
+    GUIDE_STOP_M = .005            # stop this far short by the camera: what it shows is about 0.2 s old
 
     def __init__(self):
         self.key = None
@@ -467,11 +496,32 @@ class DockEntry:
         self.progress = 0.
         self.target = .25
         self.message = ''
+        self.guided = False
+        self.guide = None
+        self.capture = False
+        self.turn, self.turn_from, self.squaring = 0., 0., False
+        self.side = 0.  # how far left of the dock's line it stood at the hand-over (context dock_side_m)
+        self.facing = False
+        self.travel = 0.
+        self.last_odom = None
+        self.heard = 0.
 
-    def update(self, context, odom, now, persist):
+    def update(self, context, odom, now, persist, guide=None):
         key = [context['token'], context['segment']]
         if key != self.key:
             self.key, self.origin, self.started = key, odom, now
+            self.guided, self.guide = False, None
+            self.capture, self.facing = bool(context.get('dock_capture')), False
+            try:
+                self.turn = angle(float(context.get('dock_turn_rad') or 0.))
+            except (TypeError, ValueError):
+                self.turn = 0.
+            self.turn_from, self.squaring = odom[2], not self.capture and abs(self.turn) > .04
+            try:
+                self.side = max(-.08, min(.08, float(context.get('dock_side_m') or 0.)))
+            except (TypeError, ValueError):
+                self.side = 0.
+            self.travel, self.last_odom, self.heard = 0., odom, now
             try:
                 self.target = max(.05, min(.40, float(context.get('dock_entry_m') or .25)))
             except (TypeError, ValueError):
@@ -493,20 +543,89 @@ class DockEntry:
         self.progress = dx*math.cos(self.origin[2])+dy*math.sin(self.origin[2])
         lateral = abs(-dx*math.sin(self.origin[2])+dy*math.cos(self.origin[2]))
         heading_error = angle(self.origin[2]-odom[2])
+        self.guide = guide
+        if guide is not None:
+            self.guided = True
+        if self.capture:
+            return self.captured(odom, now, guide)
+        if self.state == 'entering' and self.squaring:
+            remaining = angle(self.turn_from+self.turn-odom[2])
+            if now-self.started > self.SQUARE_TIME_S:
+                self.state, self.message = 'fault', '5번 진입 중단 · 제자리에서 방향을 못 맞춤 (바퀴/바닥 확인)'
+                return Motion(0., 0., 'docking_entry_fault')
+            if abs(remaining) > self.SQUARE_DONE_RAD:
+                self.message = f'5번 진입 · 제자리에서 방향 맞춤 (남은 각도 {abs(math.degrees(remaining)):.0f}도)'
+                rate = max(self.CAPTURE_TURN_MIN, min(self.CAPTURE_TURN_LIMIT, 1.5*abs(remaining)))
+                return Motion(0., math.copysign(rate, remaining), 'docking_entry_entering')
+            # Squared up: the straight run starts here, on the heading it was asked to reach.
+            self.squaring = False
+            self.origin, self.started = (odom[0], odom[1], angle(self.turn_from+self.turn)), now
+            dx = dy = self.progress = lateral = 0.
+            heading_error = angle(self.origin[2]-odom[2])
+        # Handed over beside the dock's line (dock_side_m) and no camera: the same steering on odometry brings it onto
+        # the line, as far as the wheels know where that is.
+        if guide is None and abs(self.side) > .008:
+            steer = (self.progress-self.target, self.side-dx*math.sin(self.origin[2])+dy*math.cos(self.origin[2]), -heading_error)
+        else:
+            steer = guide
+        # Once it has been steered, the path is no longer the straight line it started on: wider limits.
+        lateral_limit, heading_limit, time_limit = (.10, .50, 35.) if self.guided or steer is not None else (.03, .15, 25.)
         if self.state == 'entering':
-            if lateral > .03 or abs(heading_error) > .15 or now-self.started > 25.:
+            if lateral > lateral_limit or abs(heading_error) > heading_limit or now-self.started > time_limit:
                 self.state = 'fault'
-            elif self.progress >= self.target-.003:
+            elif guide is not None and guide[0] >= -self.GUIDE_STOP_M and self.progress >= self.target-self.GUIDE_SHORT_M:
+                self.state = 'complete'  # the camera sees it on the spot
+            elif self.progress >= self.target+(self.GUIDE_OVER_M if guide is not None else 0.)-.003:
                 self.state = 'complete'
-        self.message = {'entering': f'5번 진입 · 3cm/s로 {self.target*100:.0f}cm 직진 (앞은 안 보고 좌우 라이다만)',
-                        'complete': '5번 진입 완료 · 정지',
+        how = ' · 천장 캠을 보며 방향 맞춤' if guide is not None else ''
+        self.message = {'entering': f'5번 진입 · 3cm/s로 {self.target*100:.0f}cm 직진 (앞은 안 보고 좌우 라이다만){how}',
+                        'complete': '5번 진입 완료 · 정지' + (' (천장 캠이 본 자리)' if self.guided else ''),
                         'fault': '5번 진입 중단 · 옆으로 밀림/방향/시간 제한 확인'}[self.state]
         if self.state == 'entering':
+            if steer is not None:
+                sideways = max(-self.GUIDE_LEFT_LIMIT, min(self.GUIDE_LEFT_LIMIT, self.K_LEFT*steer[1]))
+                turn = -(self.K_YAW*steer[2]+sideways)
+                return Motion(self.SPEED_MPS, max(-self.GUIDE_TURN_LIMIT, min(self.GUIDE_TURN_LIMIT, turn)),
+                              'docking_entry_entering')
             return Motion(self.SPEED_MPS, max(-.1, min(.1, 1.5*heading_error)), 'docking_entry_entering')
         return Motion(0., 0., 'docking_entry_'+self.state)
 
+    def captured(self, odom, now, guide):
+        """The whole way in on the camera (see the class text). guide: (forward, left, yaw) or None."""
+        self.travel += math.hypot(odom[0]-self.last_odom[0], odom[1]-self.last_odom[1])
+        self.last_odom = odom
+        if guide is not None:
+            self.heard = now
+        turn = wanted = 0.
+        if guide is not None:
+            sideways = max(-self.CAPTURE_LEFT_LIMIT, min(self.CAPTURE_LEFT_LIMIT, self.K_LEFT*guide[1]))
+            turn = -(self.K_YAW*guide[2]+sideways)
+            wanted = abs(turn)/self.K_YAW  # how far it is from the heading that leads onto the spot's line
+        if self.state == 'entering':
+            if now-self.started > self.CAPTURE_TIME_S or self.travel > self.CAPTURE_TRAVEL_M or now-self.heard > self.CAPTURE_BLIND_S:
+                self.state = 'fault'
+            elif guide is not None and guide[0] >= -self.GUIDE_STOP_M:
+                self.state = 'complete'  # the camera sees it on the spot
+        if self.state == 'entering' and guide is not None:
+            self.facing = wanted > (self.CAPTURE_FACED_RAD if self.facing else self.CAPTURE_FACE_RAD)
+        self.message = {'entering': ('5번 진입 · 천장 캠이 안 보여 서서 기다림' if guide is None else
+                                     '5번 진입 · 천장 캠을 보며 제자리에서 방향 맞춤' if self.facing else
+                                     f'5번 진입 · 천장 캠을 보며 들어감 (남은 거리 {max(0., -guide[0])*100:.0f}cm)'),
+                        'complete': '5번 진입 완료 · 정지 (천장 캠이 본 자리)',
+                        'fault': '5번 진입 중단 · 천장 캠이 오래 안 보였거나 시간/거리 제한을 넘음'}[self.state]
+        if self.state != 'entering':
+            return Motion(0., 0., 'docking_entry_'+self.state)
+        if guide is None:
+            return Motion(0., 0., 'docking_entry_entering')
+        if self.facing:
+            rate = max(self.CAPTURE_TURN_MIN, min(self.CAPTURE_TURN_LIMIT, abs(turn)))
+            return Motion(0., math.copysign(rate, turn), 'docking_entry_entering')
+        return Motion(self.SPEED_MPS, max(-self.GUIDE_TURN_LIMIT, min(self.GUIDE_TURN_LIMIT, turn)), 'docking_entry_entering')
+
     def status(self):
-        return dict(key=self.key, state=self.state, progress_m=self.progress, target_m=self.target, message=self.message)
+        return dict(key=self.key, state=self.state, progress_m=self.progress, target_m=self.target, message=self.message,
+                    guided=self.guided, guide=list(self.guide) if self.guide is not None else None,
+                    capture=self.capture, travel_m=self.travel, squaring=self.squaring)
 
 
 class BackOff:
