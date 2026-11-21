@@ -523,6 +523,19 @@ class TaskStore:
             ).all()
             return [self._present(task) for task in tasks]
 
+    def running_orders(self) -> list[dict[str, Any]]:
+        """Started orders that have not ended, with their steps, oldest start first (the dispatcher reads which of
+        them still have a Pinky on its way to the loading spot)."""
+        with self._sessions() as session:
+            tasks = session.scalars(
+                select(TaskRecord)
+                .where(TaskRecord.order_items.is_not(None),
+                       TaskRecord.status.in_((TaskStatus.VALIDATING.value, TaskStatus.RUNNING.value)))
+                .order_by(TaskRecord.started_at, TaskRecord.id)
+            ).all()
+            return [{**self._present(task), "steps": [self._present_step(step) for step in task.steps]}
+                    for task in tasks]
+
     def recent_orders(self, limit: int = 12) -> list[dict[str, Any]]:
         """The latest orders (tasks with order_items) with their steps and events, newest first."""
         with self._sessions() as session:

@@ -10,6 +10,7 @@
 | `src/control_station/app.py` | 서버 조립(`main`)과 요청 분배. 경로 표는 `api/routes.py` |
 | `src/control_station/api/` | `tasks.py`(주문·작업 목록·생성·시작·취소, 명령 해석), `flow.py`(주문 진행 화면, 경보 확인, 모의 세계 조작), `cameras.py`(카메라 목록, MJPEG 스트림), `arm.py`(텔레오퍼레이션·정책 한 번 실행, OMX 명령 큐, 선반 칸, 정책 목록), `status.py`(health, 로봇 상태, 주차 `/live`·`/check`), `common.py`(교차 출처 확인, JSON 본문, 작업 조건·주문 물체 검증). 경로별 상태·오류 코드는 `tests/test_api_routes.py`로 고정 |
 | `src/control_station/order_desk.py`, `api/orders.py` | 주문 접수 창구: 주문 창용 catalog, 핑키 없이 접수(`PENDING`), 배정 미리보기, 시작할 때 핑키 확정(`PINKY_ASSIGNED`), 거절. 수령 구역은 `receiving_zones.py`·`config/receiving-zones.json` |
+| `src/control_station/dispatcher.py` | 자동 출발(기본 꺼짐): 기다리는 주문을 접수 순서대로 시작. 앞 주문의 핑키가 출발하면 바로 다음 주문(`CONTROL_STATION_DISPATCH_WAIT_FOR_SPOT=1`이면 적재 자리 도착 뒤), 핑키·수령 구역이 없으면 줄 전체 대기, 그 주문만의 문제면 건너뜀, 멈춘 주문의 경보 확인 전에는 정지 ([주문 흐름](order-flow.md#자동-출발-접수-순서대로)) |
 | `src/control_station/inventory.py` | 선반 재고: 카메라 YOLO 개수(클래스 이름 = 물건 이름)는 같은 값이 3번 연속일 때만 확정, 팔이 일하는 동안은 마지막 확정값 유지, 10초 넘게 새 값이 없으면 그 물건은 "모름"으로 주문을 닫고 주문 창과 관제에 알림. 우리 집기는 옮김 확인 즉시 장부에서 빼고, 그 밖의 변화는 `RESTOCKED`·`REMOVED_OUTSIDE`로 기록. 주문 가능 수량 = 선반 수량 − 열린 주문의 예약(있음/품절/모름/판매 중지). 작업자가 물건마다 카메라 기준·판매 중지·직접 센 수량으로 바꿀 수 있고(`data/inventory-overrides.json`에 저장), 접수 검사는 `OUT_OF_STOCK`·`ITEM_CLOSED`. `GET /api/inventory`, `POST /api/inventory/{물건}` |
 | `src/control_station/assignment.py` | 핑키·OMX 배정 규칙(순수 함수): 핑키는 제외 조건 뒤 배터리 구간 → 오늘 운행 → 쉰 시간 → 번호, 팔은 제약이 많은 물체부터 성공률 → 남은 재고 → 설정 순서. 고른 이유를 함께 돌려줌 |
 | `src/control_station/order_flow.py` | 주문 단계 실행: 선반 재고 → 배정 규칙으로 팔 배정 → 핑키 도착 대기 → 물체별 집기·옮김 확인 → 총량 → 핑키 관제 신호. 적재 자리 하나를 주문끼리 나눠 씀 |
@@ -59,6 +60,7 @@
 | POST | `/api/arm/commands`, `/api/arm/commands/from-camera`, `/api/arm/commands/{id}/events`·`cancel`·`clear-unknown` | OMX 명령 등록(정면 카메라 칸 확인 포함), 워커 이벤트 보고, 취소, 결과 불명 정리 ([HTTP 인터페이스](arm-command-api.md)) |
 | GET | `/api/tasks`, `/api/tasks/{task_id}` | 작업 요약 목록, 작업 단계·이벤트 이력과 비저장 `local_execution_owner` |
 | POST | `/api/tasks` | 주문: `order_items`(1–5종, 종류별 1–5개, 학습 정책이 있는 물체)와 선택 `pinky_id`(`10`/`11`/`12`, 없으면 비어 있는 핑키 배정, 모두 바쁘면 409 `PINKY_UNAVAILABLE`). 이전 형식: `destination`, `arm_job`, 선택 `pick_request`. 그 밖의 필드는 거부. `PENDING` 작업·단계·`TASK_CREATED` 이벤트 저장 |
+| GET, POST | `/api/dispatch` | 자동 출발 상태 조회, `{"auto": true\|false}`로 켜기·끄기. `CONTROL_STATION_AUTO_DISPATCH=1`이면 켜진 채로 시작 |
 | POST | `/api/tasks/parse-command` | 제한 문법 문장을 집기 조건·주문 물체 초안으로 해석. 저장이나 명령 없음 |
 | POST | `/api/tasks/{task_id}/start`, `/cancel` | 작업 시작(비동기), 취소 요청. 모의 모드에서만 받고 ROS 2 모드는 `EXECUTION_MODE_UNSUPPORTED`. 오류는 `error_code`/`message`/`error` |
 

@@ -99,8 +99,12 @@
     <div id="flowAlerts" class="alert-band" aria-live="polite"></div>
     <section aria-labelledby="intake-title">
       <div class="section-heading"><h2 id="intake-title">주문 접수</h2><span id="intakeUpdated" class="updated">불러오는 중</span></div>
+      <div id="dispatchBar" class="dispatch-bar" hidden>
+        <label class="dispatch-switch"><input type="checkbox" id="dispatchAuto"> 접수 순서대로 자동 출발</label>
+        <span id="dispatchState" class="dispatch-state" aria-live="polite"></span>
+      </div>
       <div id="intakeOrders" class="intake-list"><p class="loading">접수된 주문을 불러오는 중…</p></div>
-      <p class="note">배정 미리보기는 지금 상태로 계산한 안내이며 아무것도 예약하지 않습니다. 시작을 누르면 그때 핑키를 다시 고르고, 팔 순서는 선반 재고를 확인한 뒤 다시 정합니다.</p>
+      <p class="note">배정 미리보기는 지금 상태로 계산한 안내이며 아무것도 예약하지 않습니다. 시작을 누르면 그때 핑키를 다시 고르고, 팔 순서는 선반 재고를 확인한 뒤 다시 정합니다. 자동 출발을 켜면 오래된 주문부터 핑키가 하나씩 이어서 출발합니다.</p>
     </section>
     <section aria-labelledby="flow-robots-title">
       <div class="section-heading"><h2 id="flow-robots-title">로봇 상태</h2><span id="flowUpdated" class="updated">불러오는 중</span></div>

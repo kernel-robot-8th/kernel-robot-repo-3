@@ -345,7 +345,13 @@ def redock(node, context, token, segment, square, dock, attempt, correction=None
     # The camera sees this Pinky right now (and its behaviour layer can be led by it): back out only as far as the
     # camera still sees the marker and let the camera bring it in again, talking all the way. No Nav2 square-up,
     # which is where it hunted for minutes (2026-11-19).
-    layer = behaviour_feedback()
+    # One missing frame must not send it the long way round (2026-11-21: the twelfth entry of a repeat test went
+    # back 35 cm and through Nav2 because the guide was silent at that instant): look for up to 1.5 s.
+    layer, until = behaviour_feedback(), time.monotonic()+1.5
+    while rclpy.ok() and not node.interrupted and layer.get('dock_guide') is None and time.monotonic() < until:
+        context(node.pose(.8), mission_wait=True)
+        rclpy.spin_once(node, timeout_sec=.075)
+        layer = behaviour_feedback()
     camera_led = layer.get('dock_guide') is not None and 'capture' in (layer.get('dock_entry') or {})
     back_m = REDOCK_CAPTURE_BACK_M if camera_led else REDOCK_BACK_M
     if camera_led:

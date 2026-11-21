@@ -1876,6 +1876,7 @@ const intake = {
   previewLoading: new Set(),
   notes: new Map(),         // order id -> { title, text, verdicts? } left on the card by a refused start or reject
   busy: new Map(),          // order id -> 'start' | 'reject' while that request is in flight
+  dispatch: null,           // automatic dispatch from GET /api/orders: { auto, blocked, skipped, started }
 };
 const renderedCards = new WeakMap();  // card element -> the HTML it shows
 let intakeRequestSeq = 0;
@@ -1919,12 +1920,69 @@ function intakeCardHtml(order) {
       </span>
     </header>
     ${previewHtml(order)}
+    ${dispatchNoteHtml(order.id)}
     ${note ? `<div class="intake-note" role="alert"><strong>${escapeHtml(note.title)}</strong> ${escapeHtml(note.text)}
       ${note.verdicts ? verdictListHtml(note.verdicts, null) : ''}</div>` : ''}`;
 }
 
+// Automatic dispatch (dispatcher.py): the switch, what the line waits for, and per-card reasons.
+const dispatchBar = document.querySelector('#dispatchBar');
+const dispatchAuto = document.querySelector('#dispatchAuto');
+const dispatchState = document.querySelector('#dispatchState');
+let dispatchBusy = false;
+
+function dispatchNoteHtml(orderId) {
+  const dispatch = intake.dispatch;
+  if (!dispatch?.auto) return '';
+  const skipped = (dispatch.skipped || []).find((entry) => entry.order_id === orderId);
+  if (skipped) return `<div class="dispatch-note skipped"><strong>자동 출발에서 건너뜀</strong> ${escapeHtml(skipped.message || skipped.code)}</div>`;
+  if (dispatch.blocked?.order_id === orderId) return `<div class="dispatch-note"><strong>자동 출발 대기</strong> ${escapeHtml(dispatch.blocked.message || dispatch.blocked.code)}</div>`;
+  return '';
+}
+
+function renderDispatch() {
+  const dispatch = intake.dispatch;
+  dispatchBar.hidden = !dispatch;
+  if (!dispatch) return;
+  dispatchBar.classList.toggle('on', dispatch.auto);
+  if (!dispatchBusy) dispatchAuto.checked = dispatch.auto;
+  dispatchAuto.disabled = dispatchBusy;
+  if (!dispatch.auto) dispatchState.textContent = '꺼짐 · 주문마다 [시작]을 눌러요';
+  else if (dispatch.blocked) dispatchState.textContent = `켜짐 · ${dispatch.blocked.order_id ? `${dispatch.blocked.order_id} 대기 · ` : ''}${dispatch.blocked.message || dispatch.blocked.code}`;
+  else if (!intake.orders.length) dispatchState.textContent = '켜짐 · 기다리는 주문이 없어요';
+  else dispatchState.textContent = '켜짐 · 차례대로 출발시키는 중';
+}
+
+dispatchAuto.addEventListener('change', async () => {
+  const auto = dispatchAuto.checked;
+  if (auto && !window.confirm(
+    `접수 순서대로 자동 출발을 켤까요?\n기다리는 주문 ${intake.orders.length}건부터 [시작]을 누르지 않아도 핑키가 출발합니다.`,
+  )) {
+    dispatchAuto.checked = false;
+    return;
+  }
+  dispatchBusy = true;
+  renderDispatch();
+  try {
+    const response = await fetch('/api/dispatch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auto }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(apiErrorMessage(result, '자동 출발을 바꾸지 못했습니다'));
+    intake.dispatch = result.dispatch;
+    showToast(auto ? '자동 출발을 켰어요' : '자동 출발을 껐어요', auto ? '오래된 주문부터 차례로 출발해요' : '이미 출발한 주문은 그대로 진행해요');
+  } catch (error) {
+    showToast('자동 출발을 바꾸지 못했어요', error.message, 'error');
+  } finally {
+    dispatchBusy = false;
+    renderDispatch();
+    refreshIntake();
+  }
+});
+
 function renderIntake() {
   const { orders } = intake;
+  renderDispatch();
   flowSummary.waiting = orders.length;
   renderFlowSummary();
   intakeBadge.hidden = !orders.length;
@@ -2004,6 +2062,7 @@ async function refreshIntake() {
     if (seq !== intakeRequestSeq) return;  // a newer poll has been sent; its answer wins
     announceNewOrders(result.orders);
     intake.orders = result.orders;
+    intake.dispatch = result.dispatch || null;
     forgetGoneOrders();
     renderIntake();
     intake.orders.filter((order) => !intake.previews.has(order.id)).forEach((order) => loadPreview(order.id));

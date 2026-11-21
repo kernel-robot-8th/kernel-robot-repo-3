@@ -7,6 +7,8 @@ POST /api/orders                     {items: [{object_class, quantity}], receivi
                                      (no zone: start assigns one; a zone given is an operator's choice)
                                      Idempotency-Key header: a resend with the same key gets the same order (200)
 GET  /api/orders                     orders waiting in the intake, oldest first
+GET  /api/dispatch                   automatic dispatch: on/off, what the line waits for, orders passed over
+POST /api/dispatch                   {auto: true|false} turn automatic dispatch on or off
 GET  /api/orders/{id}/assignment     which Pinky, arms and receiving zone would serve it now, and why
 POST /api/orders/{id}/start          assign the receiving zone and the Pinky, start the order flow
 POST /api/orders/{id}/reject         turn down a waiting order
@@ -56,7 +58,30 @@ def post_inventory(h: ControlStationHandler, route: str, parts: list[str], body:
 
 def get_orders(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
     """주문 접수 창: 시작을 기다리는 주문"""
-    h._json(200, {"orders": h.app.order_desk.pending()})
+    dispatcher = getattr(h.app, "order_dispatcher", None)
+    h._json(200, {"orders": h.app.order_desk.pending(),
+                  "dispatch": dispatcher.snapshot() if dispatcher is not None else None})
+
+
+def get_dispatch(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
+    """자동 출발 상태: 켜짐 여부, 줄이 기다리는 이유, 건너뛴 주문, 최근 자동 출발"""
+    dispatcher = getattr(h.app, "order_dispatcher", None)
+    if dispatcher is None:
+        h._json_error(404, "DISPATCH_NOT_CONFIGURED", "자동 출발이 설정되지 않았습니다")
+        return
+    h._json(200, {"dispatch": dispatcher.snapshot()})
+
+
+def post_dispatch(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:
+    """자동 출발 켜기·끄기: {auto: true|false}. 끄면 이미 출발한 주문은 그대로 진행"""
+    dispatcher = getattr(h.app, "order_dispatcher", None)
+    if dispatcher is None:
+        h._json_error(404, "DISPATCH_NOT_CONFIGURED", "자동 출발이 설정되지 않았습니다")
+        return
+    if set(body) != {"auto"} or not isinstance(body["auto"], bool):
+        h._json_error(400, "DISPATCH_INVALID", "auto(true 또는 false)만 보내 주세요")
+        return
+    h._json(200, {"dispatch": dispatcher.set_enabled(body["auto"])})
 
 
 def get_assignment(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
