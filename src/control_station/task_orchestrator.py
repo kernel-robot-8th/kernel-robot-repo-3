@@ -623,8 +623,6 @@ class MockTaskOrchestrator:
              "slot_id": evidence.get("slot_id")},
             expected_task_status=TaskStatus.RUNNING,
         )
-        # Waiting longer than the policy run plus the queue, ACK and home move means the result is unclear.
-        deadline = time.monotonic() + policy["max_run_s"] + 180
         last_state, cancel_sent = None, False
         while True:
             current = self.arm_commands.get(arm_id)
@@ -648,10 +646,6 @@ class MockTaskOrchestrator:
                 except ArmCommandConflict:
                     pass
                 cancel_sent = True
-            if time.monotonic() > deadline:
-                raise ArmTaskNotConfirmed(
-                    "ARM_RESULT_TIMEOUT", f"팔 명령 {arm_id}의 결과가 오지 않았습니다. 팔을 현장에서 확인하세요."
-                )
             time.sleep(0.5)
         if cancel_sent:
             return None

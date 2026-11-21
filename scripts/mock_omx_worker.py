@@ -29,6 +29,7 @@ from urllib.request import Request, urlopen
 
 
 PHASES = ("APPROACH_TARGET", "GRASP_TARGET", "LIFT_TARGET", "MOVE_TO_DESTINATION", "PLACE_TARGET")
+JOG_JOINTS = {"shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"}
 
 
 class Refused(Exception):
@@ -86,6 +87,11 @@ class Worker:
                 return "SLOT_MAP_MISMATCH"
             if target["pick_slot_id"] not in self.known_slots:
                 return "SLOT_UNKNOWN"
+        elif command["operation"] == "JOG_JOINT":
+            if target.get("joint") not in JOG_JOINTS:
+                return "JOINT_NOT_SUPPORTED"
+            if target.get("direction") not in {"POSITIVE", "NEGATIVE"}:
+                return "DIRECTION_NOT_SUPPORTED"
         else:
             return "NOT_IMPLEMENTED"
         if datetime.fromisoformat(command["valid_until"]) <= datetime.now(timezone.utc):
@@ -100,12 +106,14 @@ class Worker:
         target = command["target"]
         if command["operation"] == "RETURN_HOME":
             where = "home"
+        elif command["operation"] == "JOG_JOINT":
+            where = f"{target.get('joint')} {target.get('direction')}"
         elif target.get("pick_slot_id") is not None:
             where = f"칸 {target['pick_slot_id']} ({target['slot_label']})"
         else:
             where = "정책이 스스로 찾음"
         place = f" -> {command['place']['slot_id']}" if command.get("place") else ""
-        print(f"[{command['command_id']}] {command['operation']} {target['object_class'] or ''} @ {where}{place}", flush=True)
+        print(f"[{command['command_id']}] {command['operation']} {target.get('object_class') or ''} @ {where}{place}", flush=True)
         if self.args.result == "silent":
             print("  (silent: ACCEPTED를 보내지 않음 -> 관제가 ACK_TIMEOUT 후 UNKNOWN 처리)", flush=True)
             return
@@ -115,6 +123,29 @@ class Worker:
                 self.send(command, "REJECTED", reason_code=reason)
                 return
             command = self.send(command, "ACCEPTED")  # only an HTTP 200 here allows motion
+            if command["operation"] == "JOG_JOINT":
+                if command["cancel_requested"]:
+                    self.send(command, "CANCELED", phase="JOINT_JOG")
+                    return
+                self.execute_phase(command, "JOINT_JOG")
+                command = self.send(command, "PROGRESS", phase="JOINT_JOG")
+                if self.args.result == "succeeded":
+                    self.send(
+                        command,
+                        "SUCCEEDED",
+                        pose_reached=True,
+                        details={
+                            "simulated": True,
+                            "joint": target["joint"],
+                            "direction": target["direction"],
+                            "step_ticks": 20,
+                        },
+                    )
+                elif self.args.result == "failed":
+                    self.send(command, "FAILED", reason_code="MOCK_JOG_FAILED")
+                else:
+                    self.send(command, "RESULT_UNKNOWN", reason_code="MOCK_RESULT_UNCONFIRMED")
+                return
             for phase in PHASES:
                 if command["cancel_requested"]:
                     self.send(command, "CANCELED", phase=phase)

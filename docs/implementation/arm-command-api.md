@@ -37,7 +37,9 @@ sequenceDiagram
 
 ## 명령 (관제 → 워커)
 
-워커가 `GET /api/arm/{robot_id}/commands/next`로 받는 `command` 객체입니다. 대상은 명령을 만든 시점에 고정되며, 실행 중에 바뀌지 않습니다. 명령 종류는 `MOVE_TO_SLOT`(칸 자세 재생), `RETURN_HOME`(home 자세), `PICK_WITH_POLICY`(물체별 학습 정책) 세 가지입니다. 좌표(XYZ) 명령은 2026-11-11에 없앴습니다.
+워커가 `GET /api/arm/{robot_id}/commands/next`로 받는 `command` 객체입니다. 대상은 명령을 만든 시점에 고정되며, 실행 중에 바뀌지 않습니다. 명령 종류는 `MOVE_TO_SLOT`(칸 자세 재생), `RETURN_HOME`(home 자세), `PICK_WITH_POLICY`(물체별 학습 정책), `JOG_JOINT`(운영자가 지정한 관절의 고정 크기 상대 조그)입니다. 좌표(XYZ) 명령은 2026-11-11에 없앴습니다.
+
+`JOG_JOINT`는 `target: {"joint":"shoulder_pan","direction":"POSITIVE"}` 형식만 받습니다. 허용 관절은 어깨 좌우·상하, 팔꿈치, 손목 굽힘·회전의 5개이고 한 번에 20틱(약 1.76°)만 움직입니다. 워커는 현재 위치와 hardware error를 다시 읽고, 100–3995틱 가드 범위를 벗어나는 목표를 거부하며 저속 profile(2/1)로 실행합니다. 이 가드와 한 단계 이동은 충돌 없는 작업 공간을 증명하지 않습니다. 운영자는 팔 하나씩 선택하고 주변을 비운 상태에서 조작해야 합니다.
 
 ```json
 {
@@ -66,6 +68,7 @@ sequenceDiagram
 | 필드 | 의미 | 워커가 할 일 |
 |---|---|---|
 | `target.pick_slot_id` | 선반 칸([칸 정의](#선반-칸-정의)의 사용 칸 6개 중 하나). `PICK_WITH_POLICY`에서는 정면 카메라가 물체를 본 칸(근거)이며 없을 수 있습니다 | 그 칸에 기록해 둔 관절 자세를 재생. 모르는 칸이면 `REJECTED` / `SLOT_UNKNOWN` |
+| `target.joint`, `target.direction` | `JOG_JOINT`만: 허용된 5개 관절 이름과 `POSITIVE`/`NEGATIVE` | 현재 관절값 기준으로 고정 20틱 조그. raw ticks를 요청에서 받지 않음 |
 | `target.slot_label`, `slot_map_version` | 칸 이름(예: "왼쪽 선반 아래 단 좌")과 명령을 만들 때 쓴 칸 정의 파일의 SHA-256 | 자기 칸 정의와 버전이 다르면 `REJECTED` / `SLOT_MAP_MISMATCH` |
 | `target.policy` | `PICK_WITH_POLICY`만: 정책 ID·모델·정책 정의 파일 버전 | 자기 정책 정의와 다르면 `REJECTED` / `POLICY_REGISTRY_MISMATCH` |
 | `valid_until` | 이 시각 이후에는 실행하지 않음 | 지났으면 `REJECTED` / `EXPIRED` |
@@ -234,25 +237,25 @@ sequenceDiagram
 - 정책 정의: [config/omx-act-policies.json](../../config/omx-act-policies.json). 물체 이름(YOLO 클래스, 한글 이름, 별칭) → 모델(Hugging Face repo), 정책 입력 `front`/`wrist`에 넣을 카메라 역할(`OVERHEAD` 선반을 위에서 봄, `GRIPPER` 그리퍼), 최대 실행 시간. `arm_id`가 지정된 정책은 학습한 팔에서만 실행됩니다. 관제와 워커가 같은 파일을 읽고, 명령에는 파일의 SHA-256(`target.policy.registry_version`)이 고정됩니다. 다르면 워커가 `POLICY_REGISTRY_MISMATCH`로 거부합니다.
 - 물체별 집기 UI에서 실행 팔을 선택합니다. 카메라에서 칸을 찾으면 `config/arms.json`의 shelf 담당 팔과 선택을 대조하고, 서로 다르면 `ARM_SHELF_MISMATCH`로 거부합니다. 선택하지 않은 경우 집기 버튼은 비활성 상태입니다.
 - 두 팔 워커 설정: `CONTROL_STATION_LEFT/RIGHT_FOLLOWER_PORT`, `CONTROL_STATION_LEFT/RIGHT_OMX_POSES`, `CONTROL_STATION_LEFT/RIGHT_CEILING_CAMERA`, `CONTROL_STATION_LEFT/RIGHT_JOINT_CAMERA`를 설정하고 각각 `scripts/omx_act_policy_test.sh worker --robot-id arm-01` 및 `--robot-id arm-02`로 실행합니다. 양쪽 워커는 대기할 수 있지만, 정책 실행 중에는 두 팔 모두 새 명령을 받지 않습니다. 반대 팔 명령이 미완료 상태이면 정책 집기도 등록되지 않습니다.
-- 별도 `액션 상한 진단 실행` 패널은 기존 LeRobot 직접 실행 진단용으로, home 복귀 판정을 하지 않습니다. 운영용 1회 집기는 반드시 위 HTTP 워커의 물체별 정책 버튼을 사용합니다.
 - 명령: `target`은 `object_class`(필수)와 선택적 `pick_slot_id`만 받습니다. 관제가 `target.object_class`를 검출기 클래스 이름으로 바꾸고 `target.policy`(`policy_id`, `label`, `model`, `registry_version`)를 붙입니다. 정책이 없는 물체는 400입니다. `place`는 다른 집기 명령과 같이 필요합니다(화면에서는 `CART_1`).
 - 워커 검사(거부 사유): 가짜·dry-run 팔(`POLICY_NEEDS_REAL_ARM`), 정책 파일 버전·정책 ID(`POLICY_REGISTRY_MISMATCH`, `POLICY_UNKNOWN`), 다른 팔에서 녹화한 정책이거나 포트가 이 팔의 보드가 아님(`POLICY_WRONG_ARM`), home 미기록(`POSE_NOT_RECORDED`), 만료(`EXPIRED`), 카메라 장치 없음(`CAMERA_UNAVAILABLE`), 다른 프로그램이 카메라 사용 중(`CAMERA_BUSY`), 정책 서버 응답 없음(`POLICY_SERVER_UNAVAILABLE`), 현재 자세가 home에서 400틱 넘게 떨어짐(`NOT_AT_REST`, 정책은 쉬는 자세에서 시작하도록 학습됨).
 - 카메라 넘겨주기: V4L2 카메라는 한 프로그램만 열 수 있습니다. 관제가 그 명령 팔의 정책 카메라(`CONTROL_STATION_ARM01_*_CAMERA`/`ARM02_*`, 예전 단일 팔 설정이면 `CONTROL_STATION_ACT_OVERHEAD_CAMERA`, `CONTROL_STATION_JOINT_CAMERA`와 같은 장치)를 화면에 띄우고 있으면, 워커가 정책 명령을 가져가는 순간(`DISPATCHED`) 그 카메라를 닫고 명령이 끝나면(`DISPATCHED`·`ACCEPTED`·`RUNNING`이 아니게 되면) 다시 엽니다. 그동안 화면에는 "학습 정책 실행 중"이 표시됩니다. 워커는 카메라를 열기 전에 다른 프로세스가 장치를 열고 있지 않은지 최대 5초 기다리고, 그래도 열려 있으면 `CAMERA_BUSY`로 거부합니다. 2026-11-07 임시 관제에서 실제 헤드캠(허브 4.4)으로 확인: 명령을 가져가는 응답(0.04초) 안에 닫히고, 명령이 끝난 뒤 다시 `STREAMING`.
 - 실행: ACCEPTED 뒤 서보 속도 프로파일을 0(학습 때와 같은 전원 기본값)으로 되돌리고, LeRobot `RobotClient`를 워커 프로세스 안에서 돌립니다. LeRobot이 연결하면서 모터 설정을 쓰느라 토크가 잠깐 꺼집니다. 정지할 때는 토크를 유지합니다(`disable_torque_on_disconnect=False`).
-- 멈추는 조건: 정책에는 완료 신호가 없으므로, 워커가 LeRobot의 동일한 follower bus에서 읽은 실제 `Present_Position` 관절값으로 판정합니다. 어느 관절이든 home에서 300틱 넘게 벗어난 뒤 다섯 관절 모두 150틱 이내이고, 최신 측정값이 0.2초 이내인 상태로 1.5초 유지되면 `RETURNED_TO_REST`입니다(워커 옵션 `--policy-depart-ticks`, `--policy-rest-ticks`, `--policy-settle-s`; 시작 허용치는 `--policy-start-ticks=400`). 학습 에피소드가 쉬는 자세에서 끝나도록 녹화돼 있어서 이 조건을 씁니다. 이 신호는 팔이 home 근처로 돌아왔다는 뜻이며 물체 집기·적재 완료를 뜻하지 않습니다.
+- 멈추는 조건: 정책에는 완료 신호가 없으므로, 워커가 LeRobot의 동일한 follower bus에서 읽은 실제 `Present_Position` 관절값으로 판정합니다. 어느 관절이든 home에서 300틱 넘게 벗어난 뒤 다섯 관절 모두 150틱 이내인 서로 다른 측정값 3개가 연속되면 `RETURNED_TO_REST`입니다(워커 옵션 `--policy-depart-ticks`, `--policy-rest-ticks`; 시작 허용치는 `--policy-start-ticks=400`). 학습 에피소드가 쉬는 자세에서 끝나도록 녹화돼 있어서 이 조건을 씁니다. 이 신호는 팔이 home 근처로 돌아왔다는 뜻이며 물체 집기·적재 완료를 뜻하지 않습니다.
+- 정책 실행을 시간 경과로 종료하는 코드는 없습니다. 실제 관절값이 home을 벗어난 뒤 허용 오차 안으로 돌아와 안정된 것이 확인되거나, 운영자가 취소하거나 통신·장치 오류가 발생하면 종료합니다. 작업 흐름도 팔 명령의 최종 이벤트를 기다립니다.
+- 순차 정책 실행은 관제 화면에서 등록된 정책을 체크하고 실행 순서를 정해 시작합니다(1~4개, 중복 물체 제외). 서버는 정책 등록 정보를 기준으로 각 물체의 담당 팔에 단계별 `PICK_WITH_POLICY` 명령을 보냅니다. 직전 워커 결과가 `SUCCEEDED` 또는 `UNKNOWN`/`PLACE_NOT_VERIFIED`이고 실측 `pose_reached: true`인 경우에만 다음 단계를 보냅니다. 그 외 실패·취소·ACK 불명·만료·초기 자세 미복귀는 시퀀스를 멈춥니다. 적재 여부는 미확인으로 기록하고, 다음 단계 진행을 위해 UNKNOWN 명령만 시퀀스 메모와 함께 해제합니다. 선택 가능한 정책은 [config/omx-act-policies.json](../../config/omx-act-policies.json)에서 읽습니다.
+- 순차 실행 API: `GET /api/arm/sequences`는 최근 실행을 반환하고, `POST /api/arm/sequences`는 `{"object_classes":["carrot","apple"]}`처럼 순서가 있는 물체 목록으로 시작합니다. 기존 사전 정의를 실행할 때는 `{"sequence_id":"..."}`도 지원합니다. `POST /api/arm/sequences/{run_id}/cancel`은 현재 명령 취소를 요청합니다. 화면은 각 단계 담당 팔과 진행 상태를 표시합니다.
 - 결과:
 
 | 정책 정지 이유 | 그 뒤 동작 | 보고 |
 |---|---|---|
-| 쉬는 자세로 돌아옴 | 실제 관절이 home에서 300틱 안이면 home으로 정렬 | `RESULT_UNKNOWN` / `PLACE_NOT_VERIFIED`, `pose_reached: true`. 300틱 넘으면 움직이지 않고 `FAILED` / `REST_NOT_CONFIRMED` |
-| 최대 시간 안에 움직이지 않음 | 없음 (쉬는 자세) | `FAILED` / `POLICY_DID_NOT_MOVE` |
-| 최대 시간 초과, 쉬는 자세 아님 | **자동 복귀 안 함.** 그 자리에서 토크 유지 | `FAILED` / `POLICY_TIMEOUT_NOT_AT_REST` |
+| 쉬는 자세로 돌아옴 | 실제 관절이 `--policy-rest-ticks`(기본 150틱) 안이면 추가 이동 없이 종료 | `RESULT_UNKNOWN` / `PLACE_NOT_VERIFIED`, `pose_reached: true`. 허용치 밖이면 움직이지 않고 `FAILED` / `REST_NOT_CONFIRMED` |
 | 운영자 취소 | 그 자리에서 토크 유지 | `CANCELED` |
 | 통신·카메라·모터 오류 | 그 자리 | `RESULT_UNKNOWN` / `POLICY_RUN_ERROR` |
 
-  쉬는 자세로 돌아온 것은 집기·적재 성공을 뜻하지 않습니다. 그래서 `SUCCEEDED`를 보내지 않고(관제도 `grasp_confirmed`·`place_confirmed` 없이는 받지 않음), 운영자가 현장을 보고 **현장 확인 완료**로 닫습니다. 시간 초과 때 자동 복귀하지 않는 것은 물건을 든 채나 선반 근처에서 관절 공간으로 크게 움직이지 않기 위해서입니다. 이때는 현장 확인 뒤 원상복귀 버튼을 씁니다.
+  쉬는 자세로 돌아온 것은 집기·적재 성공을 뜻하지 않습니다. 그래서 `SUCCEEDED`를 보내지 않고(관제도 `grasp_confirmed`·`place_confirmed` 없이는 받지 않음), 운영자가 현장을 보고 **현장 확인 완료**로 닫습니다. 취소나 실행 오류 때는 팔을 그 자리에서 유지하고 현장 확인 뒤 후속 조작을 합니다.
 - 실행 방법: [ACT 집기 정책 실물 시험](runbook.md#act-집기-정책-실물-시험)의 `server`와 `worker`.
-- 작업 흐름 연결(선택, `CONTROL_STATION_TASK_REAL_ARM=1`): 이동·팔 작업(`TRANSPORT_AND_ARM`)의 `EXECUTE_ARM_TASK`가 작업의 팔 작업 문구에 들어 있는 물체 이름(예: "당근 집기")으로 정책을 고릅니다. 명령을 만들기 전에 **정면 카메라(`CONTROL_STATION_PICK_EVIDENCE_CAMERA`, 기본 `shelf_camera`)가 그 물체를 칸 하나에서만 보고 있어야** 합니다(SR-13, 수동 "정면 캠으로 칸 찾기"와 같은 판정). 보이면 작업 이력에 `TARGET_CONFIRMED`(칸·신뢰도·촬영 시각)를 남기고 그 관측을 `source.kind: CAMERA`·`target.pick_slot_id`로 붙여 `PICK_WITH_POLICY`를 만듭니다. 못 보면(`CAMERA_NOT_FOUND`, `CAMERA_NOT_FRESH`, `TARGET_NOT_FOUND`, `TARGET_AMBIGUOUS`, `TARGET_MULTIPLE` 등) **팔 명령을 만들지 않고** 그 코드로 작업이 실패하며 실패 원천은 `front_camera`로 기록됩니다. 수동 조작 탭의 "확인 없이 실행"과 달리 작업 흐름에는 우회가 없습니다. 명령이 만들어지면 워커가 가져가 실행하고, 결과를 기다립니다(0.5초마다 조회, 정책 최대 시간+180초 넘으면 `ARM_RESULT_TIMEOUT`). `RESULT_UNKNOWN`/`PLACE_NOT_VERIFIED`+`pose_reached`면 단계 성공(`ARM_HOME_PLACEMENT_NOT_VERIFIED`), 그 밖의 결과는 그 사유 코드로 작업 실패입니다. `VERIFY_ARM_RESULT`는 판단을 `VERIFY_LOAD`로 넘긴다고 기록합니다. 실제(모의가 아닌) 적재 관측이 확인되면 팔 명령에 현장 확인을 기록하고, 모의 적재 관측이면 팔 명령을 `UNKNOWN`으로 남겨 운영자가 닫습니다. 작업을 취소하면 팔 명령도 취소합니다. 나머지 단계(주행·도착 확인 등)는 기존과 같습니다. 2026-11-07 가짜 워커로 성공·정책 시간 초과·정책 없는 작업 문구를 단위 테스트했고, 실물로는 아직 실행하지 않았습니다. 2026-11-11 정면 카메라 확인을 추가해 단위 테스트(카메라 근거가 명령 source로 전달, 미검출·확인 경로 없음이면 팔 명령 0건)와, 카메라 없는 임시 관제+모의 워커로 HTTP 작업 실행(`CAMERA_NOT_FOUND`, 원천 `front_camera`, 팔 명령 0건)을 확인했습니다. 관제 화면 작업 이력에는 정면 카메라 확인, OMX 명령 등록(명령 ID·정책·칸), OMX 명령 상태(워커 대기열→워커가 가져감→접수→실행 중→결과)가 표시됩니다. **실제 정면 카메라가 물체를 본 상태에서 작업 흐름으로 실물 팔을 움직이는 시험은 아직 하지 않았습니다.**
+- 작업 흐름 연결(선택, `CONTROL_STATION_TASK_REAL_ARM=1`): 이동·팔 작업(`TRANSPORT_AND_ARM`)의 `EXECUTE_ARM_TASK`가 작업의 팔 작업 문구에 들어 있는 물체 이름(예: "당근 집기")으로 정책을 고릅니다. 명령을 만들기 전에 **정면 카메라(`CONTROL_STATION_PICK_EVIDENCE_CAMERA`, 기본 `shelf_camera`)가 그 물체를 칸 하나에서만 보고 있어야** 합니다(SR-13, 수동 "정면 캠으로 칸 찾기"와 같은 판정). 보이면 작업 이력에 `TARGET_CONFIRMED`(칸·신뢰도·촬영 시각)를 남기고 그 관측을 `source.kind: CAMERA`·`target.pick_slot_id`로 붙여 `PICK_WITH_POLICY`를 만듭니다. 못 보면(`CAMERA_NOT_FOUND`, `CAMERA_NOT_FRESH`, `TARGET_NOT_FOUND`, `TARGET_AMBIGUOUS`, `TARGET_MULTIPLE` 등) **팔 명령을 만들지 않고** 그 코드로 작업이 실패하며 실패 원천은 `front_camera`로 기록됩니다. 수동 조작 탭의 "확인 없이 실행"과 달리 작업 흐름에는 우회가 없습니다. 명령이 만들어지면 워커가 가져가 실행하고 최종 이벤트를 기다립니다. `RESULT_UNKNOWN`/`PLACE_NOT_VERIFIED`+`pose_reached`면 단계 성공(`ARM_HOME_PLACEMENT_NOT_VERIFIED`), 그 밖의 결과는 그 사유 코드로 작업 실패입니다. `VERIFY_ARM_RESULT`는 판단을 `VERIFY_LOAD`로 넘긴다고 기록합니다. 실제(모의가 아닌) 적재 관측이 확인되면 팔 명령에 현장 확인을 기록하고, 모의 적재 관측이면 팔 명령을 `UNKNOWN`으로 남겨 운영자가 닫습니다. 작업을 취소하면 팔 명령도 취소합니다. 나머지 단계(주행·도착 확인 등)는 기존과 같습니다. 2026-11-07 가짜 워커로 성공·정책 실행 실패·정책 없는 작업 문구를 단위 테스트했고, 실물로는 아직 실행하지 않았습니다. 2026-11-11 정면 카메라 확인을 추가해 단위 테스트(카메라 근거가 명령 source로 전달, 미검출·확인 경로 없음이면 팔 명령 0건)와, 카메라 없는 임시 관제+모의 워커로 HTTP 작업 실행(`CAMERA_NOT_FOUND`, 원천 `front_camera`, 팔 명령 0건)을 확인했습니다. 관제 화면 작업 이력에는 정면 카메라 확인, OMX 명령 등록(명령 ID·정책·칸), OMX 명령 상태(워커 대기열→워커가 가져감→접수→실행 중→결과)가 표시됩니다. **실제 정면 카메라가 물체를 본 상태에서 작업 흐름으로 실물 팔을 움직이는 시험은 아직 하지 않았습니다.**
 - 2026-11-07 확인: 단위 테스트(정책 선택, 명령 고정값, 성공 조건, 정지 판정, 물체별 카메라 대응), 임시 관제(카메라 없음)에서 "당근" 명령 등록 → 모의 워커 `RESULT_UNKNOWN`/`PLACE_NOT_VERIFIED`, 가짜 팔 워커 `POLICY_NEEDS_REAL_ARM` 거부, 실물 팔 포트에서 정책 서버 주소를 틀리게 줘 `POLICY_SERVER_UNAVAILABLE` 거부(팔 읽기만). **관제에서 실물 정책 실행, 정면 카메라의 당근 검출, 정지 판정과 home 정렬은 아직 실물로 시험하지 않았습니다.**
 
 ## ROS 2 action 워커 (`/omx/move_to_slot`)

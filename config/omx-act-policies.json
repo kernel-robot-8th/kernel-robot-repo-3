@@ -1,29 +1,29 @@
 {
   "schema_version": 1,
-  "notes": "물체 이름(YOLO 클래스) → 그 물체만 집도록 학습한 LeRobot ACT 정책. ACT는 위치나 문장을 입력으로 받지 않고, 카메라 영상과 관절 값만 봄. cameras는 정책 입력 이름(front/wrist)에 실제로 넣을 카메라 역할(OVERHEAD: 선반을 위에서 본 카메라, GRIPPER: 그리퍼 카메라). 2026-11-07 데이터셋 영상으로 확인. arm_id는 그 정책을 녹화한 팔(config/arms.json): 정책은 그 팔의 포트·카메라로만 실행. null이면 녹화 팔 미확인 — 어느 팔에도 배정되고, 관제의 정책 실행은 예전 단일 팔 설정(CONTROL_STATION_POLICY_*·FOLLOWER_PORT)으로 돈다.",
+  "notes": "물체 이름(YOLO 클래스) → 그 물체만 집도록 학습한 LeRobot ACT 정책. 팔 배정은 고정: 당근·티슈는 왼팔(arm-01), 사과·수박은 오른팔(arm-02). ACT는 위치나 문장을 입력으로 받지 않고 카메라 영상과 관절 값만 봄. cameras는 정책 입력 이름(front/wrist)에 실제로 넣을 카메라 역할(OVERHEAD: 선반을 위에서 본 카메라, GRIPPER: 그리퍼 카메라).",
   "policies": [
     {
-      "policy_id": "carrot_act_v2",
+      "policy_id": "carrot_act_v7",
+      "arm_id": "arm-01",
       "object_class": "carrot",
       "label": "당근",
       "aliases": [
         "당근",
         "carrot"
       ],
-      "model": "JJinJJin2/omx_act_policy_v2",
+      "model": "JJinJJin2/omx_act_policy_v7",
       "policy_type": "act",
       "task": "Pick up Doll",
-      "dataset": "JJinJJin2/pick_and_place_v2",
+      "dataset": "JJinJJin2/pick_and_place_v3",
       "cameras": {
         "front": "OVERHEAD",
         "wrist": "GRIPPER"
       },
-      "arm_id": null,
-      "max_run_s": 45,
-      "notes": "에피소드 20개 모두 당근. task 문장은 녹화 때 붙인 이름일 뿐이며 ACT는 쓰지 않음. 에피소드가 쉬는 자세 근처에서 시작하고 끝남. 녹화한 팔 확인 필요(arm_id null)."
+      "notes": "에피소드 20개 모두 당근. task 문장은 녹화 때 붙인 이름일 뿐이며 ACT는 쓰지 않음. 에피소드가 쉬는 자세 근처에서 시작하고 끝남."
     },
     {
       "policy_id": "tissue_act_v1",
+      "arm_id": "arm-01",
       "object_class": "tissue",
       "label": "물티슈",
       "aliases": [
@@ -39,12 +39,10 @@
         "front": "GRIPPER",
         "wrist": "OVERHEAD"
       },
-      "arm_id": null,
-      "max_run_s": 45,
-      "notes": "에피소드 20개 모두 물티슈. 녹화 때 카메라 이름이 뒤바뀌어 front에 그리퍼 카메라, wrist에 위에서 본 카메라가 들어감. 실물 실행은 아직 하지 않음. 녹화한 팔 확인 필요(arm_id null)."
+      "notes": "에피소드 20개 모두 물티슈. 녹화 때 카메라 이름이 뒤바뀌어 front에 그리퍼 카메라, wrist에 위에서 본 카메라가 들어감. 실물 실행은 아직 하지 않음."
     },
     {
-      "policy_id": "apple_act_20261109",
+      "policy_id": "apple_act_20261119",
       "arm_id": "arm-02",
       "object_class": "apple",
       "label": "사과",
@@ -52,19 +50,17 @@
         "사과",
         "apple"
       ],
-      "model": "neverlish/omx_act_record-apple-20261109-1",
+      "model": "neverlish/omx_act_record-apple-20261119-1",
       "policy_type": "act",
       "task": "Pick up Doll",
-      "dataset": "neverlish/record-apple-20261109-1",
       "cameras": {
         "front": "GRIPPER",
         "wrist": "OVERHEAD"
       },
-      "max_run_s": 40,
-      "notes": "에피소드 20개(약 15초), 쉬는 자세에서 시작. 녹화 때 카메라 이름이 뒤바뀌어 front에 그리퍼 카메라(분홍 손가락, F58AE686 팔), wrist에 위에서 본 카메라가 들어감. 2026-11-11 영상으로 확인. 실물 실행은 아직 안 함. 녹화한 팔 F58AE686 = arm-02(오른쪽 팔, 2026-11-16 팔 담당 배치)라 그 팔에서만 실행하고, 사과는 오른쪽 선반에 둔다."
+      "notes": "운영자 지정 모델 neverlish/omx_act_record-apple-20261119-1. 카메라 입력은 기존 등록 설정(front=GRIPPER, wrist=OVERHEAD)을 사용. 새 모델의 학습 데이터·카메라 대응은 별도 확인되지 않음."
     },
     {
-      "policy_id": "watermelon_act_20261108",
+      "policy_id": "watermelon_act_20261119",
       "arm_id": "arm-02",
       "object_class": "watermelon",
       "label": "수박",
@@ -72,16 +68,14 @@
         "수박",
         "watermelon"
       ],
-      "model": "neverlish/omx_act_record-watermelon-20261108-1",
+      "model": "neverlish/omx_act_record-watermelon-20261119-1",
       "policy_type": "act",
       "task": "Pick up Doll",
-      "dataset": "neverlish/record-watermelon-20261108-1",
       "cameras": {
         "front": "OVERHEAD",
         "wrist": "GRIPPER"
       },
-      "max_run_s": 45,
-      "notes": "ACT 데이터셋 2026-11-08, 체크포인트 100000. 학습 카메라 역할은 front=천장, wrist=그리퍼. task 문장은 녹화 당시 이름이며 정책 식별에는 쓰이지 않음."
+      "notes": "운영자가 지정한 모델 neverlish/omx_act_record-watermelon-20261119-1. 새 모델의 학습 데이터와 카메라 대응은 별도 확인되지 않음."
     }
   ]
 }

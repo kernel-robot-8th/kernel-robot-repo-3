@@ -146,12 +146,12 @@ class RealArmTaskTests(unittest.TestCase):
         self.assertEqual(command["state"], "UNKNOWN")
         self.assertIsNone(command["operator_cleared_at"])
 
-    def test_policy_timeout_fails_the_task_without_a_load_check(self) -> None:
-        final = {"event": "FAILED", "reason_code": "POLICY_TIMEOUT_NOT_AT_REST"}
+    def test_policy_error_fails_the_task_without_a_load_check(self) -> None:
+        final = {"event": "FAILED", "reason_code": "POLICY_ERROR"}
         task, _ = self.run_task("당근 집기", final, MockLoadObserver(1))
         self.assertEqual(task["status"], "FAILED")
         arm_step = self.step(task, "EXECUTE_ARM_TASK")
-        self.assertEqual((arm_step["status"], arm_step["error"]["code"]), ("FAILED", "POLICY_TIMEOUT_NOT_AT_REST"))
+        self.assertEqual((arm_step["status"], arm_step["error"]["code"]), ("FAILED", "POLICY_ERROR"))
         verify_load = self.step(task, "VERIFY_LOAD")  # never run: marked not executed after the failure
         self.assertEqual((verify_load["status"], verify_load["result"]["outcome"]), ("CANCELED", "NOT_EXECUTED_AFTER_FAILURE"))
 

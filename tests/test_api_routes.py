@@ -19,7 +19,6 @@ from unittest import mock
 
 from control_station.app import WEB_DIR, ControlStationHandler, ControlStationServer
 from control_station.arm_commands import ArmCommandStore
-from control_station.arm_supervisor import ArmTeleopSupervisor
 from control_station.policy_run_supervisor import PolicyRunSupervisor
 from control_station.models import CameraConnectionState, CameraSnapshot, CameraStreamState, FrameFreshness
 from control_station.parking_ros import ParkingObservationError
@@ -134,7 +133,6 @@ class ApiTestCase(unittest.TestCase):
         slot_map = load_shelf_slot_map()
         server.mode = "mock"
         server.robot_provider = FakeProvider()
-        server.arm_supervisor = ArmTeleopSupervisor(disabled_reason="테스트에서는 팔을 쓰지 않습니다")
         server.policy_run_supervisor = PolicyRunSupervisor(disabled_reason="테스트에서는 정책을 실행하지 않습니다")
         server.arm_control_lock = threading.RLock()
         server.camera_manager = self.cameras
@@ -238,9 +236,7 @@ class ReadRouteTests(ApiTestCase):
                 self.assertEqual(self.get(path), (404, error("Task not found")))
 
     def test_arm_read_routes(self) -> None:
-        status, body = self.get("/api/arm/status")
-        self.assertEqual(status, 200)
-        self.assertIn("arm", body)
+        self.assertEqual(self.get("/api/arm/status")[0], 404)
         self.assertEqual(self.get("/api/arm/commands")[0], 200)
         status, body = self.get("/api/arm/shelf-slots")
         self.assertEqual(status, 200)
@@ -361,13 +357,9 @@ class TaskRouteTests(ApiTestCase):
 
 
 class ArmRouteTests(ApiTestCase):
-    def test_teleop_start_stop(self) -> None:
-        status, body = self.post("/api/arm/start", {})
-        self.assertEqual(status, 409)
-        self.assertEqual(body["error"], "테스트에서는 팔을 쓰지 않습니다")  # type: ignore[index]
-        self.assertIn("arm", body)
-        self.assertEqual(self.post("/api/arm/stop", {}, origin="http://evil.example"),
-                         (403, error("Cross-origin arm-control request rejected")))
+    def test_teleop_routes_removed(self) -> None:
+        self.assertEqual(self.post("/api/arm/start", {})[0], 404)
+        self.assertEqual(self.post("/api/arm/stop", {})[0], 404)
 
     def test_arm_command_routes(self) -> None:
         self.assertEqual(self.post("/api/arm/commands", {"x": 1}, origin="http://evil.example"),

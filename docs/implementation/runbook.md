@@ -11,7 +11,7 @@ python -m pip install -r requirements.txt
 ./run-control-station.sh
 ```
 
-브라우저에서 <http://127.0.0.1:8000>을 엽니다. 기본 모드에서는 로봇 제어를 시작하지 않습니다. 서버를 종료하려면 실행 중인 터미널에서 `Ctrl+C`를 누릅니다.
+브라우저에서 <http://127.0.0.1:8000>을 엽니다. 런처는 `.control-station/control-station.env`가 있으면 자동으로 읽습니다. 팔 포트·자세·카메라가 설정돼 있으면 ACT 정책 서버와 해당 팔 워커도 확인해 빠진 서비스만 시작합니다. 따라서 유효한 대기 명령은 워커가 연결된 뒤 실행될 수 있습니다. 서버와 런처가 시작한 유휴 서비스는 터미널에서 `Ctrl+C`로 함께 종료합니다.
 
 ## 주문 흐름 실행 (주문 진행 탭)
 
@@ -84,33 +84,35 @@ curl -sS http://127.0.0.1:8000/api/tasks/TASK-ID
 
 `CONTROL_STATION_TASK_REAL_ARM=1`이면 작업의 팔 단계가 주문 물체(`pick_request.category`, 예: `carrot`·`당근`)로 학습 정책을 고릅니다([HTTP 인터페이스](arm-command-api.md#학습-정책으로-집기-pick_with_policy)). 정책이 없는 물체면 팔 명령을 만들지 않고 `ARM_JOB_POLICY_NOT_FOUND`로 멈춥니다.
 
-런처로 시작할 때마다 `.control-station/logs/session-<시각>-<프로세스ID>.log`에 관제 서버 출력과 HTTP 요청 로그를 저장하고, 터미널에도 함께 표시합니다. `--arm` 실행의 LeRobot 출력은 같은 세션 ID를 가진 `arm-<시각>-<프로세스ID>.log`에 따로 저장합니다. 이 폴더는 Git에서 제외됩니다.
-
-## 팔 텔레오퍼레이션 제어 켜기
-
-저장소 루트에서 실행합니다. 런처는 현재 셸의 `PATH`를 먼저 확인하고, 없으면 기본 위치 `~/Desktop/lerobot/venv/bin/lerobot-teleoperate`를 자동으로 찾습니다. 관제용 `.venv`가 있으면 그 Python도 자동으로 사용합니다.
-
-```bash
-./run-control-station.sh --arm
-```
-
-LeRobot이 기본 위치가 아닌 곳에 설치된 경우에만 실행 파일 경로를 지정하면 됩니다.
-
-```bash
-CONTROL_STATION_ARM_PROGRAM=/경로/lerobot-teleoperate ./run-control-station.sh --arm
-```
-
-그 다음 화면의 **텔레오퍼레이션 시작** 버튼을 누르면 팔 프로세스를 시작합니다. `--arm`은 시작 API를 활성화할 뿐 서버 실행만으로 팔을 움직이지 않습니다. 종료 버튼은 프로세스에 `SIGINT`를 보냅니다.
-
-카메라 캡처와 JPEG 인코딩은 관제 서버가 담당하므로 `opencv-python-headless`도 관제 가상환경에 설치되어야 합니다. `requirements.txt` 설치 후 `--arm`으로 실행하면 됩니다. LeRobot 가상환경에만 OpenCV가 설치된 경우 관제 서버에서는 사용할 수 없습니다.
+런처로 시작할 때마다 `.control-station/logs/session-<시각>-<프로세스ID>.log`에 관제 서버 출력과 HTTP 요청 로그를 저장하고, 터미널에도 함께 표시합니다. 이 폴더는 Git에서 제외됩니다.
 
 카메라 worker 시작, 장치 열기/형식 설정 또는 프레임 read/변환/인코딩 처리에서 예외가 나면 해당 카메라 카드가 연결 끊김/오류 상태와 예외 사유를 표시합니다. worker가 실행 중 프레임 처리에 실패하면 약 2초 뒤 재연결을 시도하지만, worker 자체가 시작하지 못한 경우 자동 재시도는 하지 않으므로 원인을 정리한 뒤 관제 프로세스를 다시 시작해야 합니다. YOLO 추론 오류는 detector 오류로 표시하지만 원본 영상 캡처는 계속합니다. 재연결 시도나 서버 생존은 카메라의 현재 준비 상태를 증명하지 않으므로 카드의 연결·스트림·freshness 상태를 따로 확인하세요.
 
 서버가 정상 종료되고 camera worker도 실제로 종료되면 연결 상태는 `DISCONNECTED`, stream 상태는 `STOPPED`로 표시됩니다. 종료 대기 제한 안에 worker가 멈추지 않으면 마지막 관측 상태를 그대로 두어 종료를 완료한 것처럼 표시하지 않습니다.
 
-기본 장치 설정은 follower `/dev/omx_follower`, leader `/dev/omx_leader`입니다. LeRobot은 카메라를 열거나 별도 Rerun 화면을 띄우지 않습니다. `--arm` 모드에서 관제 서버가 Joint Camera `/dev/v4l/by-id/usb-Innomaker_Innomaker-U20CAM-720P_SN0001-video-index0`와 Head Camera `/dev/v4l/by-id/usb-Jieli_Technology_USB_Composite_Device-video-index0`에서 MJPEG 영상을 읽습니다. Joint camera의 기본 ID 경로는 이전 `/dev/video4` 설정이 가리키던 Innomaker 장치를 따른 것이며 물리 장착 위치의 최종 확인은 아닙니다. 각 경로는 환경 변수 `CONTROL_STATION_JOINT_CAMERA`, `CONTROL_STATION_HEAD_CAMERA`로 바꿀 수 있습니다. 환경 변수 `CONTROL_STATION_FOLLOWER_PORT`, `CONTROL_STATION_LEADER_PORT`로 모터 포트를 바꿀 수 있습니다. 런처에서 시작한 팔 프로세스 로그는 `.control-station/logs/arm-<세션ID>.log`에 저장하며 `CONTROL_STATION_ARM_LOG`로 경로를 지정할 수 있습니다.
+기본 장치 설정은 follower `/dev/omx_follower`, leader `/dev/omx_leader`입니다. 관제의 카메라 관측 화면은 왼쪽·오른쪽 천장 카메라와 왼쪽·오른쪽 관절 카메라를 표시합니다. 입력 경로는 각 역할에 대응하는 `CONTROL_STATION_LEFT_CEILING_CAMERA`, `CONTROL_STATION_RIGHT_CEILING_CAMERA`, `CONTROL_STATION_LEFT_JOINT_CAMERA`, `CONTROL_STATION_RIGHT_JOINT_CAMERA`로 설정합니다. `CONTROL_STATION_HEAD_CAMERA`는 Pinky 주차 화면에서 계속 사용하지만 카메라 관측 카드에서는 숨깁니다. 경로를 설정하지 않은 카메라도 미설정 카드로 표시합니다. USB 포트와 실제 장착 위치 대응은 화면으로 확인하세요. 환경 변수 `CONTROL_STATION_FOLLOWER_PORT`, `CONTROL_STATION_LEADER_PORT`로 모터 포트를 바꿀 수 있습니다.
 
-장치 번호는 연결 순서에 따라 바뀔 수 있습니다. 2026-10-31 read-only 열거에서는 HCAM0가 `/dev/video4`, Innomaker U20CAM-720P가 `/dev/video6`이었습니다. 기존 구성에서 `/dev/video4`를 Joint Camera로 선택했던 기록에 따라 이제 그 슬롯의 기본 경로를 Innomaker by-id로 고정했고 Head Camera는 HCAM0 by-id를 사용합니다. 단일 frame만으로 물리 장착 위치를 검증한 것은 아니므로 `--arm`을 실행하기 전에 `v4l2-ctl --list-devices`, `/dev/v4l/by-id`, 관제 화면을 통해 사람이 역할을 확인하세요. 환경 변수로 같은 실물 capture node를 두 슬롯에 지정하면 관제는 양쪽 stream을 열지 않고 충돌 오류를 표시합니다.
+### 좌·우 팔 키보드 관절 조그
+
+화면의 **키보드 관절 조그**에서 팔을 선택하고 작업 공간 확인란을 켭니다. 각 숫자 키 `1`–`5`는 해당 관절의 양의 방향, `Q/W/E/R/T` 키(한글 자판의 `ㅂ/ㅈ/ㄷ/ㄱ/ㅅ`)는 음의 방향으로 20틱씩 한 번 이동합니다. 반복 입력은 무시하며 팔별로 미완료 명령이 있으면 새 조그를 거부합니다. 브라우저 포커스는 조그 패널 안에 있어야 합니다.
+
+조그 요청은 `/api/arm/commands`의 `JOG_JOINT` 명령으로 기록되고, 실물 워커가 `ACCEPTED`를 보고한 뒤에만 수행됩니다. 따라서 좌·우 팔마다 해당 follower 포트와 자세 파일을 지정한 워커가 실행 중이어야 합니다. 이 PC의 두 보드는 다음처럼 각각 별도 터미널에서 실행할 수 있습니다.
+
+```bash
+/home/fastcampus/Desktop/lerobot/venv/bin/python scripts/omx_lerobot_worker.py \
+  --server http://127.0.0.1:8000 --robot-id arm-01 --worker-id arm-left \
+  --port /dev/serial/by-id/usb-ROBOTIS_OpenRB-150_A9F9354350323952582E3120FF070727-if00 \
+  --poses .control-station/omx-poses-A9F93543.json --profile-velocity 2 --profile-acceleration 1
+
+/home/fastcampus/Desktop/lerobot/venv/bin/python scripts/omx_lerobot_worker.py \
+  --server http://127.0.0.1:8000 --robot-id arm-02 --worker-id arm-right \
+  --port /dev/serial/by-id/usb-ROBOTIS_OpenRB-150_F58AE68650323952582E3120FF05260E-if00 \
+  --poses .control-station/omx-poses-F58AE686.json --profile-velocity 2 --profile-acceleration 1
+```
+
+조그 목표는 모터 위치 100–3995틱 안으로 제한하지만 이는 충돌 없는 작업영역이 아닙니다. 로봇의 실물 정지 절차와 작업 공간을 확보하고, 한 번에 한 팔만 조작하세요. UI/워커 상태는 비상정지나 작업 완료를 증명하지 않습니다.
+
+장치 번호는 연결 순서에 따라 바뀔 수 있습니다. 좌·우 천장/관절 카메라는 서로 다른 USB 포트의 by-path로 구분하고, 카메라 관측 화면에서 실제 장착 역할을 대조하세요. 예시 PC에서는 허브 포트 4.4/10.4를 천장 카메라, 4.3/10.3을 관절 카메라로 사용합니다. Head Camera는 Pinky 주차 화면 전용이며 일반 카메라 카드에서는 숨깁니다. 같은 실물 capture node를 여러 입력에 지정하면 관제는 해당 stream을 열지 않고 충돌 오류를 표시합니다.
 
 ### Front Camera 화면
 
@@ -128,11 +130,11 @@ CONTROL_STATION_FRONT_CAMERA=/dev/v4l/by-path/pci-0000:00:14.0-usb-0:2:1.0-video
 
 V4L2 장치는 한 프로세스만 영상을 받을 수 있어, 관제가 Front Camera를 열고 있으면 정책 client가 같은 장치를 열지 못합니다. 그래서 정책 시작 요청을 받으면 관제가 Front Camera capture를 먼저 닫고, 닫힌 것을 확인한 뒤 정책 client를 시작합니다. 정책 프로세스가 살아 있는 동안 카드는 `연결 끊김`/`중지`와 사용 중 안내를 표시하고, 프로세스가 끝나면 자동으로 다시 엽니다. 5초 안에 닫힘을 확인하지 못하면 정책을 시작하지 않고 409 오류를 반환합니다. 이 해제는 Front Camera feed 하나만 대상으로 하며, 정책이 여는 다른 카메라(위·그리퍼 중 Front Camera가 아닌 쪽)를 관제의 다른 feed가 열고 있으면 처리하지 않습니다.
 
-실제 팔 제어는 운영체제의 장치 권한, LeRobot 의존성 및 사용자별 OMX 지원 코드가 있어야 합니다. 이 구성은 현재 관제 저장소에 포함되지 않습니다. 저장소만 복제한 환경에서는 첫 번째 절차로 대시보드와 API를 실행할 수 있습니다.
+`.control-station/control-station.env`에 팔별 포트, 자세 파일, 천장·관절 카메라를 설정하면 런처가 관제 준비 후 ACT 서버와 각 워커의 heartbeat를 확인합니다. 정책 서버는 LeRobot 실행환경의 `CONTROL_STATION_LEROBOT_PYTHON`을 사용하며 기본 경로는 `~/Desktop/lerobot/venv/bin/python`입니다. `CONTROL_STATION_POLICY_REST_TICKS`는 정책 종료 후 모든 관절이 초기자세에서 허용되는 최대 오차이며, 이 PC는 200틱을 사용합니다. 실행 로그는 `.control-station/logs/policy-server-<session>.log`, `worker-left-<session>.log`, `worker-right-<session>.log`에 기록됩니다. 기존에 준비된 서비스는 재사용하고, `CONTROL_STATION_AUTO_START_ARM_RUNTIME=0`이면 자동 기동을 끕니다. 팔 설정이 없는 저장소 복제 환경은 관제 화면/API만 시작합니다.
 
 ## 학습 정책 한 번 실행
 
-LeRobot async inference 정책 서버를 별도 터미널에서 먼저 실행합니다. 제어 서버의 정책 실행 버튼은 async client만 시작하며 정책 서버를 자동으로 띄우지 않습니다.
+LeRobot async inference 정책 서버는 일반적으로 `run-control-station.sh`가 설정된 팔 워커와 함께 확인·기동합니다. 수동 실행이 필요한 경우 아래 명령을 사용합니다.
 
 ```bash
 cd ~/Desktop/lerobot
@@ -237,7 +239,7 @@ CONTROL_STATION_SHELF_CAMERA=/dev/v4l/by-path/pci-0000:80:14.0-usb-0:10:1.0-vide
 
 같은 날 정면 캠이 카메라 쪽을 향해 세워 둔 당근(잎이 안 보임)을 신뢰도 0.03에서도 못 찾아, 당근 방향을 바꿔 가며 2분(1초 간격) 더 찍고 이어서 학습한 `.control-station/models/best11_carrot_tissue_20261107b.pt`로 바꿨습니다. 정면 캠 라벨은 잎 없이 주황 몸통(H≤7)만으로 잡도록 넓혔고(`yolo/dataset_carrot_20261107b/color_label.py`), 손이 들어간 10개 시점은 뺐으며, 1차 데이터셋 전체를 함께 넣어 30 epoch 학습했습니다. 2차 촬영 마지막 20% 장면에서 정면 캠 당근 22/22·물티슈 22/22(이전 모델 0/22·0/22), 상단 캠 당근·물티슈 22/22였고, 1차 장면과 예전 헤드캠 데이터 결과는 이전 모델과 같았습니다. 못 찾던 장면에서는 당근 0.81로 찾았지만, 같은 장면에서 없는 물티슈를 0.34로 잘못 검출했습니다.
 
-클래스는 strawberry, car, ball, pumpkin, apple, carrot, fruits(열매 송이), potato, watermelon, tissue(물티슈) 10종입니다. 2026-11-07에 천장 카메라 프레임 한 장으로 확인했을 때, best11은 위에서 본 Pinky 본체를 `car`(0.93)로 잘못 검출했고, 선반에 놓인 과일·장난감 10여 개는 하나도 검출하지 못했습니다(이전 모델은 2~3개를 낮은 신뢰도로 검출했고 일부는 틀림). 위에서 내려다본 사진으로 학습했는지는 확인하지 않았습니다. 천장 카메라 검출은 지금 표시용으로만 보고, 적재 개수 판단에 쓰지 않습니다. 선반 카메라는 이때 사람이 시야를 가려서 비교하지 못했습니다. 관제 가상환경에 `requirements-vision.txt`를 설치하면 ultralytics가 `opencv-python`을 함께 설치해 `cv2`가 OpenCV 5.0으로 바뀝니다. 이 저장소는 `opencv-python-headless<5`를 쓰므로, 설치 뒤 `opencv-python`을 지우고 `opencv-python-headless`를 다시 설치했습니다. 2026-11-02에 이전 모델로 이 PC(RTX 5080, PyTorch 2.15 CUDA 13.2)에서 두 카메라 모두 YOLO를 켠 채 29.7 fps를 유지했습니다. best11의 프레임당 추론 시간은 같은 GPU에서 약 7 ms로 이전 모델(7~10 ms)과 비슷했고, 관제에 올린 상태의 fps는 아직 재지 않았습니다. 그때 Head는 strawberry·ball을 검출했고, 선반 카메라는 이 시점에 검출이 없었습니다(모델이 선반 정면 시점으로 학습됐는지 미확인). 다른 카메라와 같은 장치로 지정하면 선반 카메라만 열지 않고 오류를 표시합니다. 2026-11-02에 천장·선반 카메라를 함께 열어 두 카드 모두 640×480, 29.7 fps로 수신되는 것을 확인했습니다. Joint Camera(손목 카메라)는 별도 장치이며 `--arm` 모드에서만 엽니다.
+클래스는 strawberry, car, ball, pumpkin, apple, carrot, fruits(열매 송이), potato, watermelon, tissue(물티슈) 10종입니다. 2026-11-07에 천장 카메라 프레임 한 장으로 확인했을 때, best11은 위에서 본 Pinky 본체를 `car`(0.93)로 잘못 검출했고, 선반에 놓인 과일·장난감 10여 개는 하나도 검출하지 못했습니다(이전 모델은 2~3개를 낮은 신뢰도로 검출했고 일부는 틀림). 위에서 내려다본 사진으로 학습했는지는 확인하지 않았습니다. 천장 카메라 검출은 지금 표시용으로만 보고, 적재 개수 판단에 쓰지 않습니다. 선반 카메라는 이때 사람이 시야를 가려서 비교하지 못했습니다. 관제 가상환경에 `requirements-vision.txt`를 설치하면 ultralytics가 `opencv-python`을 함께 설치해 `cv2`가 OpenCV 5.0으로 바뀝니다. 이 저장소는 `opencv-python-headless<5`를 쓰므로, 설치 뒤 `opencv-python`을 지우고 `opencv-python-headless`를 다시 설치했습니다. 2026-11-02에 이전 모델로 이 PC(RTX 5080, PyTorch 2.15 CUDA 13.2)에서 두 카메라 모두 YOLO를 켠 채 29.7 fps를 유지했습니다. best11의 프레임당 추론 시간은 같은 GPU에서 약 7 ms로 이전 모델(7~10 ms)과 비슷했고, 관제에 올린 상태의 fps는 아직 재지 않았습니다. 그때 Head는 strawberry·ball을 검출했고, 선반 카메라는 이 시점에 검출이 없었습니다(모델이 선반 정면 시점으로 학습됐는지 미확인). 다른 카메라와 같은 장치로 지정하면 선반 카메라만 열지 않고 오류를 표시합니다. 2026-11-02에 천장·선반 카메라를 함께 열어 두 카드 모두 640×480, 29.7 fps로 수신되는 것을 확인했습니다. Joint Camera(손목 카메라)는 별도 장치이며 카메라 입력 경로를 설정하면 표시합니다.
 
 ## 카메라별 YOLO 검출 표시
 
@@ -253,7 +255,7 @@ Joint Camera에도 detector를 켜려면 별도 가중치 경로를 지정합니
 ```bash
 CONTROL_STATION_HEAD_YOLO_WEIGHTS=/경로/shelf-search.pt \
 CONTROL_STATION_JOINT_YOLO_WEIGHTS=/경로/wrist-refine.pt \
-./run-control-station.sh --arm
+./run-control-station.sh
 ```
 
 | 환경 변수 | 기본값 | 내용 |
@@ -262,7 +264,7 @@ CONTROL_STATION_JOINT_YOLO_WEIGHTS=/경로/wrist-refine.pt \
 | `CONTROL_STATION_HEAD_YOLO_WORLD_PROMPTS` | 없음 | 쉼표 구분 1–100개 text class prompt; 설정하면 같은 Ultralytics 의존성의 `YOLOWorld.set_classes()`를 쓰는 YOLO-World open-vocabulary 검출 모드를 선택 |
 | `CONTROL_STATION_HEAD_YOLO_CONF` | `0.25` | 모델이 반환할 최소 confidence threshold. 유한한 `0`–`1` 값이어야 하며, 범위를 벗어나거나 숫자가 아니면 detector 오류로 표시되고 프레임 스트림은 유지됩니다. 검출 confidence는 보정된 확률이 아닙니다. |
 | `CONTROL_STATION_HEAD_YOLO_DEVICE` | 자동 | `0`(첫 번째 GPU) 또는 `cpu` |
-| `CONTROL_STATION_JOINT_YOLO_WEIGHTS` | 없음 (꺼짐) | `--arm` 모드 Joint Camera 전용 YOLO 가중치 `.pt` 경로 |
+| `CONTROL_STATION_JOINT_YOLO_WEIGHTS` | 없음 (꺼짐) | Joint Camera 전용 YOLO 가중치 `.pt` 경로 |
 | `CONTROL_STATION_JOINT_YOLO_WORLD_PROMPTS` | 없음 | Joint Camera YOLO-World의 고정 prompt 목록; weights도 명시해야 모델이 로드됩니다 |
 | `CONTROL_STATION_JOINT_YOLO_CONF` | `0.25` | Joint Camera detector confidence threshold |
 | `CONTROL_STATION_JOINT_YOLO_DEVICE` | 자동 | Joint Camera detector device (`0` 또는 `cpu`) |

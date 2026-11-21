@@ -17,7 +17,7 @@ from control_station.store import PinkyUnavailable, TaskStore
 from test_api_routes import ApiTestCase
 
 POLICY = {
-    "policy_type": "act", "task": "Pick up Doll", "cameras": {"front": "OVERHEAD", "wrist": "GRIPPER"}, "max_run_s": 30,
+    "policy_type": "act", "task": "Pick up Doll", "cameras": {"front": "OVERHEAD", "wrist": "GRIPPER"},
 }
 
 

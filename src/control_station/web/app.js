@@ -250,7 +250,7 @@ function renderCameras(cameras, pinkyLoad = null) {
     ERROR: '오류', UNKNOWN: '확인 필요',
   };
   const freshnessLabel = { FRESH: '최신', STALE: '지연', UNKNOWN: '확인 필요' };
-  const cameraIds = cameras.map((camera) => camera.id).join(',');
+  const cameraIds = visibleCameras.map((camera) => camera.id).join(',');
   const availableClasses = [];
   const availableClassKeys = new Set();
   for (const camera of cameras.filter((item) => item.detector_state === 'ready')) {
@@ -268,7 +268,7 @@ function renderCameras(cameras, pinkyLoad = null) {
   }));
   if (cameraGrid.dataset.cameraIds !== cameraIds) {
     cameraGrid.dataset.cameraIds = cameraIds;
-    cameraGrid.innerHTML = cameras.map((camera) => `
+    cameraGrid.innerHTML = visibleCameras.map((camera) => `
       <article class="camera-card" data-camera-id="${escapeHtml(camera.id)}">
         <header class="camera-head"><h3>${escapeHtml(cameraName(camera))}</h3><span class="camera-position">${escapeHtml(camera.position)}</span></header>
         <div class="camera-preview" data-field="preview"><span>영상 스트림 미연결</span></div>
@@ -288,7 +288,7 @@ function renderCameras(cameras, pinkyLoad = null) {
         <p class="note" data-field="error"></p>
       </article>`).join('');
   }
-  cameras.forEach((camera) => {
+  visibleCameras.forEach((camera) => {
     const card = cameraGrid.querySelector(`[data-camera-id="${camera.id}"]`);
     if (!card) return;
     card.querySelector('[data-field="connection"]').textContent = connectionLabel[camera.connection_state] || camera.connection_state;
@@ -451,25 +451,15 @@ function showDirectBlock(block, enabled) {
   manualDirect.hidden = manualTeleop.hidden && manualPolicyRun.hidden;
 }
 
-function renderPolicyRun(policyRun) {
-  const labels = {
-    DISABLED: '비활성화', STOPPED: '중지', STARTING: '시작 중',
-    RUNNING: '정책 실행 중', STOPPING: '중단 중', LIMIT_REACHED: '액션 상한 도달',
-    INTERRUPTED: '중단 · 결과 미확정', ERROR: '오류',
-  };
-  const profiles = policyRun.policy_profiles || [];
-  const expectedOptions = profiles.map((profile) => profile.id).join('|');
-  const currentOptions = [...policyProfile.options].map((option) => option.value).join('|');
-  if (expectedOptions !== currentOptions) {
-    policyProfile.replaceChildren(...profiles.map((profile) => {
-      const option = document.createElement('option');
-      option.value = profile.id;
-      option.textContent = profile.name;
-      return option;
-    }));
-    if (profiles.some((profile) => profile.id === policyRun.current_profile_id)) {
-      policyProfile.value = policyRun.current_profile_id;
-    }
+function updateJointJogAvailability() {
+  const robotId = jointJogArm.value;
+  const available = connectedJointJogWorkers.has(robotId);
+  jointJogArmState.textContent = `${robotId === 'arm-01' ? '왼쪽' : '오른쪽'} 팔 ${available ? '워커 연결됨' : '워커 없음'}`;
+  jointJogPanel.querySelectorAll('[data-jog-joint]').forEach((button) => {
+    button.disabled = !jointJogEnable.checked || !available || jointJogRequestPending;
+  });
+  if (!available && !jointJogRequestPending) {
+    jointJogStatus.textContent = '선택한 팔의 실물 워커가 연결되지 않았습니다. runbook의 좌·우 워커 실행 절차를 먼저 진행하세요.';
   }
   policyProfile.disabled = !policyRun.enabled || profiles.length < 2 || policyRun.process_alive;
   policyRunState.textContent = labels[policyRun.state] || policyRun.state;
@@ -481,44 +471,53 @@ function renderPolicyRun(policyRun) {
   showDirectBlock(manualPolicyRun, policyRun.enabled || policyRun.process_alive);
 }
 
-async function sendArmAction(action) {
-  armStart.disabled = true;
-  armStop.disabled = true;
+async function sendJointJog(joint, direction, inputLabel) {
+  if (!jointJogEnable.checked || !connectedJointJogWorkers.has(jointJogArm.value) || jointJogRequestPending) return;
+  jointJogRequestPending = true;
+  jointJogStatus.textContent = `${jointJogArm.value === 'arm-01' ? '왼쪽' : '오른쪽'} 팔 · ${joint} ${direction === 'POSITIVE' ? '+' : '−'} 조그 요청 중`;
   try {
-    const response = await fetch(`/api/arm/${action}`, { method: 'POST' });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || '요청에 실패했습니다.');
-    renderArm(result.arm);
-  } catch (error) {
-    armDetail.textContent = error.message;
+    const command = await postArmCommand('/api/arm/commands', {
+      robot_id: jointJogArm.value,
+      operation: 'JOG_JOINT',
+      valid_for_s: 15,
+      target: { joint, direction },
+      source: { kind: 'OPERATOR_INPUT', note: `keyboard jog ${inputLabel}` },
+    });
+    jointJogStatus.textContent = command
+      ? `${command.command_id} 등록 · 워커가 한 단계 조그를 처리합니다.`
+      : armCommandMessage.textContent || '조그 요청을 등록하지 못했습니다.';
   } finally {
-    await refresh();
+    jointJogRequestPending = false;
   }
 }
 
-armStart.addEventListener('click', () => sendArmAction('start'));
-armStop.addEventListener('click', () => sendArmAction('stop'));
-
-async function sendPolicyRunAction(action) {
-  policyRunStart.disabled = true;
-  policyRunStop.disabled = true;
-  try {
-    const profileQuery = action === 'start'
-      ? `?profile_id=${encodeURIComponent(policyProfile.value)}`
-      : '';
-    const response = await fetch(`/api/arm/policy/${action}${profileQuery}`, { method: 'POST' });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || '정책 실행 요청에 실패했습니다.');
-    renderPolicyRun(result.policy_run);
-  } catch (error) {
-    policyRunDetail.textContent = error.message;
-  } finally {
-    await refresh();
+jointJogPanel.querySelectorAll('[data-jog-joint]').forEach((button) => {
+  button.addEventListener('click', () => sendJointJog(
+    button.dataset.jogJoint, button.dataset.jogDirection, button.textContent.trim(),
+  ));
+});
+jointJogEnable.addEventListener('change', () => {
+  updateJointJogAvailability();
+  if (jointJogEnable.checked && connectedJointJogWorkers.has(jointJogArm.value)) {
+    jointJogStatus.textContent = '조그가 켜졌습니다. 이 패널에 포커스한 뒤 키를 한 번씩 누르세요.';
+  } else if (!jointJogEnable.checked) {
+    jointJogStatus.textContent = '조그가 꺼져 있습니다.';
   }
-}
-
-policyRunStart.addEventListener('click', () => sendPolicyRunAction('start'));
-policyRunStop.addEventListener('click', () => sendPolicyRunAction('stop'));
+});
+jointJogArm.addEventListener('change', () => {
+  updateJointJogAvailability();
+});
+window.addEventListener('keydown', (event) => {
+  const target = event.target;
+  if (!jointJogEnable.checked || !document.hasFocus() || !jointJogPanel.contains(document.activeElement)
+      || event.repeat || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey
+      || (target instanceof HTMLInputElement && target.type !== 'checkbox')
+      || target instanceof HTMLSelectElement || target?.isContentEditable) return;
+  const binding = jointJogKeys.get(event.code);
+  if (!binding) return;
+  event.preventDefault();
+  sendJointJog(binding[0], binding[1], event.key);
+});
 
 const armCommandForm = document.querySelector('#armCommandForm');
 const armCommandMessage = document.querySelector('#armCommandMessage');
@@ -932,7 +931,138 @@ async function loadPolicyButtons() {
     policyButtons.innerHTML = `<p class="manual-empty">${escapeHtml(error.message)}</p>`;
   }
 }
-loadPolicyButtons();
+
+const sequenceChoices = document.querySelector('#sequenceChoices');
+const sequenceOrder = document.querySelector('#sequenceOrder');
+const startSequenceButton = document.querySelector('#startSequence');
+const sequenceStatus = document.querySelector('#sequenceStatus');
+const sequenceRunActions = document.querySelector('#sequenceRunActions');
+let sequencePolicies = [];
+let selectedSequencePolicyIds = [];
+let sequenceRunActive = false;
+loadSequencePolicies();
+
+function sequenceArmLabel(armId) {
+  if (armId === 'arm-02') return '오른팔';
+  if (armId === 'arm-01') return '왼팔';
+  return '선반 담당 팔';
+}
+
+function renderSequenceBuilder() {
+  if (!sequenceChoices || !sequenceOrder) return;
+  sequenceChoices.replaceChildren(...sequencePolicies.map((policy) => {
+    const label = document.createElement('label');
+    label.className = 'sequence-choice';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = selectedSequencePolicyIds.includes(policy.policy_id);
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) {
+        if (selectedSequencePolicyIds.length >= 4) {
+          checkbox.checked = false;
+          armCommandMessage.textContent = '한 번에 최대 4개 물체까지 선택할 수 있습니다.';
+          return;
+        }
+        selectedSequencePolicyIds.push(policy.policy_id);
+      } else {
+        selectedSequencePolicyIds = selectedSequencePolicyIds.filter((id) => id !== policy.policy_id);
+      }
+      renderSequenceBuilder();
+    });
+    const text = document.createElement('span');
+    text.textContent = `${policy.label} · ${sequenceArmLabel(policy.arm_id)}`;
+    label.append(checkbox, text);
+    return label;
+  }));
+  sequenceOrder.replaceChildren(...selectedSequencePolicyIds.map((policyId, index) => {
+    const policy = sequencePolicies.find((item) => item.policy_id === policyId);
+    if (!policy) return null;
+    const item = document.createElement('li');
+    const text = document.createElement('span');
+    text.textContent = `${policy.label} · ${sequenceArmLabel(policy.arm_id)}`;
+    item.append(text);
+    for (const [delta, symbol, description] of [[-1, '↑', '앞으로'], [1, '↓', '뒤로']]) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'secondary';
+      button.textContent = symbol;
+      button.title = `${policy.label} 순서 ${description}`;
+      button.setAttribute('aria-label', button.title);
+      button.disabled = index + delta < 0 || index + delta >= selectedSequencePolicyIds.length;
+      button.addEventListener('click', () => {
+        const next = [...selectedSequencePolicyIds];
+        [next[index], next[index + delta]] = [next[index + delta], next[index]];
+        selectedSequencePolicyIds = next;
+        renderSequenceBuilder();
+      });
+      item.append(button);
+    }
+    return item;
+  }).filter(Boolean));
+  if (startSequenceButton) startSequenceButton.disabled = sequenceRunActive || selectedSequencePolicyIds.length === 0;
+}
+
+startSequenceButton?.addEventListener('click', async () => {
+  const steps = selectedSequencePolicyIds
+    .map((id) => sequencePolicies.find((policy) => policy.policy_id === id))
+    .filter(Boolean);
+  if (!steps.length || sequenceRunActive) return;
+  const order = steps.map((policy, index) => `${index + 1}. ${policy.label} (${sequenceArmLabel(policy.arm_id)})`).join('\n');
+  if (!window.confirm(`다음 순서로 정책을 실행합니다.\n\n${order}\n\n각 단계에서 팔이 초기 자세로 돌아오면 다음 정책을 실행합니다. 물건 적재 여부는 확인하지 않습니다. 로봇 주변을 비웠는지 확인하세요.`)) return;
+  startSequenceButton.disabled = true;
+  try {
+    const response = await fetch('/api/arm/sequences', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ object_classes: steps.map((policy) => policy.object_class) }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(apiErrorMessage(payload, '연속 실행을 시작하지 못했습니다'));
+    armCommandMessage.textContent = `${steps.map((policy) => policy.label).join(' → ')} 시작 · ${payload.sequence.sequence_run_id}`;
+    await refreshSequences();
+    await refreshArmCommands();
+  } catch (error) {
+    armCommandMessage.textContent = error.message;
+  } finally {
+    renderSequenceBuilder();
+  }
+});
+
+async function refreshSequences() {
+  if (!sequenceStatus) return;
+  try {
+    const response = await fetch('/api/arm/sequences', { cache: 'no-store' });
+    const result = await response.json();
+    if (!response.ok) throw new Error(apiErrorMessage(result, '연속 실행 목록을 불러오지 못했습니다'));
+    const run = result.latest;
+    sequenceRunActive = Boolean(run && ['QUEUED', 'DISPATCHED', 'RUNNING', 'CANCELING'].includes(run.state));
+    if (startSequenceButton) startSequenceButton.disabled = sequenceRunActive || selectedSequencePolicyIds.length === 0;
+    sequenceRunActions?.replaceChildren();
+    if (run) {
+      const labels = run.steps.map((step, index) => {
+        const armId = step.robot_id || run.robot_id;
+        const icon = index < run.current_step ? '✓' : index === run.current_step && run.state === 'RUNNING' ? '▶' : '·';
+        return `${icon} ${step.label}(${armId === 'arm-02' ? '오른팔' : '왼팔'})`;
+      }).join(' → ');
+      const placementUnknown = run.results.some((item) => item.placement_confirmed !== true);
+      const runStateLabels = { QUEUED: '팔 워커 대기 중', DISPATCHED: '워커가 명령을 가져감', RUNNING: '정책 실행 중', CANCELING: '취소 대기', COMPLETED: '완료', NEEDS_INTERVENTION: '현장 확인 필요', CANCELED: '취소됨' };
+      sequenceStatus.textContent = `${run.sequence_id} · ${runStateLabels[run.state] || run.state} · ${labels}${placementUnknown && run.results.length ? ' · 적재 여부 미확인' : ''}`;
+      if (['QUEUED', 'DISPATCHED', 'RUNNING', 'CANCELING'].includes(run.state)) {
+        const cancel = document.createElement('button');
+        cancel.type = 'button'; cancel.className = 'secondary'; cancel.textContent = run.state === 'QUEUED' ? '대기 중인 연속 실행 취소' : '연속 실행 취소 요청';
+        cancel.addEventListener('click', async () => {
+          const response = await fetch(`/api/arm/sequences/${run.sequence_run_id}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+          const payload = await response.json();
+          if (!response.ok) armCommandMessage.textContent = apiErrorMessage(payload, '취소 요청 실패');
+          await refreshSequences();
+        });
+        sequenceRunActions?.append(cancel);
+      }
+    } else sequenceStatus.textContent = '실행 이력 없음';
+  } catch (error) {
+    sequenceStatus.textContent = error.message;
+  }
+}
+refreshSequences();
 
 // ---- 주문 표시 공통 (물체 이름, 핑키 배지) ----
 const pinkyNames = { 10: 'P0', 11: 'P1', 12: 'P2' };
@@ -1598,15 +1728,14 @@ taskForm.addEventListener('submit', async (event) => {
 
 async function refresh() {
   try {
-    const [healthResponse, robotsResponse, camerasResponse, armResponse] = await Promise.all([
+    const [healthResponse, robotsResponse, camerasResponse] = await Promise.all([
       fetch('/api/health', { cache: 'no-store' }),
       fetch('/api/robots', { cache: 'no-store' }),
       fetch('/api/cameras', { cache: 'no-store' }),
-      fetch('/api/arm/status', { cache: 'no-store' }),
     ]);
-    if (!healthResponse.ok || !robotsResponse.ok || !camerasResponse.ok || !armResponse.ok) throw new Error('API unavailable');
-    const [health, robotData, cameraData, armData] = await Promise.all([
-      healthResponse.json(), robotsResponse.json(), camerasResponse.json(), armResponse.json(),
+    if (!healthResponse.ok || !robotsResponse.ok || !camerasResponse.ok) throw new Error('API unavailable');
+    const [health, robotData, cameraData] = await Promise.all([
+      healthResponse.json(), robotsResponse.json(), camerasResponse.json(),
     ]);
     controlMode = health.mode;
     updateParkingConfig(health.parking);
@@ -2165,4 +2294,5 @@ window.setInterval(refreshIntake, 2000);
 window.setInterval(refreshIntakePreviews, 3000);
 window.setInterval(refreshTasks, 1000);
 window.setInterval(refreshArmCommands, 1000);
+window.setInterval(refreshSequences, 1000);
 window.setInterval(pollParkingLive, 500);

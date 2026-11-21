@@ -859,3 +859,12 @@ footer { margin-top: 40px; padding: 16px 4px 0; color: var(--text-3); font-size:
   .pinky-log li { grid-template-columns: 4.8em minmax(0, 1fr) auto; gap: 4px 8px; }
   .pinky-log-message { grid-column: 1 / -1; }
 }
+
+.sequence-builder { flex: 1 1 100%; display: grid; gap: 8px; padding: 12px; border: 1px solid #d9dde2; border-radius: 4px; background: #fff; }
+.sequence-builder h3, .sequence-builder p { margin: 0; }
+.sequence-choices { display: flex; flex-wrap: wrap; gap: 8px; }
+.sequence-choice { display: inline-flex; align-items: center; gap: 6px; padding: 8px 10px; border: 1px solid #cbd1d8; border-radius: 4px; background: #f8f9fa; }
+.sequence-order { display: grid; gap: 6px; margin: 0; padding-left: 28px; }
+.sequence-order li { display: flex; align-items: center; gap: 8px; }
+.sequence-order li span { flex: 1; }
+.sequence-order button { min-width: 2.25rem; padding: 4px 8px; }

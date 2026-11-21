@@ -242,7 +242,7 @@
       <div class="section-heading"><h2 id="cameras-title">카메라 관측</h2><span class="updated">실행 모드별</span></div>
       <datalist id="detectorClassOptions"></datalist>
       <div id="cameraGrid" class="camera-grid"><p class="loading">상태를 불러오는 중…</p></div>
-      <p class="note">설정된 카메라(탑 캠, 선반 캠, --arm 모드의 손목 캠) 입력을 관측합니다. 프리뷰와 검출 후보는 검토용이며 로봇 제어에 연결되지 않습니다.</p>
+      <p class="note">왼쪽·오른쪽 천장 카메라와 각 팔의 관절 카메라 영상 및 상태를 표시합니다. 입력 경로는 CONTROL_STATION_LEFT_CEILING_CAMERA, CONTROL_STATION_RIGHT_CEILING_CAMERA, CONTROL_STATION_LEFT_JOINT_CAMERA, CONTROL_STATION_RIGHT_JOINT_CAMERA로 설정합니다. 프리뷰와 검출 후보는 검토용이며 로봇 제어에 연결되지 않습니다.</p>
     </section>
     <section aria-labelledby="parking-title">
       <div class="section-heading"><h2 id="parking-title">Pinky 도착 확인</h2><span id="parkingUpdated" class="updated">판정 전</span></div>
@@ -379,7 +379,17 @@
       <div class="manual-legacy dev-only">
         <h3 class="manual-subtitle">칸으로 이동 <span class="chip">개발용 · ?dev=1</span></h3>
         <p class="manual-hint">좌표·칸 방식(2026-11-11에 정책 흐름으로 바꾸며 접음)에서 쓰던 명령이에요. 칸 앞 자세로만 움직이고 집기로 이어지지 않아요.</p>
-        <form id="cameraCommandForm" class="camera-command-form">
+        <div class="sequence-builder">
+          <h3>물체 순서 선택</h3>
+          <p class="note">체크한 순서대로 선택됩니다. 목록의 ↑ ↓ 버튼으로 순서를 바꿀 수 있습니다. 각 정책은 등록된 담당 팔이 실행합니다.</p>
+          <div id="sequenceChoices" class="sequence-choices" aria-label="연속 실행에 포함할 물체"></div>
+          <ol id="sequenceOrder" class="sequence-order" aria-label="정책 실행 순서"></ol>
+          <button id="startSequence" type="button" disabled>선택한 순서로 실행</button>
+      </div>
+      <p id="sequenceStatus" class="note" role="status">연속 실행 상태 확인 중</p>
+      <div id="sequenceRunActions" class="policy-buttons"></div>
+      <p class="note">연속 실행은 선택한 순서로 정책을 한 번씩 실행합니다. 각 팔이 실측 초기자세로 돌아오면 다음 단계로 넘어가며, 복귀를 확인하지 못하면 멈춥니다. 물건이 카트에 놓였는지는 확인하지 않습니다.</p>
+      <form id="cameraCommandForm" class="camera-command-form">
           <label>정면 캠에서 찾을 물건<input id="cameraCommandClass" name="object_class" list="detectorClassOptions" maxlength="80" required placeholder="예: ball"></label>
           <button type="submit" id="cameraSlotCommand">정면 캠으로 칸 찾아 이동</button>
         </form>
@@ -450,11 +460,6 @@
         <div><dt>GET</dt><dd><code>/api/robots</code> 로봇 통신 상태</dd></div>
         <div><dt>GET</dt><dd><code>/api/cameras</code> 카메라 통신 상태</dd></div>
         <div><dt>GET</dt><dd><code>/streams/{camera_id}.mjpg</code> 카메라 영상</dd></div>
-        <div><dt>GET</dt><dd><code>/api/arm/status</code> 팔 프로세스 상태</dd></div>
-        <div><dt>POST</dt><dd><code>/api/arm/start</code> 텔레오퍼레이션 시작</dd></div>
-        <div><dt>POST</dt><dd><code>/api/arm/stop</code> 종료 요청</dd></div>
-        <div><dt>POST</dt><dd><code>/api/arm/policy/start?profile_id=apple_pick</code> 선택한 학습 정책 1회 실행</dd></div>
-        <div><dt>POST</dt><dd><code>/api/arm/policy/stop</code> 학습 정책 중단 요청</dd></div>
         <div><dt>POST</dt><dd><code>/api/arm/commands</code> OMX 명령 1건을 큐에 등록 (팔당 미완료 명령 1건)</dd></div>
         <div><dt>GET</dt><dd><code>/api/arm/commands</code>, <code>/api/arm/commands/{command_id}</code> 명령 목록과 워커 접속 상태 / 명령 상세와 이벤트</dd></div>
         <div><dt>GET</dt><dd><code>/api/arm/{robot_id}/commands/next?worker_id=...&amp;wait_s=20</code> 워커 long-poll (200 명령 / 204 없음)</dd></div>

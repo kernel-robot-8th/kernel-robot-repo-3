@@ -58,7 +58,7 @@ class ActPolicyRegistry:
 
     def summary(self) -> list[dict[str, Any]]:
         return [
-            {key: policy[key] for key in ("policy_id", "object_class", "label", "aliases", "model", "max_run_s", "arm_id")}
+            {key: policy[key] for key in ("policy_id", "object_class", "label", "aliases", "model", "arm_id")}
             for policy in self.policies.values()
         ]
 
@@ -90,9 +90,6 @@ def _policy(raw: object) -> dict[str, Any]:
     arm_id = raw.get("arm_id")
     if arm_id is not None and (not isinstance(arm_id, str) or not _ARM_ID.fullmatch(arm_id)):
         raise ActPolicyError(f"{policy_id!r}.arm_id must look like arm-01 when given")
-    max_run_s = raw.get("max_run_s")
-    if isinstance(max_run_s, bool) or not isinstance(max_run_s, int) or not 5 <= max_run_s <= 300:
-        raise ActPolicyError(f"{policy_id!r}.max_run_s must be an integer from 5 to 300")
     return {
         "policy_id": policy_id,
         "object_class": _text(raw, "object_class"),
@@ -102,7 +99,6 @@ def _policy(raw: object) -> dict[str, Any]:
         "policy_type": "act",
         "task": _text(raw, "task", 200),
         "cameras": dict(cameras),
-        "max_run_s": max_run_s,
         "arm_id": arm_id,
     }
 
