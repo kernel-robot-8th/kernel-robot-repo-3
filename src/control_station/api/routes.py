@@ -65,6 +65,7 @@ GET_ROUTES: tuple[Route, ...] = (
     Route(_path("/api/catalog"), orders.get_catalog),
     Route(_path("/api/inventory"), orders.get_inventory),
     Route(_path("/api/orders"), orders.get_orders),
+    Route(_path("/api/dispatch"), orders.get_dispatch),
     Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "orders"] and parts[3] == "assignment",
           orders.get_assignment),
     Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "orders"] and parts[3] == "track",
@@ -110,6 +111,7 @@ POST_ROUTES: tuple[Route, ...] = (
           orders.post_inventory, "Cross-origin inventory request rejected"),
     # The order window is a page of this server, so a browser order is same-origin like the operator screen.
     Route(_path("/api/orders"), orders.post_order, "Cross-origin order request rejected"),
+    Route(_path("/api/dispatch"), orders.post_dispatch, "Cross-origin order-control request rejected"),
     Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "orders"] and parts[3] in {"start", "reject", "pickup-confirm", "arrival-confirm"},
           orders.post_order_action, "Cross-origin order-control request rejected", reads_body=False),
 )
