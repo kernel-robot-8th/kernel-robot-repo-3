@@ -243,6 +243,13 @@ body:not(.dev) .sim-tag, body:not(.dev) .simulated { display: none; }
 .verdict.excluded .pinky-badge { background: var(--fill); color: var(--text-3); }
 .pick-list { display: grid; gap: 4px; margin: 0; padding-left: 20px; font-size: 13px; }
 .pick-list small { margin-left: 6px; color: var(--text-3); font-size: 12px; }
+.dispatch-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: 0 0 12px; padding: 12px 16px; border-radius: var(--radius-card); background: var(--card); box-shadow: var(--shadow); font-size: 14px; }
+.dispatch-switch { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer; }
+.dispatch-switch input { width: 18px; height: 18px; accent-color: var(--blue); }
+.dispatch-state { color: var(--text-2); overflow-wrap: anywhere; }
+.dispatch-bar.on .dispatch-state { color: var(--blue-strong); }
+.dispatch-note { margin-top: 12px; padding: 10px 14px; border-radius: var(--radius-inner); background: var(--blue-soft); color: var(--blue-strong); font-size: 14px; overflow-wrap: anywhere; }
+.dispatch-note.skipped { background: var(--yellow-soft); color: var(--yellow-ink); }
 .intake-note { margin-top: 12px; padding: 12px 14px; border-radius: var(--radius-inner); background: var(--red-soft); color: var(--red-ink); font-size: 14px; overflow-wrap: anywhere; }
 .intake-note .verdict-list { margin-top: 8px; }
 

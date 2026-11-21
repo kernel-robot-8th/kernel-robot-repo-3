@@ -477,6 +477,7 @@ class DockEntry:
     Now the runner hands over once the Pinky is near that point, with how far it still has to turn to the dock's
     heading; the Pinky turns that much on the spot on its odometry, then drives in as before."""
     SPEED_MPS = .03
+    TAKEOVER_LEFT_M = .06          # farther beside the line than the straight run's steering can bring back
     SQUARE_DONE_RAD, SQUARE_TIME_S = .03, 20.        # its own turn to the dock's heading (context dock_turn_rad)
     CAPTURE_FACE_RAD, CAPTURE_FACED_RAD = .35, .12   # turn on the spot above the first, drive again below the second
     CAPTURE_TURN_LIMIT, CAPTURE_TURN_MIN = .5, .25   # rad/s on the spot; below the minimum the wheels only hum
@@ -546,6 +547,13 @@ class DockEntry:
         self.guide = guide
         if guide is not None:
             self.guided = True
+        if (not self.capture and self.state == 'entering' and guide is not None
+                and (abs(guide[2]) > self.CAPTURE_FACE_RAD or abs(guide[1]) > self.TAKEOVER_LEFT_M)):
+            # The camera sees it turned away or well beside the line (2026-11-21: 93 degrees off after Nav2 had
+            # "squared it up" on a map heading that was wrong). The straight run cannot mend that and used to stop
+            # as a fault; the camera takes it over instead, turning it on the spot first.
+            self.capture, self.squaring, self.facing = True, False, False
+            self.travel, self.last_odom, self.heard, self.started = 0., odom, now, now
         if self.capture:
             return self.captured(odom, now, guide)
         if self.state == 'entering' and self.squaring:

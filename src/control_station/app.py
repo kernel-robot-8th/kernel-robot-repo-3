@@ -29,6 +29,7 @@ from control_station.camera_adapters import (
 from control_station.load_check import mock_load_observer_from_env
 from control_station.mock_world import MockWorld
 from control_station.inventory import InventoryMonitor, InventoryOverrides
+from control_station.dispatcher import OrderDispatcher
 from control_station.order_desk import OrderDesk
 from control_station.order_flow import OrderDevices, OrderFlow
 from control_station.receiving_zones import ReceivingZoneError, load_receiving_zones
@@ -464,6 +465,16 @@ def main() -> None:
     )
     # A larger order runs as shipments; each later one gets its Pinky from the desk when it starts.
     server.order_flow.choose_shipment_pinky = server.order_desk.assign_next_shipment
+    # Automatic dispatch (dispatcher.py): waiting orders start oldest first, each as soon as the Pinky before it
+    # has been sent off. Off unless CONTROL_STATION_AUTO_DISPATCH=1 or the switch on the order screen.
+    # CONTROL_STATION_DISPATCH_WAIT_FOR_SPOT=1: the next order waits until that Pinky stands at the loading spot.
+    auto_dispatch = os.environ.get("CONTROL_STATION_AUTO_DISPATCH", "").strip() == "1"
+    server.order_dispatcher = OrderDispatcher(
+        server.order_desk, task_store, enabled=auto_dispatch,
+        wait_for_spot=os.environ.get("CONTROL_STATION_DISPATCH_WAIT_FOR_SPOT", "").strip() == "1",
+    ).start()
+    if auto_dispatch:
+        print("자동 출발이 켜져 있습니다: 기다리는 주문을 접수 순서대로 출발시킵니다", flush=True)
     if real_arm:
         print("작업 흐름의 팔 단계가 실제 팔 명령(PICK_WITH_POLICY)을 보냅니다", flush=True)
     mode_label = {"mock": "모의", "ros2": "ROS 2"}[mode]
@@ -473,6 +484,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nControl station stopped.", flush=True)
     finally:
+        server.order_dispatcher.close()
         server.server_close()
         if server.parking_tracker is not None:
             server.parking_tracker.close()

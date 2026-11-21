@@ -220,3 +220,23 @@ class SightingsTests(unittest.TestCase):
             seen.see([-.25+index*.002, .01, .0])
         self.assertEqual(seen.count, 3)
         self.assertEqual(seen.see(None), 0)
+
+
+class CameraTakeoverTests(unittest.TestCase):
+    def test_squared_up_on_a_wrong_heading_the_camera_takes_over_instead_of_a_fault(self):
+        # Seen 2026-11-21: after a redock through Nav2 the Pinky stood 93 degrees off; the guided straight run faulted.
+        entry, persist = DockEntry(), Path(tempfile.mkdtemp())/'latch.json'
+        x, y, yaw = -.22, -.016, math.radians(-93)
+        ox, oy, oyaw, now, step = 0., 0., 0., 0., .05
+        context = dict(token='t', segment='r', dock_entry_m=.25, dock_turn_rad=0.)
+        for _ in range(4000):
+            motion = entry.update(context, (ox, oy, oyaw), now, persist, (x, y, yaw))
+            if motion.state != 'docking_entry_entering':
+                break
+            x += motion.linear*math.cos(yaw)*step; y += motion.linear*math.sin(yaw)*step; yaw += motion.angular*step
+            ox += motion.linear*math.cos(oyaw)*step; oy += motion.linear*math.sin(oyaw)*step; oyaw += motion.angular*step
+            now += step
+        self.assertEqual((entry.state, entry.capture), ('complete', True))
+        self.assertLess(abs(x*1000), 8.)
+        self.assertLess(abs(y*1000), 5.)
+        self.assertLess(abs(math.degrees(yaw)), 4.)
