@@ -163,6 +163,35 @@ class PinkyLoadCounter:
                 "ignored_classes": sorted(self.ignore), "method": f"median of {self.frames} frames inside the tray region"}
 
 
+    def live(self) -> dict[str, Any]:
+        """What the operator screen shows as "탑재 목록": the tray counts in the newest frame, without waiting.
+
+        Display only: one frame can miss or double an object, so the order flow keeps using __call__ (median of
+        fresh frames). A missing region, camera, detector or fresh frame is reported as a state, never as zero.
+        """
+        base: dict[str, Any] = {"camera_id": self.camera_id, "region_px": self.region, "counts": {}, "items": [],
+                                "ignored_classes": sorted(self.ignore), "usable_for_robot_control": False}
+        if self.region is None:
+            return {**base, "state": "NO_TRAY_REGION",
+                    "message": "핑키 쟁반 영역을 모릅니다 (CONTROL_STATION_PINKY_TRAY_REGION 또는 주차 위치 등록 필요)"}
+        camera = next((item for item in self.snapshots() if item.id == self.camera_id), None)
+        if camera is None:
+            return {**base, "state": "NO_CAMERA", "message": f"카메라 {self.camera_id}가 설정되지 않았습니다"}
+        frame = camera.to_dict()
+        base["frame_sequence"] = int(frame.get("frame_sequence") or 0)
+        if frame.get("detector_state") != "ready":
+            return {**base, "state": "DETECTOR_NOT_READY",
+                    "message": f"물체 검출기가 준비되지 않았습니다 ({frame.get('detector_state') or '없음'})"}
+        if frame.get("stream_state") != "STREAMING" or frame.get("frame_freshness") != "FRESH":
+            return {**base, "state": "NOT_FRESH",
+                    "message": f"새 프레임이 없습니다 ({frame.get('stream_state')}, {frame.get('frame_freshness')})"}
+        items = [item for item in frame.get("detections") or []
+                 if self._on_tray(item) and str(item.get("class_name")) not in self.ignore]
+        counts = Counter(str(item.get("class_name")) for item in items)
+        return {**base, "state": "READY", "captured_at": _now(), "counts": dict(sorted(counts.items())),
+                "items": [{"class_name": item.get("class_name"), "confidence": item.get("confidence")} for item in items]}
+
+
 def load_counter_from_env(snapshots: Callable[[], list[Any]], repository_root: Path, spot_id: str | None) -> PinkyLoadCounter:
     camera_id = os.environ.get("CONTROL_STATION_LOAD_CAMERA", "head_camera").strip() or "head_camera"
     region = parse_region(os.environ.get("CONTROL_STATION_PINKY_TRAY_REGION", ""))

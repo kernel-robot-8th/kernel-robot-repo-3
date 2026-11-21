@@ -213,7 +213,14 @@ function renderRobots(robots) {
   }).join('');
 }
 
-function renderCameras(cameras) {
+// 탑재 목록: what the load camera sees on the Pinky tray in its newest frame (GET /api/cameras pinky_load).
+function pinkyLoadText(load) {
+  if (load.state !== 'READY') return load.message || load.state;
+  const entries = Object.entries(load.counts || {});
+  return entries.length ? entries.map(([name, count]) => `${objectLabel(name)} ${count}`).join(' · ') : '비어 있음';
+}
+
+function renderCameras(cameras, pinkyLoad = null) {
   const names = { HEAD: '천장 카메라', JOINT: '조인트 카메라', FRONT: '정면 카메라', SHELF: '선반 카메라 (정면)' };
   // The server names each camera by its job ("왼쪽 팔 탑 캠 (ACT 정책)"); the table above is for older servers.
   const cameraName = (camera) => camera.role || names[camera.position] || camera.id;
@@ -255,6 +262,7 @@ function renderCameras(cameras) {
           <div class="camera-detail"><span>프레임 ID / 해상도</span><strong data-field="frame-info"></strong></div>
           <div class="camera-detail"><span>프레임률</span><strong data-field="frame-rate"></strong></div>
           <div class="camera-detail" data-field="detections-row" hidden><span>YOLO 검출</span><strong data-field="detections"></strong></div>
+          <div class="camera-detail" data-field="pinky-load-row" hidden><span>탑재 목록 · 표시 전용</span><strong data-field="pinky-load"></strong></div>
           <div class="camera-detail" data-field="slot-zones-row" hidden><span>선반 칸 · 표시 전용</span><strong data-field="slot-zones"></strong></div>
           <div class="camera-detail" data-field="detector-provenance-row" hidden><span>YOLO 설정 / 모델</span><strong data-field="detector-provenance"></strong></div>
         </div>
@@ -282,6 +290,12 @@ function renderCameras(cameras) {
     card.querySelector('[data-field="detections"]').textContent = camera.detector_state === 'ready'
       ? (camera.detections.map((item) => `${item.class_name} ${Math.round(item.confidence * 100)}% @ (${item.center_px.join(', ')})`).join(', ') || '없음')
       : (detectorLabel[camera.detector_state] || '');
+    const loadRow = card.querySelector('[data-field="pinky-load-row"]');
+    loadRow.hidden = !pinkyLoad || pinkyLoad.camera_id !== camera.id;
+    if (!loadRow.hidden) {
+      loadRow.querySelector('[data-field="pinky-load"]').textContent = pinkyLoadText(pinkyLoad);
+      loadRow.dataset.state = pinkyLoad.state;
+    }
     const hasDetectorProvenance = Boolean(camera.detector_confidence_threshold != null
       || camera.detector_weights_sha256 || camera.detector_ultralytics_version
       || camera.detector_model_type);
@@ -1576,7 +1590,7 @@ async function refresh() {
     serverStatus.innerHTML = `<span class="dot"></span><span><strong>API 정상</strong>${modeWords}</span>`;
     renderOverviewSummary(health, robotData.robots, cameraData.cameras);
     renderRobots(robotData.robots);
-    renderCameras(cameraData.cameras);
+    renderCameras(cameraData.cameras, cameraData.pinky_load);
     renderArm(armData.arm);
     renderPolicyRun(armData.policy_run);
     updatedAt.textContent = `갱신 ${clockFormat.format(new Date())}`;

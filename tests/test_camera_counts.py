@@ -109,6 +109,38 @@ class CountTests(unittest.TestCase):
             PinkyLoadCounter(FakeCamera("head_camera", [frame]).snapshots, "head_camera", None)("10")
         self.assertEqual(raised.exception.error_code, "COUNT_TRAY_REGION_UNKNOWN")
 
+    def test_live_load_lists_the_newest_frame_on_the_tray_for_display(self) -> None:
+        frame = [
+            detection("apple", [400, 150, 420, 170]),   # on the tray
+            detection("carrot", [440, 200, 460, 220]),  # on the tray
+            detection("carrot", [100, 100, 120, 120]),  # on the shelf
+            detection("car", [400, 150, 480, 230]),     # the Pinky itself
+        ]
+        region = [380, 120, 500, 250]
+        live = PinkyLoadCounter(FakeCamera("head_camera", [frame]).snapshots, "head_camera", region).live()
+        self.assertEqual(live["state"], "READY")
+        self.assertEqual(live["counts"], {"apple": 1, "carrot": 1})
+        self.assertEqual([item["class_name"] for item in live["items"]], ["apple", "carrot"])
+        self.assertFalse(live["usable_for_robot_control"])
+        empty = PinkyLoadCounter(FakeCamera("head_camera", [[]]).snapshots, "head_camera", region).live()
+        self.assertEqual((empty["state"], empty["counts"]), ("READY", {}))
+
+    def test_live_load_reports_why_it_cannot_count_instead_of_zero(self) -> None:
+        region = [380, 120, 500, 250]
+        cases = [
+            (PinkyLoadCounter(FakeCamera("head_camera", [[]]).snapshots, "head_camera", None), "NO_TRAY_REGION"),
+            (PinkyLoadCounter(FakeCamera("other", [[]]).snapshots, "head_camera", region), "NO_CAMERA"),
+            (PinkyLoadCounter(FakeCamera("head_camera", [[]], detector="loading").snapshots, "head_camera", region),
+             "DETECTOR_NOT_READY"),
+            (PinkyLoadCounter(FakeCamera("head_camera", [[]], fresh=False).snapshots, "head_camera", region), "NOT_FRESH"),
+        ]
+        for counter, state in cases:
+            with self.subTest(state=state):
+                live = counter.live()
+                self.assertEqual(live["state"], state)
+                self.assertEqual(live["counts"], {})
+                self.assertTrue(live["message"])
+
     def test_tray_region_comes_from_the_registered_pinky_marker(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             spot = Path(directory) / "spot.json"
