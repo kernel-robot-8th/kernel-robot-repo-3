@@ -12,7 +12,11 @@ if TYPE_CHECKING:
 def get_cameras(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
     """카메라 목록"""
     zones = h.app.shelf_slot_zones
-    h._json(200, {"cameras": [zones.annotate(camera.to_dict()) for camera in h.app.camera_manager.snapshots()]})
+    payload: dict = {"cameras": [zones.annotate(camera.to_dict()) for camera in h.app.camera_manager.snapshots()]}
+    load_view = getattr(h.app, "load_view", None)
+    if load_view is not None:  # 탑재 목록: the newest frame's objects on the Pinky tray (display only)
+        payload["pinky_load"] = load_view.live()
+    h._json(200, payload)
 
 
 def get_stream(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:

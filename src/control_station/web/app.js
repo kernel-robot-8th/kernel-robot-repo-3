@@ -213,7 +213,32 @@ function renderRobots(robots) {
   }).join('');
 }
 
-function renderCameras(cameras) {
+// 탑재 목록: what the load camera sees on the Pinky tray in its newest frame (GET /api/cameras pinky_load).
+function pinkyArrivalText(load) {
+  const pinky = load.pinky;
+  if (load.state !== 'READY' || !pinky) return load.message || load.state;
+  if (pinky.state === 'ARRIVED') {
+    const seen = pinky.marker_visible ? `${pinky.offset_px}px` : `마커 가려짐 · 마지막 확인 ${clockFormat.format(new Date(pinky.last_seen_at))}`;
+    return `${pinky.name} 적재 자리 도착 ✓ (마커 ${pinky.marker_id}, ${seen})`;
+  }
+  if (pinky.state === 'NOT_AT_SPOT') return `${pinky.name} 도착 전 (마커 ${pinky.marker_id}, 자리에서 ${pinky.offset_px}px)`;
+  if (pinky.state === 'NOT_SEEN' && Object.keys(load.counts || {}).length) return '핑키 마커가 물건에 가려져 있습니다 (쟁반 위 물건은 아래에 표시)';
+  return pinky.message || pinky.state;
+}
+
+// HTML for the 적재 목록 row: a green chip per kind seen on the tray ("✓ 사과", "✓ 당근 2개").
+function pinkyLoadHtml(load) {
+  if (load.state !== 'READY') return escapeHtml(load.message || load.state);
+  // Only a marker seen away from the spot means the Pinky is not there; a hidden marker (cargo on it) still lists.
+  if (load.pinky && load.pinky.state === 'NOT_AT_SPOT') return '핑키 도착 대기';
+  const entries = Object.entries(load.counts || {});
+  if (!entries.length) return '비어 있음';
+  return entries.map(([name, count]) => (
+    `<span class="load-chip">✓ ${escapeHtml(objectLabel(name))}${count > 1 ? ` ${count}개` : ''}</span>`
+  )).join('');
+}
+
+function renderCameras(cameras, pinkyLoad = null) {
   const names = { HEAD: '천장 카메라', JOINT: '조인트 카메라', FRONT: '정면 카메라', SHELF: '선반 카메라 (정면)' };
   // The server names each camera by its job ("왼쪽 팔 탑 캠 (ACT 정책)"); the table above is for older servers.
   const cameraName = (camera) => camera.role || names[camera.position] || camera.id;
@@ -255,6 +280,8 @@ function renderCameras(cameras) {
           <div class="camera-detail"><span>프레임 ID / 해상도</span><strong data-field="frame-info"></strong></div>
           <div class="camera-detail"><span>프레임률</span><strong data-field="frame-rate"></strong></div>
           <div class="camera-detail" data-field="detections-row" hidden><span>YOLO 검출</span><strong data-field="detections"></strong></div>
+          <div class="camera-detail" data-field="pinky-arrival-row" hidden><span>핑키 도착 · 표시 전용</span><strong data-field="pinky-arrival"></strong></div>
+          <div class="camera-detail" data-field="pinky-load-row" hidden><span>적재 목록 · 표시 전용</span><strong data-field="pinky-load"></strong></div>
           <div class="camera-detail" data-field="slot-zones-row" hidden><span>선반 칸 · 표시 전용</span><strong data-field="slot-zones"></strong></div>
           <div class="camera-detail" data-field="detector-provenance-row" hidden><span>YOLO 설정 / 모델</span><strong data-field="detector-provenance"></strong></div>
         </div>
@@ -282,6 +309,18 @@ function renderCameras(cameras) {
     card.querySelector('[data-field="detections"]').textContent = camera.detector_state === 'ready'
       ? (camera.detections.map((item) => `${item.class_name} ${Math.round(item.confidence * 100)}% @ (${item.center_px.join(', ')})`).join(', ') || '없음')
       : (detectorLabel[camera.detector_state] || '');
+    const loadRow = card.querySelector('[data-field="pinky-load-row"]');
+    loadRow.hidden = !pinkyLoad || pinkyLoad.camera_id !== camera.id;
+    const arrivalRow = card.querySelector('[data-field="pinky-arrival-row"]');
+    arrivalRow.hidden = loadRow.hidden;
+    if (!arrivalRow.hidden) {
+      arrivalRow.querySelector('[data-field="pinky-arrival"]').textContent = pinkyArrivalText(pinkyLoad);
+      arrivalRow.dataset.state = pinkyLoad.pinky?.state || pinkyLoad.state;
+    }
+    if (!loadRow.hidden) {
+      loadRow.querySelector('[data-field="pinky-load"]').innerHTML = pinkyLoadHtml(pinkyLoad);
+      loadRow.dataset.state = pinkyLoad.state;
+    }
     const hasDetectorProvenance = Boolean(camera.detector_confidence_threshold != null
       || camera.detector_weights_sha256 || camera.detector_ultralytics_version
       || camera.detector_model_type);
@@ -1576,7 +1615,7 @@ async function refresh() {
     serverStatus.innerHTML = `<span class="dot"></span><span><strong>API 정상</strong>${modeWords}</span>`;
     renderOverviewSummary(health, robotData.robots, cameraData.cameras);
     renderRobots(robotData.robots);
-    renderCameras(cameraData.cameras);
+    renderCameras(cameraData.cameras, cameraData.pinky_load);
     renderArm(armData.arm);
     renderPolicyRun(armData.policy_run);
     updatedAt.textContent = `갱신 ${clockFormat.format(new Date())}`;

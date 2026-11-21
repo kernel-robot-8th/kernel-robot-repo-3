@@ -64,6 +64,7 @@ class _CameraFeed:
     detector: "_YoloDetector | None" = None
     robot_id: str | None = "arm-01"
     detections: list[dict[str, object]] = field(default_factory=list)
+    markers: list[dict[str, object]] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
     thread: threading.Thread | None = None
     # Set while another program (the arm worker running a LeRobot policy) needs this V4L2 device: the capture
@@ -133,6 +134,22 @@ class _YoloDetector:
         else:
             self.confidence = confidence
             self.confidence_threshold = confidence
+        # Per-class thresholds, e.g. {PREFIX}_CLASS_CONF=tissue=0.15 (the white wet-tissue pack scores low on the
+        # white Pinky tray). Classes not named keep {PREFIX}_CONF.
+        self.class_confidence: dict[str, float] = {}
+        for part in os.environ.get(f"{env_prefix}_CLASS_CONF", "").split(","):
+            name, _, value = part.partition("=")
+            if not name.strip():
+                continue
+            try:
+                threshold = float(value)
+            except ValueError:
+                threshold = math.nan
+            if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+                self.state = "error"
+                self.error_message = f"{env_prefix}_CLASS_CONF는 '클래스=0~1 숫자'를 쉼표로 이어 써야 합니다 ({part.strip()})"
+                break
+            self.class_confidence[name.strip()] = threshold
 
     def load(self) -> bool:
         if self.state == "error":
@@ -185,13 +202,18 @@ class _YoloDetector:
         return True
 
     def _predict(self, image):  # type: ignore[no-untyped-def]
+        floor = min([self.confidence, *self.class_confidence.values()])
         result = self._model.predict(
             source=image,
-            conf=self.confidence,
+            conf=floor,
             imgsz=self.inference_image_size,
             device=self.device,
             verbose=False,
         )[0]
+        if self.class_confidence:  # keep each box only above its own class threshold (drawn boxes too)
+            keep = [index for index, box in enumerate(result.boxes)
+                    if float(box.conf.item()) >= self.class_confidence.get(result.names[int(box.cls.item())], self.confidence)]
+            result = result[keep]
         height, width = result.orig_shape
         detections = [
             {
@@ -769,10 +791,37 @@ class OpenCVArmCameraStreamManager:
                     )
                 self._closed.wait(2)
 
+    def _find_markers(self, feed: _CameraFeed, image, cv2) -> list[dict[str, object]]:  # type: ignore[no-untyped-def]
+        """ArUco markers (DICT_4X4_50) in the cameras named by CONTROL_STATION_MARKER_CAMERAS (default head_camera).
+
+        Display only: the "핑키 도착" line on the load camera card. The parking judgment stays with the C++ node.
+        """
+        cameras = {name.strip() for name in os.environ.get("CONTROL_STATION_MARKER_CAMERAS", "head_camera").split(",")}
+        if feed.camera_id not in cameras or not hasattr(cv2, "aruco"):
+            return []
+        detector = getattr(self, "_aruco_detector", None)
+        if detector is None:
+            detector = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50),
+                                               cv2.aruco.DetectorParameters())
+            self._aruco_detector = detector
+        try:
+            corners, ids, _ = detector.detectMarkers(image)
+        except Exception:  # a marker failure must not stop the stream
+            return []
+        if ids is None:
+            return []
+        found = []
+        for marker_corners, marker_id in zip(corners, ids.ravel().tolist()):
+            points = marker_corners.reshape(4, 2)
+            found.append({"id": int(marker_id), "center_px": [round(float(v), 1) for v in points.mean(axis=0)],
+                          "corners_px": [[round(float(x), 1), round(float(y), 1)] for x, y in points]})
+        return found
+
     def _publish_frame(self, feed: _CameraFeed, image, captured_at: str, captured_monotonic: float, cv2) -> None:  # type: ignore[no-untyped-def]
         """Run YOLO on one BGR frame and make it the feed's latest JPEG."""
         frame_sha256 = hashlib.sha256(image.tobytes(order="C")).hexdigest()
         detections: list[dict[str, object]] = []
+        markers = self._find_markers(feed, image, cv2)  # on the raw frame, before YOLO draws on it
         detector = feed.detector
         if detector is not None and detector.state == "ready":
             try:
@@ -801,6 +850,7 @@ class OpenCVArmCameraStreamManager:
                 )
             feed.frame = jpeg.tobytes()
             feed.detections = detections
+            feed.markers = markers
             feed.last_frame_at = captured_at
             feed.last_frame_monotonic = captured_monotonic
             feed.frame_times.append(captured_monotonic)
@@ -936,6 +986,7 @@ class OpenCVArmCameraStreamManager:
                             feed.detector.ultralytics_version if feed.detector else None
                         ),
                         detections=list(feed.detections),
+                        markers=list(feed.markers),
                         stream_url=(
                             f"/streams/{feed.camera_id}.mjpg"
                             if configured and feed.frame is not None

@@ -364,6 +364,10 @@ def main() -> None:
     # CONTROL_STATION_ORDER_COUNTS=camera (shelf cams with slot zones, the top cam inside the Pinky tray), else the
     # mock world. With camera counts but mock picks, a person has to move each object during the pick step.
     shelf_stock, pinky_load = world.shelf_stock, world.pinky_load
+    # "탑재 목록" on the load camera card: what the camera sees on the Pinky tray right now. Display only, in every
+    # mode; it never feeds the order flow (that uses the counters below).
+    server.load_view = load_counter_from_env(server.camera_manager.snapshots, Path(__file__).resolve().parents[2],
+                                             parking_spot_id)
     if os.environ.get("CONTROL_STATION_ORDER_COUNTS", "").strip() == "camera":
         shelf_stock = ShelfStockCounter(server.camera_manager.snapshots, server.shelf_slot_zones, slot_map, server.arms)
         load_counter = load_counter_from_env(server.camera_manager.snapshots, Path(__file__).resolve().parents[2],
