@@ -35,6 +35,7 @@ class FakeCamera:
 
     def __init__(self, camera_id: str, frames: list[list[dict]], *, fresh: bool = True, detector: str = "ready") -> None:
         self.camera_id, self.frames, self.fresh, self.detector, self.sequence = camera_id, frames, fresh, detector, 0
+        self.markers: list[dict] = []  # ArUco markers the next frames carry (set by a test)
 
     def snapshots(self) -> list[CameraSnapshot]:
         self.sequence += 1
@@ -44,7 +45,7 @@ class FakeCamera:
             stream_state=CameraStreamState.STREAMING,
             frame_freshness=FrameFreshness.FRESH if self.fresh else FrameFreshness.STALE,
             frame_sequence=self.sequence, frame_width=640, frame_height=480, detector_state=self.detector,
-            detections=detections,
+            detections=detections, markers=list(self.markers),
         )]
 
 
@@ -125,6 +126,25 @@ class CountTests(unittest.TestCase):
         empty = PinkyLoadCounter(FakeCamera("head_camera", [[]]).snapshots, "head_camera", region).live()
         self.assertEqual((empty["state"], empty["counts"]), ("READY", {}))
 
+    def test_live_load_keeps_an_object_that_flickers_below_the_threshold_in_some_frames(self) -> None:
+        melon = detection("watermelon", [410, 170, 430, 190])
+        camera = FakeCamera("head_camera", [[melon], [], [], [melon], []])  # seen in 2 of 5 frames
+        live = PinkyLoadCounter(camera.snapshots, "head_camera", [366, 108, 522, 264]).live()
+        self.assertEqual(live["counts"], {"watermelon": 1})
+        self.assertEqual(len(live["frames"]), 5)
+
+    def test_live_load_holds_an_object_for_a_few_seconds_after_it_was_last_seen(self) -> None:
+        melon = detection("watermelon", [410, 170, 430, 190])
+        camera = FakeCamera("head_camera", [[melon]] * 5 + [[]])  # seen, then gone in every later frame
+        counter = PinkyLoadCounter(camera.snapshots, "head_camera", [366, 108, 522, 264])
+        counter.live_hold_s = 5
+        self.assertEqual(counter.live()["counts"], {"watermelon": 1})
+        held = counter.live()
+        self.assertEqual(held["counts"], {"watermelon": 1})  # not seen now, still within 5 s
+        self.assertFalse(held["items"][0]["seen_now"])
+        with mock.patch("control_station.camera_counts.time.monotonic", return_value=time.monotonic() + 6):
+            self.assertEqual(counter.live()["counts"], {})  # 6 s later it is dropped
+
     def test_live_load_reports_why_it_cannot_count_instead_of_zero(self) -> None:
         region = [380, 120, 500, 250]
         cases = [
@@ -140,6 +160,27 @@ class CountTests(unittest.TestCase):
                 self.assertEqual(live["state"], state)
                 self.assertEqual(live["counts"], {})
                 self.assertTrue(live["message"])
+
+    def test_live_load_marks_the_pinky_arrived_by_its_marker_and_keeps_it_while_cargo_hides_it(self) -> None:
+        camera = FakeCamera("head_camera", [[detection("apple", [430, 170, 450, 190])]])
+        arrivals = [{"pinky_id": "12", "name": "P2", "marker_id": 21, "spot_id": "pinky_dock_1", "spot_center_px": [444.0, 185.0]}]
+        counter = PinkyLoadCounter(camera.snapshots, "head_camera", [366, 108, 522, 264], arrivals=arrivals, arrival_tolerance_px=30)
+        self.assertEqual(counter.live()["pinky"]["state"], "NOT_SEEN")
+        camera.markers = [{"id": 21, "center_px": [520.0, 185.0]}]  # 76 px from the spot
+        far = counter.live()["pinky"]
+        self.assertEqual((far["state"], far["offset_px"], far["name"]), ("NOT_AT_SPOT", 76.0, "P2"))
+        camera.markers = [{"id": 21, "center_px": [450.0, 193.0]}]
+        arrived = counter.live()
+        self.assertEqual((arrived["pinky"]["state"], arrived["pinky"]["offset_px"]), ("ARRIVED", 10.0))
+        self.assertEqual(arrived["counts"], {"apple": 1})
+        camera.markers = []  # cargo covers the marker: still arrived
+        hidden = counter.live()["pinky"]
+        self.assertEqual((hidden["state"], hidden["marker_visible"]), ("ARRIVED", False))
+        camera.markers = [{"id": 21, "center_px": [444.0, 400.0]}, {"id": 1, "center_px": [359.0, 430.0]}]  # driving off
+        self.assertEqual(counter.live()["pinky"]["state"], "NOT_AT_SPOT")
+        camera.markers = []
+        self.assertEqual(counter.live()["pinky"]["state"], "NOT_SEEN")
+        self.assertEqual(PinkyLoadCounter(camera.snapshots, "head_camera", [0, 0, 1, 1]).live()["pinky"]["state"], "NOT_CONFIGURED")
 
     def test_tray_region_comes_from_the_registered_pinky_marker(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

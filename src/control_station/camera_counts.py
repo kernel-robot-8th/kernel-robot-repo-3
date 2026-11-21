@@ -130,9 +130,19 @@ class PinkyLoadCounter:
     """Order flow `pinky_load(pinky_id)`: {class: count} on the Pinky tray at the loading spot."""
 
     def __init__(self, snapshots: Callable[[], list[Any]], camera_id: str, region: list[float] | None,
-                 ignore: frozenset[str] = frozenset({"car"}), frames: int = 5, max_wait_s: float = 4.0) -> None:
+                 ignore: frozenset[str] = frozenset({"car"}), frames: int = 5, max_wait_s: float = 4.0,
+                 arrivals: list[dict[str, Any]] | None = None, arrival_tolerance_px: float = 30.0) -> None:
         self.snapshots, self.camera_id, self.region, self.ignore = snapshots, camera_id, region, ignore
         self.frames, self.max_wait_s = frames, max_wait_s
+        # "핑키 도착" on the card: each Pinky's marker and where it stands at the loading spot (registered, px).
+        self.arrivals, self.arrival_tolerance_px = arrivals or [], arrival_tolerance_px
+        self._arrived: dict[str, Any] | None = None  # kept while cargo hides the marker
+        self.live_frames, self.live_wait_s = 5, 1.0  # the screen's 적재 목록 looks at up to 5 fresh frames, 1 s at most
+        try:  # how long the screen keeps an object after it was last seen
+            self.live_hold_s = float(os.environ.get("CONTROL_STATION_LOAD_HOLD_S", "5"))
+        except ValueError:
+            self.live_hold_s = 5.0
+        self._held: dict[str, dict[str, Any]] = {}
 
     def region_or_none(self) -> str:
         return "영역 " + ",".join(f"{value:.0f}" for value in self.region) if self.region else "영역 없음"
@@ -185,11 +195,75 @@ class PinkyLoadCounter:
         if frame.get("stream_state") != "STREAMING" or frame.get("frame_freshness") != "FRESH":
             return {**base, "state": "NOT_FRESH",
                     "message": f"새 프레임이 없습니다 ({frame.get('stream_state')}, {frame.get('frame_freshness')})"}
-        items = [item for item in frame.get("detections") or []
-                 if self._on_tray(item) and str(item.get("class_name")) not in self.ignore]
-        counts = Counter(str(item.get("class_name")) for item in items)
-        return {**base, "state": "READY", "captured_at": _now(), "counts": dict(sorted(counts.items())),
-                "items": [{"class_name": item.get("class_name"), "confidence": item.get("confidence")} for item in items]}
+        # A low-scoring object flickers around the threshold frame to frame, so look at the last few fresh frames:
+        # a kind counts when any of them saw it (the most seen at once), and a marker when any of them saw it.
+        try:
+            frames = sample_frames(self.snapshots, self.camera_id, self.live_frames, self.live_wait_s)
+        except CountUnavailable:
+            frames = [frame]
+        counts: Counter = Counter()
+        best: dict[str, dict[str, Any]] = {}
+        markers: dict[int, dict[str, Any]] = {}
+        for sample in frames:
+            seen = [item for item in sample.get("detections") or []
+                    if self._on_tray(item) and str(item.get("class_name")) not in self.ignore]
+            counts |= Counter(str(item.get("class_name")) for item in seen)
+            for item in seen:
+                name = str(item.get("class_name"))
+                if name not in best or float(item.get("confidence") or 0) > float(best[name].get("confidence") or 0):
+                    best[name] = item
+            for marker in sample.get("markers") or []:
+                if isinstance(marker, dict) and "id" in marker:
+                    markers[int(marker["id"])] = marker  # the newest frame that saw it wins
+        base["frame_sequence"] = int(frames[-1].get("frame_sequence") or 0)
+        pinky = self._arrival(list(markers.values()))
+        # Keep each kind on the screen for live_hold_s after it was last seen, so an object that drops below the
+        # threshold for a few seconds does not blink off; a Pinky seen leaving the spot clears the list at once.
+        now = time.monotonic()
+        if pinky.get("state") == "NOT_AT_SPOT":
+            self._held.clear()
+        for name, count in counts.items():
+            self._held[name] = {"count": count, "confidence": best[name].get("confidence"), "seen": now}
+        for name in [name for name, held in self._held.items() if now - held["seen"] > self.live_hold_s]:
+            del self._held[name]
+        return {**base, "state": "READY", "captured_at": _now(),
+                "counts": {name: held["count"] for name, held in sorted(self._held.items())},
+                "items": [{"class_name": name, "confidence": held["confidence"], "seen_now": name in counts,
+                           "seen_s_ago": round(now - held["seen"], 1)} for name, held in sorted(self._held.items())],
+                "frames": [int(sample.get("frame_sequence") or 0) for sample in frames],
+                "hold_s": self.live_hold_s, "pinky": pinky}
+
+    def _arrival(self, markers: list[dict[str, Any]]) -> dict[str, Any]:
+        """Is a Pinky's marker at its registered loading-spot position? Display only, in pixels.
+
+        ARRIVED when the marker center is within arrival_tolerance_px of the registered center; NOT_AT_SPOT when it
+        is seen farther away; while cargo hides the marker the last ARRIVED stays (marker_visible False).
+        """
+        if not self.arrivals:
+            return {"state": "NOT_CONFIGURED", "message": "핑키 마커·적재 자리 등록이 없습니다"}
+        seen = {int(marker["id"]): marker for marker in markers if isinstance(marker, dict) and "id" in marker}
+        nearest: dict[str, Any] | None = None
+        for entry in self.arrivals:
+            marker = seen.get(entry["marker_id"])
+            if marker is None:
+                continue
+            (x, y), (rx, ry) = marker["center_px"], entry["spot_center_px"]
+            offset = round(((x - rx) ** 2 + (y - ry) ** 2) ** 0.5, 1)
+            result = {**{key: entry[key] for key in ("pinky_id", "name", "marker_id", "spot_id")},
+                      "offset_px": offset, "marker_visible": True, "last_seen_at": _now()}
+            if offset <= self.arrival_tolerance_px:
+                self._arrived = {**result, "state": "ARRIVED"}
+                return self._arrived
+            if nearest is None or offset < nearest["offset_px"]:
+                nearest = {**result, "state": "NOT_AT_SPOT"}
+        if nearest is not None:
+            if self._arrived and self._arrived["pinky_id"] == nearest["pinky_id"]:
+                self._arrived = None  # the same Pinky was seen leaving the spot
+            if self._arrived is None:
+                return nearest
+        if self._arrived is not None:
+            return {**self._arrived, "marker_visible": False}
+        return {"state": "NOT_SEEN", "message": "핑키 마커가 보이지 않습니다"}
 
 
 def load_counter_from_env(snapshots: Callable[[], list[Any]], repository_root: Path, spot_id: str | None) -> PinkyLoadCounter:
@@ -204,4 +278,31 @@ def load_counter_from_env(snapshots: Callable[[], list[Any]], repository_root: P
     ignore = frozenset(
         name.strip() for name in os.environ.get("CONTROL_STATION_LOAD_IGNORE_CLASSES", "car").split(",") if name.strip()
     )
-    return PinkyLoadCounter(snapshots, camera_id, region, ignore)
+    try:
+        tolerance = float(os.environ.get("CONTROL_STATION_ARRIVAL_TOLERANCE_PX", "30"))
+    except ValueError:
+        tolerance = 30.0
+    return PinkyLoadCounter(snapshots, camera_id, region, ignore, arrivals=pinky_arrivals(repository_root),
+                            arrival_tolerance_px=tolerance)
+
+
+def pinky_arrivals(repository_root: Path) -> list[dict[str, Any]]:
+    """Each Pinky with a registered loading spot: its marker id and the marker center registered there (px)."""
+    from control_station.pinky_markers import PinkyMarkerError, load_pinky_markers
+    from control_station.store import PINKY_NAMES
+
+    try:
+        markers = load_pinky_markers(spots_dir=repository_root / ".control-station" / "parking-spots")
+    except (PinkyMarkerError, OSError):
+        return []
+    arrivals = []
+    for pinky_id, marker in markers.items():
+        spot_path = repository_root / ".control-station" / "parking-spots" / f"{marker.spot_id}.json"
+        try:
+            corners = json.loads(spot_path.read_text(encoding="utf-8"))["reference_corners_px"]
+            center = [sum(point[0] for point in corners) / 4, sum(point[1] for point in corners) / 4]
+        except (OSError, ValueError, KeyError, TypeError, IndexError, ZeroDivisionError):
+            continue
+        arrivals.append({"pinky_id": pinky_id, "name": PINKY_NAMES.get(pinky_id, pinky_id), "marker_id": marker.marker_id,
+                         "spot_id": marker.spot_id, "spot_center_px": [round(center[0], 1), round(center[1], 1)]})
+    return arrivals

@@ -80,6 +80,8 @@ class CameraSnapshot:
     detector_device: str | None = None
     detector_ultralytics_version: str | None = None
     detections: list[dict[str, object]] = field(default_factory=list)
+    # ArUco markers (DICT_4X4_50) seen in the raw frame before YOLO drew on it: {id, center_px, corners_px}.
+    markers: list[dict[str, object]] = field(default_factory=list)
     # What the camera is for, in words (e.g. "왼쪽 팔 탑 캠 (ACT 정책)"), which program opens the device
     # (control_station / policy / ros_node), and a two-word state for people: "연결됨" or "연결 전".
     role: str | None = None
