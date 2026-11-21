@@ -1,7 +1,9 @@
 import argparse  # 라벨링할 폴더를 지정한다.
+import json  # 화면 대비·밝기 설정을 저장한다.
 from pathlib import Path  # 사진과 라벨 파일의 경로를 다룬다.
 
 import cv2  # 사진을 띄우고 마우스로 박스를 그리는 OpenCV를 가져온다.
+import numpy as np  # 보정 막대 창의 안내 띠를 만든다.
 
 
 classes = {0: 'strawberry', 1: 'car', 2: 'ball', 3: 'pumpkin', 4: 'apple', 5: 'carrot', 6: 'fruits',
@@ -20,6 +22,20 @@ args = parser.parse_args()  # 옵션을 읽는다.
 images = sorted(args.folder.glob('*.jpg'))[args.start - 1::args.every]  # 고른 사진을 이름순으로 가져온다.
 if not images:  # 경로가 잘못되었거나 사진이 없는지 확인한다.
     raise SystemExit(f'사진이 없습니다: {args.folder}')
+
+view_path = Path(__file__).resolve().parent / 'multi_label_view.json'  # 화면 보정값을 다음 실행에도 쓰려고 저장한다.
+view_setting = {'contrast': 1.0, 'brightness': 0}  # 화면에만 적용하는 보정값이다. 사진 파일과 라벨은 바꾸지 않는다.
+try:
+    view_setting.update(json.loads(view_path.read_text(encoding='utf-8')))
+except (FileNotFoundError, ValueError):  # 처음 실행했거나 파일이 깨졌으면 기본값을 쓴다.
+    pass
+saved_setting = dict(view_setting)  # Space로 저장한 값이다. 이 값과 다르면 아직 저장하지 않은 상태다.
+
+
+def adjust(image):  # 밝은 사진에서 윤곽이 보이도록 중간 밝기를 기준으로 대비와 밝기를 바꾼다.
+    contrast, brightness = view_setting['contrast'], view_setting['brightness']
+    return cv2.convertScaleAbs(image, alpha=contrast, beta=128 * (1 - contrast) + brightness)
+
 
 boxes = []  # 현재 사진의 확정한 박스다. (클래스, x1, y1, x2, y2) 표시 화면 기준 좌표다.
 drag = {'start': None, 'end': None, 'pending': None, 'selected': None}  # 그리는 박스, 종류를 기다리는 박스, 고른 박스다.
@@ -80,13 +96,41 @@ done = sum(p.with_suffix('.txt').exists() for p in images)  # 이미 라벨이 �
 print(f'라벨링 대상: {len(images)}장 / 완료: {done}장 / {images[index].name}부터 시작')
 print('드래그: 박스 / 숫자·- 키: 종류 / 클릭: 박스 고르기(숫자·- 키: 종류 변경, D: 삭제) / Z: 마지막 박스 삭제')
 print('N·Enter: 저장 후 다음 / P: 저장 후 이전 / X: 저장 없이 다음 / Q: 종료')
-cv2.namedWindow('label')  # 라벨링 창을 만든다.
+print('창 위 막대 또는 [ ]: 화면 대비 / , .: 화면 밝기 / /: 보정 초기화 / Space: 보정값 저장 '
+      '(화면에만 적용, 저장한 값은 모든 사진과 다음 실행에 유지)')
+# Qt 창의 확대·이동 기능이 드래그를 가로채지 않도록 기본 모드로 띄운다.
+cv2.namedWindow('label', cv2.WINDOW_AUTOSIZE | cv2.WINDOW_GUI_NORMAL)  # 라벨링 창을 만든다.
 cv2.setMouseCallback('label', on_mouse)  # 마우스 동작을 박스 그리기에 연결한다.
+# 보정 막대는 라벨링 창에 붙이면 드래그를 방해하므로 작은 창에 따로 둔다.
+BAR_WINDOW, CONTRAST_BAR, BRIGHTNESS_BAR = 'view adjust', 'contrast x0.1', 'brightness (150=0)'
+cv2.namedWindow(BAR_WINDOW, cv2.WINDOW_AUTOSIZE | cv2.WINDOW_GUI_NORMAL)
+cv2.createTrackbar(CONTRAST_BAR, BAR_WINDOW, int(round(view_setting['contrast'] * 10)), 30, lambda value: None)
+cv2.setTrackbarMin(CONTRAST_BAR, BAR_WINDOW, 5)  # 대비는 0.5~3.0이다.
+cv2.createTrackbar(BRIGHTNESS_BAR, BAR_WINDOW, view_setting['brightness'] + 150, 300, lambda value: None)  # -150~+150이다.
+bar_panel = np.zeros((20, 420, 3), np.uint8)  # 안내 글자를 쓸 검은 띠다.
+cv2.putText(bar_panel, 'drag bars, then Space in label window to save', (6, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+            (255, 255, 255), 1)
+cv2.imshow(BAR_WINDOW, bar_panel)  # 막대 창에 짧은 안내를 띄운다.
+
+
+def sync_bars():  # 키로 바꾼 값을 막대 위치에도 반영한다.
+    cv2.setTrackbarPos(CONTRAST_BAR, BAR_WINDOW, int(round(view_setting['contrast'] * 10)))
+    cv2.setTrackbarPos(BRIGHTNESS_BAR, BAR_WINDOW, view_setting['brightness'] + 150)
+
+
 preview = load(images[index])  # 첫 사진을 불러온다.
 entries = [f'{key}:{classes[cls]}' for key, cls in menu.items()]  # 키 안내 글자다.
 
 while True:  # 종료하거나 마지막 사진을 끝낼 때까지 반복한다.
-    view = cv2.copyMakeBorder(preview, 0, 90, 0, 0, cv2.BORDER_CONSTANT, value=(40, 40, 40))  # 아래에 안내 줄을 붙인다.
+    view_setting['contrast'] = max(cv2.getTrackbarPos(CONTRAST_BAR, BAR_WINDOW), 5) / 10  # 막대로 바꾼 값을 읽는다.
+    view_setting['brightness'] = cv2.getTrackbarPos(BRIGHTNESS_BAR, BAR_WINDOW) - 150
+    view = cv2.copyMakeBorder(adjust(preview), 0, 90, 0, 0, cv2.BORDER_CONSTANT, value=(40, 40, 40))  # 아래에 안내 줄을 붙인다.
+    unsaved = view_setting != saved_setting  # 저장하지 않은 보정값이면 노란색으로 알린다.
+    setting_text = (f"contrast {view_setting['contrast']:.1f}  brightness {view_setting['brightness']:+d}  "
+                    + ('(Space: save)' if unsaved else '(saved)'))
+    cv2.rectangle(view, (0, 0), (380, 22), (0, 0, 0), -1)  # 보정값을 사진 위 왼쪽에 표시한다.
+    cv2.putText(view, setting_text, (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                (0, 255, 255) if unsaved else (255, 255, 255), 1)
     for cls, x1, y1, x2, y2 in boxes:  # 확정한 박스를 클래스 색으로 그린다.
         cv2.rectangle(view, (x1, y1), (x2, y2), colors[cls], 2)
         cv2.putText(view, classes[cls], (x1, max(y1 - 5, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, colors[cls], 2)
@@ -115,6 +159,21 @@ while True:  # 종료하거나 마지막 사진을 끝낼 때까지 반복한다
     if key in (ord('q'), ord('Q'), 27):  # Q나 Esc를 누르면 현재 사진을 저장하지 않고 끝낸다.
         print('종료합니다. 현재 사진은 저장하지 않았습니다.')
         break
+    if chr(key) in '[],./ ':  # 화면 보정은 언제든 바꿀 수 있다. Space를 눌러야 저장된다.
+        if chr(key) == ' ':  # 지금 값을 저장해 이후 모든 사진과 다음 실행에 쓴다.
+            view_path.write_text(json.dumps(view_setting), encoding='utf-8')
+            saved_setting = dict(view_setting)
+            print(f"보정값 저장: 대비 {view_setting['contrast']:.1f}, 밝기 {view_setting['brightness']:+d}")
+        elif chr(key) == '/':
+            view_setting.update(contrast=1.0, brightness=0)
+        elif chr(key) in '[]':
+            step = 0.1 if chr(key) == ']' else -0.1
+            view_setting['contrast'] = round(min(max(view_setting['contrast'] + step, 0.5), 3.0), 1)
+        else:
+            step = 10 if chr(key) == '.' else -10
+            view_setting['brightness'] = int(min(max(view_setting['brightness'] + step, -150), 150))
+        sync_bars()
+        continue
     if drag['pending']:  # 종류를 기다리는 동안에는 종류와 취소만 받는다.
         if chr(key) in menu:  # 키로 박스 종류를 정한다.
             boxes.append((menu[chr(key)], *drag['pending']))

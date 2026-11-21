@@ -11,6 +11,7 @@ if __name__ == '__main__':  # 파일을 직접 실행할 때만 테스트한다.
     parser.add_argument('--weights', type=Path)  # 학습 모델 경로를 받는다.
     parser.add_argument('--source', type=Path, default=folder / 'dataset_strawberry_car_ball_expanded' / 'images' / 'val')
     parser.add_argument('--no-show', action='store_true')  # 화면 없이 결과를 저장한다.
+    parser.add_argument('--conf', type=float, default=0.25)  # 이 신뢰도 이상만 표시한다. 예: --conf 0.8
     args = parser.parse_args()  # 터미널 옵션을 읽는다.
     candidates = list((folder / 'runs').glob('strawberry_car_ball*/weights/best.pt'))  # 학습 결과 전체다.
     weights = args.weights or (max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None)
@@ -34,7 +35,7 @@ if __name__ == '__main__':  # 파일을 직접 실행할 때만 테스트한다.
     for image_path in images:  # 사진을 한 장씩 인식한다.
         result = model.predict(  # 모델에 사진을 넣어 딸기·자동차·공을 검출한다.
             source=str(image_path),  # 이번에 인식할 사진 경로를 지정한다.
-            conf=0.25,  # 신뢰도가 25% 이상인 검출만 표시한다.
+            conf=args.conf,  # 이 신뢰도 이상인 검출만 표시한다.
             imgsz=640,  # 학습 때와 같은 입력 크기를 사용한다.
             device=0,  # 첫 번째 NVIDIA GPU로 인식한다.
             verbose=False,  # 라이브러리의 사진별 기본 로그를 생략한다.

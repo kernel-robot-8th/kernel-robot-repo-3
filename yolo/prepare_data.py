@@ -21,6 +21,7 @@ sources = [  # 원본 폴더와 정답 클래스 번호를 연결한다.
     ('yolo/potato2_frames', 7),  # 감자 사진이다. potato_frames(호박)와 다른 클래스다.
     ('yolo/watermelon_frames', 8),  # 수박 사진이다.
     ('yolo/tissue_frames', 9),  # 물티슈 사진이다.
+    ('yolo/pepper_frames', 11),  # 고추 사진이다. 고추만 단독으로 찍었다.
     ('yolo/apple_frames', 4),  # 사과 사진이다.
     ('yolo/carrot_frames', 5),  # 당근 사진이다.
     ('yolo/fruits_frames', 6),  # 열매 송이 사진이다. 송이 전체를 박스 하나로 잡았다.
@@ -29,6 +30,7 @@ sources = [  # 원본 폴더와 정답 클래스 번호를 연결한다.
     ('yolo/cam_front_frames', None),  # camera_capture.py로 찍은 앞 카메라 사진이다. 여러 클래스가 섞여 있다.
     ('yolo/cam_top_frames', None),  # camera_capture.py로 찍은 위 카메라 사진이다. 여러 클래스가 섞여 있다.
     ('yolo/cam_focus_frames', None),  # crop_focus.py로 카메라 사진에서 당근·고추 주변을 잘라 만든 사진이다.
+    ('yolo/background_frames', None),  # make_background.py로 물체를 지운 배경 사진이다. 빈 라벨(물체 없음)이다.
 ]  # 폴더별로 학습과 검증을 따로 나눈다. None은 여러 클래스가 섞인 폴더다.
 class_ids = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'}  # 라벨에 허용하는 클래스 번호다. 아래 data.yaml의 names와 같게 둔다.
 unknown = set(args.only or []) - {Path(folder_path).name for folder_path, _ in sources}  # 오타 확인이다.
@@ -52,7 +54,7 @@ for folder_path, class_id in sources:  # 원본 폴더를 하나씩 확인한다
         if not label_path.is_file():  # 누락된 라벨을 확인한다.
             raise SystemExit(f'라벨이 없습니다: {image_path}')  # 누락 시 중단한다.
         rows = label_path.read_text().splitlines()  # 박스별 정답을 읽는다.
-        if not rows:  # 작업이 끝나지 않은 빈 라벨을 확인한다.
+        if not rows and folder_name != 'background_frames':  # 작업이 끝나지 않은 빈 라벨을 확인한다. 배경 사진만 빈 라벨이 정상이다.
             raise SystemExit(f'빈 라벨입니다: {label_path}')  # 빈 라벨을 알린다.
         for row in rows:  # 클래스와 정규화 좌표를 검사한다.
             values = row.split()  # 다섯 항목으로 나눈다.

@@ -6,3 +6,5 @@ test_results/
 camera_frames/
 # 학습 기록 사진은 training-log.docx 안에 들어 있으므로 따로 올리지 않는다.
 docs/images/
+# multi_label.py의 화면 보정값이다. 사람마다 다르게 쓴다.
+multi_label_view.json
