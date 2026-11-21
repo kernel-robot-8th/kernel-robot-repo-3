@@ -6,10 +6,8 @@ started separately on this PC) and LeRobot's RobotClient, which this module runs
 An ACT policy has no "done" signal and never stops by itself, so this module decides when to stop:
 
 - RETURNED_TO_REST: measured joint positions first left the recorded home pose (more than `depart_ticks` on some
-  joint), then stayed within `rest_ticks` of it for `settle_s` while measurements remained fresh. The training
-  episodes start and end at rest.
-- NEVER_DEPARTED: `max_run_s` passed without the arm leaving rest.
-- TIMEOUT: `max_run_s` passed while the arm was away from rest.
+  joint), then three distinct consecutive measurements were within `rest_ticks` of it. The training episodes
+  start and end at rest.
 - CANCELED: the operator canceled the command.
 
 Arriving back at rest says nothing about whether the object was grasped or placed.
@@ -61,40 +59,33 @@ class RestWatcher:
     home: dict[str, int]
     depart_ticks: int = 300
     rest_ticks: int = 150
-    settle_s: float = 1.5
-    max_sample_age_s: float = 0.2
     departed: bool = False
-    rest_since: float | None = None
+    rest_samples: int = 0
+    last_sample_id: int = 0
     farthest: int = 0
 
     def distance(self, ticks: dict[str, int]) -> int:
         return max_home_error_ticks(self.home, ticks)
 
-    def update(
-        self, now: float, ticks: dict[str, int], *, observed_at: float | None = None
-    ) -> bool:
-        """True after fresh measured positions return within tolerance and stay there for settle_s."""
-        if observed_at is not None and (
-            observed_at > now or now - observed_at > self.max_sample_age_s
-        ):
-            self.rest_since = None
+    def update(self, sample_id: int, ticks: dict[str, int]) -> bool:
+        """True after departure and three distinct measured positions return within home tolerance."""
+        if sample_id <= self.last_sample_id or any(name not in ticks for name in ARM_JOINTS):
             return False
+        self.last_sample_id = sample_id
         distance = self.distance(ticks)
         self.farthest = max(self.farthest, distance)
         if distance > self.depart_ticks:
             self.departed = True
         if not self.departed or distance > self.rest_ticks:
-            self.rest_since = None
+            self.rest_samples = 0
             return False
-        if self.rest_since is None:
-            self.rest_since = now
-        return now - self.rest_since >= self.settle_s
+        self.rest_samples += 1
+        return self.rest_samples >= 3
 
 
 @dataclass
 class PolicyRunResult:
-    stop_reason: str  # RETURNED_TO_REST, NEVER_DEPARTED, TIMEOUT, CANCELED, ERROR
-    run_s: float
+    stop_reason: str  # RETURNED_TO_REST, CANCELED, ERROR
     farthest_from_home_ticks: int
     last_commanded_ticks: dict[str, int] = field(default_factory=dict)
     last_observed_ticks: dict[str, int] = field(default_factory=dict)
@@ -163,13 +154,13 @@ def run_policy(
     cameras: dict[str, str],
     server_address: str,
     watcher: RestWatcher,
-    max_run_s: float,
     cancel_requested: Callable[[], bool],
     started: Callable[[], None] | None = None,
     max_step_ticks: int | None = None,
     policy_device: str = "cuda",
 ) -> PolicyRunResult:
-    """Run the policy until the watcher, the time limit or a cancel stops it. Torque stays on afterwards.
+    """Run until measured departure followed by return-to-home, operator cancel, or an execution error.
+    Torque stays on afterwards.
 
     `max_step_ticks` limits how far any joint goal may be from the present position at each step (1/30 s); used
     when the policy starts from a pose it was not trained from and its first actions may jump."""
@@ -183,7 +174,7 @@ def run_policy(
 
         last_commanded_ticks: dict[str, int] = {}
         last_observed_ticks: dict[str, int] = {}
-        last_observed_at: float | None = None
+        observation_sequence = 0
         actions_sent = 0
 
         def control_loop_action(self, verbose: bool = False):
@@ -196,7 +187,7 @@ def run_policy(
             self.last_commanded_ticks = ticks
             measured = self.robot.bus.sync_read("Present_Position", normalize=False)
             self.last_observed_ticks = {name: int(measured[name]) for name in ARM_JOINTS}
-            self.last_observed_at = time.monotonic()
+            self.observation_sequence += 1
             self.actions_sent += 1
             return action
 
@@ -224,12 +215,11 @@ def run_policy(
         aggregate_fn_name="weighted_average",
         debug_visualize_queue_size=False,
     )
-    begin = time.monotonic()
     client = WatchedClient(config)  # connects the arm: LeRobot briefly turns torque off while it configures
     receiver = control = None
     try:
         if not client.start():
-            return PolicyRunResult("ERROR", time.monotonic() - begin, 0, message="policy server refused the client")
+            return PolicyRunResult("ERROR", 0, message="policy server refused the client")
         receiver = threading.Thread(target=client.receive_actions, daemon=True)
         control = threading.Thread(target=client.control_loop, args=(policy["task"],), daemon=True)
         receiver.start()
@@ -243,12 +233,8 @@ def run_policy(
             now = time.monotonic()
             if not control.is_alive():
                 reason, message = "ERROR", "control loop stopped"
-            elif client.last_observed_ticks and watcher.update(
-                now, client.last_observed_ticks, observed_at=client.last_observed_at
-            ):
+            elif client.last_observed_ticks and watcher.update(client.observation_sequence, client.last_observed_ticks):
                 reason = "RETURNED_TO_REST"
-            elif now - begin > max_run_s:
-                reason = "TIMEOUT" if watcher.departed else "NEVER_DEPARTED"
             elif now >= next_cancel_check:
                 next_cancel_check = now + 1.0
                 try:
@@ -264,7 +250,6 @@ def run_policy(
         }
         return PolicyRunResult(
             reason,
-            now - begin,
             watcher.farthest,
             last_commanded_ticks=dict(client.last_commanded_ticks),
             last_observed_ticks=final_observed,

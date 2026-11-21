@@ -367,6 +367,7 @@ class OpenCVArmCameraStreamManager:
     def __init__(
         self,
         joint_enabled: bool = True,
+        head_enabled: bool = True,
         policy_active: Callable[[], bool] | None = None,
         *,
         policy_devices: Callable[[], list[str]] | None = None,
@@ -391,7 +392,11 @@ class OpenCVArmCameraStreamManager:
         head_device = os.environ.get(
             "CONTROL_STATION_HEAD_CAMERA",
             "/dev/v4l/by-id/usb-Jieli_Technology_USB_Composite_Device-video-index0",
-        ).strip()
+        ).strip() if head_enabled else ""
+        left_ceiling_device = os.environ.get("CONTROL_STATION_LEFT_CEILING_CAMERA", "").strip()
+        right_ceiling_device = os.environ.get("CONTROL_STATION_RIGHT_CEILING_CAMERA", "").strip()
+        left_joint_device = os.environ.get("CONTROL_STATION_LEFT_JOINT_CAMERA", "").strip()
+        right_joint_device = os.environ.get("CONTROL_STATION_RIGHT_JOINT_CAMERA", "").strip()
         front_device = os.environ.get(
             "CONTROL_STATION_FRONT_CAMERA",
             os.environ.get("CONTROL_STATION_POLICY_FRONT_CAMERA", ""),
@@ -407,12 +412,26 @@ class OpenCVArmCameraStreamManager:
             role="그리퍼 캠 (예전 단일 팔 설정)", setting="CONTROL_STATION_JOINT_CAMERA",
         )
         if not joint_enabled:
-            joint_feed.error_message = "팔 카메라 스트림을 사용하려면 --arm 모드로 실행하세요"
+            joint_feed.error_message = (
+                "관절 카메라를 보려면 CONTROL_STATION_JOINT_CAMERA를 설정하세요"
+            )
         elif joint_weights or joint_prompts:
             joint_feed.detector = _YoloDetector(
                 joint_weights, "CONTROL_STATION_JOINT_YOLO"
             )
         self._feeds = {
+            "left_ceiling_camera": _CameraFeed(
+                "left_ceiling_camera", "LEFT_CEILING", left_ceiling_device or None, robot_id=None
+            ),
+            "right_ceiling_camera": _CameraFeed(
+                "right_ceiling_camera", "RIGHT_CEILING", right_ceiling_device or None, robot_id=None
+            ),
+            "left_joint_camera": _CameraFeed(
+                "left_joint_camera", "LEFT_JOINT", left_joint_device or None, robot_id="arm-01"
+            ),
+            "right_joint_camera": _CameraFeed(
+                "right_joint_camera", "RIGHT_JOINT", right_joint_device or None, robot_id="arm-02"
+            ),
             "head_camera": _CameraFeed(
                 "head_camera",
                 "HEAD",

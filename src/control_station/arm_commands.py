@@ -38,10 +38,12 @@ ARM_ROBOT_IDS = frozenset({"arm-01", "arm-02"})
 # RETURN_HOME moves it back to the worker's recorded "home" pose; it names no object, slot or place.
 # PICK_WITH_POLICY runs the LeRobot ACT policy trained for the named object (config/omx-act-policies.json). The
 # policy finds the object in its own camera images; a camera-observed slot, if any, is evidence, not an input.
-# No operation takes coordinates: the team dropped camera-to-arm coordinate targeting (2026-11-11).
-OPERATIONS = frozenset({"MOVE_TO_SLOT", "RETURN_HOME", "PICK_WITH_POLICY"})
+# JOG_JOINT is an operator-only, fixed-size relative nudge; it does not accept raw target ticks or coordinates.
+OPERATIONS = frozenset({"MOVE_TO_SLOT", "RETURN_HOME", "PICK_WITH_POLICY", "JOG_JOINT"})
 # Operations whose SUCCEEDED means "measured joints reached the planned pose" rather than grasp and place.
-POSE_OPERATIONS = frozenset({"MOVE_TO_SLOT", "RETURN_HOME"})
+POSE_OPERATIONS = frozenset({"MOVE_TO_SLOT", "RETURN_HOME", "JOG_JOINT"})
+JOG_JOINTS = frozenset({"shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"})
+JOG_DIRECTIONS = frozenset({"POSITIVE", "NEGATIVE"})
 SOURCE_KINDS = frozenset({"OPERATOR_INPUT"})
 # Phase names follow the control station's pick-and-place step types so progress can map onto steps.
 PHASES = frozenset(
@@ -222,8 +224,8 @@ def validate_command_request(
 ) -> tuple[str, str, int, dict[str, Any]]:
     """Return (robot_id, operation, valid_for_s, frozen request) or raise ArmCommandError.
 
-    MOVE_TO_SLOT names one shelf slot (`pick_slot_id`), RETURN_HOME names nothing, and PICK_WITH_POLICY names
-    an object with a trained policy.
+    MOVE_TO_SLOT names one shelf slot (`pick_slot_id`), RETURN_HOME names nothing, PICK_WITH_POLICY names
+    an object with a trained policy, and JOG_JOINT names one joint and a direction (never raw ticks).
     """
     allowed = {"robot_id", "operation", "valid_for_s", "target", "place", "source"}
     if set(payload) - allowed:
@@ -238,6 +240,24 @@ def validate_command_request(
     if isinstance(valid_for_s, bool) or not isinstance(valid_for_s, int) or not 5 <= valid_for_s <= 600:
         raise ArmCommandError("valid_for_s must be an integer from 5 to 600")
     source = _operator_source(payload.get("source"))
+    if operation == "JOG_JOINT":
+        if not 5 <= valid_for_s <= 30:
+            raise ArmCommandError("JOG_JOINT valid_for_s must be an integer from 5 to 30")
+        target = payload.get("target")
+        if not isinstance(target, Mapping) or set(target) != {"joint", "direction"}:
+            raise ArmCommandError("JOG_JOINT target must contain exactly joint and direction")
+        joint, direction = target.get("joint"), target.get("direction")
+        if not isinstance(joint, str) or joint not in JOG_JOINTS:
+            raise ArmCommandError("target.joint must name one of the five arm joints")
+        if not isinstance(direction, str) or direction not in JOG_DIRECTIONS:
+            raise ArmCommandError("target.direction must be POSITIVE or NEGATIVE")
+        if payload.get("place") is not None:
+            raise ArmCommandError("JOG_JOINT takes no place")
+        return str(robot_id), str(operation), valid_for_s, {
+            "target": {"joint": joint, "direction": direction},
+            "place": None,
+            "source": source,
+        }
     if operation == "RETURN_HOME":
         if payload.get("target") not in (None, {}) or payload.get("place") is not None:
             raise ArmCommandError("RETURN_HOME takes no target or place; the worker uses its recorded home pose")

@@ -36,7 +36,6 @@ from mock_omx_worker import Refused, Worker, request_json
 from omx_policy_pick import PolicyPick, add_policy_arguments, arm_env, finish_policy_arguments
 from omx_slot_motion import ARM_JOINTS, Outcome, Rejected, SlotMotion, add_motion_arguments
 
-
 class LeRobotOmxWorker(Worker):
     banner = "실물 OMX 워커 {worker_id}: {url} 대기 (명령을 받으면 팔이 움직입니다)"
 
@@ -52,6 +51,15 @@ class LeRobotOmxWorker(Worker):
     # ---- worker hooks ----
     def check(self, command: dict) -> str | None:
         target = command["target"]
+        if command["operation"] == "JOG_JOINT":
+            try:
+                self.goal = self.motion.plan_jog(
+                    target.get("joint"), target.get("direction"),
+                    datetime.fromisoformat(command["valid_until"]), step_ticks=MANUAL_JOG_STEP_TICKS,
+                )
+            except Rejected as rejected:
+                return rejected.reason_code
+            return None
         if command["operation"] not in ("MOVE_TO_SLOT", "RETURN_HOME"):
             return "NOT_IMPLEMENTED"
         # RETURN_HOME replays this worker's own "home" pose, which belongs to the slot map it was loaded with.
@@ -129,6 +137,8 @@ class LeRobotOmxWorker(Worker):
         target = command["target"]
         if command["operation"] == "RETURN_HOME":
             where = "home"
+        elif command["operation"] == "JOG_JOINT":
+            where = f"{target.get('joint')} {target.get('direction')}"
         else:
             where = f"{target.get('pick_slot_id')} ({target.get('slot_label')})"
         print(f"[{command['command_id']}] {command['operation']} {where}", flush=True)
@@ -164,7 +174,13 @@ class LeRobotOmxWorker(Worker):
             status, body = request_json("GET", f"{self.base}/api/arm/commands/{command['command_id']}", timeout=5)
             return status == 200 and body["command"]["cancel_requested"]
 
-        result = self.motion.move(goal, cancel_requested)
+        is_jog = command["operation"] == "JOG_JOINT"
+        result = self.motion.move(
+            goal,
+            cancel_requested,
+            profile_velocity=2 if is_jog else None,
+            profile_acceleration=1 if is_jog else None,
+        )
         details = {"goal_ticks": goal, "final_ticks": result.final_ticks, "max_error_ticks": result.max_error_ticks}
         if result.outcome == "SUCCEEDED":
             self.send(command, "SUCCEEDED", result, pose_reached=True, details=details)

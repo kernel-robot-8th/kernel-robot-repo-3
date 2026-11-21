@@ -154,6 +154,23 @@ class OrderRequestRecord(Base):
     created_at: Mapped[str] = mapped_column(String, nullable=False)
 
 
+class ArmSequenceRecord(Base):
+    """Persistent operator-requested sequence of policy picks."""
+
+    __tablename__ = "arm_sequences"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    sequence_key: Mapped[str] = mapped_column(String, nullable=False)
+    robot_id: Mapped[str] = mapped_column(String, nullable=False)
+    state: Mapped[str] = mapped_column(String, nullable=False)
+    current_step: Mapped[int] = mapped_column(nullable=False)
+    steps: Mapped[list[dict[str, object]]] = mapped_column("steps_json", JSON, nullable=False)
+    results: Mapped[list[dict[str, object]]] = mapped_column("results_json", JSON, nullable=False)
+    current_command_id: Mapped[str | None] = mapped_column(String)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[str] = mapped_column(String, nullable=False)
+
+
 def database_path() -> Path:
     default_path = Path(__file__).resolve().parents[2] / "data" / "tasks.sqlite3"
     return Path(os.environ.get("CONTROL_STATION_DB", default_path))

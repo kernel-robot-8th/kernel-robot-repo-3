@@ -31,7 +31,7 @@ class ActPolicyRegistryTests(unittest.TestCase):
     def test_worker_and_control_station_see_the_same_registry_version(self) -> None:
         version, policies = load_policies(DEFAULT_POLICIES)
         self.assertEqual(version, load_act_policies().version)
-        self.assertEqual(sorted(policies), ["apple_act_20261109", "carrot_act_v2", "tissue_act_v1", "watermelon_act_20261108"])
+        self.assertEqual(sorted(policies), ["apple_act_20261119", "carrot_act_v7", "tissue_act_v1", "watermelon_act_20261119"])
 
     def test_bad_registries_are_refused(self) -> None:
         good = json.loads(DEFAULT_POLICIES.read_text(encoding="utf-8"))
@@ -57,24 +57,25 @@ class PolicyRunTests(unittest.TestCase):
         # The tissue dataset was recorded with the two camera names swapped.
         self.assertEqual(policy_cameras(policies["tissue_act_v1"], devices), {"front": "/dev/gripper", "wrist": "/dev/overhead"})
 
-    def test_stops_only_after_leaving_rest_and_settling_back(self) -> None:
-        watcher = RestWatcher(HOME, depart_ticks=300, rest_ticks=150, settle_s=1.5)
-        self.assertFalse(watcher.update(0.0, HOME))  # still at rest before the policy moved: not done
-        self.assertFalse(watcher.update(5.0, HOME))
-        self.assertFalse(watcher.update(6.0, shifted(shoulder_lift=900)))  # reaching for the shelf
+    def test_stops_only_after_leaving_rest_and_three_home_samples(self) -> None:
+        watcher = RestWatcher(HOME, depart_ticks=300, rest_ticks=150)
+        self.assertFalse(watcher.update(1, HOME))  # still at rest before the policy moved: not done
+        self.assertFalse(watcher.update(2, HOME))
+        self.assertFalse(watcher.update(3, shifted(shoulder_lift=900)))  # reaching for the shelf
         self.assertTrue(watcher.departed)
-        self.assertFalse(watcher.update(10.0, shifted(shoulder_lift=100)))  # back near rest, settling starts
-        self.assertFalse(watcher.update(11.0, shifted(shoulder_lift=60)))
-        self.assertTrue(watcher.update(11.6, shifted(wrist_roll=74)))
+        self.assertFalse(watcher.update(4, shifted(shoulder_lift=100)))  # first home sample
+        self.assertFalse(watcher.update(5, shifted(shoulder_lift=60)))
+        self.assertTrue(watcher.update(6, shifted(wrist_roll=74)))
         self.assertEqual(watcher.farthest, 900)
 
-    def test_leaving_rest_again_restarts_the_settle_time(self) -> None:
-        watcher = RestWatcher(HOME, depart_ticks=300, rest_ticks=150, settle_s=1.5)
-        watcher.update(0.0, shifted(elbow_flex=-600))
-        watcher.update(1.0, HOME)
-        watcher.update(2.0, shifted(elbow_flex=-200))  # passing by rest on the way back out
-        self.assertFalse(watcher.update(2.6, HOME))
-        self.assertTrue(watcher.update(4.2, HOME))
+    def test_leaving_home_tolerance_resets_consecutive_sample_count(self) -> None:
+        watcher = RestWatcher(HOME, depart_ticks=300, rest_ticks=150)
+        watcher.update(1, shifted(elbow_flex=-600))
+        watcher.update(2, HOME)
+        watcher.update(3, shifted(elbow_flex=-200))  # passing by rest on the way back out
+        self.assertFalse(watcher.update(4, HOME))
+        self.assertFalse(watcher.update(5, HOME))
+        self.assertTrue(watcher.update(6, HOME))
 
 
 if __name__ == "__main__":

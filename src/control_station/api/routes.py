@@ -52,6 +52,8 @@ GET_ROUTES: tuple[Route, ...] = (
     Route(_path("/api/arm/commands"), arm.get_commands),
     Route(_path("/api/arm/shelf-slots"), arm.get_shelf_slots),
     Route(_path("/api/arm/policies"), arm.get_policies),
+    Route(_path("/api/arm/sequences"), arm.get_sequences),
+    Route(lambda route, parts: route.startswith("/api/arm/sequences/"), arm.get_sequence),
     Route(lambda route, parts: route.startswith("/api/arm/commands/"), arm.get_command),
     Route(lambda route, parts: bool(_NEXT_COMMAND.fullmatch(route)), arm.get_next_command),
     Route(_prefix_suffix("/api/parking-spots/", "/live"), status.get_parking_live),
@@ -80,13 +82,17 @@ POST_ROUTES: tuple[Route, ...] = (
     Route(lambda route, parts: len(parts) == 5 and parts[:3] == ["api", "flow", "alerts"] and parts[4] == "ack",
           flow.post_alert_ack, "Cross-origin alert request rejected"),
     Route(_path("/api/mock-world"), flow.post_mock_world, "Cross-origin mock-world request rejected"),
-    Route(lambda route, parts: route in {"/api/arm/start", "/api/arm/stop", "/api/arm/policy/start", "/api/arm/policy/stop"},
-          arm.post_teleop,
+    Route(lambda route, parts: route in {"/api/arm/policy/start", "/api/arm/policy/stop"},
+          arm.post_policy_run,
           "Cross-origin arm-control request rejected", cross_origin_error_code=False, reads_body=False),
     Route(_path("/api/tasks/parse-command"), tasks.post_parse_command,
           "Cross-origin command-preview request rejected", cross_origin_error_code=False),
     Route(_path("/api/arm/commands/from-camera"), arm.post_command_from_camera,
           "Cross-origin arm-command request rejected"),
+    Route(_path("/api/arm/sequences"), arm.post_sequence,
+          "Cross-origin arm-sequence request rejected"),
+    Route(lambda route, parts: len(parts) == 5 and parts[:3] == ["api", "arm", "sequences"] and parts[4] == "cancel",
+          arm.post_sequence, "Cross-origin arm-sequence request rejected"),
     # The arm worker is a plain HTTP client without Origin, so only browser requests can be cross-origin.
     Route(
         lambda route, parts: route == "/api/arm/commands"

@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 ARM_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll")
+MANUAL_JOG_STEP_TICKS = 20
 # Gripper ticks from the team's recorded demonstrations (JJinJJin2/pick_and_place_v2, RANGE_0_100 on 0..4095):
 # larger is more open; the operator opened to about 58-60 (2,400-2,450 ticks) and commanded 46.8 (1,916 ticks) to
 # squeeze; 49 (about 2,010 ticks) is the rest/closed reading.
@@ -108,7 +109,7 @@ class FakeFollowerBus:
             return {name: round(self.positions[name]) for name in names}
         if register == "Moving":
             return {name: int(abs(self.goal[name] - self.positions[name]) > 0.5) for name in names}
-        if register in ("Homing_Offset", "Drive_Mode"):
+        if register in ("Homing_Offset", "Drive_Mode", "Hardware_Error_Status"):
             return {name: 0 for name in names}
         raise KeyError(register)
 
@@ -234,6 +235,26 @@ class SlotMotion:
             raise Rejected("TARGET_TOO_FAR", f"largest joint change {max(deltas.values())} ticks")
         return goal
 
+    def plan_jog(
+        self, joint: str, direction: str, valid_until: datetime, step_ticks: int = MANUAL_JOG_STEP_TICKS
+    ) -> dict[str, int]:
+        """Plan one small relative jog, with a guard band inside the servos' extended-position range."""
+        if not isinstance(joint, str) or joint not in ARM_JOINTS:
+            raise Rejected("JOINT_NOT_SUPPORTED", joint)
+        if not isinstance(direction, str) or direction not in {"POSITIVE", "NEGATIVE"}:
+            raise Rejected("DIRECTION_NOT_SUPPORTED", direction)
+        errors = self.bus.sync_read("Hardware_Error_Status", list(ARM_JOINTS), normalize=False, num_retry=3)
+        if any(int(value) != 0 for value in errors.values()):
+            raise Rejected("MOTOR_HARDWARE_ERROR", str(errors))
+        start = self.present()
+        sign = 1 if direction == "POSITIVE" else -1
+        target = start[joint] + sign * step_ticks
+        if not 100 <= target <= 3995:
+            raise Rejected("JOINT_LIMIT", f"{joint} target {target} is outside the guarded 100–3995 tick range")
+        goal = dict(start)
+        goal[joint] = target
+        return self.check_goal(goal, valid_until)
+
     def synced_profiles(self, start: dict[str, int], goal: dict[str, int]) -> tuple[dict[str, int], dict[str, int]]:
         """Per-joint profile velocity and acceleration scaled by each joint's travel, so all joints start and arrive
         together and the tool moves close to the straight joint-space line. With one shared profile the joints that
@@ -245,7 +266,8 @@ class SlotMotion:
         return velocity, acceleration
 
     def move(self, goal: dict[str, int], cancel_requested: Callable[[], bool],
-             progress: Callable[[dict[str, int], int], None] | None = None, *, sync: bool = False) -> Outcome:
+             progress: Callable[[dict[str, int], int], None] | None = None, *, sync: bool = False,
+             profile_velocity: int | None = None, profile_acceleration: int | None = None) -> Outcome:
         """Move to `goal` and report how it ended. `progress(present, max_error)` is first called just before the
         goal is written (nothing has moved yet), then about every 0.1 s while moving. `sync` scales each joint's
         profile so all joints arrive together (see synced_profiles)."""
@@ -257,8 +279,8 @@ class SlotMotion:
             if sync:
                 velocity, acceleration = self.synced_profiles(start, goal)
             else:
-                velocity = {name: settings.profile_velocity for name in ARM_JOINTS}
-                acceleration = {name: settings.profile_acceleration for name in ARM_JOINTS}
+                velocity = {name: profile_velocity or settings.profile_velocity for name in ARM_JOINTS}
+                acceleration = {name: profile_acceleration or settings.profile_acceleration for name in ARM_JOINTS}
             self.write("Profile_Acceleration", acceleration)
             self.write("Profile_Velocity", velocity)
             self.write("Torque_Enable", {name: 1 for name in ARM_JOINTS})

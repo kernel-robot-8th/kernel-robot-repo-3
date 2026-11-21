@@ -220,7 +220,7 @@ class OrderFlowTests(unittest.TestCase):
         policies_path.write_text(json.dumps({"schema_version": 1, "policies": [
             {"policy_id": "carrot_right", "object_class": "carrot", "label": "당근", "aliases": [], "model": "a/b",
              "policy_type": "act", "task": "x", "cameras": {"front": "OVERHEAD", "wrist": "GRIPPER"},
-             "max_run_s": 30, "arm_id": "arm-02"},
+             "arm_id": "arm-02"},
         ]}))
         self.start(stock="shelf_a:carrot=2;shelf_b:apple=1", policies=load_act_policies(policies_path))
         task = self.wait(self.order([{"object_class": "carrot", "quantity": 1}]))

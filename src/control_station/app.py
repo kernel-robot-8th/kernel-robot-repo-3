@@ -16,10 +16,10 @@ from control_station.api import routes
 from control_station.api.common import is_cross_origin, is_retryable, read_json_object
 from control_station.act_policies import ActPolicyError, load_act_policies
 from control_station.arm_commands import ARM_ROBOT_IDS, ArmCommandStore
+from control_station.arm_sequences import ArmSequenceSupervisor
 from control_station.arm_action_ros import RosPickTransport
 from control_station.arm_pick import ArmActionPick, ArmQueuePick
 from control_station.arms import ArmConfigError, load_arms
-from control_station.arm_supervisor import ArmTeleopSupervisor
 from control_station.policy_run_supervisor import PolicyRunSupervisor
 from control_station.camera_counts import ShelfStockCounter, load_counter_from_env
 from control_station.camera_adapters import (
@@ -75,6 +75,14 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
         if getattr(self, "_request_id", None) is None:
             self._request_id = uuid.uuid4().hex[:12]
         return self._request_id
+
+    def end_headers(self) -> None:
+        # The control UI is served as plain static files. Avoid browsers keeping an old app.js/index.html
+        # after the operator refreshes while iterating on the local console.
+        route = urlsplit(self.path).path
+        if not route.startswith(("/api/", "/streams/")):
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        super().end_headers()
 
     def _json(self, status: int, body: dict[str, Any]) -> None:
         """JSON 응답"""
@@ -174,7 +182,6 @@ def main() -> None:
     server = ControlStationServer((host, port), handler)
     server.mode = mode
     server.robot_provider = provider
-    server.arm_supervisor = ArmTeleopSupervisor(disabled_reason=None)
     # One-shot LeRobot policy client started from the control station (POST /api/arm/policy/start).
     server.policy_run_supervisor = PolicyRunSupervisor()
     server.arm_control_lock = threading.RLock()
@@ -202,10 +209,35 @@ def main() -> None:
             "CONTROL_STATION_FRONT_YOLO_WORLD_PROMPTS",
         )
     )
+    camera_input_configured = any(
+        os.environ.get(name, "").strip()
+        for name in (
+            "CONTROL_STATION_LEFT_CEILING_CAMERA",
+            "CONTROL_STATION_RIGHT_CEILING_CAMERA",
+            "CONTROL_STATION_LEFT_JOINT_CAMERA",
+            "CONTROL_STATION_RIGHT_JOINT_CAMERA",
+            "CONTROL_STATION_JOINT_CAMERA",
+            "CONTROL_STATION_ARM_CAMERA",
+        )
+    )
+    ceiling_camera_configured = any(
+        os.environ.get(name, "").strip()
+        for name in (
+            "CONTROL_STATION_LEFT_CEILING_CAMERA",
+            "CONTROL_STATION_RIGHT_CEILING_CAMERA",
+        )
+    )
+    paired_joint_cameras_configured = any(
+        os.environ.get(name, "").strip()
+        for name in (
+            "CONTROL_STATION_LEFT_JOINT_CAMERA",
+            "CONTROL_STATION_RIGHT_JOINT_CAMERA",
+        )
+    )
     if not (
-        server.arm_supervisor.enabled
-        or head_detector_configured
+        head_detector_configured
         or front_camera_configured
+        or camera_input_configured
         or server.parking_camera_id
         or os.environ.get("CONTROL_STATION_SHELF_CAMERA", "").strip()
         or os.environ.get("CONTROL_STATION_HEAD_CAMERA", "").strip().startswith("ros:")
@@ -215,7 +247,23 @@ def main() -> None:
     else:
         # Six cameras with two arms: ceiling (parking), shelf, and each arm's gripper and overhead camera.
         server.camera_manager = OpenCVArmCameraStreamManager(
-            joint_enabled=server.arm_supervisor.enabled,
+            joint_enabled=(
+                (
+                    not paired_joint_cameras_configured
+                    and (
+                        bool(
+                            os.environ.get("CONTROL_STATION_JOINT_CAMERA", "").strip()
+                            or os.environ.get("CONTROL_STATION_ARM_CAMERA", "").strip()
+                        )
+                    )
+                )
+            ),
+            head_enabled=(
+                not ceiling_camera_configured
+                or bool(os.environ.get("CONTROL_STATION_HEAD_CAMERA", "").strip())
+                or head_detector_configured
+                or bool(server.parking_camera_id)
+            ),
             policy_active=lambda: bool(server.policy_run_supervisor.snapshot()["process_alive"]),
             policy_devices=server.policy_run_supervisor.active_devices,
             arm_cameras=server.policy_run_supervisor.arm_devices,
@@ -236,6 +284,7 @@ def main() -> None:
     server.arm_commands = ArmCommandStore(
         task_store.session_factory, slot_map=slot_map, slot_map_error=slot_map_error, act_policies=act_policies
     )
+    server.arm_sequences = ArmSequenceSupervisor(task_store.session_factory, server.arm_commands)
     server.act_policies_error = act_policies_error
     # Which arm serves which shelf (left shelf -> left arm); orders need it to plan the arm for each object.
     try:
@@ -489,7 +538,6 @@ def main() -> None:
         if server.parking_tracker is not None:
             server.parking_tracker.close()
         server.camera_manager.close()
-        server.arm_supervisor.close()
         server.policy_run_supervisor.close()
         server.task_orchestrator.close()
         server.inventory.close()

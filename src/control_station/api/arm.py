@@ -1,4 +1,4 @@
-"""팔 텔레오퍼레이션, OMX 명령 큐, 선반 칸"""
+"""OMX 명령 큐와 선반 칸 API"""
 
 from __future__ import annotations
 
@@ -6,32 +6,19 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlsplit
 
 from control_station.arm_commands import ARM_ROBOT_IDS, ArmCommandConflict, ArmCommandError, ArmCommandNotFound
+from control_station.arm_sequences import ArmSequenceError
 from control_station.shelf_slot_zones import SlotSelectionError, select_slot_for_class
 
 if TYPE_CHECKING:
     from control_station.app import ControlStationHandler
 
 
-def get_status(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
-    """팔 텔레오퍼레이션·학습 정책 한 번 실행 상태"""
-    h._json(200, {"arm": h.app.arm_supervisor.snapshot(), "policy_run": h.app.policy_run_supervisor.snapshot()})
-
-
-def post_teleop(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
-    """팔 텔레오퍼레이션 시작·정지, 학습 정책 한 번 실행 시작·중단 (둘은 동시에 실행하지 않음)"""
-    policy_route = route.startswith("/api/arm/policy/")
-    response_key = "policy_run" if policy_route else "arm"
+def post_policy_run(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
+    """학습 정책 실행 시작·중단"""
+    response_key = "policy_run"
     try:
         with h.app.arm_control_lock:
-            if route == "/api/arm/start":
-                if h.app.policy_run_supervisor.snapshot()["process_alive"]:
-                    raise RuntimeError("학습 정책 실행이 끝날 때까지 텔레오퍼레이션을 시작할 수 없습니다.")
-                state = h.app.arm_supervisor.start()
-            elif route == "/api/arm/stop":
-                state = h.app.arm_supervisor.stop()
-            elif route == "/api/arm/policy/start":
-                if h.app.arm_supervisor.snapshot()["process_alive"]:
-                    raise RuntimeError("텔레오퍼레이션을 종료한 뒤 학습 정책을 실행하세요.")
+            if route == "/api/arm/policy/start":
                 profile_ids = parse_qs(urlsplit(h.path).query).get("profile_id", [])
                 if len(profile_ids) > 1:
                     raise RuntimeError("profile_id는 하나만 지정할 수 있습니다.")
@@ -57,8 +44,7 @@ def post_teleop(h: ControlStationHandler, route: str, parts: list[str], body: No
             else:
                 state = h.app.policy_run_supervisor.stop()
     except RuntimeError as exc:
-        snapshot = h.app.policy_run_supervisor.snapshot() if policy_route else h.app.arm_supervisor.snapshot()
-        h._json(409, {"error": str(exc), response_key: snapshot})
+        h._json(409, {"error": str(exc), response_key: h.app.policy_run_supervisor.snapshot()})
         return
     h._json(202, {response_key: state})
 
@@ -129,6 +115,43 @@ def get_policies(h: ControlStationHandler, route: str, parts: list[str], body: N
         h._json(200, {"registry_version": policies.version, "policies": policies.summary()})
 
 
+def get_sequences(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
+    try:
+        h._json(200, {"sequences": h.app.arm_sequences.definitions(), "latest": h.app.arm_sequences.latest()})
+    except ArmSequenceError as exc:
+        h._json_error(409, "ARM_SEQUENCE_CONFIG_INVALID", str(exc))
+
+
+def get_sequence(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
+    run_id = parts[3]
+    try:
+        h._json(200, {"sequence": h.app.arm_sequences.get(run_id)})
+    except KeyError:
+        h._json_error(404, "ARM_SEQUENCE_NOT_FOUND", "Arm sequence not found")
+
+
+def post_sequence(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:
+    try:
+        if route == "/api/arm/sequences":
+            if set(body) == {"sequence_id"} and isinstance(body.get("sequence_id"), str):
+                sequence = h.app.arm_sequences.start(body["sequence_id"])
+            elif set(body) == {"object_classes"}:
+                sequence = h.app.arm_sequences.start_custom(body["object_classes"])
+            else:
+                raise ArmSequenceError("body에는 sequence_id 또는 object_classes가 필요합니다")
+            h._json(201, {"sequence": sequence})
+        else:
+            if body:
+                raise ArmSequenceError("cancel body는 빈 객체여야 합니다")
+            h._json(200, {"sequence": h.app.arm_sequences.cancel(parts[3])})
+    except KeyError:
+        h._json_error(404, "ARM_SEQUENCE_NOT_FOUND", "Arm sequence not found")
+    except ArmSequenceError as exc:
+        h._json_error(409, "ARM_SEQUENCE_CONFLICT", str(exc))
+    except (ArmCommandError, ArmCommandConflict) as exc:
+        h._json_error(409, getattr(exc, "error_code", "ARM_COMMAND_CONFLICT"), str(exc))
+
+
 def get_shelf_slots(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
     """선반 칸 정의"""
     slot_map = h.app.arm_commands.slot_map
@@ -173,6 +196,7 @@ def post_command(h: ControlStationHandler, route: str, parts: list[str], body: d
             h._json(201, {"command": store.create(body)})
         elif parts[4] == "events":
             command, applied = store.apply_worker_event(parts[3], body)
+            h.app.arm_sequences.on_worker_event(command, applied)
             if command["operation"] == "PICK_WITH_POLICY":
                 sync_policy_cameras(h.app)  # reopen them once the command has finished
             h._json(200, {"command": command, "applied": applied})
@@ -245,21 +269,32 @@ def post_command_from_camera(h: ControlStationHandler, route: str, parts: list[s
         return
     try:
         selection = select_slot_for_class(h.app.shelf_slot_zones.annotate(snapshot.to_dict()), class_name)
-        # Route camera-confirmed work to the arm serving that shelf. An explicitly selected arm is
-        # accepted only when it serves the detected shelf, so a UI mismatch cannot dispatch across the aisle.
+        # Policy picks use the object-to-arm assignment; pose-only slot moves use the arm serving the shelf.
         arms = getattr(h.app, "arms", None)
         slot_map = h.app.arm_commands.slot_map
         slot = slot_map.active_slots.get(selection["slot_id"]) if slot_map is not None else None
         shelf_arm = arms.for_shelf(slot["shelf_id"]) if arms is not None and slot is not None else None
-        if shelf_arm is None:
+        if operation == "PICK_WITH_POLICY" and policy is not None and policy["arm_id"] is not None:
+            assigned_arm = arms.get(policy["arm_id"]) if arms is not None else None
+            expected_robot_id = policy["arm_id"] if assigned_arm is not None else None
+            mismatch_code = "ARM_POLICY_MISMATCH"
+            mismatch_message = f"{policy['label']} 정책은 {assigned_arm['label'] if assigned_arm else policy['arm_id']}에 고정되어 있습니다."
+        else:
+            expected_robot_id = shelf_arm["arm_id"] if shelf_arm else None
+            mismatch_code = "ARM_SHELF_MISMATCH"
+            mismatch_message = (
+                f"{selection['slot_label']}은 {shelf_arm['label']} 담당 선반입니다. 팔 선택을 확인하세요."
+                if shelf_arm else "검출된 선반 칸을 담당할 팔 설정이 없습니다"
+            )
+        if expected_robot_id is None:
             h._json_error(409, "SHELF_ARM_NOT_CONFIGURED", "검출된 선반 칸을 담당할 팔 설정이 없습니다")
             return
-        if requested_robot_id is not None and requested_robot_id != shelf_arm["arm_id"]:
+        if requested_robot_id is not None and requested_robot_id != expected_robot_id:
             h._json_error(
                 409,
-                "ARM_SHELF_MISMATCH",
-                f"{selection['slot_label']}은 {shelf_arm['label']} 담당 선반입니다. 팔 선택을 확인하세요.",
-                details={"expected_robot_id": shelf_arm["arm_id"]},
+                mismatch_code,
+                mismatch_message,
+                details={"expected_robot_id": expected_robot_id},
             )
             return
         robot_id = shelf_arm["arm_id"]
