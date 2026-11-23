@@ -92,6 +92,7 @@ class PolicyRunResult:
     final_error_ticks: dict[str, int] = field(default_factory=dict)
     actions_sent: int = 0
     message: str = ""
+    run_s: float = 0.0
 
 
 def devices_in_use(paths: list[str]) -> list[str]:
@@ -164,6 +165,8 @@ def run_policy(
 
     `max_step_ticks` limits how far any joint goal may be from the present position at each step (1/30 s); used
     when the policy starts from a pose it was not trained from and its first actions may jump."""
+    run_started_at = time.monotonic()
+
     from lerobot.async_inference.configs import RobotClientConfig
     from lerobot.async_inference.robot_client import RobotClient
     from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
@@ -256,6 +259,7 @@ def run_policy(
             final_error_ticks=final_errors,
             actions_sent=client.actions_sent,
             message=message,
+            run_s=time.monotonic() - run_started_at,
         )
     finally:
         client.shutdown_event.set()

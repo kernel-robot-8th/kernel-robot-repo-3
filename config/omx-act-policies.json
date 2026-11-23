@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "notes": "물체 이름(YOLO 클래스) → 그 물체만 집도록 학습한 LeRobot ACT 정책. 팔 배정은 고정: 당근·티슈는 왼팔(arm-01), 사과·수박은 오른팔(arm-02). ACT는 위치나 문장을 입력으로 받지 않고 카메라 영상과 관절 값만 봄. cameras는 정책 입력 이름(front/wrist)에 실제로 넣을 카메라 역할(OVERHEAD: 선반을 위에서 본 카메라, GRIPPER: 그리퍼 카메라).",
+  "notes": "물체 이름(YOLO 클래스) → 그 물체만 집도록 학습한 LeRobot ACT 정책. 팔 배정은 고정: 당근은 왼팔(arm-01), 사과·수박·키위는 오른팔(arm-02). ACT는 위치나 문장을 입력으로 받지 않고, 카메라 영상과 관절 값만 봄. cameras는 정책 입력 이름(front/wrist)에 실제로 넣을 카메라 역할(OVERHEAD: 선반을 위에서 본 카메라, GRIPPER: 그리퍼 카메라).",
   "policies": [
     {
       "policy_id": "carrot_act_v7",
@@ -20,26 +20,6 @@
         "wrist": "GRIPPER"
       },
       "notes": "에피소드 20개 모두 당근. task 문장은 녹화 때 붙인 이름일 뿐이며 ACT는 쓰지 않음. 에피소드가 쉬는 자세 근처에서 시작하고 끝남."
-    },
-    {
-      "policy_id": "tissue_act_v1",
-      "arm_id": "arm-01",
-      "object_class": "tissue",
-      "label": "물티슈",
-      "aliases": [
-        "물티슈",
-        "티슈",
-        "tissue"
-      ],
-      "model": "JJinJJin2/omx_act_policy",
-      "policy_type": "act",
-      "task": "Pick up Doll",
-      "dataset": "JJinJJin2/pick_and_place",
-      "cameras": {
-        "front": "GRIPPER",
-        "wrist": "OVERHEAD"
-      },
-      "notes": "에피소드 20개 모두 물티슈. 녹화 때 카메라 이름이 뒤바뀌어 front에 그리퍼 카메라, wrist에 위에서 본 카메라가 들어감. 실물 실행은 아직 하지 않음."
     },
     {
       "policy_id": "apple_act_20261119",
@@ -76,6 +56,25 @@
         "wrist": "GRIPPER"
       },
       "notes": "운영자가 지정한 모델 neverlish/omx_act_record-watermelon-20261119-1. 새 모델의 학습 데이터와 카메라 대응은 별도 확인되지 않음."
+    },
+    {
+      "policy_id": "kiwi_act_20261121",
+      "arm_id": "arm-02",
+      "object_class": "kiwi",
+      "label": "키위",
+      "aliases": [
+        "키위",
+        "kiwi"
+      ],
+      "model": "neverlish/omx_act_record-kiwi-20261121-1",
+      "policy_type": "act",
+      "task": "Pick up Doll",
+      "dataset": "neverlish/record-kiwi-20261116-1",
+      "cameras": {
+        "front": "OVERHEAD",
+        "wrist": "GRIPPER"
+      },
+      "notes": "운영자가 지정한 모델. 2026-11-23 추론 기록에서 front=/dev/video10(오른쪽 천장), wrist=/dev/video6(오른쪽 그리퍼)로 실행한 설정을 사용."
     }
   ]
 }

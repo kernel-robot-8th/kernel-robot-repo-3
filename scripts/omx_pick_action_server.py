@@ -3,7 +3,7 @@
 
 The same pick as the HTTP worker (omx_lerobot_worker.py): the checks, the ACT policy run and the home alignment are
 omx_policy_pick.PolicyPick, so the same rules apply (policy recorded on this arm and board, registry SHA and model,
-start from rest, cancel stops in place with torque on). Run one server per arm, in the LeRobot environment with
+return to its recorded home before starting, cancel stops in place with torque on). Run one server per arm, in the LeRobot environment with
 ROS 2 and the interface package sourced:
 
     source /opt/ros/jazzy/setup.bash && source cpp/install/setup.bash
@@ -14,8 +14,8 @@ ROS 2 and the interface package sourced:
 How a goal ends:
 - one goal at a time; a goal that arrives while the arm is busy is refused by ROS (not accepted)
 - checks fail -> aborted, outcome REJECTED; nothing moved
-- feedback CHECKING, then STARTING_POLICY right before the policy may move the arm (nothing moves before it),
-  RUNNING_POLICY once the policy runs, RETURNING_HOME before the home alignment
+- feedback CHECKING, RETURNING_HOME before policy start, STARTING_POLICY, RUNNING_POLICY, then RETURNING_HOME after
+  the policy. The arm moves during either RETURNING_HOME phase.
 - back home -> succeeded, outcome HOME_REACHED_PLACE_NOT_VERIFIED, pose_reached true: the arm cannot see whether
   the object was placed; the control station checks that with its cameras
 - cancel -> the policy stops where the arm is -> canceled, outcome CANCELED
@@ -120,8 +120,6 @@ class PickActionServer(Node):
             reason, policy = self.pick.check(policy_ref, valid_until, allow_simulation=True)
             if reason is None and policy["object_class"] != request.object_class:
                 reason = "POLICY_UNKNOWN"
-            if reason is None:
-                self.pick.prepare()
         except (ConnectionError, OSError, RuntimeError) as error:
             return self.finish(goal_handle, "REJECTED", "FOLLOWER_PORT_UNAVAILABLE", str(error)[:300])
         if reason:
@@ -132,16 +130,30 @@ class PickActionServer(Node):
         if goal_handle.is_cancel_requested:
             return self.finish(goal_handle, "CANCELED", "CANCELED_BEFORE_START")
 
-        feedback("STARTING_POLICY", f"{policy['label']} 정책 시작")
+        feedback("RETURNING_HOME", "정책 시작 전 저장된 초기자세로 복귀")
         ticker = threading.Thread(target=heartbeat, daemon=True)
         ticker.start()
+        error_reason_code = "HOME_RETURN_ERROR"
         try:
-            result, details = self.pick.run(policy, cancel_requested=lambda: goal_handle.is_cancel_requested,
-                                            started=lambda: feedback("RUNNING_POLICY"))
-            end = self.pick.end(result, details, returning_home=lambda: feedback("RETURNING_HOME"))
+            cancel_requested = lambda: goal_handle.is_cancel_requested
+            end = self.pick.return_home_before_policy(cancel_requested)
+            if end is None and goal_handle.is_cancel_requested:
+                end = PickEnd("CANCELED", "OPERATOR_CANCELED", "초기자세 복귀 후 정책 시작 전에 취소되었습니다.",
+                              pose_reached=True, phase="RETURNING_HOME")
+            if end is None:
+                self.pick.prepare()
+                if goal_handle.is_cancel_requested:
+                    end = PickEnd("CANCELED", "OPERATOR_CANCELED", "정책 준비 중 취소되어 정책을 시작하지 않았습니다.",
+                                  pose_reached=True, phase="RETURNING_HOME")
+                else:
+                    error_reason_code = "POLICY_RUN_ERROR"
+                    feedback("STARTING_POLICY", f"{policy['label']} 정책 시작")
+                    result, details = self.pick.run(policy, cancel_requested=cancel_requested,
+                                                    started=lambda: feedback("RUNNING_POLICY"))
+                    end = self.pick.end(result, details, returning_home=lambda: feedback("RETURNING_HOME"))
         except Exception as error:  # the arm keeps torque where the policy left it; a person has to look
-            self.get_logger().error(f"  정책 실행 오류: {error}")
-            end = PickEnd("RESULT_UNKNOWN", "POLICY_RUN_ERROR", str(error)[:300])
+            self.get_logger().error(f"  초기자세 복귀 또는 정책 실행 오류: {error}")
+            end = PickEnd("RESULT_UNKNOWN", error_reason_code, str(error)[:300], phase="RETURNING_HOME")
         finally:
             done.set()
         return self.finish(goal_handle, outcome_of(end), end.reason_code or "", end.message or "",

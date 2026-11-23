@@ -6,7 +6,8 @@ apply the same rules:
   in config/arms.json): otherwise POLICY_WRONG_ARM
 - the command's policy registry SHA-256 and model must match this PC's policy file: POLICY_REGISTRY_MISMATCH,
   POLICY_UNKNOWN
-- the policy starts only from rest, with free cameras and a reachable policy server; not after valid_until
+- after acceptance, the arm returns to its own recorded home pose before the policy starts; a move beyond the normal
+  max-delta guard is refused before acceptance
 - a cancel stops the policy where the arm is; torque stays on (the arm must not drop)
 - back at rest, the arm is aligned to its recorded home pose. Grasp and placement are not observed, so the best
   ending is RESULT_UNKNOWN / PLACE_NOT_VERIFIED with pose_reached true
@@ -75,18 +76,16 @@ def add_policy_arguments(parser: argparse.ArgumentParser, robot_id: str) -> None
                         default=arm_env(robot_id, "GRIPPER_CAMERA") or os.environ.get("CONTROL_STATION_JOINT_CAMERA")
                         or DEFAULT_GRIPPER_CAMERA,
                         help="camera on the gripper (env CONTROL_STATION_ARM01_GRIPPER_CAMERA, else CONTROL_STATION_JOINT_CAMERA)")
-    policy.add_argument("--policy-start-ticks", type=int, default=400,
-                        help="refuse to start the policy when a joint is farther than this from home")
     policy.add_argument("--policy-depart-ticks", type=int, default=300, help="a joint this far from home = policy started moving")
     policy.add_argument("--policy-rest-ticks", type=int, default=150, help="all joints this close to home = back at rest")
     policy.add_argument("--policy-settle-s", type=float, default=1.5, help="seconds at rest before stopping the policy")
     policy.add_argument("--policy-device", default="cuda",
                         help="where the policy server runs the model (cpu while another job fills the GPU)")
     policy.add_argument("--policy-any-start", action="store_true",
-                        help="EXPERIMENT: also start the policy away from rest (e.g. after MOVE_TO_SLOT); needs a step limit")
+                        help="compatibility option: policy still starts from recorded home; enables a 40-tick action limit")
     policy.add_argument("--policy-max-step-ticks", type=int, default=None,
-                        help="limit each policy goal to present ± this many ticks per 1/30 s step (default: none, "
-                             "40 with --policy-any-start)")
+                        help="limit each policy goal to present ± this many ticks per 1/30 s step (default: none; "
+                             "--policy-any-start sets 40 when omitted)")
     policy.add_argument("--simulated-run-s", type=float, default=3.0,
                         help="how long a simulated policy run (--fake-follower, --dry-run) pretends to take")
 
@@ -159,16 +158,43 @@ class PolicyPick:
         if problem:
             print(f"  {problem}", flush=True)
             return "POLICY_SERVER_UNAVAILABLE", None
-        home = self.motion.poses["poses"]["home"]["ticks"]
-        with self.motion.follower():
-            now = self.motion.present()
-        away = max(abs(now[name] - home[name]) for name in ARM_JOINTS)
-        print(f"  현재 {now}\n  home과 최대 차이 {away} ticks", flush=True)
-        if away > settings.policy_start_ticks:
-            if not settings.policy_any_start:
-                return "NOT_AT_REST", None  # the policy was trained starting from rest
-            print(f"  실험 모드: 쉬는 자세가 아닌 곳에서 정책 시작 (한 스텝 최대 {settings.policy_max_step_ticks} ticks)", flush=True)
+        # Preflight that the remembered home pose is reachable before accepting a command. The worker still
+        # replans after acceptance and physically returns home before it starts the policy.
+        try:
+            with self.motion.follower():
+                self.motion.plan("home", self.motion.slot_map_version, valid_until)
+        except Rejected as rejected:
+            return rejected.reason_code, None
         return None, policy
+
+    def return_home_before_policy(self, cancel_requested: Callable[[], bool]) -> PickEnd | None:
+        """Move this arm to its own recorded home before any policy starts; return a failure/cancel result if not there."""
+        if self.simulated:
+            return None
+        if cancel_requested():
+            return PickEnd("CANCELED", "OPERATOR_CANCELED", "초기자세 복귀 전에 취소되었습니다.",
+                           phase="RETURNING_HOME")
+        try:
+            with self.motion.follower():
+                goal = self.motion.plan("home", self.motion.slot_map_version,
+                                        datetime.now(timezone.utc) + timedelta(seconds=60))
+                outcome = self.motion.move(goal, cancel_requested)
+        except Rejected as rejected:
+            return PickEnd("FAILED", rejected.reason_code, str(rejected)[:300], phase="RETURNING_HOME")
+        except (ConnectionError, OSError, RuntimeError) as error:
+            return PickEnd("RESULT_UNKNOWN", "HOME_RETURN_ERROR", str(error)[:300], phase="RETURNING_HOME")
+
+        details = {"goal_ticks": goal, "final_ticks": outcome.final_ticks,
+                   "max_error_ticks": outcome.max_error_ticks, "outcome": outcome.outcome}
+        if outcome.outcome == "SUCCEEDED":
+            print("  정책 시작 전 초기자세 복귀 확인", flush=True)
+            return None
+        if outcome.outcome == "CANCELED":
+            return PickEnd("CANCELED", "OPERATOR_CANCELED", "초기자세 복귀 중 취소되었습니다.",
+                           phase="RETURNING_HOME", details={"home_return": details})
+        return PickEnd("FAILED" if outcome.outcome == "FAILED" else "RESULT_UNKNOWN",
+                       outcome.reason_code or "HOME_RETURN_FAILED", outcome.message or "초기자세 복귀 실패",
+                       phase="RETURNING_HOME", details={"home_return": details})
 
     def prepare(self) -> None:
         """Run the policy at the servo speed it was recorded with (power-on default 0 = no profile limit); the
@@ -192,7 +218,7 @@ class PolicyPick:
         print(f"  정책 실행: {policy['model']} · front={cameras['front']} · wrist={cameras['wrist']}", flush=True)
         result = run_policy(
             policy, port=settings.port, cameras=cameras, server_address=settings.policy_server, watcher=watcher,
-            max_run_s=policy["max_run_s"], cancel_requested=cancel_requested, started=started,
+            cancel_requested=cancel_requested, started=started,
             max_step_ticks=settings.policy_max_step_ticks, policy_device=settings.policy_device,
         )
         return result, self._report(policy, result)
@@ -209,7 +235,7 @@ class PolicyPick:
                 reason = "CANCELED"
                 break
             time.sleep(0.05)
-        result = PolicyRunResult(reason, time.monotonic() - begin, 0, message="simulated")
+        result = PolicyRunResult(reason, 0, message="simulated", run_s=time.monotonic() - begin)
         return result, {**self._report(policy, result), "simulated": True}
 
     @staticmethod
@@ -242,19 +268,16 @@ class PolicyPick:
         return end
 
     def finish_at_home(self, policy_details: dict) -> PickEnd:
-        """The policy came back to rest: align to the recorded home pose. The command was accepted in time, so the
-        follow-up move is not tied to valid_until."""
+        """Always align to this arm's recorded home pose after the policy returns to rest.
+
+        A broad rest tolerance can end the policy while the arm is still noticeably offset from its recorded pose.
+        Keep the normal motion planner's max-delta and timeout guards, then report placement as unverified.
+        """
         time.sleep(0.5)  # let the servos finish the last goal the policy wrote
         try:
             with self.motion.follower():
                 goal = self.motion.plan("home", self.motion.slot_map_version,
                                         datetime.now(timezone.utc) + timedelta(seconds=60))
-                now = self.motion.present()
-                away = max(abs(goal[name] - now[name]) for name in ARM_JOINTS)
-                if away > 2 * self.settings.policy_rest_ticks:
-                    return PickEnd("FAILED", "REST_NOT_CONFIRMED",
-                                   f"정책은 쉬는 자세로 돌아왔다고 봤지만 실제 관절이 home에서 {away} ticks 떨어져 있어 움직이지 않았습니다.",
-                                   details={"policy_run": policy_details, "present_ticks": now})
                 outcome = self.motion.move(goal, lambda: False)
         except Rejected as rejected:
             return PickEnd("FAILED", rejected.reason_code, details={"policy_run": policy_details})
@@ -264,9 +287,17 @@ class PolicyPick:
                            details={"policy_run": policy_details})
         home_details = {"goal_ticks": goal, "final_ticks": outcome.final_ticks, "max_error_ticks": outcome.max_error_ticks}
         details = {"policy_run": policy_details, "home_return": home_details}
-        if outcome.outcome == "SUCCEEDED":
+        measured_home_error = (
+            max(abs(int(outcome.final_ticks[name]) - goal[name]) for name in ARM_JOINTS)
+            if all(name in outcome.final_ticks for name in ARM_JOINTS) else None
+        )
+        if outcome.outcome == "SUCCEEDED" or (
+            measured_home_error is not None and measured_home_error <= self.settings.policy_rest_ticks
+        ):
             # The arm is home; grasp and placement were not observed, so success cannot be claimed.
-            return PickEnd("RESULT_UNKNOWN", "PLACE_NOT_VERIFIED", "정책 동작 뒤 home 복귀 완료. 집기·적재는 확인하지 않았습니다.",
+            home_details["max_error_ticks"] = measured_home_error
+            home_details["tolerance_ticks"] = self.settings.policy_rest_ticks
+            return PickEnd("RESULT_UNKNOWN", "PLACE_NOT_VERIFIED", "정책 동작 뒤 초기자세 허용범위 복귀. 집기·적재는 확인하지 않았습니다.",
                            pose_reached=True, details=details)
         return PickEnd("FAILED" if outcome.outcome == "FAILED" else "RESULT_UNKNOWN",
                        outcome.reason_code or "HOME_RETURN_FAILED", outcome.message or None, details=details)
