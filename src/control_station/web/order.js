@@ -10,9 +10,11 @@ const FINISHED_STAGES = ['done', 'canceled'];
 
 const orderForm = document.querySelector('#orderForm');
 const productList = document.querySelector('#products');
+const categoryNav = document.querySelector('#categoryNav');
 const stockNotice = document.querySelector('#stockNotice');
 const cartNote = document.querySelector('#cartNote');
 const cartSummary = document.querySelector('#cartSummary');
+const cartTotal = document.querySelector('#cartTotal');
 const submitButton = document.querySelector('#submitOrder');
 const formError = document.querySelector('#formError');
 const tracking = document.querySelector('#tracking');
@@ -23,7 +25,8 @@ const trackError = document.querySelector('#trackError');
 const state = {
   catalogLoaded: false,
   catalogFailed: false,  // the latest refresh failed; the last good catalog stays on screen
-  products: [],          // [{object_class, label, available, status, notice}] in catalog order
+  products: [],          // orderable products with stock, category and optional price
+  category: 'all',
   notice: null,          // why some objects cannot be ordered now (stock unknown), from the catalog
   zones: [],             // [{zone_id, label}]; the server picks one when the order starts, the app only needs one to exist
   cart: new Map(),       // object_class -> quantity, only quantities above 0
@@ -36,6 +39,30 @@ const state = {
   trackTimer: null,
   confirming: false,
 };
+
+const CATEGORY_LABELS = { all: '전체', fruit: '과일', vegetable: '채소', other: '기타' };
+const PRODUCT_CATEGORIES = {
+  apple: 'fruit', strawberry: 'fruit', kiwi: 'fruit', watermelon: 'fruit',
+  carrot: 'vegetable', tissue: 'other',
+};
+// A future pick target can be previewed in the shop before the control station has its policy and stock setup.
+const FRONTEND_ONLY_PRODUCTS = [
+  { object_class: 'kiwi', label: '키위', category: 'fruit', unit: '개', price_krw: 900,
+    available: 0, status: 'coming_soon' },
+];
+
+function categoryOf(product) {
+  return CATEGORY_LABELS[product.category] ? product.category : (PRODUCT_CATEGORIES[product.object_class] || 'other');
+}
+
+function priceOf(product) {
+  const value = product.price_krw ?? product.price;
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function formatPrice(value) {
+  return `₩${value.toLocaleString('ko-KR')}`;
+}
 
 // localStorage can be missing or throw (private mode, blocked site data); the app then just forgets the order.
 const saved = {
@@ -57,6 +84,7 @@ const closedStatus = {
   sold_out: { chip: '품절', className: 'sold-out' },
   unknown: { chip: '주문 닫힘', className: 'unknown' },
   closed: { chip: '판매 중지', className: 'closed' },
+  coming_soon: { chip: '준비 중', className: 'unknown' },
 };
 
 function orderable(product) {
@@ -71,7 +99,8 @@ function maxQuantity(product) {
 function cartItems() {
   return state.products
     .filter((product) => state.cart.has(product.object_class))
-    .map((product) => ({ object_class: product.object_class, label: product.label, quantity: state.cart.get(product.object_class) }));
+    .map((product) => ({ object_class: product.object_class, label: product.label, quantity: state.cart.get(product.object_class),
+      price_krw: priceOf(product) }));
 }
 
 // 128 random bits as hex. crypto.randomUUID needs a secure context and the app is also opened over plain http
@@ -93,7 +122,10 @@ function setQuantity(product, quantity) {
 // ---- catalog ----------------------------------------------------------------------------------------------
 
 function applyCatalog(catalog) {
-  state.products = catalog.products;
+  state.products = [...catalog.products];
+  for (const product of FRONTEND_ONLY_PRODUCTS) {
+    if (!state.products.some((item) => item.object_class === product.object_class)) state.products.push(product);
+  }
   state.notice = catalog.notice ?? catalog.stock_error ?? null;
   state.zones = catalog.zones || [];
   // Stock can drop or close while the customer is choosing: lower the cart to what is left and say so on the card.
@@ -143,12 +175,15 @@ function renderNotice() {
 function productCard(product) {
   const name = product.label;
   return element('article', { class: 'product', 'data-object-class': product.object_class },
-    element('span', { class: 'product-mark', 'aria-hidden': 'true' }, [...name][0] || '?'),
+    element('span', { class: 'product-mark', 'aria-hidden': 'true' },
+      element('img', { src: `/images/products/${encodeURIComponent(product.object_class)}.png`, alt: '', loading: 'lazy' })),
     element('div', { class: 'product-info' },
       element('h3', { class: 'product-name' }, name),
+      element('p', { class: 'product-price' }),
       element('p', { class: 'product-stock' }),
       element('p', { class: 'product-adjusted', hidden: '' })),
-    element('div', { class: 'stepper', role: 'group', 'aria-label': `${name} 수량` },
+    element('button', { type: 'button', class: 'add-to-cart' }, '담기'),
+    element('div', { class: 'stepper', role: 'group', 'aria-label': `${name} 수량`, hidden: '' },
       element('button', { type: 'button', class: 'step', 'data-step': '-1', 'aria-label': `${name} 하나 빼기` }, '−'),
       element('output', { class: 'step-value', 'aria-live': 'polite' }, '0'),
       element('button', { type: 'button', class: 'step', 'data-step': '1', 'aria-label': `${name} 하나 더하기` }, '+')));
@@ -157,6 +192,8 @@ function productCard(product) {
 function updateProductCard(card, product) {
   const quantity = state.cart.get(product.object_class) || 0;
   const max = maxQuantity(product);
+  card.querySelector('.product-price').textContent = priceOf(product) === null
+    ? '가격 준비 중' : `${formatPrice(priceOf(product))}${product.unit ? ` / ${product.unit}` : ''}`;
   const stock = card.querySelector('.product-stock');
   const closed = orderable(product) ? null : (closedStatus[product.status] || { chip: '주문 닫힘', className: 'unknown' });
   if (closed) {
@@ -174,6 +211,9 @@ function updateProductCard(card, product) {
   }
   card.classList.toggle('selected', quantity > 0);
   card.classList.toggle('unavailable', max === 0);
+  card.querySelector('.add-to-cart').hidden = quantity > 0;
+  card.querySelector('.add-to-cart').disabled = state.sending || max === 0;
+  card.querySelector('.stepper').hidden = quantity === 0;
   const adjusted = state.adjusted.get(product.object_class);
   const adjustedNote = card.querySelector('.product-adjusted');
   adjustedNote.hidden = !adjusted;
@@ -192,24 +232,48 @@ function renderProducts() {
     productList.replaceChildren(element('p', { class: 'placeholder' }, text));
     return;
   }
-  // Cards are built once per product set and then updated in place, so a refresh never steals the focus.
-  const keys = state.products.map((product) => `${product.object_class}:${product.label}`).join('|');
+  const visibleProducts = state.category === 'all'
+    ? state.products : state.products.filter((product) => categoryOf(product) === state.category);
+  if (!visibleProducts.length) {
+    productList.dataset.keys = '';
+    productList.replaceChildren(element('p', { class: 'placeholder' }, '이 분류에 상품이 없어요'));
+    return;
+  }
+  // Cards are built once per visible product set and then updated in place, so a refresh never steals the focus.
+  const keys = visibleProducts.map((product) => `${product.object_class}:${product.label}`).join('|');
   if (productList.dataset.keys !== keys) {
     productList.dataset.keys = keys;
-    productList.replaceChildren(...state.products.map(productCard));
+    productList.replaceChildren(...visibleProducts.map(productCard));
   }
-  state.products.forEach((product, index) => updateProductCard(productList.children[index], product));
+  visibleProducts.forEach((product, index) => updateProductCard(productList.children[index], product));
+}
+
+function renderCategories() {
+  const categories = [...new Set(state.products.map(categoryOf))];
+  const options = ['all', ...Object.keys(CATEGORY_LABELS).filter((category) => category !== 'all' && categories.includes(category))];
+  if (!options.includes(state.category)) state.category = 'all';
+  const counts = { all: state.products.length };
+  state.products.forEach((product) => { const category = categoryOf(product); counts[category] = (counts[category] || 0) + 1; });
+  categoryNav.replaceChildren(...options.map((category) => element('button', {
+    type: 'button', class: `category-chip${state.category === category ? ' active' : ''}`,
+    'aria-pressed': state.category === category ? 'true' : 'false', 'data-category': category,
+  }, `${CATEGORY_LABELS[category]} ${counts[category]}`)));
 }
 
 function renderCart() {
   const items = cartItems();
   const total = items.reduce((sum, item) => sum + item.quantity, 0);
-  let summary = '담은 물건이 없어요';
+  let summary = '장바구니가 비어 있어요';
+  cartTotal.textContent = '상품을 골라 주세요';
   if (total) {
     summary = `${items.map((item) => `${item.label} ${item.quantity}개`).join(', ')}, 모두 ${total}개`;
+    cartTotal.textContent = items.every((item) => item.price_krw !== null)
+      ? `합계 ${formatPrice(items.reduce((sum, item) => sum + item.price_krw * item.quantity, 0))}`
+      : '가격을 준비 중이에요';
   }
   cartSummary.textContent = summary;
   cartSummary.classList.toggle('filled', total > 0);
+  cartTotal.classList.toggle('filled', total > 0);
   const noZone = state.catalogLoaded && !state.zones.length;  // the server could not read its receiving zones
   cartNote.textContent = noZone ? '받을 곳이 정해지지 않아 지금은 주문할 수 없어요' : '받을 곳은 로봇이 출발할 때 알려 드려요';
   cartNote.classList.toggle('error', noZone);
@@ -219,6 +283,7 @@ function renderCart() {
 
 function render() {
   renderNotice();
+  renderCategories();
   renderProducts();
   renderCart();
 }
@@ -241,7 +306,7 @@ function showScreen(name) {
   orderForm.hidden = name !== 'order';
   tracking.hidden = name !== 'track';
   myOrderLink.hidden = name !== 'order' || !state.orderId;
-  document.querySelector('#pageTitle').textContent = name === 'track' ? '내 주문' : '무엇을 가져다 드릴까요?';
+  document.querySelector('#pageTitle').textContent = name === 'track' ? '내 주문' : '오늘 필요한 걸 골라 담아 보세요';
   document.querySelector('#pageLead').hidden = name === 'track';
 }
 
@@ -356,6 +421,13 @@ pickupButton.addEventListener('click', async () => {
 });
 
 productList.addEventListener('click', (event) => {
+  const addButton = event.target.closest('.add-to-cart');
+  if (addButton) {
+    const objectClass = addButton.closest('[data-object-class]').dataset.objectClass;
+    const product = state.products.find((item) => item.object_class === objectClass);
+    if (product) { setQuantity(product, 1); clearError(); render(); }
+    return;
+  }
   const button = event.target.closest('[data-step]');
   if (!button) return;
   const objectClass = button.closest('[data-object-class]').dataset.objectClass;
@@ -364,6 +436,14 @@ productList.addEventListener('click', (event) => {
   setQuantity(product, (state.cart.get(objectClass) || 0) + Number(button.dataset.step));
   clearError();
   render();
+});
+
+categoryNav.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-category]');
+  if (!button) return;
+  state.category = button.dataset.category;
+  renderCategories();
+  renderProducts();
 });
 
 orderForm.addEventListener('submit', async (event) => {
