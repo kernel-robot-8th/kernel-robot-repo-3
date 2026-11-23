@@ -30,7 +30,7 @@
         <button type="button" class="nav-item" data-view="pinky">핑키</button>
         <button type="button" class="nav-item" data-view="inventory">재고</button>
         <button type="button" class="nav-item" data-view="tasks">작업 이력</button>
-        <button type="button" class="nav-item" data-view="overview" data-dev-only>장비·카메라</button>
+        <button type="button" class="nav-item" data-view="overview">장비·카메라</button>
         <button type="button" class="nav-item" data-view="manual" data-dev-only>수동 조작</button>
         <button type="button" class="nav-item" data-view="ros" data-dev-only>ROS 모니터</button>
         <button type="button" class="nav-item" data-view="api" data-dev-only>API</button>
@@ -67,7 +67,7 @@
           <div id="dashProgress" class="dash-progress"></div>
         </section>
         <section class="dash-card dash-devices-card" aria-labelledby="dash-devices-title">
-          <div class="dash-card-head"><h3 id="dash-devices-title">장비 상태</h3><button type="button" class="link-button" data-dash-goto="overview">카메라 보기</button></div>
+          <div class="dash-card-head"><h3 id="dash-devices-title">장비 상태</h3><button type="button" class="link-button" data-dash-goto="overview">장비 세부 보기</button></div>
           <div id="dashDevices" class="dash-devices"></div>
         </section>
         <section class="dash-card dash-todo-card" aria-labelledby="dash-todo-title">
@@ -83,6 +83,12 @@
           <div id="dashStock" class="dash-stock"></div>
         </section>
       </div>
+      <section aria-labelledby="cameras-title">
+        <div class="section-heading"><h2 id="cameras-title">로봇 카메라</h2><span class="updated">실시간 미리보기</span></div>
+        <datalist id="detectorClassOptions"></datalist>
+        <div id="cameraGrid" class="camera-grid"><p class="loading">카메라를 불러오는 중…</p></div>
+        <p class="note">왼쪽·오른쪽 천장 카메라와 각 팔 관절 카메라 영상입니다. 정책 실행 중에는 해당 팔 카메라를 정책이 사용하므로 미리보기가 잠시 멈출 수 있습니다.</p>
+      </section>
     </div>
       </div>
 
@@ -238,12 +244,6 @@
       </div>
       <p class="note">Nav2 액션 서버 발견 여부는 통신 경로만 나타냅니다. 로봇 동작 가능 상태를 보장하지 않습니다. 이 서버는 주행 명령을 전송하지 않습니다.</p>
     </section>
-    <section aria-labelledby="cameras-title">
-      <div class="section-heading"><h2 id="cameras-title">카메라 관측</h2><span class="updated">실행 모드별</span></div>
-      <datalist id="detectorClassOptions"></datalist>
-      <div id="cameraGrid" class="camera-grid"><p class="loading">상태를 불러오는 중…</p></div>
-      <p class="note">왼쪽·오른쪽 천장 카메라와 각 팔의 관절 카메라 영상 및 상태를 표시합니다. 입력 경로는 CONTROL_STATION_LEFT_CEILING_CAMERA, CONTROL_STATION_RIGHT_CEILING_CAMERA, CONTROL_STATION_LEFT_JOINT_CAMERA, CONTROL_STATION_RIGHT_JOINT_CAMERA로 설정합니다. 프리뷰와 검출 후보는 검토용이며 로봇 제어에 연결되지 않습니다.</p>
-    </section>
     <section aria-labelledby="parking-title">
       <div class="section-heading"><h2 id="parking-title">Pinky 도착 확인</h2><span id="parkingUpdated" class="updated">판정 전</span></div>
       <div class="parking-panel">
@@ -387,6 +387,8 @@
           <button id="startSequence" type="button" disabled>선택한 순서로 실행</button>
       </div>
       <p id="sequenceStatus" class="note" role="status">연속 실행 상태 확인 중</p>
+      <p id="sequenceRequestMessage" class="manual-message" role="alert"></p>
+      <ol id="sequenceStepDetails" class="sequence-step-details" aria-label="물체별 실행 상태"></ol>
       <div id="sequenceRunActions" class="policy-buttons"></div>
       <p class="note">연속 실행은 선택한 순서로 정책을 한 번씩 실행합니다. 각 팔이 실측 초기자세로 돌아오면 다음 단계로 넘어가며, 복귀를 확인하지 못하면 멈춥니다. 물건이 카트에 놓였는지는 확인하지 않습니다.</p>
       <form id="cameraCommandForm" class="camera-command-form">

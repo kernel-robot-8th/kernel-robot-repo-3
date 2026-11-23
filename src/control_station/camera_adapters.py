@@ -487,7 +487,9 @@ class OpenCVArmCameraStreamManager:
         self._add_arm_feeds(_load_arm_devices() if arm_cameras is None else arm_cameras, joint_enabled)
         by_device: dict[str, list[_CameraFeed]] = {}
         for feed in self._feeds.values():
-            if feed.device:
+            # Policy-owned feeds are presence-only and do not open the camera. They may share the preview feed's
+            # path without competing for the V4L2 device.
+            if feed.device and not feed.watch_only:
                 by_device.setdefault(os.path.realpath(feed.device), []).append(feed)
         for shared in by_device.values():
             if len(shared) < 2:
@@ -558,6 +560,14 @@ class OpenCVArmCameraStreamManager:
                 if not device:
                     feed.error_message = f"장치 경로 미설정 ({feed.setting})"
                 added.append(feed)
+                if device and streamed:
+                    side = "left" if devices.arm_id == "arm-01" else "right"
+                    preview_id = f"{side}_{'joint' if role == 'GRIPPER' else 'ceiling'}_camera"
+                    preview_feed = self._feeds.get(preview_id)
+                    if (preview_feed and preview_feed.device
+                            and os.path.realpath(preview_feed.device) == os.path.realpath(device)):
+                        # Keep a single V4L2 capture owner, while preserving the policy camera's presence status.
+                        preview_feed.watch_only = True
         taken = {os.path.realpath(feed.device) for feed in added if feed.device}
         for legacy_id in ("joint_camera", "front_camera"):
             legacy = self._feeds.get(legacy_id)

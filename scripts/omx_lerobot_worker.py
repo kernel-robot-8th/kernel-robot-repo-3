@@ -16,8 +16,9 @@ The motion itself and its safety checks live in omx_slot_motion.py, shared with 
 - moves only after the control station answers ACCEPTED with HTTP 200
 - checks the command's cancel flag about once a second while moving
 - --release-torque turns arm torque off and exits (support the arm by hand first)
-PICK_WITH_POLICY runs the LeRobot ACT policy trained for the named object (omx_policy_pick.py, shared with the ROS 2
-action server omx_pick_action_server.py) through the policy server on this PC, stops it once the arm is back at rest, then aligns it to the recorded home pose. Whether
+PICK_WITH_POLICY first returns to this arm's recorded home pose, then runs the LeRobot ACT policy trained for the
+named object (omx_policy_pick.py, shared with the ROS 2 action server omx_pick_action_server.py) through the policy
+server on this PC. It stops the policy once the arm is back at rest and aligns it to the recorded home pose. Whether
 the object was grasped and placed is not checked, so the outcome is RESULT_UNKNOWN / PLACE_NOT_VERIFIED.
 A policy recorded on one arm (arm_id) runs only in that arm's worker (--robot-id) on that arm's board
 (board_serial in config/arms.json). With two arms, run one worker per arm; each takes its port and cameras from
@@ -31,6 +32,7 @@ from __future__ import annotations
 import argparse
 import time
 from datetime import datetime
+from pathlib import Path
 
 from mock_omx_worker import Refused, Worker, request_json
 from omx_policy_pick import PolicyPick, add_policy_arguments, arm_env, finish_policy_arguments
@@ -88,12 +90,8 @@ class LeRobotOmxWorker(Worker):
                 self.send(command, "REJECTED", reason_code=reason)
                 return
             command = self.send(command, "ACCEPTED")  # only an HTTP 200 here allows motion
-            self.pick.prepare()
         except Refused as refused:
             print(f"  중단: 관제가 거부함 ({refused}). 더 진행하지 않습니다.", flush=True)
-            return
-        except (ConnectionError, OSError, RuntimeError) as error:
-            self.report_policy_error(command, f"profile reset failed: {error}")
             return
 
         command_id = command["command_id"]
@@ -103,6 +101,32 @@ class LeRobotOmxWorker(Worker):
             if status != 200:
                 raise RuntimeError(f"HTTP {status}")
             return body["command"]["cancel_requested"]
+
+        try:
+            command = self.send(command, "PROGRESS", phase="RETURNING_HOME",
+                                message="정책 시작 전 저장된 초기자세로 복귀 중")
+            home_end = self.pick.return_home_before_policy(cancel_requested)
+            if home_end is not None:
+                self.send(command, home_end.event, reason_code=home_end.reason_code, message=home_end.message,
+                          pose_reached=home_end.pose_reached, phase=home_end.phase, details=home_end.details)
+                return
+            if cancel_requested():
+                self.send(command, "CANCELED", reason_code="OPERATOR_CANCELED",
+                          message="초기자세 복귀 후 정책 시작 전에 취소되었습니다.", pose_reached=True,
+                          phase="RETURNING_HOME")
+                return
+            self.pick.prepare()
+            if cancel_requested():
+                self.send(command, "CANCELED", reason_code="OPERATOR_CANCELED",
+                          message="정책 준비 중 취소되어 정책을 시작하지 않았습니다.", pose_reached=True,
+                          phase="RETURNING_HOME")
+                return
+        except Refused as refused:
+            print(f"  관제가 초기자세 복귀를 거부함 ({refused}). 정책은 시작하지 않았습니다.", flush=True)
+            return
+        except Exception as error:
+            self.report_policy_error(command, f"초기자세 복귀 또는 정책 준비 실패: {error}")
+            return
 
         try:
             result, policy_details = self.pick.run(

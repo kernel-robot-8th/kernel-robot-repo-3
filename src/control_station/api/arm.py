@@ -91,6 +91,16 @@ def sync_policy_cameras(app: Any) -> None:
         app.policy_cameras_lent_devices = wanted
 
 
+
+def get_status(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
+    """팔 프로세스 상태와 정책 실행 상태. 관제의 텔레오퍼레이션 기능은 제거되어 비활성으로 응답한다."""
+    h._json(200, {
+        "arm": {"state": "DISABLED", "enabled": False, "process_alive": False,
+                "detail": "관제 텔레오퍼레이션 기능이 비활성화되었습니다."},
+        "policy_run": h.app.policy_run_supervisor.snapshot(),
+    })
+
+
 def get_commands(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
     """OMX 명령 목록"""
     sync_policy_cameras(h.app)
@@ -149,7 +159,8 @@ def post_sequence(h: ControlStationHandler, route: str, parts: list[str], body: 
     except ArmSequenceError as exc:
         h._json_error(409, "ARM_SEQUENCE_CONFLICT", str(exc))
     except (ArmCommandError, ArmCommandConflict) as exc:
-        h._json_error(409, getattr(exc, "error_code", "ARM_COMMAND_CONFLICT"), str(exc))
+        details = {"command": exc.command} if isinstance(exc, ArmCommandConflict) and exc.command else {}
+        h._json_error(409, getattr(exc, "error_code", "ARM_COMMAND_CONFLICT"), str(exc), **details)
 
 
 def get_shelf_slots(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:

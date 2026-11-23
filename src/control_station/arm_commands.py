@@ -56,6 +56,7 @@ PHASES = frozenset(
         "MOVE_TO_DESTINATION",
         "PLACE_TARGET",
         "VERIFY_PLACEMENT",
+        "RETURNING_HOME",
     }
 )
 MAX_WAIT_S = 30.0

@@ -65,6 +65,13 @@ body:not(.dev) .dev-only { display: none !important; }
 .manual-reason { color: var(--text-3); font-size: 12px; }
 .manual-message { margin: 0; color: var(--text-2); font-size: 13px; }
 .manual-message:empty { display: none; }
+.sequence-step-details { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.sequence-step-details li { display: grid; gap: 3px; padding: 10px 12px; border-radius: var(--radius-inner); background: var(--card-muted); }
+.sequence-step-details li[data-state="RUNNING"], .sequence-step-details li[data-state="ACCEPTED"] { border-left: 3px solid var(--blue); }
+.sequence-step-details li[data-state="UNKNOWN"], .sequence-step-details li[data-state="FAILED"],
+.sequence-step-details li[data-state="REJECTED"] { border-left: 3px solid var(--red); }
+.sequence-step-details li[data-state="SUCCEEDED"], .sequence-step-details li[data-state="COMPLETED"] { border-left: 3px solid var(--green); }
+.sequence-step-details small { color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
 
 .manual-recover button.wide { width: 100%; min-height: 48px; margin-top: auto; font-size: 15px; }
 

@@ -110,7 +110,7 @@ sequenceDiagram
 | `RESULT_UNKNOWN` | `ACCEPTED`/`RUNNING` → `UNKNOWN` | 동작은 끝났지만 파지·적재를 확인할 수 없을 때. `reason_code` 필수 |
 | `CANCELED` | `ACCEPTED`/`RUNNING` → `CANCELED` | 운영자 취소 요청이 있을 때만. 스스로 멈췄으면 `FAILED` |
 
-`phase` 값은 관제의 집기 단계 이름과 같습니다: `APPROACH_TARGET`, `REFINE_TARGET`, `GRASP_TARGET`, `VERIFY_GRASP`, `LIFT_TARGET`, `MOVE_TO_DESTINATION`, `PLACE_TARGET`, `VERIFY_PLACEMENT`. `reason_code`는 대문자·숫자·`_`로 된 1–60자이며, 값 목록은 OMX 팀과 정합니다.
+`phase` 값은 관제의 집기 단계 이름과 같습니다: `APPROACH_TARGET`, `REFINE_TARGET`, `GRASP_TARGET`, `VERIFY_GRASP`, `LIFT_TARGET`, `MOVE_TO_DESTINATION`, `PLACE_TARGET`, `VERIFY_PLACEMENT`, `RETURNING_HOME`. `reason_code`는 대문자·숫자·`_`로 된 1–60자이며, 값 목록은 OMX 팀과 정합니다.
 
 ## 상태와 관제 규칙
 
@@ -227,6 +227,8 @@ sequenceDiagram
     API->>API: 당근 → carrot → 정책 carrot_act_v2, 정면 카메라에서 carrot이 한 칸에만 보이는지
     API-->>Op: 201 명령 (칸은 근거)
     W->>API: 명령 가져감 → 검사 → ACCEPTED (200일 때만 진행)
+    W->>API: PROGRESS RETURNING_HOME
+    W->>W: 이 팔에 기록된 home 자세로 이동, 도착 확인
     W->>P: RobotClient로 정책 실행 (카메라 2대 + 관절)
     W->>API: PROGRESS APPROACH_TARGET, 이후 1초마다 취소 확인
     W->>W: 팔이 home을 벗어났다가 돌아와 1.5초 머물면 정책 정지 (토크 유지)
@@ -238,10 +240,10 @@ sequenceDiagram
 - 물체별 집기 UI에서 실행 팔을 선택합니다. 카메라에서 칸을 찾으면 `config/arms.json`의 shelf 담당 팔과 선택을 대조하고, 서로 다르면 `ARM_SHELF_MISMATCH`로 거부합니다. 선택하지 않은 경우 집기 버튼은 비활성 상태입니다.
 - 두 팔 워커 설정: `CONTROL_STATION_LEFT/RIGHT_FOLLOWER_PORT`, `CONTROL_STATION_LEFT/RIGHT_OMX_POSES`, `CONTROL_STATION_LEFT/RIGHT_CEILING_CAMERA`, `CONTROL_STATION_LEFT/RIGHT_JOINT_CAMERA`를 설정하고 각각 `scripts/omx_act_policy_test.sh worker --robot-id arm-01` 및 `--robot-id arm-02`로 실행합니다. 양쪽 워커는 대기할 수 있지만, 정책 실행 중에는 두 팔 모두 새 명령을 받지 않습니다. 반대 팔 명령이 미완료 상태이면 정책 집기도 등록되지 않습니다.
 - 명령: `target`은 `object_class`(필수)와 선택적 `pick_slot_id`만 받습니다. 관제가 `target.object_class`를 검출기 클래스 이름으로 바꾸고 `target.policy`(`policy_id`, `label`, `model`, `registry_version`)를 붙입니다. 정책이 없는 물체는 400입니다. `place`는 다른 집기 명령과 같이 필요합니다(화면에서는 `CART_1`).
-- 워커 검사(거부 사유): 가짜·dry-run 팔(`POLICY_NEEDS_REAL_ARM`), 정책 파일 버전·정책 ID(`POLICY_REGISTRY_MISMATCH`, `POLICY_UNKNOWN`), 다른 팔에서 녹화한 정책이거나 포트가 이 팔의 보드가 아님(`POLICY_WRONG_ARM`), home 미기록(`POSE_NOT_RECORDED`), 만료(`EXPIRED`), 카메라 장치 없음(`CAMERA_UNAVAILABLE`), 다른 프로그램이 카메라 사용 중(`CAMERA_BUSY`), 정책 서버 응답 없음(`POLICY_SERVER_UNAVAILABLE`), 현재 자세가 home에서 400틱 넘게 떨어짐(`NOT_AT_REST`, 정책은 쉬는 자세에서 시작하도록 학습됨).
+- 워커 검사(거부 사유): 가짜·dry-run 팔(`POLICY_NEEDS_REAL_ARM`), 정책 파일 버전·정책 ID(`POLICY_REGISTRY_MISMATCH`, `POLICY_UNKNOWN`), 다른 팔에서 녹화한 정책이거나 포트가 이 팔의 보드가 아님(`POLICY_WRONG_ARM`), home 미기록(`POSE_NOT_RECORDED`), 만료(`EXPIRED`), 카메라 장치 없음(`CAMERA_UNAVAILABLE`), 다른 프로그램이 카메라 사용 중(`CAMERA_BUSY`), 정책 서버 응답 없음(`POLICY_SERVER_UNAVAILABLE`), 저장된 home 자세가 최대 이동 한도보다 멀리 있음(`TARGET_TOO_FAR`).
 - 카메라 넘겨주기: V4L2 카메라는 한 프로그램만 열 수 있습니다. 관제가 그 명령 팔의 정책 카메라(`CONTROL_STATION_ARM01_*_CAMERA`/`ARM02_*`, 예전 단일 팔 설정이면 `CONTROL_STATION_ACT_OVERHEAD_CAMERA`, `CONTROL_STATION_JOINT_CAMERA`와 같은 장치)를 화면에 띄우고 있으면, 워커가 정책 명령을 가져가는 순간(`DISPATCHED`) 그 카메라를 닫고 명령이 끝나면(`DISPATCHED`·`ACCEPTED`·`RUNNING`이 아니게 되면) 다시 엽니다. 그동안 화면에는 "학습 정책 실행 중"이 표시됩니다. 워커는 카메라를 열기 전에 다른 프로세스가 장치를 열고 있지 않은지 최대 5초 기다리고, 그래도 열려 있으면 `CAMERA_BUSY`로 거부합니다. 2026-11-07 임시 관제에서 실제 헤드캠(허브 4.4)으로 확인: 명령을 가져가는 응답(0.04초) 안에 닫히고, 명령이 끝난 뒤 다시 `STREAMING`.
-- 실행: ACCEPTED 뒤 서보 속도 프로파일을 0(학습 때와 같은 전원 기본값)으로 되돌리고, LeRobot `RobotClient`를 워커 프로세스 안에서 돌립니다. LeRobot이 연결하면서 모터 설정을 쓰느라 토크가 잠깐 꺼집니다. 정지할 때는 토크를 유지합니다(`disable_torque_on_disconnect=False`).
-- 멈추는 조건: 정책에는 완료 신호가 없으므로, 워커가 LeRobot의 동일한 follower bus에서 읽은 실제 `Present_Position` 관절값으로 판정합니다. 어느 관절이든 home에서 300틱 넘게 벗어난 뒤 다섯 관절 모두 150틱 이내인 서로 다른 측정값 3개가 연속되면 `RETURNED_TO_REST`입니다(워커 옵션 `--policy-depart-ticks`, `--policy-rest-ticks`; 시작 허용치는 `--policy-start-ticks=400`). 학습 에피소드가 쉬는 자세에서 끝나도록 녹화돼 있어서 이 조건을 씁니다. 이 신호는 팔이 home 근처로 돌아왔다는 뜻이며 물체 집기·적재 완료를 뜻하지 않습니다.
+- 실행: ACCEPTED 뒤 먼저 이 팔의 기록된 `home` 자세로 복귀합니다. 복귀가 확인된 뒤 서보 속도 프로파일을 0(학습 때와 같은 전원 기본값)으로 되돌리고 LeRobot `RobotClient`를 실행합니다. 복귀 취소·실패 시 정책을 시작하지 않습니다. LeRobot이 연결하면서 모터 설정을 쓰느라 토크가 잠깐 꺼집니다. 정지할 때는 토크를 유지합니다(`disable_torque_on_disconnect=False`).
+- 멈추는 조건: 정책에는 완료 신호가 없으므로, 워커가 LeRobot의 동일한 follower bus에서 읽은 실제 `Present_Position` 관절값으로 판정합니다. 어느 관절이든 home에서 300틱 넘게 벗어난 뒤 다섯 관절 모두 `--policy-rest-ticks`(기본 150틱) 이내인 서로 다른 측정값 3개가 연속되면 `RETURNED_TO_REST`입니다. 이 신호는 팔이 home 근처로 돌아왔다는 뜻이며 물체 집기·적재 완료를 뜻하지 않습니다.
 - 정책 실행을 시간 경과로 종료하는 코드는 없습니다. 실제 관절값이 home을 벗어난 뒤 허용 오차 안으로 돌아와 안정된 것이 확인되거나, 운영자가 취소하거나 통신·장치 오류가 발생하면 종료합니다. 작업 흐름도 팔 명령의 최종 이벤트를 기다립니다.
 - 순차 정책 실행은 관제 화면에서 등록된 정책을 체크하고 실행 순서를 정해 시작합니다(1~4개, 중복 물체 제외). 서버는 정책 등록 정보를 기준으로 각 물체의 담당 팔에 단계별 `PICK_WITH_POLICY` 명령을 보냅니다. 직전 워커 결과가 `SUCCEEDED` 또는 `UNKNOWN`/`PLACE_NOT_VERIFIED`이고 실측 `pose_reached: true`인 경우에만 다음 단계를 보냅니다. 그 외 실패·취소·ACK 불명·만료·초기 자세 미복귀는 시퀀스를 멈춥니다. 적재 여부는 미확인으로 기록하고, 다음 단계 진행을 위해 UNKNOWN 명령만 시퀀스 메모와 함께 해제합니다. 선택 가능한 정책은 [config/omx-act-policies.json](../../config/omx-act-policies.json)에서 읽습니다.
 - 순차 실행 API: `GET /api/arm/sequences`는 최근 실행을 반환하고, `POST /api/arm/sequences`는 `{"object_classes":["carrot","apple"]}`처럼 순서가 있는 물체 목록으로 시작합니다. 기존 사전 정의를 실행할 때는 `{"sequence_id":"..."}`도 지원합니다. `POST /api/arm/sequences/{run_id}/cancel`은 현재 명령 취소를 요청합니다. 화면은 각 단계 담당 팔과 진행 상태를 표시합니다.
@@ -249,7 +251,7 @@ sequenceDiagram
 
 | 정책 정지 이유 | 그 뒤 동작 | 보고 |
 |---|---|---|
-| 쉬는 자세로 돌아옴 | 실제 관절이 `--policy-rest-ticks`(기본 150틱) 안이면 추가 이동 없이 종료 | `RESULT_UNKNOWN` / `PLACE_NOT_VERIFIED`, `pose_reached: true`. 허용치 밖이면 움직이지 않고 `FAILED` / `REST_NOT_CONFIRMED` |
+| 쉬는 자세로 돌아옴 | 정책 종료 뒤에도 기록된 `home` 자세로 이동하고 도착을 확인 | `RESULT_UNKNOWN` / `PLACE_NOT_VERIFIED`, `pose_reached: true`. 복귀가 실패하면 `FAILED` 또는 `RESULT_UNKNOWN` |
 | 운영자 취소 | 그 자리에서 토크 유지 | `CANCELED` |
 | 통신·카메라·모터 오류 | 그 자리 | `RESULT_UNKNOWN` / `POLICY_RUN_ERROR` |
 
@@ -291,9 +293,9 @@ ros2 action send_goal --feedback /omx/move_to_slot omx_interfaces/action/MoveToS
 
 **왜 action인가.** 집기 한 번은 수십 초 걸리고, 그동안 진행을 보고 싶고(어디까지 왔나), 중간에 멈출 수 있어야 하며(취소), 끝나면 성공·실패·모름을 받아야 합니다. ROS 2 action은 이 세 가지(feedback·cancel·result)를 표준으로 줍니다. 서비스는 끝날 때까지 기다리기만 하고, 토픽은 한 목표의 결과를 짝지어 주지 않습니다.
 
-- **서버:** 팔마다 하나(`/arm_01/pick_object`, `/arm_02/pick_object`). 검사·정책 실행·home 정렬은 HTTP 워커와 같은 [omx_policy_pick.py](../../scripts/omx_policy_pick.py)라서 규칙이 같습니다. 녹화한 팔·보드가 아니면 `POLICY_WRONG_ARM`, 정책 파일 SHA·모델이 다르면 `POLICY_REGISTRY_MISMATCH`·`POLICY_UNKNOWN`, 쉬는 자세가 아니면 `NOT_AT_REST`입니다. 취소하면 그 자리에서 멈추고 토크를 유지합니다.
+- **서버:** 팔마다 하나(`/arm_01/pick_object`, `/arm_02/pick_object`). 검사·정책 실행·home 정렬은 HTTP 워커와 같은 [omx_policy_pick.py](../../scripts/omx_policy_pick.py)라서 규칙이 같습니다. 녹화한 팔·보드가 아니면 `POLICY_WRONG_ARM`, 정책 파일 SHA·모델이 다르면 `POLICY_REGISTRY_MISMATCH`·`POLICY_UNKNOWN`, 기록된 home까지 이동 한도를 넘으면 `TARGET_TOO_FAR`입니다. 취소하면 그 자리에서 멈추고 토크를 유지합니다.
 - **목표:** `command_id`, `arm_id`, `object_class`, `policy_id`, `policy_model`, `policy_registry_version`, `valid_until`. 좌표는 없습니다.
-- **진행:** `CHECKING` → `STARTING_POLICY`(여기부터 팔이 움직일 수 있음) → `RUNNING_POLICY` → `RETURNING_HOME`, 경과 시간, `simulated`.
+- **진행:** `CHECKING` → `RETURNING_HOME`(정책 시작 전 초기자세 복귀) → `STARTING_POLICY` → `RUNNING_POLICY` → `RETURNING_HOME`(정책 종료 후 초기자세 복귀), 경과 시간, `simulated`.
 - **결과:** `HOME_REACHED_PLACE_NOT_VERIFIED`(home 복귀, 놓였는지는 모름 = 정상 끝), `FAILED`, `RESULT_UNKNOWN`, `CANCELED`, `REJECTED`(검사 거부, 움직이지 않음). 그 밖에 `reason_code`, `message`, `pose_reached`, `simulated`, `run_s`. ROS 상태는 정상 끝만 succeeded, 취소는 canceled, 나머지는 aborted입니다.
 - 한 번에 목표 하나. 실행 중에 온 목표는 ROS 단계에서 받지 않습니다.
 
