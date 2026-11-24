@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Record what the fusion needs, for the noise measurement and the offline comparison (scripts/fusion_eval.py).
+"""퓨전에 필요한 토픽을 녹화한다: 노이즈 측정과 오프라인 비교(scripts/fusion_eval.py)에 쓴다.
 
-On the PC through the domain bridge (topics under /pinky_<id>/):
+실행 위치: 오프라인 도구 (사람이 직접 실행). PC에서 도메인 브리지를 거치거나 핑키에서 직접 돌린다.
+사용처: 만든 JSONL을 scripts/fusion_eval.py가 읽는다. app.py나 주행준비는 이 파일을 쓰지 않는다.
+
+PC에서 도메인 브리지를 거쳐(토픽이 /pinky_<id>/ 아래에 있음):
     source /opt/ros/jazzy/setup.bash
     python3 scripts/fusion_record.py --ns /pinky_10 --seconds 20 --out logs/fusion/box60.jsonl --note "low box 0.6 m"
-On the Pinky itself: --ns ''.
+핑키 자체에서는: --ns ''.
 
-One JSON object per line: meta, tf_static (sensor mountings), odom (robot pose), scan, range. "t" is the time the
-message arrived here, so all topics share one clock; stamps are kept as they came.
-Only reads topics: it never commands the robot.
+한 줄에 JSON 객체 하나: meta, tf_static(센서 장착 위치), odom(로봇 자세), scan, range. "t"는 메시지가 여기
+도착한 시각이라 모든 토픽이 시계 하나를 공유한다. stamp는 들어온 그대로 둔다.
+토픽을 읽기만 한다: 로봇에 명령을 내리지 않는다.
 """
 from __future__ import annotations
 
@@ -19,16 +22,18 @@ import time
 from pathlib import Path
 
 
+# 쿼터니언 q에서 z축 회전(yaw, rad)만 뽑는다.
 def yaw_of(q) -> float:
     return math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
 
 
 def finite_or_none(values):
-    """JSON has no inf/nan: +inf (no return) stays as 1e9, anything else non-finite becomes null."""
+    """JSON에는 inf/nan이 없다: +inf(반사 없음)는 1e9로 남기고, 나머지 유한하지 않은 값은 null로 바꾼다."""
     return [1e9 if math.isinf(v) and v > 0 else (v if math.isfinite(v) else None) for v in values]
 
 
 def main(argv=None) -> int:
+    """--seconds 동안 녹화해 --out에 쓴다. 받지 못한 토픽이 하나라도 있으면 1을 돌려준다."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--ns', default='/pinky_10', help="topic prefix, '' on the robot itself")
     parser.add_argument('--seconds', type=float, default=20.0)
@@ -59,6 +64,8 @@ def main(argv=None) -> int:
     class Recorder(Node):
         def __init__(self):
             super().__init__('pinky_fusion_record')
+            # /tf_static은 발행자가 TRANSIENT_LOCAL(latched)로 한 번만 보낸다: 같은 QoS로 받아야 늦게 붙어도
+            # 장착 위치를 받는다. 센서 토픽은 발행자에 맞춰 best-effort(sensor_data)다.
             latched = QoSProfile(depth=10, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                                  reliability=ReliabilityPolicy.RELIABLE)
             self.create_subscription(TFMessage, f'{ns}/tf_static', self.on_static, latched)

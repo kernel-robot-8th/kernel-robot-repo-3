@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""Offline evaluation of the LiDAR + ultrasonic fusion on recorded runs (scripts/fusion_record.py makes the logs).
+"""녹화한 주행으로 라이다 + 초음파 퓨전을 오프라인 평가한다(로그는 scripts/fusion_record.py가 만든다).
 
-Two jobs:
-  noise    Sensor noise from runs standing still in front of a box: mean, standard deviation and dropouts per
-           sensor and distance. The largest standard deviation becomes lidar_sigma_m / us_sigma_m.
+실행 위치: 오프라인 도구 (사람이 직접 실행, PC). ROS 없이 돈다.
+사용처: 사람이 퓨전 설정(navigation.fusion_grid)을 정하고 비교할 때. 로봇 FusionGrid 코드를 그대로 재생한다.
+
+할 일 두 가지:
+  noise    상자 앞에 서 있는 녹화로 센서 노이즈를 잰다: 센서·거리별 평균, 표준편차, 결측 비율.
+           가장 큰 표준편차가 lidar_sigma_m / us_sigma_m이 된다.
              python3 scripts/fusion_eval.py noise --run 0.20=logs/fusion/d20.jsonl --run 0.40=logs/fusion/d40.jsonl
-  compare  The same recording replayed through three methods (an ablation):
-             lidar_only         LiDAR alone: what Nav2 had before
-             ultrasonic_binary  every reading overwrites its cells: an echo marks its whole arc at once, the
-                                next reading decides again (the classic binary sonar marking, as Nav2's own
-                                marking/clearing does it: no accumulation, no LiDAR association)
-             fused              FusionGrid as it runs on the robot
-           With --box x,y (the box centre in the robot's start frame, x forward, y left, metres) it reports whether
-           and when the low box was found and how far the robot was from it then; without --box the run is an empty
-           path and every low obstacle is a false one.
+  compare  같은 녹화를 세 방법으로 재생한다(ablation, 한 요소씩 빼 보는 비교):
+             lidar_only         라이다만: 퓨전 전에 Nav2가 가졌던 것
+             ultrasonic_binary  읽을 때마다 칸을 덮어쓴다: 반사 한 번이 호 전체를 바로 표시하고 다음 값이 다시
+                                정한다(Nav2 자체 marking/clearing처럼 하는 고전 이진 소나 표시: 누적 없음,
+                                라이다 연관 없음)
+             fused              로봇에서 도는 그대로의 FusionGrid
+           --box x,y(로봇 출발 좌표계의 상자 중심, x 앞, y 왼쪽, m)를 주면 낮은 상자를 찾았는지, 언제 찾았는지,
+           그때 로봇이 얼마나 떨어져 있었는지 보고한다. --box가 없으면 빈 길 주행이고 낮은 장애물은 모두 오검출이다.
              python3 scripts/fusion_eval.py compare logs/fusion/box60.jsonl --box 0.60,0.0
              python3 scripts/fusion_eval.py compare logs/fusion/empty.jsonl
 """
@@ -28,6 +30,7 @@ from pathlib import Path
 
 import numpy as np
 
+# PC 패키지(scripts.fusion_eval)로 불리면 상대 import, 스크립트로 직접 실행하면 같은 폴더에서 import한다.
 if __package__:
     from .fusion_grid import FusionGrid
 else:
@@ -35,6 +38,7 @@ else:
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE = 'base_footprint'
+# compare가 돌리는 방법별 FusionGrid 설정 덮어쓰기(fusion_grid.DEFAULTS의 비교용 스위치).
 METHODS = {
     'lidar_only': {'use_ultrasonic': False},
     'ultrasonic_binary': {'associate': False, 'us_accumulate': False},
@@ -43,31 +47,33 @@ METHODS = {
 
 
 def load(path) -> list[dict]:
+    """JSONL 녹화를 레코드 목록으로 읽는다."""
     with open(path, encoding='utf-8') as handle:
         return [json.loads(line) for line in handle if line.strip()]
 
 
 def reading(value) -> float:
-    """A recorded range back to a float: null -> nan, the 1e9 that stands for +inf (no return) -> inf."""
+    """녹화된 거리 값을 float로 되돌린다: null -> nan, +inf(반사 없음)를 뜻하는 1e9 -> inf."""
     if value is None:
         return math.nan
     return math.inf if value >= 1e9 else float(value)
 
 
 def compose(a, b):
-    """Pose b given in the frame of pose a, into a's parent frame. Poses are (x, y, yaw)."""
+    """자세 a의 좌표계로 주어진 자세 b를 a의 부모 좌표계로 옮긴다. 자세는 (x, y, yaw)다."""
     x, y, yaw = a
     c, s = math.cos(yaw), math.sin(yaw)
     return x + c * b[0] - s * b[1], y + s * b[0] + c * b[1], yaw + b[2]
 
 
 class StaticFrames:
-    """Sensor mountings from the recorded static TF (URDF), as (x, y, yaw, z) in base_footprint."""
+    """녹화된 static TF(URDF)에서 얻은 센서 장착 위치. base_footprint 기준 (x, y, yaw, z)."""
 
     def __init__(self, records):
         self.parent = {r['child'].lstrip('/'): r for r in records if r.get('type') == 'tf_static'}
 
     def in_base(self, frame: str):
+        """frame에서 부모를 따라 base_footprint까지 올라가며 합성한다. 사슬이 끊기거나 20단을 넘으면 None."""
         frame = (frame or '').lstrip('/')
         if frame == BASE:
             return 0.0, 0.0, 0.0, 0.0
@@ -86,6 +92,7 @@ class StaticFrames:
 
 
 class OdomTrack:
+    """녹화된 odom 자세를 시간으로 선형 보간한다. yaw는 unwrap해 -pi/pi 경계에서 튀지 않게 한다."""
     def __init__(self, records):
         rows = sorted((r['t'], r['x'], r['y'], r['yaw']) for r in records if r.get('type') == 'odom')
         self.t = np.array([row[0] for row in rows])
@@ -93,6 +100,7 @@ class OdomTrack:
         self.y = np.array([row[2] for row in rows])
         self.yaw = np.unwrap(np.array([row[3] for row in rows])) if rows else np.array([])
 
+    # 녹화 구간 앞뒤 slack초(0.5 s)까지만 보간한다. 그 밖이면 None(자세를 모름).
     def at(self, t: float, slack: float = 0.5):
         if not len(self.t) or t < self.t[0] - slack or t > self.t[-1] + slack:
             return None
@@ -104,6 +112,7 @@ class OdomTrack:
 
 
 def ultrasonic_mount(frames: StaticFrames, frame: str, geometry: dict):
+    """초음파 장착 위치: TF에 있으면 그것, 없으면 robot_geometry.json 값과 높이 3.7 cm(fusion_grid와 같은 대체)."""
     mount = frames.in_base(frame) if frame else None
     if mount is not None:
         return mount
@@ -112,7 +121,7 @@ def ultrasonic_mount(frames: StaticFrames, frame: str, geometry: dict):
 
 
 def replay(records, settings=None, geometry=None):
-    """Feed the recording to a FusionGrid in time order; yields (t, robot pose in odom, grid) after each reading."""
+    """녹화를 시간 순서로 FusionGrid에 넣는다. 값 하나를 넣을 때마다 (t, odom의 로봇 자세, 격자)를 낸다."""
     grid = FusionGrid(settings)
     frames, odom, geometry = StaticFrames(records), OdomTrack(records), geometry or {}
     for rec in sorted((r for r in records if r.get('type') in ('scan', 'range')), key=lambda r: r['t']):
@@ -134,12 +143,13 @@ def replay(records, settings=None, geometry=None):
 
 
 def evaluate(records, settings=None, box=None, box_size=0.10, geometry=None) -> dict:
-    """Low-obstacle detection over one recording. box = (x, y) in the robot's start frame, None for an empty path."""
+    """녹화 하나에서 낮은 장애물 검출을 평가한다. box = 로봇 출발 좌표계의 (x, y), 빈 길이면 None."""
     odom = OdomTrack(records)
     start = odom.start()
     if start is None:
         raise ValueError('the recording has no odometry')
     target = compose(start, (box[0], box[1], 0.0))[:2] if box else None
+    # 상자 반 폭 + 5 cm 안의 낮은 장애물 칸은 상자를 찾은 것, 그 밖은 오검출로 센다
     match = box_size / 2 + 0.05
     result = dict(detected=False if box else None, first_detection_s=None, robot_to_box_at_detection_m=None,
                   closest_robot_to_box_m=None, false_positive_s=0.0, max_false_cells=0)
@@ -174,12 +184,13 @@ def evaluate(records, settings=None, box=None, box_size=0.10, geometry=None) -> 
 
 
 def compare(records, base_settings=None, box=None, box_size=0.10, geometry=None) -> dict:
+    """METHODS의 방법마다 evaluate한 결과 {방법 이름: 결과}."""
     return {name: evaluate(records, {**(base_settings or {}), **preset}, box, box_size, geometry)
             for name, preset in METHODS.items()}
 
 
 def noise_stats(values, expected=None) -> dict:
-    """Mean, standard deviation, share of dropouts (None/non-finite) and bias against the expected distance."""
+    """평균, 표준편차, 결측(None/유한하지 않음) 비율, 기대 거리 대비 편향(bias)."""
     good = [v for v in values if v is not None and math.isfinite(v)]
     result = dict(n=len(values), valid=len(good), dropout=round(1 - len(good) / len(values), 3) if values else None,
                   mean_m=None, std_m=None, bias_m=None)
@@ -191,7 +202,8 @@ def noise_stats(values, expected=None) -> dict:
 
 
 def noise(records, distance=None, geometry=None) -> dict:
-    """distance = robot centre (base_footprint) to the box face, straight ahead; None if not measured."""
+    """distance = 로봇 중심(base_footprint)에서 바로 앞 상자 면까지(m). 재지 않았으면 None.
+    센서별 기대 거리는 distance에서 센서 장착 x를 뺀 값이다. 라이다는 정면 빔 하나만 본다."""
     frames = StaticFrames(records)
     geometry = geometry or {}
     us_values, us_mount = [], None
@@ -206,7 +218,7 @@ def noise(records, distance=None, geometry=None) -> dict:
             continue
         lidar_mount = mount
         angles = rec['angle_min'] + np.arange(len(rec['ranges'])) * rec['angle_increment'] + mount[2]
-        k = int(np.argmin(np.abs(np.arctan2(np.sin(angles), np.cos(angles)))))  # the beam pointing straight ahead
+        k = int(np.argmin(np.abs(np.arctan2(np.sin(angles), np.cos(angles)))))  # 바로 앞을 향한 빔
         v = rec['ranges'][k]
         lidar_values.append(v if v is not None and math.isfinite(v) and rec['range_min'] <= v <= rec['range_max'] else None)
     expect = (lambda mount: None if distance is None or mount is None else distance - mount[0])
@@ -214,7 +226,7 @@ def noise(records, distance=None, geometry=None) -> dict:
 
 
 def suggested_sigmas(rows: list[dict]) -> dict:
-    """The largest standard deviation over all distances, so the model is never more confident than the sensor."""
+    """모든 거리 중 가장 큰 표준편차(최소 5 mm). 모델이 센서보다 더 확신하는 일이 없게 한다."""
     out = {}
     for sensor, key in (('lidar', 'lidar_sigma_m'), ('ultrasonic', 'us_sigma_m')):
         stds = [row[sensor]['std_m'] for row in rows if row[sensor]['std_m'] is not None]
@@ -224,6 +236,7 @@ def suggested_sigmas(rows: list[dict]) -> dict:
 
 
 def default_geometry() -> dict:
+    """config/robot_geometry.json의 default 치수. 읽지 못하면 빈 dict."""
     try:
         return json.loads((ROOT / 'config/robot_geometry.json').read_text())['default']
     except (OSError, ValueError, KeyError):
@@ -231,6 +244,7 @@ def default_geometry() -> dict:
 
 
 def _print_compare(results: dict, box) -> None:
+    """compare 결과를 방법별 한 줄 표로 출력한다."""
     head = f"{'method':<19}{'found':>7}{'after s':>9}{'robot-box m':>13}{'false s':>9}{'max false cells':>17}"
     print(head)
     print('-' * len(head))

@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
-"""Robot side: turn the front ultrasonic Range into points for Nav2's VoxelLayer (LiDAR + ultrasonic fusion).
+"""(사용 안 함) 로봇 쪽: 전면 초음파 Range를 Nav2 VoxelLayer용 점으로 바꾸던 이전 라이다 + 초음파 퓨전.
 
-The LiDAR sees one plane about 12.5 cm above the floor; the ultrasonic looks forward about 3.7 cm above it, so
-it sees low things the LiDAR passes over. The costmap keeps both in 5 cm height cells and treats a column as
-blocked when any cell in it is occupied, so a low box becomes an obstacle Nav2 plans around.
+실행 위치: 지금은 어디서도 실행되지 않는다(저장소에 남은 죽은 코드).
+사용처: 없음. 2026-11-16 scripts/fusion_grid.py가 이 파일을 대신했다. runtime_bundle에 들어 있지 않고, 어느 코드도
+  import하지 않으며, 테스트도 없다. app.py는 예전 설치에서 남아 도는 같은 이름의 프로세스를 주행준비 때 멈추기만
+  한다(app.py의 _stop_script_command("ultrasonic_cloud")).
 
-A Range only says "something within this cone at this distance", so a confirmed echo marks the whole arc across
-the field of view (the safe side). Two clouds go out in the sensor frame:
-  /us_sensor/cloud_mark   the arc of a confirmed echo within mark_max_range_m (marking only)
-  /us_sensor/cloud_clear  the arc at the measured distance, or at clear_max_range_m with no echo (clearing only)
-A reading counts only after agree_count readings in a row agree within agree_m around the median of the last
-`window`, which keeps single jumps out. Far echoes are not marked: from 3.7 cm high the cone meets the floor.
-Settings: /home/pinky/.cache/pinky-fleet/nav2/runtime_config.json -> navigation.ultrasonic_cloud.
+라이다는 바닥에서 약 12.5 cm 높이의 평면 하나를 보고, 초음파는 바닥에서 약 3.7 cm 높이로 앞을 보므로 라이다가
+넘겨 보는 낮은 물체를 본다. costmap은 둘 다 5 cm 높이 칸에 두고, 기둥 안의 어느 칸이든 점유면 막힌 것으로 보므로
+낮은 상자가 Nav2가 돌아가는 장애물이 된다.
+
+Range는 "이 원뿔 안, 이 거리에 무언가 있다"만 말하므로, 확인된 반사는 시야 전체에 걸친 호를 표시한다(안전한 쪽).
+센서 좌표계로 점군 두 개를 낸다:
+  /us_sensor/cloud_mark   mark_max_range_m 안의 확인된 반사의 호 (marking 전용)
+  /us_sensor/cloud_clear  측정 거리의 호, 반사가 없으면 clear_max_range_m의 호 (clearing 전용)
+값은 최근 `window`개의 중앙값 둘레 agree_m 안에서 agree_count번 연속 맞아야 인정한다. 한 번 튀는 값을 막는다.
+먼 반사는 표시하지 않는다: 3.7 cm 높이에서는 원뿔이 바닥에 닿는다.
+설정: /home/pinky/.cache/pinky-fleet/nav2/runtime_config.json -> navigation.ultrasonic_cloud.
 """
 from __future__ import annotations
 
@@ -21,12 +26,13 @@ import statistics
 from collections import deque
 from pathlib import Path
 
+# 단위: m, rad. window·agree_count·arc_points는 개수다.
 DEFAULTS = dict(min_range_m=0.03, mark_max_range_m=0.6, clear_max_range_m=0.8, window=5, agree_m=0.03,
                 agree_count=3, arc_points=7, fov_rad=0.26)
 
 
 class RangeFilter:
-    """Median of the last readings, confirmed once enough agree. No ROS here, so it can be tested on its own."""
+    """최근 값들의 중앙값을, 충분히 맞으면 확인한다. ROS가 없어 따로 테스트할 수 있다."""
 
     def __init__(self, settings: dict):
         self.s = {**DEFAULTS, **(settings or {})}
@@ -35,7 +41,7 @@ class RangeFilter:
         self.last_median: float | None = None
 
     def update(self, value: float) -> tuple[str, float | None]:
-        """('obstacle', d) for a confirmed echo to mark, ('free', d) to clear up to d, or ('unsure', None)."""
+        """표시할 확인된 반사면 ('obstacle', d), d까지 비울 때 ('free', d), 그 밖에는 ('unsure', None)."""
         if math.isnan(value):
             self.recent.clear()
             self.agreeing = 0
@@ -58,7 +64,7 @@ class RangeFilter:
         return "free", median
 
     def arc(self, distance: float, fov: float | None) -> list[tuple[float, float, float]]:
-        """Points across the cone at `distance` in the sensor frame (x forward)."""
+        """센서 좌표계(x가 앞)에서 `distance` 거리의 원뿔을 가로지르는 점들."""
         width = fov if fov and math.isfinite(fov) and 0 < fov < math.pi else self.s["fov_rad"]
         count = max(1, int(self.s["arc_points"]))
         angles = [0.0] if count == 1 else [-width / 2 + i * width / (count - 1) for i in range(count)]
@@ -91,7 +97,7 @@ def main() -> None:
             if kind == "unsure":
                 return
             header = msg.header
-            if header.stamp.sec == 0 and header.stamp.nanosec == 0:  # drivers that leave the stamp at zero
+            if header.stamp.sec == 0 and header.stamp.nanosec == 0:  # stamp를 0으로 두는 드라이버
                 header.stamp = self.get_clock().now().to_msg()
             points = self.filter.arc(distance, float(msg.field_of_view))
             self.clear.publish(point_cloud2.create_cloud_xyz32(header, points))

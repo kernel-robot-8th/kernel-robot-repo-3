@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
-"""Robot side: show which Pinky this is, and what it is doing, on the Pinky's own screen.
+"""핑키 자기 LCD에 이 핑키가 누구인지, 지금 무엇을 하는지 보여 준다.
 
-Top: the name the control screens use (P0, P1, P2) with the robot id, and the battery. Middle, big: what it is doing
-now ("적재 자리로 이동 중", "물건 싣는 중", "대기 중"). Below: a second line when there is one ("배달 A"). Background:
-the same colour as the status lamp (scripts/status_lamp.py). All of it comes from the dashboard's /fleet/indicator
-(scripts/fleet_ops.indicator and activity). Korean is shown when the robot has a Korean font, else the short English
-word. With no indicator for SILENCE_S the dashboard is out of reach: NO LINK.
+실행 위치: 로봇 (주행준비 때 runtime_bundle로 올라감)
+사용처: app.py가 주행준비 때 별도 프로세스로 띄우고, app._reload_display가 이 파일만 다시 올려 재시작한다.
 
-The screen: pinky_pro's own driver (pinky_emotion/pinky_lcd.py: LCD().img_show(PIL image), a 320x240 landscape
-picture) is tried first, then the older names. Read from the pinky_pro sources on 2026-11-24, not yet seen working
-on a Pinky; what worked, or why nothing did, is reported on /fleet/display_status. pinky_emotion's emotion_server
-draws on the same screen ten times a second, so the two must not run together. With no screen this node reports
-the reason for a while (trying to open it again meanwhile) and ends. A screen problem never affects driving: this
-node only draws.
+위: 관제 화면의 이름(P0, P1, P2)과 로봇 id, 배터리. 가운데 크게: 지금 하는 일("적재 자리로 이동 중",
+"물건 싣는 중", "대기 중"). 아래: 둘째 줄이 있으면("배달 A"). 배경: 상태 램프(scripts/status_lamp.py)와 같은 색.
+모두 관제의 /fleet/indicator(scripts/fleet_ops.indicator와 activity)에서 온다. 로봇에 한글 글꼴이 있으면 한국어,
+없으면 짧은 영어 단어를 쓴다. SILENCE_S 동안 indicator가 없으면 관제와 끊긴 것: NO LINK.
 
-Sending the picture (2026-11-24): pinky_lcd.img_show writes the whole frame (153,600 bytes) in one go, and on a
-Pinky that is driving that write often ended in "[Errno 110] Connection timed out", so the screen stayed on the old
-picture for a long time. With pinky_lcd's own primitives this node sends only the bands of rows that changed, a few
-rows per write, and sends a band again when its write fails; what is still to go is finished on the next ticks.
+화면: pinky_pro 자체 드라이버(pinky_emotion/pinky_lcd.py: LCD().img_show(PIL 이미지), 320x240 가로 그림)를
+먼저 시도하고, 그다음 옛 이름들을 시도한다. 2026-11-24 pinky_pro 소스를 읽고 만든 것으로 핑키에서 동작을 아직
+보지 못했다. 무엇이 됐는지, 왜 안 됐는지는 /fleet/display_status로 알린다. pinky_emotion의 emotion_server가
+같은 화면에 초당 10번 그리므로 둘을 함께 돌리면 안 된다. 화면이 없으면 한동안 이유를 알리며(그동안 다시 열기를
+시도) 끝난다. 화면 문제는 주행에 영향을 주지 않는다: 이 노드는 그리기만 한다.
+
+그림 보내기(2026-11-24): pinky_lcd.img_show는 프레임 전체(153,600 바이트)를 한 번에 쓰는데, 주행 중인
+핑키에서 그 쓰기가 자주 "[Errno 110] Connection timed out"으로 끝나 화면이 오래 옛 그림에 머물렀다.
+pinky_lcd의 저수준 함수로 바뀐 행 묶음(band)만 몇 행씩 보내고, 쓰기가 실패한 묶음은 다시 보낸다.
+남은 것은 다음 tick들에서 마저 보낸다.
 """
 import json
 import time
@@ -25,17 +26,17 @@ from pathlib import Path
 
 COLORS = {"orange": (255, 110, 0), "green": (0, 170, 60), "blue": (0, 90, 255), "red": (220, 0, 0)}
 WORDS = {"orange": "NO POSE", "green": "DRIVING", "blue": "READY", "red": "STOP"}
-NAMES = {"10": "P0", "11": "P1", "12": "P2"}  # the names on the control screens (control_station.storage.store.PINKY_NAMES)
-SILENCE_S = 3.0
-NO_SCREEN_REPORT_S = 90.0   # how long opening the screen is tried (every OPEN_RETRY_S) before this node ends
+NAMES = {"10": "P0", "11": "P1", "12": "P2"}  # 관제 화면의 이름(control_station.storage.store.PINKY_NAMES)
+SILENCE_S = 3.0             # s. 관제 indicator는 0.25 s마다 오므로 3 s 조용하면 끊긴 것
+NO_SCREEN_REPORT_S = 90.0   # s. 화면 열기를(OPEN_RETRY_S마다) 이만큼 시도한 뒤 노드를 끝낸다
 OPEN_RETRY_S = 2.0
-OPEN_TRIES = 3              # in a row, each time the screen is opened
-TICK_S = 0.2
-BAND_ROWS = 8        # panel rows per write: 8 x 240 px x 2 bytes = 3840, one spidev write (its buffer is 4096)
-BAND_TRIES = 3       # a band whose write fails is sent again, with its window set again
-SMALL_CHUNK = 32     # bytes per write after BIG_FAILURES_TO_SMALL failed band writes in a row (short writes
-BIG_FAILURES_TO_SMALL = 6  # stay inside the SPI controller's FIFO; slower, tried only when big ones keep failing)
-DRAW_BUDGET_S = 1.5  # per tick; bands left over go out on the next ticks
+OPEN_TRIES = 3              # 화면을 열 때마다 연달아 시도하는 횟수
+TICK_S = 0.2                # s. 5 Hz로 그릴 것이 바뀌었는지 본다
+BAND_ROWS = 8        # 한 번 쓰는 패널 행 수: 8 x 240 px x 2 바이트 = 3840, spidev 한 번(버퍼 4096)
+BAND_TRIES = 3       # 쓰기 실패한 band는 창(window)을 다시 잡고 다시 보낸다
+SMALL_CHUNK = 32     # band 쓰기가 BIG_FAILURES_TO_SMALL번 연달아 실패한 뒤의 쓰기당 바이트(짧은 쓰기는
+BIG_FAILURES_TO_SMALL = 6  # SPI 컨트롤러 FIFO 안에 들어감. 느려서 큰 쓰기가 계속 실패할 때만)
+DRAW_BUDGET_S = 1.5  # s, tick당. 남은 band는 다음 tick들에서 보낸다
 FALLBACK_SIZE = (320, 240)
 FONT_PATHS = ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
               "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf")
@@ -47,18 +48,18 @@ KOREAN_FONT_PATHS = ("/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
                      "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
                      "/usr/share/fonts/truetype/unfonts-core/UnDotumBold.ttf",
                      "/usr/share/fonts/truetype/baekmuk/dotum.ttf")
-# (module, class, picture size): pinky_lcd's panel is 240x320 and img_show turns a landscape picture onto it.
+# (모듈, 클래스, 그림 크기): pinky_lcd 패널은 240x320이고 img_show가 가로 그림을 돌려 올린다.
 BACKENDS = (("pinky_emotion.pinky_lcd", "LCD", (320, 240)), ("pinky_lcd", "LCD", (320, 240)), ("pinkylib", "LCD", None))
 
 
 def korean_font(paths=KOREAN_FONT_PATHS):
-    """The first Korean font file on this machine, or None."""
+    """이 기기에 있는 첫 한글 글꼴 파일, 없으면 None."""
     return next((path for path in paths if Path(path).is_file()), None)
 
 
 def screen_state(wanted, heard_at, now, korean=False):
-    """(colour, screen, face, headline, second line, battery) to show from the dashboard's last indicator (a dict),
-    or NO LINK once it has been quiet for SILENCE_S. screen: 'face' (driving), 'battery' (low), 'stop', 'text'."""
+    """관제의 마지막 indicator(dict)로 보여 줄 (색, 화면, 표정, 제목, 둘째 줄, 배터리). SILENCE_S 동안 조용하면
+    NO LINK. 화면: 'face'(주행 중), 'battery'(배터리 낮음), 'stop', 'text'."""
     if wanted is None or now - heard_at > SILENCE_S or wanted.get("mode") == "blink":
         return "orange", "text", None, ("관제 연결 끊김" if korean else "NO LINK"), "", None
     color = wanted["color"]
@@ -69,15 +70,14 @@ def screen_state(wanted, heard_at, now, korean=False):
 
 
 def draw_face(draw, box, face, ink):
-    """A face inside box (x0, y0, x1, y1): 'happy' round eyes and a smile, 'excited' eyes squeezed into arches and a
-    wide open laugh (going home), 'focus' narrowed eyes and a straight mouth (docking), 'surprised' wide eyes and an
-    open mouth (an obstacle)."""
+    """box (x0, y0, x1, y1) 안의 얼굴: 'happy' 둥근 눈과 미소, 'excited' 아치 모양 눈과 활짝 웃는 입(귀가),
+    'focus' 가는 눈과 일자 입(도킹), 'surprised' 큰 눈과 벌린 입(장애물)."""
     x0, y0, x1, y1 = box
     w, h = x1 - x0, y1 - y0
     cx, eye_y, gap = (x0 + x1) / 2, y0 + h * 0.36, w * 0.21
     stroke = max(4, int(h * 0.07))
     for ex in (cx - gap, cx + gap):
-        if face == "excited":   # ^ ^
+        if face == "excited":   # ^ ^ 모양 눈
             r = h * 0.17
             draw.arc((ex - r, eye_y - r * 0.7, ex + r, eye_y + r * 1.3), start=200, end=340, fill=ink, width=max(6, int(h * 0.09)))
         elif face == "focus":
@@ -86,7 +86,7 @@ def draw_face(draw, box, face, ink):
             r = h * (0.20 if face == "surprised" else 0.15)
             draw.ellipse((ex - r, eye_y - r, ex + r, eye_y + r), fill=ink)
     mouth_y = y0 + h * 0.78
-    if face == "excited":       # an open laugh: the lower half of a wide ellipse, filled
+    if face == "excited":       # 활짝 웃는 입: 넓은 타원의 아래 절반을 채움
         rx, ry = w * 0.24, h * 0.26
         draw.pieslice((cx - rx, mouth_y - ry * 1.1, cx + rx, mouth_y + ry * 0.9), start=0, end=180, fill=ink)
     elif face == "surprised":
@@ -100,7 +100,7 @@ def draw_face(draw, box, face, ink):
 
 
 def draw_battery(draw, box, percent, ink, paper):
-    """A battery outline inside box, filled to percent (at least a sliver, so an empty one still reads)."""
+    """box 안에 배터리 외곽을 그리고 percent만큼 채운다(빈 배터리도 보이게 최소 한 줄은 채움)."""
     x0, y0, x1, y1 = (int(round(v)) for v in box)
     w, h = x1 - x0, y1 - y0
     stroke, cap = max(4, int(h * 0.09)), max(4, int(w * 0.06))
@@ -115,10 +115,9 @@ def draw_battery(draw, box, percent, ink, paper):
 
 def render(size, name, robot_id, color, screen="text", face=None, headline="", detail="", battery=None,
            korean_path=None):
-    """A PIL image on the state colour. Always: the name top left and the battery top right. Then by screen:
-    'text' the name big with '#id' and the headline big in the middle (shrunk to fit), the second line under it;
-    'face' a face with the headline as a caption; 'battery' a battery with the percent beside it; 'stop' the
-    headline (STOPPED) across the screen."""
+    """상태 색 바탕의 PIL 이미지. 항상 왼쪽 위에 이름, 오른쪽 위에 배터리. 화면별로: 'text'는 큰 이름과 '#id',
+    가운데 큰 제목(맞게 줄임)과 그 아래 둘째 줄. 'face'는 얼굴과 제목 자막. 'battery'는 배터리와 옆의 퍼센트.
+    'stop'은 화면 가득 제목(STOPPED)."""
     from PIL import Image, ImageDraw, ImageFont
 
     def font(px, text=""):
@@ -137,7 +136,7 @@ def render(size, name, robot_id, color, screen="text", face=None, headline="", d
     white, margin = (255, 255, 255), int(width * 0.04)
 
     def centred(text, px, min_px, y):
-        """text centred on (width / 2, y), shrunk until it fits the width."""
+        """text를 (width / 2, y) 가운데에 놓고, 폭에 맞을 때까지 글자 크기를 줄인다."""
         if not text:
             return
         room = width - 2 * margin
@@ -185,22 +184,22 @@ def render(size, name, robot_id, color, screen="text", face=None, headline="", d
 
 
 def panel_bytes(image, width, height):
-    """The picture as the panel takes it, an array (rows, columns, 2) of big-endian RGB565: the same turn and
-    packing as pinky_lcd.img_show."""
+    """패널이 받는 형태의 그림: big-endian RGB565의 (행, 열, 2) 배열. pinky_lcd.img_show와 같은 회전·패킹이다."""
     import numpy as np
     from PIL import Image
     turned = image.transpose(Image.FLIP_LEFT_RIGHT).transpose(Image.ROTATE_270)
     if turned.size != (width, height):
         turned = turned.resize((width, height), Image.LANCZOS)
     rgb = np.asarray(turned.convert("RGB")).astype(np.uint16)
+    # RGB565: 빨강 5비트 | 초록 6비트 | 파랑 5비트를 상위·하위 바이트로 나눈다.
     high = (rgb[..., 0] & 0xF8) | (rgb[..., 1] >> 5)
     low = ((rgb[..., 1] << 3) & 0xE0) | (rgb[..., 2] >> 3)
     return np.stack([high, low], axis=-1).astype(np.uint8)
 
 
 class Screen:
-    """The Pinky's LCD behind one call: the first library that opens. With pinky_lcd's primitives only the changed
-    bands are sent (draw returns False while some are still to go); otherwise the library's own whole-frame call."""
+    """핑키 LCD를 한 호출 뒤에 감춘다: 처음 열리는 라이브러리를 쓴다. pinky_lcd 저수준 함수가 있으면 바뀐 band만
+    보내고(남은 것이 있으면 draw가 False), 없으면 라이브러리의 프레임 전체 호출을 쓴다."""
 
     METHODS = ("img_show", "show_image", "display", "show")
     PRIMITIVES = ("spi", "w", "h", "_write_cmd", "_write_data", "_set_windows", "_write_data_buffer")
@@ -209,10 +208,11 @@ class Screen:
         import importlib
         errors = []
         candidates = [(backend, None, size)] if lcd is not None else BACKENDS
-        for module, name, picture_size in candidates:  # importing: only on the robot
+        for module, name, picture_size in candidates:  # import는 로봇에서만 된다
             try:
                 self.lcd = lcd if lcd is not None else self._open(getattr(importlib.import_module(module), name))
             except Exception as exc:  # noqa: BLE001 - not installed, or the screen is held by something else
+                # 설치 안 됨, 또는 다른 프로세스가 화면을 잡고 있음
                 errors.append(f"{module}: {exc}")
                 continue
             self.backend, self.method, self.payload = module, None, None
@@ -220,7 +220,7 @@ class Screen:
             height = getattr(self.lcd, "height", None) or getattr(self.lcd, "HEIGHT", None)
             self.size = picture_size or ((int(width), int(height)) if width and height else FALLBACK_SIZE)
             self.banded = all(hasattr(self.lcd, name) for name in self.PRIMITIVES)
-            self.sent = self.valid = None       # what the panel holds, and which rows of that are known
+            self.sent = self.valid = None       # 패널에 들어 있는 것, 그중 확실히 아는 행
             self.failures = self.big_failures = 0
             self.small, self.last_error, self.last_draw_s = False, None, None
             return
@@ -228,23 +228,22 @@ class Screen:
 
     @classmethod
     def _open(cls, lcd_class):
-        """An instance of the library's LCD. pinky_lcd's constructor ends with clear(), 38 writes of 4096 bytes, and
-        on a Pinky with Nav2 running one of them timed out nearly every time, so the screen could not even be opened
-        (P1, 2026-11-24). With its primitives the bands are sent here anyway, so that clear() is left out; the rest
-        of the constructor (pins, reset, panel settings: single bytes) is tried OPEN_TRIES times."""
+        """라이브러리 LCD 인스턴스. pinky_lcd 생성자는 clear()(4096 바이트 쓰기 38번)로 끝나는데, Nav2가 도는
+        핑키에서는 그중 하나가 거의 매번 시간 초과되어 화면을 열지도 못했다(P1, 2026-11-24). 저수준 함수가 있으면
+        어차피 여기서 band로 보내므로 그 clear()를 뺀다. 나머지(핀, 리셋, 패널 설정: 1바이트씩)는 OPEN_TRIES번 시도한다."""
         if all(hasattr(lcd_class, name) for name in ("_write_cmd", "_write_data", "_set_windows", "_write_data_buffer", "clear")):
             lcd_class = type("BandedLCD", (lcd_class,), {"clear": lambda self, color=0x0000: None})
         error = None
         for _ in range(OPEN_TRIES):
             try:
                 return lcd_class()
-            except OSError as exc:  # a write timed out: again
+            except OSError as exc:  # 쓰기 시간 초과: 다시
                 error = exc
                 time.sleep(0.2)
         raise error
 
     def draw(self, image, budget_s=DRAW_BUDGET_S):
-        """Put the picture on the screen. True when all of it is there, False when some bands are still to go."""
+        """그림을 화면에 올린다. 전부 올라가면 True, 아직 남은 band가 있으면 False."""
         started = time.monotonic()
         try:
             return self._draw_bands(image, started + budget_s) if self.banded else self._draw_whole(image)
@@ -252,6 +251,7 @@ class Screen:
             self.last_draw_s = round(time.monotonic() - started, 3)
 
     def _draw_whole(self, image):
+        # 메서드 이름·인자 형식(PIL/배열)을 몰라 차례로 시도하고, 성공한 조합을 기억한다.
         import numpy as np
         candidates = [self.method] if self.method else [m for m in self.METHODS if hasattr(self.lcd, m)]
         errors = []
@@ -273,13 +273,14 @@ class Screen:
         target = panel_bytes(image, lcd.w, lcd.h)
         if self.sent is None or self.sent.shape != target.shape:
             self.sent, self.valid = np.zeros_like(target), np.zeros(target.shape[0], dtype=bool)
+        # 바뀌었거나 상태를 모르는 행이 든 band만 보낸다.
         dirty = ~self.valid | (self.sent != target).any(axis=(1, 2))
         bands = sorted({int(row) // BAND_ROWS for row in np.flatnonzero(dirty)})
         if not bands:
             return True
         self.method = "bands"
         try:
-            lcd._write_cmd(0x36)   # memory access control, as img_show sets it before every frame
+            lcd._write_cmd(0x36)   # 메모리 접근 제어. img_show가 매 프레임 전에 하듯 설정
             lcd._write_data(0x08)
         except OSError as exc:
             self.failures += 1
@@ -301,7 +302,7 @@ class Screen:
                     self.sent[first:last], self.valid[first:last] = target[first:last], True
                     self.big_failures = 0
                     break
-                except OSError as exc:  # the write timed out: the band may be half written, so it goes again
+                except OSError as exc:  # 쓰기 시간 초과: band가 반쯤 쓰였을 수 있어 다시 보낸다
                     self.valid[first:last] = False
                     self.failures += 1
                     self.last_error = str(exc)
@@ -313,7 +314,7 @@ class Screen:
         return bool(self.valid.all() and (self.sent == target).all())
 
     def blank(self):
-        """Dark screen when this node ends, so a stale 'READY' is not left standing."""
+        """노드가 끝날 때 화면을 검게 해 오래된 'READY'가 남지 않게 한다."""
         try:
             from PIL import Image
             self.draw(Image.new("RGB", self.size, (0, 0, 0)), budget_s=3.0)
@@ -334,13 +335,15 @@ def main():
 
     class StatusDisplay(Node):
         def __init__(self):
+            # 화면은 운영 편의 기능이라 열리지 않아도 노드는 이유를 알리며 계속 돈다.
             super().__init__("pinky_status_display")
             self.wanted, self.heard_at, self.shown, self.problem = None, 0.0, None, None
-            self.target, self.picture = None, None  # the state being drawn and its picture
+            self.target, self.picture = None, None  # 그리는 중인 상태와 그 그림
             self.korean_path, self.started = korean_font(), time.monotonic()
             self.screen, self.opened_at = None, None
             self.open_screen()
             self.status = self.create_publisher(String, "/fleet/display_status", 1)
+            # indicator는 0.25 s마다 새로 오므로 best-effort, 마지막 하나(depth 1)만 있으면 된다.
             self.create_subscription(String, "/fleet/indicator", self.on_indicator,
                                      QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
             self.create_timer(TICK_S, self.tick)
@@ -360,6 +363,7 @@ def main():
                 self.screen = Screen()
                 self.problem = None
             except Exception as exc:  # noqa: BLE001 - no screen library, or its writes time out: tried again
+                # 화면 라이브러리가 없거나 쓰기가 시간 초과: 다시 시도한다
                 self.screen, self.problem = None, f"LCD 열기 실패: {exc}"[:400]
                 self.get_logger().error(self.problem)
 
@@ -381,12 +385,13 @@ def main():
                     self.target = state
                 if self.screen.draw(self.picture):
                     self.shown, self.problem = state, None
-                else:  # the rest goes out on the next ticks
+                else:  # 나머지는 다음 tick들에서 보낸다
                     self.problem = f"화면 일부를 아직 못 보냄: {self.screen.last_error}"
             except Exception as exc:  # noqa: BLE001
                 self.problem = str(exc)[:300]
 
         def report(self):
+            # 1 s마다 화면 상태를 /fleet/display_status로 알린다(관제가 원인 파악에 씀).
             screen = self.screen
             self.status.publish(String(data=json.dumps({
                 "shown": list(self.shown) if self.shown else None, "backend": getattr(screen, "backend", None),
@@ -402,6 +407,7 @@ def main():
     except (KeyboardInterrupt, SystemExit):
         pass
     except Exception as exc:  # noqa: BLE001 - e.g. rclpy's shutdown exception on SIGTERM
+        # 예: SIGTERM 때 rclpy의 종료 예외
         if type(exc).__name__ != "ExternalShutdownException":
             raise
     finally:

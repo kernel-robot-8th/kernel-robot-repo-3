@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-"""Create a Nav2 keepout mask aligned to the Pinky map-proto occupancy map."""
+"""핑키 map-proto 점유 지도에 맞춘 Nav2 keepout(진입 금지) 마스크를 만든다.
+
+실행 위치: 오프라인 도구 (사람이 PC에서 직접 실행: python3 scripts/create_keepout_mask.py [지도 yaml]).
+사용처: 결과 config/keepout/keepout_mask.pgm·.yaml은 runtime_bundle이 주행준비 때 로봇에 올리고,
+map-proto 지도일 때 Nav2 전역·지역 costmap의 keepout filter가 읽는다. 원본 지도는 바꾸지 않는다.
+
+핵심: 지도와 같은 크기·해상도·원점의 PGM을 만들고, 금지 사각형 안의 칸은 0(검정 = 막힘), 나머지는 255(흰색 =
+지나갈 수 있음)로 쓴다. 금지 띠 안의 수령 구역은 작은 원만 열어 둔다. 범위를 바꾸면 다시 실행하고, 로봇 Nav2를
+다음에 준비할 때 새 파일이 전송된다(OPERATIONS.md).
+"""
 
 from __future__ import annotations
 
@@ -8,14 +17,15 @@ import re
 import sys
 
 
-# Bounds estimated from the user's yellow rectangles in map-proto map coordinates.
+# 사용자가 노란 사각형으로 표시한 영역을 map-proto 지도 좌표로 어림한 경계.
+# 각 항목은 (min_x, max_x, min_y, max_y), 단위 m.
 KEEP_OUT_RECTS_M = (
-    (-0.20, 1.80, 1.86, 2.19),  # upper room band
-    (-0.20, 1.36, 0.89, 1.00),  # cross-room strip
+    (-0.20, 1.80, 1.86, 2.19),  # 위쪽 방 띠
+    (-0.20, 1.36, 0.89, 1.00),  # 방을 가로지르는 띠
 )
-# Receiving zones stand inside the upper room band (recorded 2026-11-16 as waypoints '수령 A' (0.56, 1.93) and
-# '수령 B' (1.08, 1.94)). Only a circle around each is opened, so a Pinky can drive in and stop there while the
-# rest of the band stays forbidden. (x, y, radius) in map metres.
+# 수령 구역은 위쪽 방 띠 안에 있다(2026-11-16에 웨이포인트 '수령 A' (0.56, 1.93)와 '수령 B' (1.08, 1.94)로 기록).
+# 각 지점 둘레의 원만 열어서, 띠의 나머지는 금지로 둔 채 핑키가 들어가 거기 멈출 수 있게 한다.
+# (x, y, 반지름), 단위는 지도 m.
 OPENINGS_M = (
     (0.56, 1.93, 0.15),  # 수령 A
     (1.08, 1.94, 0.15),  # 수령 B
@@ -23,6 +33,7 @@ OPENINGS_M = (
 
 
 def _pgm_tokens(data: bytes) -> tuple[list[bytes], int]:
+    """PGM 헤더의 토큰 4개(magic, 너비, 높이, 최댓값)와 픽셀 데이터 시작 위치를 돌려준다. '#' 주석 줄은 건너뛴다."""
     tokens: list[bytes] = []
     index = 0
     while len(tokens) < 4:
@@ -46,7 +57,7 @@ def _pgm_tokens(data: bytes) -> tuple[list[bytes], int]:
 
 
 def read_pgm_dimensions(path: Path) -> tuple[int, int]:
-    """Read dimensions from an ASCII or binary Netpbm grayscale image."""
+    """ASCII(P2) 또는 바이너리(P5) Netpbm 회색조 이미지에서 (너비, 높이)를 읽는다."""
     tokens, _ = _pgm_tokens(path.read_bytes())
     magic = tokens[0]
     if magic not in (b"P2", b"P5"):
@@ -58,6 +69,7 @@ def read_pgm_dimensions(path: Path) -> tuple[int, int]:
 
 
 def _map_metadata(path: Path) -> tuple[float, float, float, float]:
+    """지도 YAML에서 (해상도 m/칸, 원점 x, 원점 y, 원점 yaw)를 정규식으로 읽는다. 회전된 원점은 거부한다."""
     text = path.read_text(encoding="utf-8")
     resolution_match = re.search(r"(?m)^resolution:\s*([0-9.]+)\s*$", text)
     origin_match = re.search(r"(?m)^origin:\s*\[\s*([-0-9.]+)\s*,\s*([-0-9.]+)\s*,\s*([-0-9.]+)\s*\]", text)
@@ -73,7 +85,8 @@ def _map_metadata(path: Path) -> tuple[float, float, float, float]:
 
 
 def create_mask(map_yaml: Path, map_pgm: Path, output_pgm: Path, output_yaml: Path) -> int:
-    """Write a trinary mask with the marked rectangles encoded as lethal cells."""
+    """표시한 사각형을 치명(lethal) 칸으로 넣은 trinary 마스크를 쓰고, 막힌 칸 수를 돌려준다."""
+    # PGM은 맨 윗줄이 지도에서 y가 가장 큰 줄이므로 행 번호를 뒤집어 칸 중심의 지도 좌표를 구한다.
     width, height = read_pgm_dimensions(map_pgm)
     resolution, origin_x, origin_y, _ = _map_metadata(map_yaml)
     pixels: list[str] = []
@@ -98,6 +111,7 @@ def create_mask(map_yaml: Path, map_pgm: Path, output_pgm: Path, output_yaml: Pa
         + "\n",
         encoding="ascii",
     )
+    # mode trinary, negate 0: 어두운 칸(0)이 점유(occupied_thresh 0.65 이상)로 읽혀 금지 구역이 된다.
     output_yaml.write_text(
         "image: keepout_mask.pgm\n"
         "mode: trinary\n"
@@ -112,6 +126,7 @@ def create_mask(map_yaml: Path, map_pgm: Path, output_pgm: Path, output_yaml: Pa
 
 
 def main() -> int:
+    """인자로 받은 지도 YAML(없으면 ~/Documents/Pinky_backup/map-proto.yaml)로 config/keepout/에 마스크를 쓴다."""
     root = Path(__file__).resolve().parents[1]
     map_yaml = Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 else Path.home() / "Documents/Pinky_backup/map-proto.yaml"
     map_pgm = map_yaml.parent / "map-proto.pgm"

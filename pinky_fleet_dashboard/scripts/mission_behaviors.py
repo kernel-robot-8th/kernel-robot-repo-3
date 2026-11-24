@@ -1,4 +1,14 @@
-"""Bounded junction traversal and an operator-gated docking state machine."""
+"""제한을 둔 교차 구간 통과와 운영자 신호로 진행하는 도킹 상태 기계 등, 임무 중 특수 행동 모음.
+
+실행 위치: 로봇 (주행준비 때 runtime_bundle로 올라감)
+사용처: ultrasonic_safety.py가 import해 행동 선택에 쓴다 (Crossing, UltrasonicDetour, Docking, DockEntry,
+DockExit, BackOff, GiveWay). ROS import가 없어 tests/에서 오프라인으로 시험한다.
+
+핵심: 각 클래스는 매 주기 update()로 Motion(선속도 m/s, 각속도 rad/s, 상태 이름) 또는 None(Nav2 명령을
+그대로 둠)을 돌려준다. 모든 동작에 거리·회전·시간 한도가 있고, 넘으면 fault로 정지한다(fail closed).
+pose는 지도 (x, y, yaw), odom은 바퀴 오도메트리 (x, y, yaw), 단위 m·rad·s.
+try/except import는 PC에서는 패키지(scripts.)로, 로봇에서는 같은 폴더의 일반 모듈로 읽히기 때문이다.
+"""
 from __future__ import annotations
 from dataclasses import dataclass
 import json
@@ -10,6 +20,7 @@ except ImportError:
     from motion_gate import geometry, range_arc, detour_clearance
 
 
+# 각도를 -pi~pi로 감싼다.
 def angle(value):
     return math.atan2(math.sin(value), math.cos(value))
 
@@ -20,12 +31,18 @@ def distance(a, b):
 
 @dataclass
 class Motion:
+    """행동이 내는 속도 명령: linear(m/s), angular(rad/s), state(로그·화면용 이름)."""
     linear: float
     angular: float
     state: str
 
 
 class Crossing:
+    """경로 모퉁이(교차점)를 Nav2 명령을 저속(±0.02 m/s, ±0.2 rad/s)으로 제한해 지나고, 이후 IR로 선을 다시 잡는다.
+
+    state: idle(관여 안 함) → traverse(통과 중) → reacquire(선 재확인) → idle, 한도 초과 시 fault(정지 유지).
+    phase: approach(꺾는 점까지) → turn(다음 구간으로 회전) → reacquire. done은 이미 처리한 (start|end, 구간)이다.
+    """
     def __init__(self):
         self.token = None
         self.state = 'idle'
@@ -58,6 +75,7 @@ class Crossing:
             return Motion(0., 0., 'crossing_fault')
         if self.state == 'idle':
             start_key, end_key = ('start', segment), ('end', segment)
+            # 구간 시작점 25 cm, 끝점 15 cm 안에 들어오면 통과 동작을 시작한다.
             near_start = distance(pose, context['start_xy']) <= .25
             near_end = distance(pose, context['end_xy']) <= .15
             if context.get('start_transition') and near_start and start_key not in self.done:
@@ -92,7 +110,8 @@ class Crossing:
         if phase != self.phase:
             self.phase, self.phase_started = phase, now
         self.phase_elapsed = now-self.phase_started
-        # Approach, turn and line reacquisition must not consume one timer.
+        # 접근·회전·선 재확인이 타이머 하나를 나눠 쓰면 안 된다(단계별 20/20/12초).
+        # 그 밖의 한도: 이동 0.65 m, 누적 회전 3.6 rad, 전체 60초.
         limit = {'approach': 20., 'turn': 20., 'reacquire': 12.}[self.phase]
         if self.travel > .65:
             self.failure_reason = 'distance_limit'
@@ -105,8 +124,8 @@ class Crossing:
         if self.failure_reason:
             self.state = 'fault'
             return Motion(0., 0., 'crossing_fault')
-        # Keep reacquisition latched while IR steers away from the map heading.
-        # Rechecking alignment here used to switch back to Nav2 mid-search.
+        # IR이 지도 방향에서 벗어나게 조향하는 동안에도 재확인 상태를 유지한다.
+        # 여기서 정렬을 다시 검사하던 예전 코드는 탐색 도중 Nav2로 되돌아갔다.
         if self.phase == 'reacquire':
             self.state = 'reacquire'
             if line_ok or not ir_required:
@@ -119,8 +138,8 @@ class Crossing:
                     return None
             else:
                 self.stable_since = None
-            # The safety controller supplies the shared IR recovery controller.
-            # Do not blindly advance while no sensor can see the white line.
+            # 선 찾기 조향은 안전 제어기(ultrasonic_safety)의 공용 IR 복구 제어기가 맡는다.
+            # 어느 센서도 흰 선을 못 보는 동안 눈감고 전진하지 않는다. 선이 0.3초 안정되면 Nav2로 돌려준다.
             return Motion(0., 0., 'crossing_reacquire')
         self.stable_since = None
         return Motion(max(-.02, min(.02, linear)), max(-.20, min(.20, angular)), 'crossing_traverse')
@@ -133,7 +152,13 @@ class Crossing:
 
 
 class UltrasonicDetour:
-    """Odometry-bounded detour; a single range sensor cannot measure object width."""
+    """오도메트리로 범위를 제한한 초음파 장애물 우회. 거리 센서 하나로는 물체 폭을 잴 수 없다.
+
+    phase: stopped(0.5초 정지) → turning(60° 회전) → offset(옆으로 offset만큼) → aligning(원래 방향)
+    → passing(장애물 지나 pass_distance 전진) → return_turn(반대로 60°) → returning(선 쪽으로)
+    → line_align → line_confirm(IR 확인) → idle(완료). 60초 또는 출발점에서 0.70 m를 넘으면 fault.
+    low_points는 초음파가 본 장애물 점(지도 좌표)을 기억해 LiDAR 점과 함께 궤적 검사에 쓴다.
+    """
     def __init__(self, config=None):
         self.config = geometry(config)
         self.phase = 'idle'
@@ -152,6 +177,8 @@ class UltrasonicDetour:
         self.__init__(self.config)
         self.require_line = require_line
         self.origin, self.started, self.phase = pose, now, 'stopped'
+        # 통과 거리: 센서 위치 + 측정 거리 + 차체 반길이 + 8 cm, 0.25~0.50 m로 자른다.
+        # 옆 이동 폭: 설정값과 차체 반폭 + 3 cm 중 큰 값. 좌우 중 여유(clearance)가 큰 쪽으로 돈다.
         self.pass_distance = min(.50, max(.25, self.config['ultrasound_x_m']+range_m + self.config['half_length_m']+.08))
         self.offset = max(self.config['detour_offset_m'], self.config['half_width_m']+.03)
         obstacle = points+range_arc(range_m,self.config)
@@ -165,6 +192,7 @@ class UltrasonicDetour:
         c,s=math.cos(pose[2]),math.sin(pose[2])
         for x,y in range_arc(distance_m,self.config):
             hit = pose[0]+c*x-s*y,pose[1]+s*x+c*y
+            # 8 mm보다 가까운 점은 중복으로 보고 버리며, 최근 200개만 남긴다.
             if not self.low_points or min(distance(hit,p) for p in self.low_points)>.008:self.low_points.append(hit)
         self.low_points=self.low_points[-200:]
 
@@ -174,10 +202,12 @@ class UltrasonicDetour:
         if now-self.started > 60. or distance(pose, self.origin) > .70:
             self.phase, self.failure = 'fault', 'detour_limit'
             return Motion(0., 0., 'ultrasonic_fault')
+        # 초음파 10 cm 이하면 막힘(이동 멈춤), 회전 후 15 cm 이상이 0.75초 이어지면 다음 단계로 간다.
         blocked = range_m is not None and math.isfinite(range_m) and range_m <= .10
         if blocked:
             self.remember(pose, range_m)
         c, s = math.cos(pose[2]), math.sin(pose[2])
+        # 기억한 초음파 점을 로봇 기준 좌표로 바꿔 LiDAR 점과 합친다. forward·lateral은 출발 자세 기준 이동량이다.
         obstacles = points + [(c*(x-pose[0])+s*(y-pose[1]), -s*(x-pose[0])+c*(y-pose[1]))
                               for x, y in self.low_points]
         ox, oy, heading = self.origin
@@ -222,6 +252,7 @@ class UltrasonicDetour:
                 if self.line_since is None:self.line_since=now
                 sample=now if line_sample_at is None else line_sample_at
                 if sample!=self.line_sample_at:self.line_count+=1;self.line_sample_at=sample
+                # 새 IR 샘플 3개 이상 + 가운데 흰색 0.3초 연속이어야 복귀 완료로 본다.
                 if now-self.line_since>=.3 and self.line_count>=3:self.phase='idle'
             else:self.line_since=None;self.line_count=0
         if not clear_path(obstacles, v, w):
@@ -234,6 +265,14 @@ class UltrasonicDetour:
 
 
 class Docking:
+    """5번 자리(IR 흰색 패턴)에서 저속 진입 후 관제 신호(complete → received)를 기다리는 도킹 상태 기계.
+
+    state: idle → (흰색 샘플 3개 미만이고 dock_search면) search(앞뒤 3 cm, 1 cm/s 탐색) / search_hold(탐색 실패
+    정지) → docking(1 cm/s 직진, 10 cm·10초 한도) → reverse(IR 이탈 시 한 번만 최대 2 cm 후진) →
+    await_confirmation(정지, 완료 신호 대기) → anchor_wait(완료 신호 + 흰색 확인, 지도 위치 재설정 대기) →
+    stopped(정지, 수령 대기) → released(received 수신, 경로 재개). fault·recovery_hold는 정지 유지다.
+    stopped·recovery_hold는 ultrasonic_safety가 지도 위치 재설정 뒤·재시작 복구 때 직접 넣는다.
+    """
     ACTIVE = {'docking', 'reverse', 'await_confirmation', 'stopped', 'fault', 'recovery_hold', 'search', 'search_hold', 'anchor_wait'}
 
     def __init__(self):
@@ -267,6 +306,7 @@ class Docking:
         self.token = token
 
     def observe(self, white, sample_at):
+        """IR 샘플마다 연속 흰색·검정 횟수를 센다. 같은 sample_at(같은 샘플)은 두 번 세지 않는다."""
         self.all_white = white
         if sample_at != self.sample_at:
             self.white_count = self.white_count+1 if white else 0
@@ -274,6 +314,7 @@ class Docking:
             self.sample_at = sample_at
 
     def command(self, command):
+        """관제 명령(complete·received)을 받는다. 같은 id는 무시하고, 토큰·dock_id가 다르면 오래된 명령으로 버린다."""
         if command.get('id') == self.command_id:
             return
         if command.get('token') != self.token or command.get('dock_id') != self.dock_id:
@@ -281,7 +322,7 @@ class Docking:
         self.command_id, self.command_error = command.get('id'), ''
         if command.get('action') == 'complete' and self.state in {'docking','await_confirmation','recovery_hold'}:
             self.complete = True
-            self.white_count = 0  # Confirm fresh white samples after the signal.
+            self.white_count = 0  # 신호 뒤의 새 흰색 샘플로 다시 확인한다.
             self.message = '도킹완료 신호 수신 · 흰색 유지 확인 중'
         elif command.get('action') == 'received' and self.state == 'stopped' and self.anchored:
             self.state = 'released'
@@ -290,6 +331,7 @@ class Docking:
             self.command_error = '현재 도킹 상태에서 처리할 수 없는 명령입니다.'
 
     def update(self, context, pose, odom, now, front_blocked):
+        """Motion 또는 None(도킹과 무관, Nav2 그대로). 5번 끝점 5 cm(탐색 허용 시 10 cm) 안에서만 시작한다."""
         if context.get('token') != self.token:
             self.reset(context.get('token'))
             return None
@@ -397,10 +439,12 @@ class Docking:
 
 
 class DockExit:
-    """Reverse out of the sponge station using continuous wheel odometry.
+    """연속된 바퀴 오도메트리로 스펀지 스테이션에서 후진해 빠져나온다(2 cm/s, 0.10~0.50 m, 기본 0.20 m).
 
-    A restart during the maneuver fails closed; the origin is never rebased.
-    The independent final guard retains rear and side collision checks.
+    동작 중 재시작되면 실패로 닫는다(fail closed): 시작점을 새로 잡지 않는다.
+    persist 파일에 (token, segment) 키를 남겨, 재시작 후 같은 키가 보이면 fault로 둔다.
+    뒤·옆 충돌 검사는 독립 최종 감시기(velocity_guard)가 계속 맡는다.
+    옆으로 2 cm, 회전 0.12 rad, 30초를 넘으면 fault다.
     """
     def __init__(self):
         self.key = None
@@ -451,43 +495,40 @@ class DockExit:
 
 
 class DockEntry:
-    """Drive straight into station 5 from its square-up point on wheel odometry (2026-11-16).
+    """정렬점에서 바퀴 오도메트리로 5번 자리에 곧게 들어간다(2026-11-16).
 
-    The station stands right in front there, so the ultrasonic and the LiDAR straight ahead are not looked at;
-    the final guard keeps the LiDAR to both sides. The heading the Pinky squared up to (Nav2, within 3 degrees)
-    is held. A restart during the maneuver fails closed, as DockExit does; drifting sideways 3 cm, turning
-    more than 0.15 rad or taking over 25 s stops it as a fault.
+    바로 앞에 스테이션이 있으므로 초음파와 정면 LiDAR는 보지 않는다. 좌우 LiDAR는 최종 감시기가 계속 본다.
+    핑키가 맞춘 방향(Nav2, 3° 이내)을 유지한다. 동작 중 재시작되면 DockExit처럼 실패로 닫는다.
+    옆으로 3 cm 밀리거나 0.15 rad 넘게 돌거나 25초를 넘으면 fault로 멈춘다.
 
-    With the ceiling camera's guide (2026-11-18) it steers on what the camera sees while it drives in: `guide` is
-    the Pinky's offset from its registered spot in its own axes, in metres and radians (forward, left, yaw; forward
-    negative while it is still short of the spot), fresh from /fleet/dock_guide. It turns toward the spot's line and
-    lines up on it (a second-order line follower: yaw rate = -(K_YAW * yaw + K_LEFT * left)), and stops where the
-    camera says the spot is instead of after a counted distance. The camera only moves the stop a few centimetres
-    either way of the counted one (GUIDE_SHORT_M before it, GUIDE_OVER_M past it). While no fresh guide arrives it drives
-    as before, back on the heading it squared up to, so a hidden marker or a silent PC costs nothing.
+    천장 카메라 안내(2026-11-18): 들어가는 동안 카메라가 본 대로 조향한다. `guide`는 /fleet/dock_guide에서 온
+    최신 값으로, 등록 자리에 대한 핑키의 오프셋을 핑키 자신의 축으로 나타낸 (forward, left, yaw) m·rad다
+    (자리에 못 미쳤으면 forward가 음수). 자리의 선 쪽으로 돌아 그 선에 맞추고(2차 선 추종:
+    yaw rate = -(K_YAW * yaw + K_LEFT * left)), 센 거리 대신 카메라가 자리라고 하는 곳에서 멈춘다.
+    카메라는 정지점을 센 거리 기준 몇 cm만 옮긴다(앞으로 GUIDE_SHORT_M, 뒤로 GUIDE_OVER_M). 새 안내가 없으면
+    예전처럼 맞춘 방향으로 달리므로, 마커가 가려지거나 PC가 조용해도 손해가 없다.
 
-    Taken over by the camera (context dock_capture, 2026-11-19): the route runner hands over as soon as the camera
-    sees the Pinky in front of the spot, wherever Nav2 had brought it and whichever way it faces. Then there is no
-    squared-up line to hold: it first turns on the spot until it faces the spot's line (the camera's yaw), then drives
-    in steering as above, and stops where the camera sees the spot. Only the camera moves it: while the guide is
-    silent it stands still (CAPTURE_BLIND_S at most), and it gives up after CAPTURE_TRAVEL_M or CAPTURE_TIME_S.
+    카메라가 넘겨받기(context dock_capture, 2026-11-19): 카메라가 자리 앞의 핑키를 보는 즉시 경로 실행기가
+    넘겨준다. Nav2가 어디에 어느 방향으로 세웠든 상관없다. 그때는 지킬 정렬선이 없으므로 먼저 제자리에서 돌아
+    자리의 선(카메라 yaw)을 향한 뒤 위처럼 조향하며 들어가, 카메라가 자리를 보는 곳에서 멈춘다. 카메라만
+    움직인다: 안내가 끊기면 서 있고(최대 CAPTURE_BLIND_S), CAPTURE_TRAVEL_M나 CAPTURE_TIME_S를 넘으면 포기한다.
 
-    Squaring up by itself (context dock_turn_rad, 2026-11-19): Nav2 kept hunting for minutes to stand on the
-    square-up point to the centimetre and turn there (its collision check next to the station, its 3 cm tolerance).
-    Now the runner hands over once the Pinky is near that point, with how far it still has to turn to the dock's
-    heading; the Pinky turns that much on the spot on its odometry, then drives in as before."""
+    스스로 정렬하기(context dock_turn_rad, 2026-11-19): Nav2는 정렬점에 cm 단위로 서서 돌려고 몇 분씩 헤맸다
+    (스테이션 옆 충돌 검사, 3 cm 허용 오차 때문). 이제 실행기는 핑키가 그 점 근처에 오면 도킹 방향까지 남은
+    회전량과 함께 넘겨주고, 핑키는 오도메트리로 그만큼 제자리 회전한 뒤 예전처럼 들어간다."""
+    # 진입 속도 3 cm/s
     SPEED_MPS = .03
-    TAKEOVER_LEFT_M = .06          # farther beside the line than the straight run's steering can bring back
-    SQUARE_DONE_RAD, SQUARE_TIME_S = .03, 20.        # its own turn to the dock's heading (context dock_turn_rad)
-    CAPTURE_FACE_RAD, CAPTURE_FACED_RAD = .35, .12   # turn on the spot above the first, drive again below the second
-    CAPTURE_TURN_LIMIT, CAPTURE_TURN_MIN = .5, .25   # rad/s on the spot; below the minimum the wheels only hum
-    CAPTURE_LEFT_LIMIT = .75       # rad/s: up to about 24 degrees of crab, there is more room to come back
-    CAPTURE_BLIND_S, CAPTURE_TIME_S, CAPTURE_TRAVEL_M = 8., 75., .70
-    K_YAW, K_LEFT = 1.8, 24.       # 1/s and rad/s per metre: settles a 3 cm miss within about 15 cm of travel
-    GUIDE_LEFT_LIMIT = .45         # rad/s the sideways term may ask for: at most about 14 degrees of crab
+    TAKEOVER_LEFT_M = .06          # 직진 조향으로 되돌릴 수 있는 것보다 선에서 옆으로 먼 거리(m)
+    SQUARE_DONE_RAD, SQUARE_TIME_S = .03, 20.        # 도킹 방향으로 스스로 도는 회전(context dock_turn_rad)의 완료 오차 rad, 제한 시간 s
+    CAPTURE_FACE_RAD, CAPTURE_FACED_RAD = .35, .12   # 첫 값 넘으면 제자리 회전, 둘째 값 아래면 다시 전진(rad, 히스테리시스)
+    CAPTURE_TURN_LIMIT, CAPTURE_TURN_MIN = .5, .25   # 제자리 회전 rad/s. 최소값보다 느리면 바퀴가 웅 소리만 내고 안 돈다
+    CAPTURE_LEFT_LIMIT = .75       # rad/s: 약 24°까지 비스듬히 간다. 되돌아올 거리가 더 있기 때문이다
+    CAPTURE_BLIND_S, CAPTURE_TIME_S, CAPTURE_TRAVEL_M = 8., 75., .70  # 안내 없이 최대 8초, 전체 75초, 이동 0.70 m
+    K_YAW, K_LEFT = 1.8, 24.       # 1/s, m당 rad/s: 3 cm 어긋남을 약 15 cm 이동 안에 바로잡는다
+    GUIDE_LEFT_LIMIT = .45         # 옆 오차 항이 요구할 수 있는 rad/s: 최대 약 14° 비스듬히
     GUIDE_TURN_LIMIT = .35         # rad/s
-    GUIDE_SHORT_M, GUIDE_OVER_M = .08, .06
-    GUIDE_STOP_M = .005            # stop this far short by the camera: what it shows is about 0.2 s old
+    GUIDE_SHORT_M, GUIDE_OVER_M = .08, .06  # 카메라가 센 거리보다 8 cm 앞·6 cm 뒤까지 정지점을 옮길 수 있다
+    GUIDE_STOP_M = .005            # 카메라 기준 이만큼 앞에서 멈춘다: 카메라 영상은 약 0.2초 늦다
 
     def __init__(self):
         self.key = None
@@ -501,7 +542,7 @@ class DockEntry:
         self.guide = None
         self.capture = False
         self.turn, self.turn_from, self.squaring = 0., 0., False
-        self.side = 0.  # how far left of the dock's line it stood at the hand-over (context dock_side_m)
+        self.side = 0.  # 넘겨받을 때 도킹 선에서 왼쪽으로 떨어진 거리 m (context dock_side_m)
         self.facing = False
         self.travel = 0.
         self.last_odom = None
@@ -549,9 +590,9 @@ class DockEntry:
             self.guided = True
         if (not self.capture and self.state == 'entering' and guide is not None
                 and (abs(guide[2]) > self.CAPTURE_FACE_RAD or abs(guide[1]) > self.TAKEOVER_LEFT_M)):
-            # The camera sees it turned away or well beside the line (2026-11-21: 93 degrees off after Nav2 had
-            # "squared it up" on a map heading that was wrong). The straight run cannot mend that and used to stop
-            # as a fault; the camera takes it over instead, turning it on the spot first.
+            # 카메라가 보기에 돌아서 있거나 선에서 옆으로 많이 벗어났다(2026-11-21: Nav2가 틀린 지도 방향으로
+            # "정렬"한 뒤 93° 어긋남). 직진으로는 고칠 수 없어 예전엔 fault로 멈췄다. 이제 카메라가 넘겨받아
+            # 먼저 제자리에서 돌린다.
             self.capture, self.squaring, self.facing = True, False, False
             self.travel, self.last_odom, self.heard, self.started = 0., odom, now, now
         if self.capture:
@@ -565,24 +606,24 @@ class DockEntry:
                 self.message = f'5번 진입 · 제자리에서 방향 맞춤 (남은 각도 {abs(math.degrees(remaining)):.0f}도)'
                 rate = max(self.CAPTURE_TURN_MIN, min(self.CAPTURE_TURN_LIMIT, 1.5*abs(remaining)))
                 return Motion(0., math.copysign(rate, remaining), 'docking_entry_entering')
-            # Squared up: the straight run starts here, on the heading it was asked to reach.
+            # 정렬 완료: 요청받은 방향 위에서, 여기서부터 직진을 시작한다.
             self.squaring = False
             self.origin, self.started = (odom[0], odom[1], angle(self.turn_from+self.turn)), now
             dx = dy = self.progress = lateral = 0.
             heading_error = angle(self.origin[2]-odom[2])
-        # Handed over beside the dock's line (dock_side_m) and no camera: the same steering on odometry brings it onto
-        # the line, as far as the wheels know where that is.
+        # 도킹 선 옆(dock_side_m)에서 넘겨받았고 카메라가 없으면: 같은 조향을 오도메트리로 해서, 바퀴가 아는
+        # 범위 안에서 선 위로 데려간다.
         if guide is None and abs(self.side) > .008:
             steer = (self.progress-self.target, self.side-dx*math.sin(self.origin[2])+dy*math.cos(self.origin[2]), -heading_error)
         else:
             steer = guide
-        # Once it has been steered, the path is no longer the straight line it started on: wider limits.
+        # 한 번이라도 조향했다면 경로가 처음의 직선이 아니므로 한도를 넓힌다(옆 m, 방향 rad, 시간 s).
         lateral_limit, heading_limit, time_limit = (.10, .50, 35.) if self.guided or steer is not None else (.03, .15, 25.)
         if self.state == 'entering':
             if lateral > lateral_limit or abs(heading_error) > heading_limit or now-self.started > time_limit:
                 self.state = 'fault'
             elif guide is not None and guide[0] >= -self.GUIDE_STOP_M and self.progress >= self.target-self.GUIDE_SHORT_M:
-                self.state = 'complete'  # the camera sees it on the spot
+                self.state = 'complete'  # 카메라가 자리 위에 있다고 본다
             elif self.progress >= self.target+(self.GUIDE_OVER_M if guide is not None else 0.)-.003:
                 self.state = 'complete'
         how = ' · 천장 캠을 보며 방향 맞춤' if guide is not None else ''
@@ -599,7 +640,7 @@ class DockEntry:
         return Motion(0., 0., 'docking_entry_'+self.state)
 
     def captured(self, odom, now, guide):
-        """The whole way in on the camera (see the class text). guide: (forward, left, yaw) or None."""
+        """처음부터 끝까지 카메라만 보고 들어간다(클래스 설명 참고). guide: (forward, left, yaw) 또는 None."""
         self.travel += math.hypot(odom[0]-self.last_odom[0], odom[1]-self.last_odom[1])
         self.last_odom = odom
         if guide is not None:
@@ -608,12 +649,12 @@ class DockEntry:
         if guide is not None:
             sideways = max(-self.CAPTURE_LEFT_LIMIT, min(self.CAPTURE_LEFT_LIMIT, self.K_LEFT*guide[1]))
             turn = -(self.K_YAW*guide[2]+sideways)
-            wanted = abs(turn)/self.K_YAW  # how far it is from the heading that leads onto the spot's line
+            wanted = abs(turn)/self.K_YAW  # 자리의 선으로 이어지는 방향에서 얼마나 벗어났는지
         if self.state == 'entering':
             if now-self.started > self.CAPTURE_TIME_S or self.travel > self.CAPTURE_TRAVEL_M or now-self.heard > self.CAPTURE_BLIND_S:
                 self.state = 'fault'
             elif guide is not None and guide[0] >= -self.GUIDE_STOP_M:
-                self.state = 'complete'  # the camera sees it on the spot
+                self.state = 'complete'  # 카메라가 자리 위에 있다고 본다
         if self.state == 'entering' and guide is not None:
             self.facing = wanted > (self.CAPTURE_FACED_RAD if self.facing else self.CAPTURE_FACE_RAD)
         self.message = {'entering': ('5번 진입 · 천장 캠이 안 보여 서서 기다림' if guide is None else
@@ -637,10 +678,10 @@ class DockEntry:
 
 
 class BackOff:
-    """Too close to something in front (the ultrasonic): do not just stand there. After hold_s of standing, reverse
-    straight until the ultrasonic reads clear_m or distance_m is covered, so Nav2 has room to turn onto the path
-    round the obstacle (which the fused costmap now holds). Only while the LiDAR shows the way back clear; at most
-    `tries` times in a row, then it waits (reset once the front has been clear for reset_s). 2026-11-17."""
+    """앞 물체에 너무 가까울 때(초음파) 서 있기만 하지 않는다. hold_s 동안 서 있었으면 초음파가 clear_m을 읽거나
+    distance_m을 갈 때까지 곧게 후진해, Nav2가 장애물을 도는 경로(퓨전 costmap에 이제 들어 있음)로 돌 공간을
+    만든다. LiDAR가 뒤가 비었다고 볼 때만 하며, 연속 `tries`번까지 한 뒤에는 기다린다(앞이 reset_s 동안 비면
+    횟수 초기화). 2026-11-17. 기본값: 12 cm, 15 cm, 1초, 4 cm/s, 3번, 6초, 10초."""
 
     def __init__(self, distance_m=.12, clear_m=.15, hold_s=1.0, speed_mps=.04, tries=3, timeout_s=6., reset_s=10.):
         self.distance_m, self.clear_m, self.hold_s = distance_m, clear_m, hold_s
@@ -656,7 +697,7 @@ class BackOff:
         return self.origin is not None
 
     def update(self, blocked, range_m, odom, now, rear_clear):
-        """A reversing Motion while backing off, else None (the caller holds or drives as before)."""
+        """물러나는 중이면 후진 Motion, 아니면 None(호출한 쪽이 예전대로 서 있거나 달린다)."""
         if self.active:
             done = (odom is None or not rear_clear or now-self.started > self.timeout_s
                     or distance(odom, self.origin) >= self.distance_m
@@ -684,16 +725,15 @@ class BackOff:
 
 
 class GiveWay:
-    """Give way to another Pinky on the dashboard's word (scripts/yielding.py, 2026-11-24): reverse straight, at most
-    the distance the order names, then stand until the order stops coming. Reversing goes on only while the LiDAR
-    shows the way back clear, and never longer than timeout_s; when it cannot reverse it simply stands, which is
-    still what the other Pinky needs (an obstacle that keeps still). One order is backed off for once: the same id
-    again means "keep standing"."""
+    """관제의 지시로 다른 핑키에게 길을 비킨다(scripts/yielding.py, 2026-11-24): 지시한 거리까지만 곧게 후진한 뒤
+    지시가 끊길 때까지 서 있는다. 후진은 LiDAR가 뒤가 비었다고 볼 때만, timeout_s를 넘지 않게 한다. 후진할 수
+    없으면 그냥 서 있는데, 그것도 상대 핑키에게 필요한 것(가만히 있는 장애물)이다. 지시 하나에 한 번만
+    물러나며, 같은 id가 다시 오면 "계속 서 있으라"는 뜻이다. 기본 5 cm/s, 최대 0.40 m, 10초."""
 
     def __init__(self, speed_mps=.05, limit_m=.40, timeout_s=10.):
         self.speed_mps, self.limit_m, self.timeout_s = speed_mps, limit_m, timeout_s
         self.order_id = None
-        self.origin = None      # where the reversing began (odom), None once it is over
+        self.origin = None      # 후진을 시작한 오도메트리 위치. 후진이 끝나면 None
         self.started = 0.
         self.backed_m = 0.
 
@@ -702,8 +742,8 @@ class GiveWay:
         return self.order_id is not None
 
     def update(self, order, odom, now, rear_clear):
-        """order: {'id', 'back_m'} while the dashboard says give way, else None. A Motion (reversing, or standing),
-        or None when there is no order and the caller drives as before."""
+        """order: 관제가 양보하라는 동안 {'id', 'back_m'}, 아니면 None. 후진 또는 정지 Motion을 돌려주고,
+        지시가 없으면 None(호출한 쪽이 예전대로 달린다)."""
         if not isinstance(order, dict) or not isinstance(order.get('id'), str):
             self.order_id = self.origin = None
             return None

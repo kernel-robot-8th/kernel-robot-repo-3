@@ -99,6 +99,7 @@ def _shifted(a: np.ndarray, di: int, dj: int) -> np.ndarray:
 
 
 def validated(settings: dict | None) -> dict:
+    """DEFAULTS에 settings를 덮어 검사한 설정. 모르는 키, 0 이하 값, 0.5 반대편 확률이면 ValueError다."""
     s = {**DEFAULTS, **(settings or {})}
     unknown = set(s) - set(DEFAULTS)
     if unknown:
@@ -129,10 +130,10 @@ def validated(settings: dict | None) -> dict:
 
 
 class FusionGrid:
-    """Two log-odds layers (high = LiDAR plane, low = ultrasonic plane) in a window around the robot, odom frame.
+    """로봇 둘레 창 안의 log-odds 층 두 개(high = 라이다 평면, low = 초음파 평면), odom 좌표계.
 
-    Cell (i, j) covers x in origin_x + [j, j+1) * res and y in origin_y + [i, i+1) * res (row = y, as in
-    nav_msgs/OccupancyGrid)."""
+    칸 (i, j)는 x가 origin_x + [j, j+1) * res, y가 origin_y + [i, i+1) * res 범위다
+    (nav_msgs/OccupancyGrid처럼 행 = y)."""
 
     def __init__(self, settings: dict | None = None):
         self.s = s = validated(settings)
@@ -149,31 +150,32 @@ class FusionGrid:
         self.last_echo: dict = dict(kind='none')
         self.echo_counts = {kind: 0 for kind in ECHO_CLASSES}
 
-    # -- frame keeping -------------------------------------------------------------------------------------------
+    # -- 프레임 유지(격자를 로봇 중심으로 옮기기) ---------------------------------------------------------------------------------
     def center(self) -> np.ndarray:
         return self.origin + self.n * self.res / 2
 
     def recenter(self, x: float, y: float) -> None:
-        """Keep the robot at the centre (within half a cell): shift the layers by whole cells, unknown comes in."""
+        """로봇을 창 중앙(반 칸 이내)에 둔다: 층을 칸 단위로 밀고, 새로 들어온 가장자리는 모름(0)이다."""
         dj, di = (int(round(v)) for v in (np.array([x, y]) - self.center()) / self.res)
         if di or dj:
             self.high = _shifted(self.high, di, dj)
             self.low = _shifted(self.low, di, dj)
             self.origin = self.origin + np.array([dj, di]) * self.res
 
+    # 지난 호출 이후 dt초만큼 log-odds에 exp(-dt / 시간 상수)를 곱해 0(모름) 쪽으로 줄인다.
     def decay(self, now: float) -> None:
         if self.last_decay is None:
             self.last_decay = now
             return
         dt = now - self.last_decay
         if dt <= 0:
-            return  # replayed messages can arrive slightly out of order
+            return  # 재생한 메시지는 순서가 조금 뒤바뀌어 올 수 있다
         self.high *= np.float32(math.exp(-dt / self.s['decay_high_s']))
         self.low *= np.float32(math.exp(-dt / self.s['decay_low_s']))
         self.last_decay = now
 
     def cell_index(self, xs, ys):
-        """Flat indices of the cells holding the points, inside the window only."""
+        """점들이 든 칸의 1차원(flat) 인덱스. 창 안의 점만 낸다."""
         j = np.floor((np.asarray(xs) - self.origin[0]) / self.res).astype(np.int64)
         i = np.floor((np.asarray(ys) - self.origin[1]) / self.res).astype(np.int64)
         inside = (i >= 0) & (i < self.n) & (j >= 0) & (j < self.n)
@@ -188,7 +190,7 @@ class FusionGrid:
         np.clip(self.low, self.l['floor'], self.l['ceiling'], out=self.low)
 
     def _low(self, mask: np.ndarray, delta) -> None:
-        """Ultrasonic evidence for the low layer: added (Bayesian update), or written over (binary baseline)."""
+        """low 층에 초음파 근거를 넣는다: 더하거나(베이즈 갱신), 덮어쓴다(비교용 이진 기준선)."""
         if self.s['us_accumulate']:
             self.low[mask] += delta
         else:
@@ -196,12 +198,13 @@ class FusionGrid:
 
     # -- LiDAR ---------------------------------------------------------------------------------------------------
     def update_scan(self, pose, angles, ranges, range_min: float, range_max: float, now: float) -> dict:
-        """pose = (x, y, yaw) of the LiDAR in odom; angles in the LiDAR frame. Updates the high layer only."""
+        """pose = odom에서 라이다의 (x, y, yaw), angles는 라이다 좌표계 기준(rad). high 층만 고친다."""
         self.decay(now)
         x, y, yaw = pose
         stride = max(1, int(self.s['lidar_beam_stride']))
         angles = np.asarray(angles, float)[::stride]
         r = np.asarray(ranges, float)[::stride]
+        # +inf는 "반사 없음"(창 끝까지 비어 있음)으로 쓴다. 빔을 반 칸 간격 점으로 따라가며 빈 칸을 모은다
         no_return = np.isinf(r) & (r > 0)
         valid = (np.isfinite(r) & (r >= range_min) & (r <= range_max)) | no_return
         r, a = r[valid], angles[valid] + yaw
@@ -230,7 +233,7 @@ class FusionGrid:
 
     # -- ultrasonic ----------------------------------------------------------------------------------------------
     def update_range(self, pose, distance: float, fov: float | None, now: float) -> str:
-        """pose = (x, y, yaw) of the ultrasonic in odom. Updates the low layer only; returns the echo's class."""
+        """pose = odom에서 초음파의 (x, y, yaw). low 층만 고치고 반사의 분류(ECHO_CLASSES)를 돌려준다."""
         self.decay(now)
         kind = self._update_range(pose, float(distance), fov)
         self.echo_counts[kind] += 1
@@ -251,7 +254,7 @@ class FusionGrid:
         sigma = max(float(s['us_sigma_m']), self.res / 2)
         band = 2 * sigma
         if not math.isfinite(r) or r > s['us_mark_max_range_m']:
-            # No echo, or one so far that it may be the floor: only "nothing low before it"
+            # 반사가 없거나 바닥일 수도 있을 만큼 먼 반사: "그 앞에 낮은 것은 없다"만 넣는다
             reach = s['us_clear_max_range_m'] if not math.isfinite(r) else min(r, s['us_clear_max_range_m'])
             self._low(cone & (d < reach - band), self.l['us_free'])
             self._clip()
@@ -281,21 +284,20 @@ class FusionGrid:
         return self.low >= self.l['occupied']
 
     def low_obstacle_cells(self) -> np.ndarray:
-        """Occupied low cells the LiDAR does not see as occupied: obstacles below the LiDAR plane."""
+        """low 층은 점유인데 라이다는 점유로 보지 않는 칸: 라이다 평면 아래의 장애물."""
         return self.low_occupied() & (self.high < self.l['explain'])
 
     def column_occupied(self) -> np.ndarray:
         return (self.high >= self.l['occupied']) | self.low_occupied()
 
     def points(self, mask: np.ndarray) -> np.ndarray:
-        """(k, 2) odom coordinates of the centres of the cells in mask."""
+        """mask 칸들의 중심 odom 좌표, 모양 (k, 2)."""
         i, j = np.nonzero(mask)
         return np.column_stack([self.origin[0] + (j + 0.5) * self.res, self.origin[1] + (i + 0.5) * self.res])
 
     def occupancy_data(self) -> np.ndarray:
-        """int8 row-major for nav_msgs/OccupancyGrid, -1 = unknown. A height with evidence of occupancy decides the
-        column (the larger one); with none, the clearer free one shows, so a LiDAR-free cell whose low height was
-        never looked at reads free rather than 50."""
+        """nav_msgs/OccupancyGrid용 int8 행 우선 배열, -1 = 모름. 점유 근거가 있는 높이가 기둥을 정하고(큰 쪽),
+        없으면 더 확실히 빈 쪽을 보인다. 그래서 라이다로 비었고 낮은 높이는 본 적 없는 칸은 50이 아니라 빈 칸이다."""
         top = np.maximum(self.high, self.low)
         p = 1.0 / (1.0 + np.exp(-np.where(top > 0, top, np.minimum(self.high, self.low))))
         data = np.round(100 * p).astype(np.int8)
@@ -303,6 +305,7 @@ class FusionGrid:
         return data.reshape(-1)
 
     def status(self, robot_xy=None) -> dict:
+        """/fusion/status에 담는 요약: 칸 수, 로봇에서 가장 가까운 낮은 장애물(m), 반사 분류."""
         low_cells = self.low_obstacle_cells()
         nearest = None
         if robot_xy is not None and low_cells.any():
@@ -313,13 +316,14 @@ class FusionGrid:
                     last_echo=self.last_echo, echo_counts=dict(self.echo_counts))
 
 
+# 반지름 radius, 높이 z의 원 위 점 count개(2도 간격). /fusion/low_clear의 광선 끝점으로 쓴다.
 def ring(radius: float, z: float, count: int = 180) -> list[tuple[float, float, float]]:
     return [(radius * math.cos(2 * math.pi * k / count), radius * math.sin(2 * math.pi * k / count), z)
             for k in range(count)]
 
 
 def to_local(points: np.ndarray, pose) -> np.ndarray:
-    """Odom points into the frame at pose = (x, y, yaw)."""
+    """odom 점들을 pose = (x, y, yaw) 좌표계로 옮긴다."""
     x, y, yaw = pose
     c, s = math.cos(yaw), math.sin(yaw)
     dx, dy = points[:, 0] - x, points[:, 1] - y
@@ -330,7 +334,7 @@ def yaw_of(q) -> float:
     return math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
 
 
-LOW_Z_MAX = 0.045  # the low cloud must stay in Nav2's lowest 5 cm voxel row, under the LiDAR plane
+LOW_Z_MAX = 0.045  # 낮은 점군은 라이다 평면 아래, Nav2 voxel의 가장 낮은 5 cm 줄에 머물러야 한다 (m)
 
 
 def main() -> None:
@@ -359,12 +363,14 @@ def main() -> None:
             self.grid = FusionGrid(settings)
             self.tf = Buffer()
             self.tf_listener = TransformListener(self.tf, self)
+            # 점군은 센서 QoS(best-effort): Nav2 costmap 관측 소스가 sensor_data로 구독한다
             self.marks = self.create_publisher(PointCloud2, '/fusion/low_marks', qos_profile_sensor_data)
             self.clear = self.create_publisher(PointCloud2, '/fusion/low_clear', qos_profile_sensor_data)
             self.grid_pub = self.create_publisher(OccupancyGrid, '/fusion/grid', 1)
             self.status_pub = self.create_publisher(String, '/fusion/status', 10)
             self.create_subscription(LaserScan, '/scan', self.on_scan, qos_profile_sensor_data)
             self.create_subscription(Range, '/us_sensor/range', self.on_range, qos_profile_sensor_data)
+            # 표시·비우기 점군 5 Hz, RViz·관제용 격자 2 Hz
             self.create_timer(0.2, self.publish)
             self.create_timer(0.5, self.publish_grid)
             self.us_z = 0.037
@@ -374,7 +380,7 @@ def main() -> None:
             self.get_logger().info('LiDAR + ultrasonic fusion grid ready')
 
         def lookup(self, frame: str, stamp):
-            """(x, y, yaw, z) of frame in odom at the stamp, else the latest; None without TF."""
+            """stamp 시각(없으면 최신) odom에서 frame의 (x, y, yaw, z, TF stamp). TF가 없으면 None."""
             for when in ((Time.from_msg(stamp),) if stamp.sec or stamp.nanosec else ()) + (Time(),):
                 try:
                     tf = self.tf.lookup_transform('odom', frame.lstrip('/'), when, timeout=Duration(seconds=0.0))
@@ -399,9 +405,10 @@ def main() -> None:
                 pose = self.lookup(msg.header.frame_id, msg.header.stamp)
                 if pose is None:
                     return
+                # 점군 높이는 TF의 센서 높이를 쓰되 0.5 cm..LOW_Z_MAX로 묶는다
                 self.us_z = min(max(pose[3], 0.005), LOW_Z_MAX)
                 pose = pose[:3]
-            else:  # a driver without a frame: the measured mounting from robot_geometry.json
+            else:  # frame이 없는 드라이버: robot_geometry.json의 실측 장착 위치를 쓴다
                 base = self.lookup('base_footprint', msg.header.stamp)
                 if base is None:
                     return
@@ -451,7 +458,7 @@ def main() -> None:
     node = FusionNode()
     try:
         rclpy.spin(node)
-    except (KeyboardInterrupt, ExternalShutdownException):  # Ctrl-C, or the dashboard stopping it with SIGTERM
+    except (KeyboardInterrupt, ExternalShutdownException):  # Ctrl-C, 또는 관제가 SIGTERM으로 멈출 때
         pass
     finally:
         node.destroy_node()
