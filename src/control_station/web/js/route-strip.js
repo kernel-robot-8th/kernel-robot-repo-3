@@ -1,25 +1,28 @@
-// 핑키 경로 노선도: the Pinky route as a strip of stops in driving order, with each Pinky's dot at the stop it
-// reports. No scale and no map coordinates: it shows order only, and says so on screen.
+// 핑키 경로 노선도: 핑키 경로를 달리는 순서대로 정류장을 늘어놓은 띠로 그리고, 각 핑키가 알려 준 정류장에 점을 찍는다.
+// 축척도 지도 좌표도 없다: 순서만 보여 주며, 화면에도 그렇게 적혀 있다.
 //
-// Loaded after app.js (escapeHtml, pinkyNames) and before pinky.js, which calls renderRouteStrip(view) with every
-// GET /api/pinky answer.
+// app.js(escapeHtml, pinkyNames) 뒤, pinky.js 앞에 로드된다. pinky.js가 GET /api/pinky 응답마다
+// renderRouteStrip(view)를 부른다.
 //
-// Where a dot goes, from the fleet dashboard's own words:
-// - not connected: not drawn, listed beside the strip
-// - parked, or no route at all: the parking spot P
-// - docking_manual / docking_anchor / docked_manual: station 5 (loading); dock_exit: just past 5
-// - course_complete: the receiving zone, the last stop
-// - otherwise route.current_label: a stop ("7"), a leg between two stops ("3→7:04" on the dense route), "도킹 탈출",
-//   or "주차장" at the end of the route (driving home). A stop that appears twice (7, 1) is picked by
-//   route.completed / route.total, the share of the dense route already driven.
-// Anything else (the mock world's "이동 중") is listed beside the strip instead of guessed.
+// 점을 어디에 둘지는 핑키 관제(fleet dashboard)가 쓰는 말 그대로 정한다:
+// - 연결 안 됨: 그리지 않고 띠 옆에 적는다
+// - 주차(parked)했거나 경로가 아예 없음: 주차 자리 P
+// - docking_manual / docking_anchor / docked_manual: 5번 정류장(적재), dock_exit: 5번 바로 다음
+// - course_complete: 수령 구역, 마지막 정류장
+// - 그 밖에는 route.current_label: 정류장("7"), 두 정류장 사이 구간(촘촘한 경로의 "3→7:04"), "도킹 탈출",
+//   또는 경로 끝의 "주차장"(집으로 가는 중). 두 번 나오는 정류장(7, 1)은 route.completed / route.total,
+//   즉 촘촘한 경로 중 이미 달린 비율로 고른다.
+// 그 밖의 것(모의 세계의 "이동 중")은 짐작하지 않고 띠 옆에 적는다.
 
-const ROUTE_FALLBACK_LABELS = ['1', '2', '3', '7', '4', '5', '6', '7', '9', '8', '1'];  // pinky_fleet_dashboard ROUTE_LABELS
+// 카탈로그를 받기 전에 쓰는 경로: pinky_fleet_dashboard의 ROUTE_LABELS
+const ROUTE_FALLBACK_LABELS = ['1', '2', '3', '7', '4', '5', '6', '7', '9', '8', '1'];
 const ROUTE_PARKING = '주차장';
 const ROUTE_DOCK_EXIT = '도킹 탈출';
 const ROUTE_STATION_LABEL = '5';
 const ROUTE_STATION_PHASES = new Set(['docking_manual', 'docking_anchor', 'docked_manual']);
+// 촘촘한 경로의 구간 표기 '3→7:04'(앞 정류장→다음 정류장:번호)를 나눈다.
 const ROUTE_LEG = /^(.+)→(.+):\d+$/;
+// 노선도 배치(px): 양옆 여백, 정류장 최소 간격, 선 높이, 점 높이, 같은 자리 점 간격, 글자 높이, 돌아오는 길 높이, 전체 높이.
 const routeLayout = { pad: 72, minGap: 58, lineY: 64, dotRise: 34, dotSpread: 32, labelY: 102, returnY: 134, height: 152 };
 
 const routeScroll = document.querySelector('#routeScroll');
@@ -28,14 +31,15 @@ const routeOffStrip = document.querySelector('#routeOffStrip');
 const routeSvgNamespace = 'http://www.w3.org/2000/svg';
 
 const routeStrip = {
-  labels: ROUTE_FALLBACK_LABELS,  // replaced by the receiving zone's route from GET /api/catalog when it answers
+  labels: ROUTE_FALLBACK_LABELS,  // GET /api/catalog가 답하면 수령 구역의 경로로 바뀐다
   zoneLabel: '수령 구역',
   catalogRequested: false,
-  trackKey: '',                    // labels and spacing the drawn track was built for
-  scrolledToDots: false,           // at phone width the strip scrolls once to the first Pinky, then stays put
+  trackKey: '',                    // 지금 그려 둔 선로가 만들어진 정류장·간격
+  scrolledToDots: false,           // 휴대폰 폭에서 첫 핑키로 한 번만 스크롤하고 그다음엔 그대로 둔다
   lastView: null,
 };
 
+// 수령 구역 경로를 한 번만 읽는다(첫 번째 구역의 route_labels). 받으면 마지막 화면으로 다시 그린다.
 async function loadRouteFromCatalog() {
   routeStrip.catalogRequested = true;
   try {
@@ -46,12 +50,12 @@ async function loadRouteFromCatalog() {
       routeStrip.zoneLabel = zone.label;
     }
   } catch {
-    // The fallback route stays; it is the dashboard's fixed course.
+    // 대체 경로가 그대로 남는다. 핑키 관제의 고정 코스다.
   }
   if (routeStrip.lastView) renderRouteStrip(routeStrip.lastView);
 }
 
-// P, then the route's stops; the last stop is the receiving zone and the first 5 is the loading station.
+// P 다음에 경로의 정류장들. 마지막 정류장은 수령 구역이고, 처음 나오는 5는 적재 자리다.
 function routeStops() {
   const { labels } = routeStrip;
   const station = labels.indexOf(ROUTE_STATION_LABEL);
@@ -64,7 +68,7 @@ function routeStops() {
   ];
 }
 
-// Of several matching places, the one closest to the share of the route already driven.
+// 맞는 자리가 여럿이면 이미 달린 경로 비율에 가장 가까운 것을 고른다.
 function closestToProgress(candidates, route, stopCount) {
   if (candidates.length < 2 || !route.total) return candidates[0];
   const progress = (route.completed ?? 0) / route.total;
@@ -72,7 +76,7 @@ function closestToProgress(candidates, route, stopCount) {
   return candidates.reduce((best, index) => (distance(index) < distance(best) ? index : best));
 }
 
-// { at: stop index } | { between: index of the stop before } | { returning: true } | { off: why it is not drawn }
+// { at: 정류장 번호 } | { between: 앞 정류장 번호 } | { returning: true } | { off: 그리지 않는 이유 }
 function routePlace(pinky, stops) {
   if (!pinky.connected) return { off: '연결 끊김' };
   const route = pinky.route || {};
@@ -100,6 +104,7 @@ function routePlace(pinky, stops) {
   return { off: '경로 위치 모름' };
 }
 
+// 정류장과 핑키 자리의 화면 이름(접근성 라벨용).
 function stopName(stops, index) {
   const stop = stops[index];
   if (stop.kind === 'parking') return '주차장';
@@ -114,8 +119,9 @@ function placeName(stops, place) {
   return stopName(stops, place.at);
 }
 
-// ---- drawing ----
+// ---- 그리기 ----
 
+// 상자 폭에 맞춰 간격을 정하되 minGap보다 좁히지 않는다(좁은 화면에서는 옆으로 스크롤).
 function routeGeometry(stops) {
   const { pad, minGap } = routeLayout;
   const room = routeScroll.clientWidth - 2 * pad;
@@ -123,6 +129,7 @@ function routeGeometry(stops) {
   return { gap, x: (index) => pad + index * gap, width: 2 * pad + (stops.length - 1) * gap };
 }
 
+// 정류장 하나의 SVG: 주차장 P, 적재 자리 5(양쪽 팔 표기), 수령 구역, 보통 정류장.
 function stopSvg(stop, cx) {
   const { lineY, labelY } = routeLayout;
   if (stop.kind === 'parking') {
@@ -143,8 +150,8 @@ function stopSvg(stop, cx) {
   return `<g class="route-stop"><circle cx="${cx}" cy="${lineY}" r="11"/><text x="${cx}" y="${lineY}">${escapeHtml(stop.key)}</text></g>`;
 }
 
-// The track (line, stops, captions, the dashed way home) is rebuilt only when the route or the spacing changes,
-// so the Pinky dots on top keep their elements and slide when they move.
+// 선로(선, 정류장, 글자, 점선으로 된 돌아오는 길)는 경로나 간격이 바뀔 때만 다시 만든다.
+// 그래서 위에 얹힌 핑키 점은 요소가 그대로 남아, 움직일 때 미끄러지듯 옮겨 간다.
 function drawRouteTrack(stops, geometry) {
   const { lineY, returnY, height } = routeLayout;
   const first = geometry.x(0);
@@ -162,15 +169,16 @@ function drawRouteTrack(stops, geometry) {
     <g class="route-dots"></g>`;
 }
 
+// 자리 → 점 좌표. 두 정류장 사이면 그 가운데에 둔다.
 function dotPosition(place, geometry, stops) {
   const { lineY, dotRise, returnY } = routeLayout;
-  // Driving home: on the dashed way back, toward P and clear of the captions and the way-back label.
+  // 집으로 가는 중: 점선으로 된 돌아오는 길 위, P 쪽으로, 글자와 돌아오는 길 안내문을 피해서 둔다.
   if (place.returning) return { x: geometry.x(0) + (geometry.x(stops.length - 1) - geometry.x(0)) * 0.22, y: returnY - 20 };
   if (place.between != null) return { x: (geometry.x(place.between) + geometry.x(place.between + 1)) / 2, y: lineY - dotRise };
   return { x: geometry.x(place.at), y: lineY - dotRise };
 }
 
-// Draws the dots and returns the x of the leftmost one (null when none is drawn).
+// 점을 그리고 가장 왼쪽 점의 x를 돌려준다(그린 점이 없으면 null).
 function drawRouteDots(placed, geometry, stops) {
   const layer = routeSvg.querySelector('.route-dots');
   const byKey = new Map();
@@ -183,7 +191,7 @@ function drawRouteDots(placed, geometry, stops) {
   });
   const seen = new Set();
   byKey.forEach((group) => group.forEach((item, index) => {
-    // Pinkys on the same spot sit side by side, centred over it.
+    // 같은 자리의 핑키들은 그 위에 가운데 맞춰 나란히 놓는다.
     const x = item.position.x + (index - (group.length - 1) / 2) * routeLayout.dotSpread;
     leftmost = leftmost == null ? x : Math.min(leftmost, x);
     const id = item.pinky.pinky_id;
@@ -203,6 +211,7 @@ function drawRouteDots(placed, geometry, stops) {
   return leftmost;
 }
 
+// 휴대폰 폭에서 노선도가 넘칠 때 첫 핑키가 보이도록 한 번만 스크롤한다.
 function scrollToFirstDot(leftmost) {
   if (routeStrip.scrolledToDots || leftmost == null || !routeScroll.clientWidth
     || routeScroll.scrollWidth <= routeScroll.clientWidth) return;
@@ -210,6 +219,7 @@ function scrollToFirstDot(leftmost) {
   routeScroll.scrollLeft = Math.max(0, leftmost - 64);
 }
 
+// pinky.js가 GET /api/pinky 응답마다 부른다. 선로는 필요할 때만 다시 만들고, 점을 옮기고, 못 그리는 핑키는 칩으로 적는다.
 function renderRouteStrip(view) {
   routeStrip.lastView = view;
   if (!routeStrip.catalogRequested) loadRouteFromCatalog();
@@ -236,4 +246,5 @@ function renderRouteStrip(view) {
       place.off === '연결 끊김' ? '' : ` (${escapeHtml(pinky.route?.current_label || pinky.phase_label || '정보 없음')})`}</span>`).join('');
 }
 
+// 창 크기가 바뀌면 간격을 다시 계산한다(노선도가 숨어 있으면 건너뛴다).
 window.addEventListener('resize', () => { if (routeStrip.lastView && !routeScroll.closest('[hidden]')) renderRouteStrip(routeStrip.lastView); });

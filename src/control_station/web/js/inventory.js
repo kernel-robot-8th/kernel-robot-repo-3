@@ -1,11 +1,11 @@
-// 재고 화면: what the shelves hold per object, what open orders have claimed, what can still be sold, and the
-// operator's override per object (stop selling, sell from a hand count, back to the camera).
+// 재고 화면: 물건별로 선반에 있는 수, 열린 주문이 잡아 둔 수, 아직 팔 수 있는 수, 그리고 물건마다 작업자가
+// 덮어쓰는 설정(판매 중지, 직접 센 수량으로 팔기, 카메라 값으로 되돌리기).
 //
-// Loaded after app.js and uses its helpers: escapeHtml, apiErrorMessage, formatClock, showToast, setStat.
+// app.js 뒤에 로드되고 그 도우미 escapeHtml, apiErrorMessage, formatClock, showToast, setStat을 쓴다.
 //
-// GET /api/inventory is read every 2 s while this view is on screen. POST /api/inventory/{object} answers with the
-// new snapshot, which is drawn at once. An unknown count is shown as "?" and never as 0: the server closes those
-// objects for ordering, and the screen says so.
+// GET /api/inventory는 이 뷰가 화면에 있는 동안 2초마다 읽는다. POST /api/inventory/{object}는 새 재고 전체를
+// 답하고, 그것을 바로 그린다. 모르는 개수는 "?"로 보이며 절대 0으로 보이지 않는다: 서버는 그런 물건의 주문을
+// 닫고, 화면도 그렇게 말한다.
 
 const INVENTORY_POLL_MS = 2000;
 
@@ -21,23 +21,24 @@ const inventoryStatUnknown = document.querySelector('#inventoryStatUnknown');
 const inventoryStatReserved = document.querySelector('#inventoryStatReserved');
 
 const inventoryScreen = {
-  data: null,           // last GET (or POST) answer
-  loadError: null,      // why the last GET failed; the last answer stays on screen
-  polling: false,       // a GET is in flight; the timer skips instead of piling up requests
-  version: 0,           // bumped when a POST answer is drawn, so a GET sent before it cannot draw an older state
-  busy: new Set(),      // object classes with an override request in flight
-  messages: new Map(),  // object class -> why its last override was refused
+  data: null,           // 마지막 GET(또는 POST) 응답
+  loadError: null,      // 마지막 GET이 실패한 이유. 마지막 응답은 화면에 남는다
+  polling: false,       // GET 요청 중. 타이머는 요청을 쌓지 않고 건너뛴다
+  version: 0,           // POST 응답을 그릴 때 올린다. 그 전에 보낸 GET이 옛 상태를 그리지 못하게
+  busy: new Set(),      // 수정 요청이 오가는 중인 물체 클래스
+  messages: new Map(),  // 물체 클래스 -> 마지막 수정이 거절된 이유
 };
 
-// [word, chip tone] for each product status and count source.
+// 물건 상태와 수량 출처마다 [말, 칩 색].
 const inventoryStatusChips = {
   available: ['있음', 'good'], sold_out: ['품절', 'danger'], unknown: ['모름', 'attention'], closed: ['판매 중지', 'dark'],
 };
 const inventorySourceChips = {
   camera: ['카메라', 'active'], manual: ['직접 수량', 'attention'], closed: ['판매 중지', 'dark'],
 };
-// The two arms each serve one shelf (config/arms.json); any other shelf in the answer is shown by its id.
+// 두 팔이 각각 선반 하나를 맡는다(config/arms.json). 응답에 그 밖의 선반이 있으면 id로 보인다.
 const inventoryShelves = [['shelf_a', '선반 A', '왼쪽 팔'], ['shelf_b', '선반 B', '오른쪽 팔']];
+// 최근 변화 종류의 이름과 색.
 const inventoryEventWords = {
   RESTOCKED: ['채움', 'good'], REMOVED_OUTSIDE: ['관제 밖 감소', 'attention'], OVERRIDE: ['작업자 수정', ''],
 };
@@ -50,13 +51,15 @@ function chipHtml([word, tone]) {
   return `<span class="chip${tone ? ` ${tone}` : ''}">${escapeHtml(word)}</span>`;
 }
 
+// 수량 출처 칩. 모의 세계 값은 모의 태그로 보인다.
 function sourceChipHtml(source) {
   if (source === 'mock_world') return '<span class="sim-tag">모의</span>';
   return chipHtml(inventorySourceChips[source] || [source, '']);
 }
 
-// ---- summary ----
+// ---- 요약 ----
 
+// 요약 카드와 경고 띠. data.state: live(카메라로 세는 중), held(팔이 일하는 동안 마지막 확인값 유지), unknown(모름).
 function renderInventorySummary() {
   const { data, loadError } = inventoryScreen;
   if (loadError) {
@@ -82,7 +85,7 @@ function renderInventorySummary() {
     }[data.state] || escapeHtml(data.state);
     inventorySummaryDetail.textContent = `${formatClock(data.checked_at)}에 확인했어요`;
   }
-  // Unknown stock closes those objects for ordering; a person should look at the shelf camera.
+  // 재고를 모르면 그 물건의 주문을 닫는다. 사람이 선반 카메라를 봐야 한다.
   inventoryBanner.hidden = data.state !== 'unknown';
   if (data.state === 'unknown') {
     const names = unknown.map((product) => product.label).join(', ');
@@ -91,8 +94,9 @@ function renderInventorySummary() {
   }
 }
 
-// ---- product rows: built once per product, then updated in place so typing in a count is never interrupted ----
+// ---- 물건별 줄: 물건마다 한 번 만들고 그 자리에서 값만 바꾼다. 그래서 개수를 입력하는 중에 끊기지 않는다 ----
 
+// 줄 뼈대: 이름과 칩, 카메라 재고, 선반별·합계·주문 가능·예약 수, [판매 중지]·[카메라 기준으로], 직접 수량 입력.
 function inventoryRowSkeleton(product) {
   const id = escapeHtml(product.object_class);
   const shelves = inventoryShelves.map(([shelfId, shelf, arm]) => `
@@ -127,11 +131,12 @@ function inventoryRowSkeleton(product) {
 }
 
 function shelfCount(product, shelfId) {
-  // While the camera count is unknown the last per-shelf numbers are stale; show them as unknown too.
+  // 카메라 수가 모름인 동안 선반별 마지막 숫자는 오래된 값이니 그것도 모름으로 보인다.
   if (product.status === 'unknown') return '?';
   return String(product.per_shelf[shelfId] || 0);
 }
 
+// 줄 값 갱신. [판매 중지]는 이미 중지면, [카메라 기준으로]는 작업자 수정이 없으면 막는다. 요청 중이면 모두 막는다.
 function updateInventoryRow(row, product) {
   const field = (name) => row.querySelector(`[data-field="${name}"]`);
   const busy = inventoryScreen.busy.has(product.object_class);
@@ -155,6 +160,8 @@ function updateInventoryRow(row, product) {
   field('message').textContent = message || '';
 }
 
+// 카메라 재고(camera_stock) 순서로 줄을 만든다. 주문 상품(products)에 없는 물건은 카메라 재고만 보인다.
+// 물건 구성이 바뀔 때만 다시 만든다.
 function renderInventoryProducts() {
   const data = inventoryScreen.data;
   if (!data) return;
@@ -180,8 +187,9 @@ function renderInventoryProducts() {
   });
 }
 
-// ---- recent changes ----
+// ---- 최근 변화 ----
 
+// 변화 한 줄: 작업자 수정이면 무엇으로 바꿨는지, 아니면 어느 선반에서 몇 개에서 몇 개로 바뀌었는지.
 function inventoryEventText(event) {
   const label = inventoryLabel(event.object_class);
   if (event.kind === 'OVERRIDE') {
@@ -212,8 +220,9 @@ function renderInventory() {
   renderInventoryEvents();
 }
 
-// ---- reading ----
+// ---- 읽기 ----
 
+// GET /api/inventory(2초마다, 재고 뷰가 보일 때만). 그사이 수정 응답을 그렸으면 이 응답은 버린다.
 async function refreshInventory({ force = false } = {}) {
   if (!force && (document.hidden || inventoryView.hidden || inventoryScreen.polling)) return;
   const version = inventoryScreen.version;
@@ -221,7 +230,7 @@ async function refreshInventory({ force = false } = {}) {
   try {
     const response = await fetch('/api/inventory', { cache: 'no-store' });
     const result = await response.json();
-    if (version !== inventoryScreen.version) return;  // an override answer was drawn meanwhile; it is newer
+    if (version !== inventoryScreen.version) return;  // 그사이 수정 응답을 그렸다. 그쪽이 더 새 값이다
     if (response.ok) {
       inventoryScreen.data = result;
       inventoryScreen.loadError = null;
@@ -236,8 +245,9 @@ async function refreshInventory({ force = false } = {}) {
   renderInventory();
 }
 
-// ---- operator overrides ----
+// ---- 작업자 수정 ----
 
+// POST /api/inventory/{object} {mode: auto | closed | manual, count}. 성공 응답은 새 재고 전체라 바로 그린다.
 async function setInventoryOverride(objectClass, body, doneText) {
   inventoryScreen.busy.add(objectClass);
   inventoryScreen.messages.delete(objectClass);
@@ -256,7 +266,7 @@ async function setInventoryOverride(objectClass, body, doneText) {
     }
     inventoryScreen.messages.set(objectClass, apiErrorMessage(result, '재고를 바꾸지 못했습니다'));
   } catch {
-    // No answer is not a refusal: the change may have been stored, so the next read shows what holds.
+    // 응답이 없다고 거절된 것은 아니다: 바뀐 값이 저장됐을 수 있으니, 다음 읽기가 지금 값을 보여 준다.
     inventoryScreen.messages.set(objectClass, '관제 서버의 답을 받지 못했어요. 잠시 뒤 목록에서 지금 값을 확인하세요.');
   } finally {
     inventoryScreen.busy.delete(objectClass);
@@ -265,6 +275,7 @@ async function setInventoryOverride(objectClass, body, doneText) {
   return false;
 }
 
+// [판매 중지]·[카메라 기준으로] 버튼(이벤트 위임).
 inventoryProducts.addEventListener('click', (event) => {
   const button = event.target.closest('[data-inventory-mode]');
   if (!button) return;
@@ -274,6 +285,7 @@ inventoryProducts.addEventListener('click', (event) => {
   setInventoryOverride(objectClass, { mode }, mode === 'closed' ? `${label} 판매를 멈췄어요` : `${label} 재고를 카메라 기준으로 되돌렸어요`);
 });
 
+// 직접 수량: 0~99 정수만 보낸다. 적용되면 입력칸을 비운다.
 inventoryProducts.addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = event.target;
@@ -290,6 +302,7 @@ inventoryProducts.addEventListener('submit', async (event) => {
   }
 });
 
+// 재고 뷰로 오면 바로 읽고, 그 뒤로는 2초마다 읽는다(뷰가 숨어 있으면 refreshInventory가 건너뛴다).
 document.addEventListener('viewchange', (event) => { if (event.detail.view === 'inventory') refreshInventory(); });
 document.addEventListener('visibilitychange', () => refreshInventory());
 window.setInterval(refreshInventory, INVENTORY_POLL_MS);

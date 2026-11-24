@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- 고객 주문 페이지(/order): 휴대폰용. order.js 하나가 주문하기와 주문 따라가기 두 화면을 맡는다. -->
 <html lang="ko">
 <head>
   <meta charset="utf-8">
@@ -7,6 +8,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="로봇 주문">
+  <!-- 홈 화면에 추가할 수 있는 웹 앱 설정(매니페스트·아이콘). 서비스 워커(order-sw.js)는 order.js가 등록한다. -->
   <link rel="manifest" href="/order-manifest.json">
   <link rel="icon" href="/icons/order-192.png">
   <link rel="apple-touch-icon" href="/icons/order-180.png">
@@ -16,12 +18,14 @@
 </head>
 <body>
   <main class="order-page">
+    <!-- 머리글: 제목은 화면에 따라 바뀌고, 따라갈 주문이 있으면 [내 주문 보기]가 나온다. -->
     <header class="order-header">
       <h1 id="pageTitle">무엇을 가져다 드릴까요?</h1>
       <button id="myOrderLink" type="button" class="my-order-link" hidden>내 주문 보기</button>
       <p id="pageLead">물건과 수량을 고르면 로봇이 수령 구역까지 가져다 드려요.</p>
     </header>
 
+    <!-- 주문 화면: 물건 목록(GET /api/catalog로 채움)과 화면 아래에 붙는 장바구니 막대. -->
     <form id="orderForm" class="order-form" novalidate>
       <section aria-labelledby="products-title">
         <div class="section-title"><h2 id="products-title">물건</h2><span class="hint">물건마다 5개까지 고를 수 있어요</span></div>
@@ -39,6 +43,7 @@
       </div>
     </form>
 
+    <!-- 추적 화면: GET /api/orders/{id}/track을 2초마다 읽어 단계와 [받았어요]를 보여 준다. -->
     <section id="tracking" class="tracking" aria-labelledby="track-title" hidden>
       <p class="track-eyebrow"><span id="trackPinky"></span><span id="trackShipment" class="track-shipment" hidden></span></p>
       <h2 id="track-title" class="track-title" tabindex="-1">주문을 받았어요</h2>

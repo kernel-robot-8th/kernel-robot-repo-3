@@ -1,10 +1,9 @@
-// ROS 모니터 (개발자 화면): what the Pinky fleet dashboard receives over ROS for one Pinky, like a terminal.
-// The table shows every topic it reads (value, how long ago, fresh or not) and refreshes every second. The terminal
-// below prints one line, with the time, whenever something changes: the preparation stage and its message or error,
-// the route and mission phase, the line controller and final safety gate states, the lamp, a topic going stale or
-// coming back, the LiDAR localization result. [Nav2 로그] prints the error lines of the Pinky's Nav2 log.
+// ROS 모니터(개발자 화면): 핑키 관제가 핑키 한 대에 대해 ROS로 받는 것을 터미널처럼 보여 준다.
+// 표는 읽는 모든 토픽(값, 얼마 전에 받았는지, 새 값인지)을 1초마다 새로 보여 준다. 아래 터미널은 무언가 바뀔 때마다
+// 시각과 함께 한 줄씩 찍는다: 준비 단계와 그 메시지·오류, 경로와 임무 단계, 라인 제어기와 최종 안전 게이트 상태,
+// 램프, 토픽이 끊기거나 돌아옴, 라이다 위치 찾기 결과. [Nav2 로그]는 핑키 Nav2 로그의 오류 줄을 찍는다.
 //
-// Loaded after app.js (escapeHtml, apiErrorMessage, activeView, pinkyNames). Nothing here sends a command.
+// app.js(escapeHtml, apiErrorMessage, activeView, pinkyNames) 뒤에 로드된다. 여기서는 명령을 하나도 보내지 않는다.
 
 const rosPinkySelect = document.querySelector('#rosPinky');
 const rosTopics = document.querySelector('#rosTopics');
@@ -13,6 +12,7 @@ const rosFilter = document.querySelector('#rosFilter');
 const rosPause = document.querySelector('#rosPause');
 const rosStatus = document.querySelector('#rosStatus');
 
+// 1초마다 읽고, 터미널은 최근 600줄만 둔다. ROS_TOPIC_NAMES: 응답의 토픽 키 → 실제 ROS 토픽 이름.
 const ROS_POLL_MS = 1000;
 const ROS_MAX_LINES = 600;
 const ROS_TOPIC_NAMES = {
@@ -22,18 +22,21 @@ const ROS_TOPIC_NAMES = {
   safety_status: '/safety/status', indicator: '/fleet/indicator_status', display: '/fleet/display_status',
 };
 
+// pinkyId: 보는 핑키, last: 지난 rosWatched 값(오류였으면 'error'), paused: 터미널 자동 스크롤 멈춤, seq: 요청 번호.
 const ros = { pinkyId: '10', last: null, paused: false, lines: [], polling: false, seq: 0 };
 
 function rosClock() {
   return new Date().toLocaleTimeString('ko-KR', { hour12: false });
 }
 
+// 터미널에 줄을 시각과 함께 더한다(여러 줄이면 나눠서).
 function rosPrint(text, tone = '') {
   for (const line of String(text).split('\n')) ros.lines.push({ at: rosClock(), text: line, tone });
   if (ros.lines.length > ROS_MAX_LINES) ros.lines.splice(0, ros.lines.length - ROS_MAX_LINES);
   renderRosTerminal();
 }
 
+// 거르기 글자가 든 줄만 보여 주고, 멈춤이 아니면 맨 아래로 스크롤한다.
 function renderRosTerminal() {
   const filter = rosFilter.value.trim().toLowerCase();
   const lines = filter ? ros.lines.filter((line) => line.text.toLowerCase().includes(filter)) : ros.lines;
@@ -42,7 +45,7 @@ function renderRosTerminal() {
   if (!ros.paused) rosTerminal.scrollTop = rosTerminal.scrollHeight;
 }
 
-// The things worth a terminal line, each as text, so a change is a different string.
+// 터미널 한 줄로 남길 만한 것들을 각각 글자로. 그래서 바뀌면 다른 문자열이 된다.
 function rosWatched(view) {
   const t = view.topics || {};
   const state = (key) => (t[key]?.value || {}).state;
@@ -64,12 +67,14 @@ function rosWatched(view) {
   return watched;
 }
 
+// 줄 색: 끊김·오류·실패는 빨강, 받는 중·적용·연결됨은 초록.
 function rosToneFor(key, value) {
   if (key === '오류' || /끊김|fault|stop|오류|실패/.test(String(value))) return 'bad';
   if (/prepared|받는 중|가능|적용|연결됨/.test(String(value))) return 'good';
   return '';
 }
 
+// 토픽 표의 줄들. 값은 220자까지만 보이고 전체는 title에 둔다.
 function rosTopicRows(view) {
   return Object.entries(view.topics || {}).map(([key, topic]) => {
     const age = topic.age_s == null ? '안 들어옴' : `${Number(topic.age_s).toFixed(1)}초 전`;
@@ -79,6 +84,8 @@ function rosTopicRows(view) {
   }).join('');
 }
 
+// GET /api/pinky/{id}/ros(ROS 모니터 뷰일 때만). 처음이면 지켜보는 값을 모두, 그다음엔 바뀐 값만 '이전 → 지금'으로 찍는다.
+// 그사이 다른 핑키로 바꿨으면 응답을 버린다.
 async function pollRos() {
   if (activeView !== 'ros' || document.hidden || ros.polling) return;
   ros.polling = true;
@@ -112,6 +119,7 @@ async function pollRos() {
   }
 }
 
+// [Nav2 로그]: GET /api/pinky/{id}/nav-log(SSH로 읽어 몇 초 걸린다). 마지막 200줄을 터미널에 찍는다.
 async function printNavLog() {
   const pinkyId = ros.pinkyId;
   rosPrint(`── ${pinkyNames[pinkyId] || pinkyId} Nav2 로그 읽는 중 (SSH, 몇 초 걸려요) ──`, 'log');
@@ -129,6 +137,7 @@ async function printNavLog() {
   }
 }
 
+// 다른 핑키를 고르면 상태를 비우고 바로 읽는다. seq를 올려 이전 핑키의 늦은 응답을 버린다.
 function startRosPinky(pinkyId) {
   ros.pinkyId = pinkyId;
   ros.last = null;
@@ -138,6 +147,7 @@ function startRosPinky(pinkyId) {
   pollRos();
 }
 
+// 핑키 선택지(P0~P2), 거르기, 멈춤, 지우기, Nav2 로그 버튼.
 rosPinkySelect.innerHTML = ['10', '11', '12'].map((id) => `<option value="${id}">${escapeHtml(pinkyNames[id] || id)} (${id})</option>`).join('');
 rosPinkySelect.addEventListener('change', () => startRosPinky(rosPinkySelect.value));
 rosFilter.addEventListener('input', renderRosTerminal);
@@ -148,5 +158,6 @@ rosPause.addEventListener('click', () => {
 });
 document.querySelector('#rosClear').addEventListener('click', () => { ros.lines = []; renderRosTerminal(); });
 document.querySelector('#rosNavLog').addEventListener('click', printNavLog);
+// 뷰 전환 때 바로 읽고 1초마다 읽는다(다른 뷰면 pollRos가 건너뛴다).
 document.addEventListener('viewchange', () => pollRos());
 window.setInterval(pollRos, ROS_POLL_MS);

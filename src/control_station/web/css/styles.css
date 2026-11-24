@@ -1,17 +1,21 @@
-/* Control station screen.
+/* 관제 화면(index.html)의 공통 스타일. 색 토큰(:root 변수), 기본 컨트롤, 앱 뼈대(사이드바·머리글·뷰), 카드·칩,
+ * 그리고 뷰별 구역(주문 진행, 핑키, 지도, 재고, 장비·카메라, 수동 조작, 작업 이력, API)을 담는다. index.html이
+ * 가장 먼저 불러오고, 뒤에 오는 manual.css·intake-plan.css·dashboard.css가 이 토큰을 그대로 쓴다.
  *
- * Color carries meaning and nothing decorative borrows it:
- *   blue   = the control station is doing it (primary actions, the current view, running work)
- *   yellow = a person must confirm or act (waiting orders, unknown stock, warnings)
- *   red    = stop, danger, errors
- *   green  = confirmed good
- * Pretendard is self-hosted (fonts/, SIL OFL) so the screen keeps its type without internet. */
+ * 색은 뜻을 지니며, 꾸밈으로 빌려 쓰지 않는다:
+ *   파랑 = 관제가 하고 있는 일(주요 동작, 지금 뷰, 진행 중인 작업)
+ *   노랑 = 사람이 확인하거나 처리해야 함(시작 대기 주문, 모르는 재고, 경고)
+ *   빨강 = 정지, 위험, 오류
+ *   초록 = 확인된 정상
+ * Pretendard 글꼴은 이 서버가 직접 제공해(fonts/, SIL OFL) 인터넷 없이도 글꼴이 유지된다. */
 
+/* Pretendard 네 굵기(400·500·600·700). 글자 수를 줄인 subset 파일이다. */
 @font-face { font-family: "Pretendard"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/Pretendard-Regular.subset.woff2") format("woff2"); }
 @font-face { font-family: "Pretendard"; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/Pretendard-Medium.subset.woff2") format("woff2"); }
 @font-face { font-family: "Pretendard"; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/Pretendard-SemiBold.subset.woff2") format("woff2"); }
 @font-face { font-family: "Pretendard"; font-style: normal; font-weight: 700; font-display: swap; src: url("/fonts/Pretendard-Bold.subset.woff2") format("woff2"); }
 
+/* 색·모서리·그림자 토큰. 다른 관제 화면 CSS도 이 변수를 쓴다(order.css는 자기 사본을 둔다). */
 :root {
   color-scheme: light;
   --bg: #f2f4f6;
@@ -59,11 +63,12 @@ body { margin: 0; min-width: 320px; font-size: 15px; line-height: 1.55; letter-s
 h1, h2, h3, h4 { margin: 0; letter-spacing: -.02em; }
 h2 { font-size: 19px; font-weight: 700; }
 h3 { font-size: 16px; font-weight: 700; }
+/* hidden 속성은 컴포넌트의 display 지정보다 항상 이긴다. */
 [hidden] { display: none !important; }
-/* Paths and addresses stay in the UI face; a grey pill sets them apart without a monospace label. */
+/* 경로와 주소도 UI 글꼴을 그대로 쓴다. 고정폭 글꼴 대신 회색 알약 모양으로 구분한다. */
 code { padding: 2px 7px; border-radius: 6px; background: var(--fill); color: var(--text-2); font: inherit; font-size: 13px; font-weight: 500; }
 
-/* ---- controls: element defaults at zero specificity, so any component class can restyle them ---- */
+/* ---- 컨트롤: 요소 기본값을 특이도 0(:where)으로 두어 어떤 컴포넌트 클래스든 다시 꾸밀 수 있다 ---- */
 :where(button) {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   min-height: 40px; padding: 8px 16px; border: 0; border-radius: var(--radius-button);
@@ -85,7 +90,7 @@ button:disabled { background: var(--fill); color: var(--text-disabled); cursor: 
   display: grid; gap: 6px; color: var(--text-2); font-size: 13px; font-weight: 500;
 }
 
-/* ---- app shell: sidebar, sticky header, views ---- */
+/* ---- 앱 뼈대: 사이드바, 고정 머리글, 뷰 ---- */
 .app-shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100vh; }
 .sidebar { position: sticky; top: 0; display: flex; height: 100vh; flex-direction: column; gap: 28px; padding: 28px 14px 18px; background: var(--card); }
 .brand { padding: 0 10px; }
@@ -98,9 +103,9 @@ button:disabled { background: var(--fill); color: var(--text-disabled); cursor: 
 }
 .nav-item:hover:not(:disabled) { background: var(--fill); color: var(--text); }
 .nav-item.active, .nav-item.active:hover { background: var(--blue-soft); color: var(--blue-strong); font-weight: 700; }
-/* Waiting orders need a person to start them: yellow. */
+/* 시작 대기 주문은 사람이 시작해야 하므로 노랑. */
 .nav-badge { min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px; background: var(--yellow); color: var(--text); font-size: 12px; font-weight: 700; line-height: 22px; text-align: center; }
-/* ---- ROS 모니터 (developer screen): a terminal of changes and the live topic table ---- */
+/* ---- ROS 모니터(개발자 화면): 변화를 찍는 터미널과 실시간 토픽 표 ---- */
 .ros-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
 .ros-controls select, .ros-controls input { width: auto; min-width: 140px; }
 .ros-controls input { flex: 1 1 200px; }
@@ -116,7 +121,7 @@ button:disabled { background: var(--fill); color: var(--text-disabled); cursor: 
 .ros-topics tr.stale td { color: var(--text-3); }
 .ros-value { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; max-width: 520px; overflow-wrap: anywhere; }
 
-/* Operator screen by default: developer-only parts appear with ?dev=1 (body.dev). */
+/* 기본은 운영 화면: 개발자 전용 부분은 ?dev=1(body.dev)일 때만 나온다. */
 body:not(.dev) [data-dev-only] { display: none !important; }
 .screen-mode-switch { margin-top: auto; padding: 6px 12px; color: var(--text-3); font-size: 13px; text-decoration: none; }
 .screen-mode-switch:hover { color: var(--blue); }
@@ -130,14 +135,14 @@ body:not(.dev) [data-dev-only] { display: none !important; }
 .server-status.error .dot { background: var(--red); box-shadow: 0 0 0 4px rgba(240, 68, 82, .15); }
 
 .main-content { min-width: 0; width: min(100%, 1140px); padding: 0 32px 40px; }
-/* Sticky so the Pinky stop-all in it stays in reach on every view, however far the page is scrolled. */
+/* 고정(sticky)이라, 그 안의 전체 정지가 어느 뷰에서나 페이지를 얼마나 내렸든 손 닿는 곳에 있다. */
 .header {
   position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; gap: 16px;
   margin: 0 -8px; padding: 22px 8px 14px; background: rgba(242, 244, 246, .94); backdrop-filter: blur(8px);
 }
 .header h2 { font-size: 26px; font-weight: 700; }
 .header p { margin: 2px 0 0; }
-/* The stop for emergencies: the largest and reddest thing on every view, so it is found without reading. */
+/* 비상용 정지: 어느 뷰에서나 가장 크고 가장 빨간 것이라 읽지 않고도 찾는다. */
 .stop-all {
   flex-shrink: 0; display: inline-flex; align-items: center; gap: 16px; min-width: 260px; min-height: 84px; padding: 12px 30px 12px 24px;
   border: 3px solid #a3101f; border-radius: 20px; background: #e5182b; color: #fff; text-align: left; white-space: nowrap;
@@ -161,18 +166,18 @@ section { margin-top: 36px; }
 .note strong { color: var(--text-2); }
 .loading, .error-row { color: var(--text-3); text-align: center; }
 p.loading { margin: 0; padding: 20px; }
-/* An empty list still sits on a card, so the page keeps its rhythm. */
+/* 빈 목록도 카드 위에 두어 페이지의 리듬을 지킨다. */
 .order-board > p.loading, .robot-strip > p.loading, .intake-list > p.loading, .pinky-grid > p.loading {
   grid-column: 1 / -1; padding: 22px; border-radius: var(--radius-card); background: var(--card); box-shadow: var(--shadow);
 }
 
-/* Every panel is a white card on the grey page; emphasis comes from size and position, not from borders. */
+/* 모든 패널은 회색 페이지 위의 흰 카드다. 강조는 테두리가 아니라 크기와 위치로 한다. */
 .card, .table-wrap, .arm-control, .task-form, .slot-command-form, .camera-card, .parking-panel, .api-list,
 .task-list, .task-detail, .pinky-card, .pinky-log-box, .robot-card, .order-card, .intake-card, .mock-panel {
   border-radius: var(--radius-card); background: var(--card); box-shadow: var(--shadow);
 }
 
-/* ---- summary card at the top of a view: one sentence, then the big numbers ---- */
+/* ---- 뷰 맨 위 요약 카드: 한 문장, 그다음 큰 숫자(tone 클래스는 app.js의 setStat이 붙인다) ---- */
 .summary-card { margin-top: 8px; padding: 24px 24px 22px; border-radius: 22px; background: var(--card); box-shadow: var(--shadow); }
 .summary-title { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -.03em; line-height: 1.35; }
 .summary-detail { margin: 4px 0 0; color: var(--text-2); font-size: 14px; }
@@ -186,7 +191,7 @@ p.loading { margin: 0; padding: 20px; }
 .stat.active dd { color: var(--blue); }
 .stat.zero dd { color: var(--text-disabled); }
 
-/* ---- chips: small state words, always pill-shaped and never clickable ---- */
+/* ---- 칩: 작은 상태 말. 언제나 알약 모양이고 누를 수 없다 ---- */
 .chip, .status-chip, .ready-chip, .result-chip, .plan-chip, .sim-tag, .spot-tag, .intake-zone, .simulated {
   display: inline-flex; flex-shrink: 0; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px;
   background: var(--fill); color: var(--text-2); font-size: 12px; font-weight: 600; line-height: 1.4; white-space: nowrap;
@@ -196,17 +201,17 @@ p.loading { margin: 0; padding: 20px; }
 .chip.danger { background: var(--red-soft); color: var(--red-ink); }
 .chip.active { background: var(--blue-soft); color: var(--blue-strong); }
 .chip.dark { background: var(--button-dark); color: #fff; }
-/* Mock values must never pass for real ones: a dashed outline marks them wherever they appear. */
+/* 모의 값이 실제 값으로 보이면 안 된다: 어디에 나오든 점선 테두리로 표시한다. */
 .sim-tag, .simulated { padding: 2px 9px; border: 1px dashed var(--text-3); background: transparent; color: var(--text-2); font-weight: 500; }
 .spot-tag { background: var(--blue); color: #fff; }
-/* Outside ?dev=1 the mock tags stay out of sight; the 종합 dashboard says which devices are not connected yet. */
+/* ?dev=1이 아니면 모의 태그는 보이지 않는다. 아직 연결되지 않은 장비는 종합 화면이 알려 준다. */
 body:not(.dev) .sim-tag, body:not(.dev) .simulated { display: none; }
 
-/* Pinky marks: blue while the Pinky answers, grey when it does not. */
+/* 핑키 표시: 핑키가 응답하면 파랑, 응답하지 않으면 회색. */
 .pinky-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 34px; padding: 2px 8px; border-radius: 999px; background: var(--blue-soft); color: var(--blue-strong); font-size: 13px; font-weight: 700; letter-spacing: 0; }
 .pinky-badge.offline { background: var(--fill); color: var(--text-3); }
 
-/* ---- 주문 진행: alerts ---- */
+/* ---- 주문 진행: 경보 ---- */
 .alert-band { display: grid; gap: 10px; margin-top: 16px; }
 .alert-band:empty { display: none; }
 .alert-card { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 16px 18px; border-radius: var(--radius-card); }
@@ -221,7 +226,7 @@ body:not(.dev) .sim-tag, body:not(.dev) .simulated { display: none; }
 .alert-meta { display: flex; flex-wrap: wrap; gap: 0 12px; }
 .alert-card button { background: var(--card); color: var(--text); }
 
-/* ---- 주문 접수: orders waiting for a person to start them ---- */
+/* ---- 주문 접수: 사람이 시작하기를 기다리는 주문 ---- */
 .intake-list { display: grid; gap: 12px; }
 .intake-empty { margin: 0; padding: 22px; border-radius: var(--radius-card); background: var(--card); color: var(--text-2); font-size: 15px; text-align: center; box-shadow: var(--shadow); }
 .intake-empty a { margin-left: 6px; color: var(--blue); font-weight: 600; text-decoration: none; }
@@ -233,6 +238,8 @@ body:not(.dev) .sim-tag, body:not(.dev) .simulated { display: none; }
 .intake-items { flex-basis: 100%; order: -1; font-size: 18px; font-weight: 700; letter-spacing: -.02em; }
 .intake-actions { display: flex; gap: 8px; margin-left: auto; }
 .intake-actions button { min-width: 72px; min-height: 42px; font-size: 15px; }
+/* .intake-preview·.preview-block·.preview-summary·.preview-code·.pick-list는 지금 JS가 만들지 않는 예전 미리보기용이다.
+ * 배정 미리보기는 intake-plan.css가 꾸민다. */
 .intake-preview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
 .preview-block { min-width: 0; padding: 12px 14px; border-radius: var(--radius-inner); background: var(--card-muted); }
 .preview-block h4 { margin: 0 0 4px; color: var(--text-3); font-size: 13px; font-weight: 500; }
@@ -250,6 +257,7 @@ body:not(.dev) .sim-tag, body:not(.dev) .simulated { display: none; }
 .verdict.excluded .pinky-badge { background: var(--fill); color: var(--text-3); }
 .pick-list { display: grid; gap: 4px; margin: 0; padding-left: 20px; font-size: 13px; }
 .pick-list small { margin-left: 6px; color: var(--text-3); font-size: 12px; }
+/* 자동 출발 막대와 카드별 안내(켜지면 파랑, 건너뜀은 노랑). .intake-note는 시작·거절 실패 안내(빨강). */
 .dispatch-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: 0 0 12px; padding: 12px 16px; border-radius: var(--radius-card); background: var(--card); box-shadow: var(--shadow); font-size: 14px; }
 .dispatch-switch { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer; }
 .dispatch-switch input { width: 18px; height: 18px; accent-color: var(--blue); }
@@ -260,7 +268,7 @@ body:not(.dev) .sim-tag, body:not(.dev) .simulated { display: none; }
 .intake-note { margin-top: 12px; padding: 12px 14px; border-radius: var(--radius-inner); background: var(--red-soft); color: var(--red-ink); font-size: 14px; overflow-wrap: anywhere; }
 .intake-note .verdict-list { margin-top: 8px; }
 
-/* ---- robot tiles ---- */
+/* ---- 로봇 타일 ---- */
 .robot-strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 168px), 1fr)); gap: 10px; }
 .robot-card { min-width: 0; padding: 16px 18px; }
 .robot-card h3 { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 0 0 10px; font-size: 15px; font-weight: 600; }
@@ -283,6 +291,7 @@ body:not(.dev) .sim-tag, body:not(.dev) .simulated { display: none; }
 .status-chip.RUNNING, .status-chip.VALIDATING { background: var(--blue-soft); color: var(--blue-strong); }
 .status-chip.SUCCEEDED { background: var(--green-soft); color: var(--green-ink); }
 .status-chip.FAILED, .status-chip.NEEDS_INTERVENTION { background: var(--red-soft); color: var(--red-ink); }
+/* 주문 단계 줄: 끝남(연파랑), 진행 중(파랑), 실패(빨강), 건너뜀(취소선). */
 .pipeline { display: flex; flex-wrap: wrap; gap: 4px; margin: 14px 0 10px; padding: 0; list-style: none; }
 .pipeline li { flex: 1 1 88px; padding: 7px 8px; border-radius: 10px; background: var(--fill); color: var(--text-3); font-size: 12px; font-weight: 500; text-align: center; }
 .pipeline li.done { background: var(--blue-soft); color: var(--blue-strong); }
@@ -292,6 +301,7 @@ body:not(.dev) .sim-tag, body:not(.dev) .simulated { display: none; }
 .order-now { margin: 4px 0; font-size: 15px; }
 .order-now b { margin-right: 6px; color: var(--blue); }
 .order-card.failed .order-now b { color: var(--red-ink); }
+/* 팔 적재 계획 칩(app.js의 planChips). */
 .plan-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 0; color: var(--text-disabled); }
 .plan-chip { background: var(--fill); }
 .plan-chip.done { background: var(--green-soft); color: var(--green-ink); }
@@ -299,7 +309,7 @@ body:not(.dev) .sim-tag, body:not(.dev) .simulated { display: none; }
 .plan-chip.failed { background: var(--red-soft); color: var(--red-ink); }
 .order-actions-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 
-/* ---- mock world: shown only in mock mode, outlined dashed like every mock value ---- */
+/* ---- 모의 세계: 모의 모드에서만 보이며, 모든 모의 값처럼 점선 테두리를 두른다 ---- */
 .mock-panel { display: grid; gap: 14px; padding: 18px 20px; background: var(--card); box-shadow: none; outline: 1px dashed var(--text-3); outline-offset: -1px; }
 .mock-stock { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; font-size: 14px; }
 .mock-stock div { padding: 12px 14px; border-radius: var(--radius-inner); background: var(--card-muted); color: var(--text-2); }
@@ -307,7 +317,7 @@ body:not(.dev) .sim-tag, body:not(.dev) .simulated { display: none; }
 .mock-fault-form { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
 .mock-fault-form label { flex: 1 1 160px; }
 
-/* ---- toasts: dark, so they read as a passing message and not as part of the page ---- */
+/* ---- 토스트: 어둡게 해서 페이지의 일부가 아니라 지나가는 메시지로 읽힌다 ---- */
 .toast-stack { position: fixed; right: 20px; bottom: 20px; z-index: 40; display: grid; gap: 8px; width: min(360px, calc(100vw - 32px)); pointer-events: none; }
 .toast { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; padding: 14px 16px; border-radius: 16px; background: rgba(25, 31, 40, .95); color: #fff; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); font-size: 13px; animation: toast-in .2s ease-out; }
 .toast::before { content: ""; grid-row: span 2; width: 8px; height: 8px; margin-top: 7px; border-radius: 50%; background: var(--blue); }
@@ -326,6 +336,7 @@ body:not(.dev) .sim-tag, body:not(.dev) .simulated { display: none; }
 .pinky-link.error .pinky-link-dot { background: var(--red); box-shadow: 0 0 0 4px rgba(240, 68, 82, .15); }
 .pinky-link.error strong { color: var(--red-ink); }
 .pinky-link.mock .pinky-link-dot { background: var(--text-3); }
+/* 전체 주행 테스트(pinky-test.js): 눌러야 할 줄은 파랑, 적재 자리 도착은 초록, 기다리는 중은 노랑 테두리. */
 .fleet-test-card { display: grid; gap: 14px; padding: 18px 20px; border-radius: var(--radius-card, 20px); background: var(--card); margin-bottom: 20px; }
 .fleet-test-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .fleet-test-actions .chip { margin-left: auto; }
@@ -350,7 +361,7 @@ body:not(.dev) .sim-tag, body:not(.dev) .simulated { display: none; }
 .fleet-test-rows select { flex: 0 0 auto; width: auto; min-width: 110px; }
 .pinky-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr)); gap: 12px; }
 .pinky-empty { grid-column: 1 / -1; margin: 0; padding: 22px; border-radius: var(--radius-card); background: var(--card-muted); color: var(--text-2); text-align: center; }
-/* A card opens its Pinky's detail when tapped anywhere outside its buttons. */
+/* 카드는 버튼이 아닌 곳 어디를 눌러도 그 핑키의 상세가 열린다. */
 .pinky-card { display: flex; min-width: 0; flex-direction: column; gap: 14px; padding: 20px; cursor: pointer; transition: box-shadow .15s; }
 .pinky-card:hover { box-shadow: 0 4px 16px rgba(0, 0, 0, .08); }
 .pinky-card.offline { background: var(--card-muted); box-shadow: none; }
@@ -385,7 +396,7 @@ dl.pinky-facts { display: grid; margin: 0; padding: 0; }
 .pinky-stop:hover:not(:disabled) { background: #c90f21; }
 .pinky-stop:active:not(:disabled) { background: #a80c1b; }
 .pinky-stop:disabled { border-color: transparent; box-shadow: none; }
-/* Stopping an arm: red as soon as there is something to stop (the buttons are disabled while nothing runs). */
+/* 팔 정지: 멈출 것이 생기자마자 빨강(아무것도 돌지 않을 때는 버튼이 비활성화된다). */
 #armStop:not(:disabled), #policyRunStop:not(:disabled) { min-height: 48px; padding: 0 20px; border: 2px solid #a3101f; background: #e5182b; color: #fff; font-size: 16px; font-weight: 800; }
 #armStop:hover:not(:disabled), #policyRunStop:hover:not(:disabled) { background: #c90f21; }
 .pinky-last-stop { min-width: 0; color: var(--text-2); font-size: 12px; line-height: 1.4; }
@@ -417,7 +428,7 @@ dl.pinky-facts { display: grid; margin: 0; padding: 0; }
 .result-chip.refused { background: var(--red-soft); color: var(--red-ink); }
 .result-chip.unknown { background: var(--yellow-soft); color: var(--yellow-ink); }
 
-/* ---- 핑키: the summary with the small map beside it, the route strip across below ---- */
+/* ---- 핑키: 요약 옆에 작은 지도, 그 아래 가로로 경로 노선도 ---- */
 .pinky-summary-grid { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 24px; }
 .pinky-summary-main { display: grid; align-content: start; gap: 14px; min-width: 0; }
 .pinky-summary-main .summary-stats { margin-top: 6px; }
@@ -435,7 +446,7 @@ dl.pinky-facts { display: grid; margin: 0; padding: 0; }
 .gentle-note { margin: 0; padding: 10px 12px; border-radius: var(--radius-inner); background: var(--card-muted); color: var(--text-2); font-size: 13px; line-height: 1.5; }
 .map-empty { padding: 24px 16px; color: var(--text-3); font-size: 13px; text-align: center; }
 
-/* ---- the map itself: grid image, keepout hatch, fixed points, Pinky arrows ---- */
+/* ---- 지도 자체: 격자 그림, 금지 구역 빗금, 고정 지점, 핑키 화살표 ---- */
 .pinky-map { display: block; width: 100%; height: auto; }
 .map-grid { image-rendering: pixelated; }
 .map-keepout-fill { fill: rgba(240, 68, 82, .1); }
@@ -462,11 +473,13 @@ dl.pinky-facts { display: grid; margin: 0; padding: 0; }
 .map-scale text { fill: var(--text-2); font-size: 11px; font-weight: 600; }
 .map-trail { fill: none; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; opacity: .45; }
 .map-plan { fill: none; stroke-width: 4; stroke-dasharray: 10 8; stroke-linecap: round; opacity: .9; }
+/* 핑키 화살표는 요소를 다시 만들지 않으므로 위치·방향이 바뀌면 미끄러지듯 옮겨 간다. */
 .map-pinky { transition: transform .6s cubic-bezier(.2, .8, .2, 1); }
 .map-pinky-heading { transition: transform .4s ease; }
 .map-pinky circle { fill: var(--card); stroke: var(--pinky-color, var(--blue)); stroke-width: 2.5; }
 .map-pinky path { fill: var(--pinky-color, var(--blue)); }
 .map-pinky text { fill: var(--pinky-color, var(--blue-strong)); paint-order: stroke; stroke: var(--card); stroke-width: 4px; stroke-linejoin: round; }
+/* 라이다 후보 자리(점선 원, 핑키 고유 색 --pinky-color). 작은 지도(.compact)에서는 이름을 뺀다. */
 .map-candidate { cursor: pointer; }
 .map-candidate circle { fill: var(--card); stroke: var(--pinky-color); stroke-width: 2.5; stroke-dasharray: 5 4; }
 .map-candidate path { fill: var(--pinky-color); }
@@ -480,7 +493,7 @@ dl.pinky-facts { display: grid; margin: 0; padding: 0; }
 .map-pinky.stopping path { fill: var(--red); }
 .pinky-map.compact .map-caption { display: none; }
 
-/* ---- panels over the page: they start below the sticky header so the stop-all stays in reach ---- */
+/* ---- 페이지 위 패널: 고정 머리글 아래(--overlay-top)에서 시작해 전체 정지가 손 닿는 곳에 남는다 ---- */
 .overlay-scrim { position: fixed; top: var(--overlay-top, 0px); right: 0; bottom: 0; left: 0; z-index: 30; background: rgba(25, 31, 40, .3); }
 .overlay-panel { position: fixed; top: calc(var(--overlay-top, 0px) + 12px); bottom: 12px; z-index: 31; display: flex; flex-direction: column; overflow: hidden; border-radius: 24px; background: var(--card); box-shadow: 0 12px 40px rgba(0, 0, 0, .18); animation: panel-in .22s ease-out; }
 .overlay-panel:focus { outline: none; }
@@ -534,10 +547,11 @@ button.small { min-height: 30px; padding: 4px 10px; font-size: 12px; }
 .sheet-log time { color: var(--text-3); font-variant-numeric: tabular-nums; }
 .sheet-log small { min-width: 0; color: var(--text-3); overflow-wrap: anywhere; }
 
-/* ---- enlarged map ---- */
+/* ---- 크게 본 지도 ---- */
 .map-viewer-body { display: grid; flex: 1; grid-template-columns: minmax(0, 1fr) 280px; gap: 20px; min-height: 0; padding: 18px 20px 20px; overflow-y: auto; }
 .map-viewer-map { position: relative; display: grid; place-items: center; min-height: 0; border-radius: var(--radius-inner); background: var(--card-muted); }
 .map-viewer-map .pinky-map { width: auto; max-width: 100%; height: auto; max-height: calc(100vh - var(--overlay-top, 0px) - 120px); }
+/* 위치 다시 잡기 중의 안내 막대와 미리보기(원과 방향 화살표). */
 .map-pick-bar { position: absolute; top: 10px; left: 10px; right: 10px; z-index: 1; display: flex; align-items: center; gap: 10px;
   padding: 10px 12px; border-radius: 12px; background: var(--blue); color: #fff; font-size: 14px; font-weight: 600;
   box-shadow: 0 6px 18px rgb(0 0 0 / .18); }
@@ -572,7 +586,7 @@ button.small { min-height: 30px; padding: 4px 10px; font-size: 12px; }
 .swatch.zone { border-radius: 50%; background: var(--yellow); }
 .swatch.pinky { clip-path: polygon(100% 50%, 0 0, 30% 50%, 0 100%); border-radius: 0; background: var(--blue); }
 
-/* ---- 핑키: route strip. Order only, no scale; it scrolls sideways on its own at phone width. ---- */
+/* ---- 핑키: 경로 노선도. 순서만 있고 축척은 없다. 휴대폰 폭에서는 저절로 옆으로 스크롤된다. ---- */
 .route-strip { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line-soft); }
 .route-strip-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
 .route-scroll { margin: 8px -12px 0; padding: 0 12px; overflow-x: auto; border-radius: var(--radius-inner); }
@@ -595,7 +609,7 @@ button.small { min-height: 30px; padding: 4px 10px; font-size: 12px; }
 .route-caption.strong { font-size: 13px; font-weight: 700; }
 .route-caption.station { fill: var(--blue-strong); }
 .route-caption.zone { fill: var(--yellow-ink); }
-/* The one moving thing on the screen: a dot slides when its Pinky reaches the next stop. */
+/* 화면에서 움직이는 유일한 것: 핑키가 다음 정류장에 닿으면 점이 미끄러져 간다. */
 .route-dot { transition: transform .6s cubic-bezier(.2, .8, .2, 1); }
 .route-dot circle, .route-dot path { fill: var(--blue); }
 .route-dot circle { stroke: var(--card); stroke-width: 2.5; }
@@ -605,6 +619,7 @@ button.small { min-height: 30px; padding: 4px 10px; font-size: 12px; }
 .route-off:empty { display: none; }
 
 /* ---- 재고 ---- */
+/* 재고를 모를 때 뜨는 노란 경고 띠. */
 .attention-banner { position: relative; display: grid; gap: 2px; margin-top: 16px; padding: 14px 16px 14px 50px; border-radius: var(--radius-inner); background: var(--yellow-soft); }
 .attention-banner::before { content: "!"; position: absolute; top: 14px; left: 16px; display: grid; width: 24px; height: 24px; place-items: center; border-radius: 50%; background: var(--yellow); color: var(--text); font-size: 14px; font-weight: 700; }
 .attention-banner strong { font-size: 16px; }
@@ -637,9 +652,10 @@ button.small { min-height: 30px; padding: 4px 10px; font-size: 12px; }
 .inventory-events time { color: var(--text-3); font-size: 13px; font-variant-numeric: tabular-nums; }
 .inventory-events .chip { justify-self: start; }
 .inventory-events li.inventory-events-empty { display: block; color: var(--text-3); text-align: center; }
+/* 화면에는 숨기되 화면 낭독기는 읽는 글(라벨). */
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-/* ---- 현황: tables, cameras, parking check ---- */
+/* ---- 현황(장비·카메라 뷰): 표, 카메라, 주차 판정 ---- */
 .table-wrap { overflow-x: auto; padding: 4px 8px; }
 table { width: 100%; border-collapse: collapse; text-align: left; }
 th, td { padding: 12px 12px; border-bottom: 1px solid var(--line-soft); }
@@ -656,15 +672,17 @@ td:nth-child(2) { width: 23%; white-space: nowrap; }
 .state.waiting::before { background: var(--yellow); }
 .state.stale, .state.invalid { color: var(--red-ink); }
 .state.stale::before, .state.invalid::before { background: var(--red); }
+/* 카메라 카드(app.js의 renderCameras). */
 .camera-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .camera-card { min-width: 0; overflow: hidden; }
 .camera-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 18px; }
 .camera-head h3 { font-size: 15px; font-weight: 600; }
 .camera-position { color: var(--text-3); font-size: 12px; }
 .camera-preview { position: relative; display: grid; min-height: 135px; aspect-ratio: 16 / 9; place-items: center; overflow: hidden; margin: 0 12px; border-radius: var(--radius-inner); background: var(--fill); color: var(--text-3); font-size: 13px; text-align: center; }
-/* The image and the slot overlay must share one box: absolute so the img cannot overflow the 16:9 grid cell. */
+/* 영상과 칸 오버레이는 같은 상자를 써야 한다: img가 16:9 격자 칸을 넘치지 않도록 absolute로 둔다. */
 .camera-preview img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .camera-preview .slot-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+/* 선반 칸 오버레이: 점선은 칸 전체 공간, 채운 도형은 기준 영역(물건이 있으면 초록), 점은 검출의 기준점. */
 .slot-volume { fill: none; stroke: rgba(255, 255, 255, .55); stroke-width: 1; stroke-dasharray: 4 4; }
 .slot-zone { fill: rgba(49, 130, 246, .28); stroke: var(--blue); stroke-width: 1.5; }
 .slot-zone.occupied { fill: rgba(3, 178, 108, .38); stroke: var(--green); stroke-width: 2.5; }
@@ -678,6 +696,7 @@ td:nth-child(2) { width: 23%; white-space: nowrap; }
 .camera-detail[data-field="detector-provenance-row"] strong { overflow-wrap: anywhere; }
 .camera-detail[data-field="pinky-arrival-row"] { grid-column: 1 / -1; align-items: center; font-size: 13px; }
 .camera-detail[data-field="pinky-arrival-row"][data-state="ARRIVED"] strong { color: var(--green-ink); font-weight: 700; }
+/* 카메라 영역별 집계 칩(초록, 이번 프레임에 안 보였으면 노랑 .recent). */
 .head-counts { display: flex; gap: 10px; padding: 12px 18px 0; }
 .head-counts[hidden], .head-counts section[hidden] { display: none; }
 .head-counts section { flex: 1 1 0; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
@@ -689,6 +708,7 @@ td:nth-child(2) { width: 23%; white-space: nowrap; }
 .camera-card > .note { margin: 0 18px 14px; }
 .camera-card > .note:empty { display: none; }
 
+/* 핑키 도착 확인 패널: 왼쪽에 카메라 영상과 오버레이, 오른쪽에 판정 띠·수치·게이지·윗면 그림·입력. */
 .parking-panel { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 18px; padding: 18px; }
 .parking-camera-column { display: grid; align-content: start; gap: 10px; min-width: 0; }
 .parking-pinky { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin: 0; padding: 10px 14px; border-radius: var(--radius-inner); background: var(--card-muted); }
@@ -706,6 +726,7 @@ td:nth-child(2) { width: 23%; white-space: nowrap; }
 .legend-registered { border: 1.5px dashed #fff; }
 .legend-current { border: 2px solid #3fbf6a; background: rgba(63, 191, 106, .3); }
 .parking-info { display: grid; align-content: start; gap: 12px; min-width: 0; }
+/* 판정 띠의 색은 오차 단계: within 초록, near 노랑, far 빨강, moving 파랑(깜빡임). */
 .parking-banner { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-radius: var(--radius-inner); background: var(--fill); }
 .parking-banner strong { display: block; font-size: 17px; line-height: 1.3; }
 .parking-banner small { display: block; color: var(--text-2); font-size: 13px; }
@@ -731,6 +752,7 @@ td:nth-child(2) { width: 23%; white-space: nowrap; }
 .parking-gauges { display: grid; gap: 10px; }
 .parking-gauge .gauge-head { display: flex; justify-content: space-between; gap: 8px; color: var(--text-2); font-size: 12px; }
 .parking-gauge .gauge-head strong { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* 게이지 바탕: 허용 이내(초록) · 2배까지(노랑) · 3배까지(빨강) 세 칸. */
 .gauge-track { position: relative; height: 10px; margin-top: 5px; overflow: hidden; border-radius: 5px; background: linear-gradient(to right, var(--green-soft) 0 33.33%, var(--yellow-soft) 33.33% 66.66%, var(--red-soft) 66.66% 100%); }
 .gauge-needle { position: absolute; top: -1px; width: 4px; height: 12px; margin-left: -2px; border-radius: 2px; background: var(--text); }
 .gauge-scale { display: flex; justify-content: space-between; color: var(--text-3); font-size: 10px; }
@@ -747,6 +769,7 @@ td:nth-child(2) { width: 23%; white-space: nowrap; }
 .parking-confirm.within { background: var(--green-soft); color: var(--green-ink); }
 .parking-confirm.near { background: var(--yellow-soft); color: var(--yellow-ink); }
 .parking-confirm.far { background: var(--red-soft); color: var(--red-ink); }
+/* 위 단계 표시(화면 밖 → 이동 중 → 정지·판정). 번호는 CSS 카운터로 매긴다. */
 .parking-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; counter-reset: parking-step; }
 .parking-steps li { position: relative; padding: 7px 8px 7px 30px; border-radius: 10px; background: var(--card-muted); color: var(--text-3); font-size: 12px; counter-increment: parking-step; }
 .parking-steps li::before { content: counter(parking-step); position: absolute; top: 50%; left: 8px; display: grid; width: 16px; height: 16px; margin-top: -8px; place-items: center; border-radius: 50%; background: var(--fill-strong); color: var(--text-2); font-size: 10px; font-weight: 700; }
@@ -761,6 +784,7 @@ td:nth-child(2) { width: 23%; white-space: nowrap; }
 .arm-detail { margin: 0; font-size: 15px; font-weight: 500; }
 .arm-actions { display: flex; flex-shrink: 0; gap: 8px; }
 section > .section-heading:not(:first-child) { margin-top: 24px; }
+/* .policy-pick은 지금 JS·HTML에서 쓰지 않는 예전 클래스다. */
 .policy-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 4px; }
 .policy-pick h3 { font-size: 15px; }
 .policy-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -814,11 +838,12 @@ section > .section-heading:not(:first-child) { margin-top: 24px; }
 
 footer { margin-top: 40px; padding: 16px 4px 0; color: var(--text-3); font-size: 12px; }
 
+/* 움직임 줄이기를 고른 사용자에게는 애니메이션과 전환을 끈다. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before { animation: none !important; transition: none !important; }
 }
 
-/* ---- phone width: the sidebar turns into a scrolling tab row above the sticky header ---- */
+/* ---- 휴대폰 폭: 사이드바가 고정 머리글 위의 가로 스크롤 탭 줄이 된다 ---- */
 @media (max-width: 720px) {
   body { font-size: 14px; }
   .app-shell { grid-template-columns: minmax(0, 1fr); }
@@ -864,14 +889,14 @@ footer { margin-top: 40px; padding: 16px 4px 0; color: var(--text-3); font-size:
   .inventory-available dd { font-size: 36px; }
   .inventory-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .inventory-controls { align-items: stretch; flex-direction: column; }
-  /* flex-basis auto: with a zero basis a wrapping row sizes its line for two-line labels. */
+  /* flex-basis auto: 0으로 두면 줄바꿈되는 줄이 두 줄짜리 라벨 크기로 잡힌다. */
   .inventory-modes button { flex: 1 1 auto; }
   .inventory-manual { flex-wrap: nowrap; }
   .inventory-manual input { flex: 1 1 auto; width: auto; }
   .inventory-events { padding: 4px 16px; }
   .inventory-events li { grid-template-columns: 4.8em minmax(0, 1fr); }
   .inventory-events li > span:last-child { grid-column: 1 / -1; }
-  /* A soft right edge says the strip goes on past the screen. */
+  /* 오른쪽 끝을 흐리게 해서 띠가 화면 밖으로 이어진다는 것을 알린다. */
   .route-scroll { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
   .pinky-summary-grid { grid-template-columns: minmax(0, 1fr); }
   .pinky-summary-head { flex-direction: column; gap: 4px; }
@@ -885,6 +910,7 @@ footer { margin-top: 40px; padding: 16px 4px 0; color: var(--text-3); font-size:
   .pinky-log-message { grid-column: 1 / -1; }
 }
 
+/* 수동 조작(개발용)의 정책 연속 실행 선택(app.js의 renderSequenceBuilder). */
 .sequence-builder { flex: 1 1 100%; display: grid; gap: 8px; padding: 12px; border: 1px solid #d9dde2; border-radius: 4px; background: #fff; }
 .sequence-builder h3, .sequence-builder p { margin: 0; }
 .sequence-choices { display: flex; flex-wrap: wrap; gap: 8px; }

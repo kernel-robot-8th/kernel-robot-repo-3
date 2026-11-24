@@ -1,5 +1,5 @@
-/* Intake card plan: summary chips, trays, arm timeline and the "자세히" reasons. Tokens come from styles.css.
- * Blue = what the control station chose, yellow = a person should know before starting, red = cannot. */
+/* 접수 카드의 계획(intake-plan.js): 요약 칩, 쟁반, 팔 시간표, "자세히" 안의 이유. 토큰은 styles.css에서 온다.
+ * 파랑 = 관제가 고른 것, 노랑 = 시작 전에 사람이 알아야 할 것, 빨강 = 할 수 없음. */
 
 .plan { display: grid; gap: 12px; margin-top: 14px; }
 .plan-summary { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; }
@@ -12,7 +12,7 @@
 .plan-blocked { margin: 0; color: var(--red-ink); font-size: 14px; font-weight: 600; }
 .plan-muted { margin: 0; color: var(--text-3); font-size: 13px; }
 
-/* one row per Pinky: tray on the left, the arms' timeline on the right */
+/* 핑키마다 한 줄: 왼쪽에 쟁반, 오른쪽에 팔 시간표 */
 .plan-trips { display: grid; gap: 10px; }
 .plan-trip { position: relative; display: grid; grid-template-columns: minmax(170px, 240px) minmax(0, 1fr); gap: 10px; }
 .trip-index { position: absolute; top: -8px; left: 12px; z-index: 1; padding: 0 8px; border-radius: 999px; background: var(--button-dark); color: #fff; font-size: 11px; font-weight: 600; line-height: 18px; }
@@ -21,7 +21,7 @@
 .tl-head b { color: var(--text); font-size: 15px; font-variant-numeric: tabular-nums; }
 .tray-load { font-variant-numeric: tabular-nums; }
 
-/* the tray: a slot per unit of capacity; a big object spans two */
+/* 쟁반: 용량 한 칸마다 한 칸, 큰 물건은 두 칸을 차지한다 */
 .tray { display: grid; gap: 6px; padding: 6px; border-radius: 12px; background: var(--fill-strong); }
 .tray-cell { display: grid; min-width: 0; min-height: 52px; place-content: center; padding: 4px; border-radius: 8px; text-align: center; }
 .tray-cell.filled { background: var(--card); box-shadow: inset 0 0 0 2px var(--blue); color: var(--text); }
@@ -30,7 +30,7 @@
 .tray-cell.big { background: var(--blue-soft); }
 .tray-cell.empty { border: 1.5px dashed var(--text-disabled); background: transparent; }
 
-/* timeline: one lane per arm, bars placed by seconds */
+/* 시간표: 팔마다 한 줄, 막대는 초 단위로 놓는다(left·width는 JS가 %로 준다) */
 .timeline { display: grid; gap: 6px; }
 .tl-lane, .tl-axis { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 8px; }
 .tl-arm { color: var(--text-2); font-size: 12px; font-weight: 600; white-space: nowrap; }
@@ -65,6 +65,7 @@
 .plan-rule { margin: 6px 0 0; color: var(--text-3); font-size: 12px; }
 .plan-rule b { color: var(--blue-strong); }
 
+/* 이유 표. 순위를 가른 열(.decider)은 파랑과 '결정' 표시, 배정된 줄(.chosen)은 연파랑. .mini는 지금 쓰지 않는다. */
 .plan-table-wrap { overflow-x: auto; }
 .plan-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .plan-table th { padding: 6px 8px; border-bottom: 1px solid var(--line); color: var(--text-3); font-size: 12px; font-weight: 500; text-align: left; white-space: nowrap; }
@@ -90,13 +91,14 @@
 .plan-table.arms th small { display: block; color: var(--text-3); font-size: 10px; font-weight: 400; }
 .plan-table td.picked { color: var(--blue-strong); font-weight: 700; }
 
-/* operator pickup confirm on the "수령 확인 대기" alert */
+/* "수령 확인 대기" 경보에서 작업자가 대신 누르는 수령 확인 */
 .alert-card .alert-actions { display: flex; gap: 8px; }
-/* `.alert-card small` (display: block) out-ranked `.alert-meta`, so 핑키·주문 번호·코드 ran together */
+/* `.alert-card small`(display: block)이 `.alert-meta`보다 우선해서 핑키·주문 번호·코드가 한 덩어리로 붙어 보였다 */
 .alert-card small.alert-meta { display: flex; flex-wrap: wrap; gap: 0 12px; }
 .alert-card button.pickup-confirm { background: var(--blue); color: #fff; }
 .alert-card button.pickup-confirm:hover:not(:disabled) { background: var(--blue-strong); }
 
+/* 좁은 화면에서는 쟁반과 시간표를 위아래로 쌓는다. */
 @media (max-width: 900px) {
   .plan-trip { grid-template-columns: 1fr; }
 }

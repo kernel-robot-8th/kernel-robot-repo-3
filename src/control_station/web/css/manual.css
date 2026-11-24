@@ -1,13 +1,14 @@
-/* 수동 조작 (팔): grouped by what the operator wants to do — pick with a policy, see the latest command, recover.
- * Uses the tokens of styles.css. Things that are not ready for everyday use only show with ?dev=1. */
+/* 수동 조작(팔) 뷰: 작업자가 하려는 일로 묶었다 — 정책으로 집기, 최신 명령 보기, 복구.
+ * styles.css의 토큰을 쓴다. 아직 매일 쓸 준비가 안 된 것은 ?dev=1일 때만 보인다. */
 
+/* .dev-only(개발용 칸 이동 등)는 운영 화면에서 숨긴다. */
 body:not(.dev) .dev-only { display: none !important; }
 
 .manual { margin-top: 8px; }
 .manual-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; margin: 0 4px 16px; }
 .manual-lead { margin: 4px 0 0; color: var(--text-2); font-size: 14px; }
 
-/* Which arm the buttons send to. A second arm stays greyed out until its worker is attached. */
+/* 버튼이 명령을 보낼 팔. 두 번째 팔은 워커가 붙을 때까지 회색으로 막혀 있다. */
 .arm-picker { display: flex; flex-wrap: wrap; gap: 8px; }
 .arm-choice { display: grid; justify-items: start; gap: 0; min-width: 132px; min-height: 52px; padding: 8px 16px; border-radius: 14px; background: var(--card); color: var(--text); box-shadow: var(--shadow); text-align: left; }
 .arm-choice span { font-size: 15px; font-weight: 700; }
@@ -19,13 +20,14 @@ body:not(.dev) .dev-only { display: none !important; }
 .arm-choice:disabled { background: var(--card-muted); color: var(--text-disabled); box-shadow: none; }
 .arm-choice:disabled small { color: var(--text-disabled); }
 
-/* One confirm bar for anything that moves the arm. */
+/* 팔을 움직이는 모든 것에 쓰는 확인 바 하나(app.js의 askConfirm). */
 .manual-confirm { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px; margin: 0 0 14px; padding: 16px 20px; border-radius: var(--radius-card); background: var(--yellow-soft); }
 .manual-confirm strong { display: block; font-size: 16px; font-weight: 700; }
 .manual-confirm p { margin: 2px 0 0; color: var(--text-2); font-size: 14px; }
 .manual-confirm-actions { display: flex; flex-shrink: 0; gap: 8px; }
 .manual-confirm-actions button { min-width: 96px; min-height: 44px; }
 
+/* 넓은 화면: 왼쪽에 정책 집기(두 줄 차지), 오른쪽에 최신 명령과 복구. */
 .manual-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); grid-template-rows: auto auto; gap: 14px; }
 .manual-card { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 20px; border-radius: var(--radius-card); background: var(--card); box-shadow: var(--shadow); }
 .manual-grid > .manual-card:first-child { grid-row: span 2; }
@@ -39,7 +41,7 @@ body:not(.dev) .dev-only { display: none !important; }
 .worker-state.live { color: var(--green-ink); }
 .worker-state.live::before { background: var(--green); }
 
-/* Policy picks as big tiles: the object is what the operator thinks in. */
+/* 정책 집기는 큰 타일로: 작업자는 물건으로 생각한다. */
 .pick-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-top: 4px; }
 .pick-tile { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; align-items: center; column-gap: 12px; min-height: 76px; padding: 14px 16px; border-radius: 16px; background: var(--fill); color: var(--text); text-align: left; }
 :where(.pick-tile:hover:not(:disabled)) { background: var(--blue-soft); }
@@ -53,7 +55,7 @@ body:not(.dev) .dev-only { display: none !important; }
 .pick-checklist p { margin: 0 0 6px; color: var(--text-2); font-size: 13px; font-weight: 700; }
 .pick-checklist ol { display: grid; gap: 4px; margin: 0; padding-left: 20px; color: var(--text-2); font-size: 13px; }
 
-/* The latest command for the chosen arm, and what can be done about it. */
+/* 고른 팔의 최신 명령과, 그에 대해 할 수 있는 것. */
 .manual-now-body { display: grid; gap: 4px; min-height: 92px; }
 .manual-now-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .manual-now-row .chip { font-size: 13px; }
@@ -65,6 +67,7 @@ body:not(.dev) .dev-only { display: none !important; }
 .manual-reason { color: var(--text-3); font-size: 12px; }
 .manual-message { margin: 0; color: var(--text-2); font-size: 13px; }
 .manual-message:empty { display: none; }
+/* 연속 실행 단계(개발용): 진행 중은 파랑, 실패·결과 불명은 빨강, 끝남은 초록 왼쪽 띠. */
 .sequence-step-details { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .sequence-step-details li { display: grid; gap: 3px; padding: 10px 12px; border-radius: var(--radius-inner); background: var(--card-muted); }
 .sequence-step-details li[data-state="RUNNING"], .sequence-step-details li[data-state="ACCEPTED"] { border-left: 3px solid var(--blue); }
@@ -75,7 +78,7 @@ body:not(.dev) .dev-only { display: none !important; }
 
 .manual-recover button.wide { width: 100%; min-height: 48px; margin-top: auto; font-size: 15px; }
 
-/* The log and the explanation stay folded until asked for. */
+/* 기록과 설명은 열어 달라고 할 때까지 접어 둔다. */
 .manual-log, .manual-help { margin-top: 14px; border-radius: var(--radius-card); background: var(--card); box-shadow: var(--shadow); }
 .manual-log > summary, .manual-help > summary { display: flex; align-items: baseline; gap: 10px; padding: 16px 20px; font-size: 15px; font-weight: 700; cursor: pointer; list-style: none; }
 .manual-log > summary::-webkit-details-marker, .manual-help > summary::-webkit-details-marker { display: none; }
@@ -85,7 +88,7 @@ body:not(.dev) .dev-only { display: none !important; }
 .manual-log .arm-command-table td, .manual-log .arm-command-table th { font-variant-numeric: tabular-nums; }
 .manual-help ul { margin: 0; padding: 0 24px 18px 40px; color: var(--text-2); font-size: 14px; line-height: 1.7; }
 
-/* Running LeRobot directly on this PC: only when the server was started with it. */
+/* 이 PC에서 LeRobot을 직접 실행: 서버를 그 기능과 함께 켰을 때만 보인다. */
 .manual-direct, .manual-legacy { margin-top: 28px; }
 .manual-subtitle { display: flex; align-items: center; gap: 10px; margin: 0 4px 4px; font-size: 16px; font-weight: 700; }
 .manual-direct > .manual-hint, .manual-legacy > .manual-hint { margin: 0 4px 12px; }

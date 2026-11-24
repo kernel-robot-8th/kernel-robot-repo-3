@@ -1,3 +1,42 @@
+// 관제 화면(index.html)의 기본 스크립트다. 가장 먼저 로드되며, 다른 스크립트가 함께 쓰는 전역 도우미와 상태를 둔다.
+//
+// 로드 순서: index.html의 <script defer>가 적힌 순서대로 실행된다.
+//   app.js → intake-plan.js → route-strip.js → pinky-map.js → pinky.js → pinky-detail.js → pinky-test.js
+//   → inventory.js → dashboard.js → ros-monitor.js
+// 모듈이 아닌 일반 스크립트라서 최상위 const/let/function은 모두 같은 전역 범위를 공유한다. 뒤에 로드되는 스크립트가
+// 여기의 escapeHtml, apiErrorMessage, formatClock, setStat, showToast, pinkyBadge, pinkyNames, objectLabel,
+// orderSummary, planChips, elapsed, activeView, devMode, devWord, openOverlay/closeOverlay, flowSummary, intake를
+// 그대로 쓴다. 반대로 여기서도 뒤 스크립트가 만든 window.IntakePlan을 쓰는데, 호출 시점에는 이미 로드돼 있다.
+// 뷰가 바뀌면 document에 `viewchange` 이벤트를 보내고, 다른 스크립트는 메뉴 대신 이 이벤트를 듣는다.
+//
+// 이 파일이 맡는 화면과 주기 폴링(맨 아래 setInterval):
+//   - 서버 상태·장비·카메라(GET /api/health, /api/robots, /api/cameras, /api/arm/status): 3초
+//   - 주문 진행(GET /api/flow): 1초, 주문 접수(GET /api/orders): 2초, 배정 미리보기(GET /api/orders/{id}/assignment): 3초
+//   - 작업 이력(GET /api/tasks, /api/tasks/{id}): 1초
+//   - 팔 명령(GET /api/arm/commands)·연속 실행(GET /api/arm/sequences): 1초
+//   - 핑키 도착 실시간 판정(GET /api/parking-spots/{spot}/live): 0.5초, 장비·카메라 뷰가 보일 때만
+// 핑키·지도·재고·종합·ROS 모니터 화면은 각자의 스크립트가 따로 읽는다.
+//
+// 목차 (구역 머리 주석 `// ==== n.`으로 찾는다)
+//   1. 전역 DOM 참조와 상태
+//   2. 운영/개발자 화면과 뷰 전환
+//   3. 화면 위 패널(오버레이)
+//   4. 공통 도우미
+//   5. 장비·카메라: 요약, 로봇 표, 카메라 카드, 선반 칸 오버레이
+//   6. 수동 조작: 직접 실행(텔레오퍼레이션·정책 1회 실행)
+//   7. 수동 조작: 팔 선택, 명령 목록, 확인 바, 정책으로 집기
+//   8. 수동 조작(개발용): 정책 연속 실행
+//   9. 주문 표시 공통(물체 이름·핑키 배지)과 토스트 알림
+//  10. 수동 조작: 칸으로 이동(개발용)과 원상복귀
+//  11. 작업 이력용 상태·단계·이벤트 이름표
+//  12. 장비·카메라: 핑키 도착 확인(주차 판정) 패널
+//  13. 작업 이력 화면
+//  14. 서버 상태 주기 갱신(refresh)
+//  15. 주문 진행 화면: 경보, 로봇 상태, 주문 목록, 모의 세계
+//  16. 주문 접수와 자동 출발
+//  17. 시작과 폴링 주기
+
+// ==== 1. 전역 DOM 참조와 상태 ====
 const serverStatus = document.querySelector('#serverStatus');
 const robotRows = document.querySelector('#robotRows');
 const cameraGrid = document.querySelector('#cameraGrid');
@@ -40,10 +79,14 @@ const parkingOverlay = document.querySelector('#parkingOverlay');
 const parkingPinky = document.querySelector('#parkingPinky');
 const navItems = [...document.querySelectorAll('.nav-item[data-view]')];
 const views = [...document.querySelectorAll('.view[id^="view-"]')];
+// selectedTaskId: 작업 이력에서 상세를 펼친 작업(주문 포함) id다.
+// parkingCameraId: GET /api/health의 parking.camera_id(주차 판정 카메라)다.
+// controlMode: GET /api/health의 mode('mock' | 'ros2')다. 작업 시작·취소 버튼은 mock 모드에서만 나온다.
 let selectedTaskId = null;
 let parkingCameraId = null;
 let controlMode = 'unknown';
 
+// 뷰 id → 머리글 제목. 여기 없는 이름을 요청하면 showView가 종합으로 돌린다.
 const viewNames = {
   dashboard: '종합', flow: '주문 진행', pinky: '핑키', inventory: '재고', overview: '장비·카메라', manual: '수동 조작', tasks: '작업 이력',
   ros: 'ROS 모니터', api: 'API',
@@ -53,18 +96,21 @@ const controlModeLabels = {
   ros2: 'ROS 2 상태 관측',
 };
 
+// 지금 보이는 뷰. 다른 스크립트(pinky.js, dashboard.js 등)가 폴링할지 정할 때 읽는다.
 let activeView = 'dashboard';
 
-// Mock traces (the mock world panel, "모의" tags, mode words) show only with ?dev=1. Every script asks this one
-// function, so the rule stays in one place.
+// ==== 2. 운영/개발자 화면과 뷰 전환 ====
+// 모의 흔적(모의 세계 패널, "모의" 태그, 모드 이름)은 ?dev=1일 때만 보인다. 모든 스크립트가 이 함수 하나에 물으므로
+// 규칙이 한곳에만 있다.
 function isDevView() {
   return new URLSearchParams(window.location.search).get('dev') === '1';
 }
 
+// 페이지를 열 때 한 번만 정한다. body.dev 클래스가 있어야 CSS가 [data-dev-only]·.dev-only 요소를 보여 준다.
 const devMode = isDevView();
 document.body.classList.toggle('dev', devMode);
 
-// The switch between the operator and the developer screen keeps the current view in the address.
+// 운영 화면과 개발자 화면을 오가는 링크는 지금 보고 있는 뷰(#해시)를 주소에 그대로 유지한다.
 const screenModeSwitch = document.querySelector('#screenModeSwitch');
 function updateScreenModeSwitch() {
   const params = new URLSearchParams(window.location.search);
@@ -77,16 +123,19 @@ updateScreenModeSwitch();
 window.addEventListener('hashchange', updateScreenModeSwitch);
 document.addEventListener('viewchange', updateScreenModeSwitch);
 
-// A mock word in dev mode, nothing otherwise.
+// 개발자 화면이면 모의 표시 단어를 그대로, 아니면 빈 문자열을 돌려준다.
 function devWord(word) {
   return devMode ? word : '';
 }
 
-// The view lives in the address (#pinky, #inventory…), so a reload or a shared link opens the same view.
-// Other scripts follow the switch through the `viewchange` event instead of listening to the menu.
-// The operator screen (default) leaves out the equipment, manual control and API views; ?dev=1 shows everything.
+// 뷰는 주소(#pinky, #inventory…)에 담기므로 새로고침하거나 링크를 공유해도 같은 뷰가 열린다.
+// 다른 스크립트는 메뉴를 직접 듣지 않고 `viewchange` 이벤트로 뷰 전환을 따라간다.
+// 운영 화면(기본)은 장비·수동 조작·API 뷰를 빼고 보여 주며, ?dev=1이면 모두 보인다.
+// (지금 코드에서 개발자 전용 뷰는 아래 DEV_ONLY_VIEWS의 manual, ros, api이고, 장비·카메라 뷰는 운영 화면에도 나온다.)
 const DEV_ONLY_VIEWS = new Set(['manual', 'ros', 'api']);
 
+// 요청한 뷰를 보여 준다. 없는 뷰이거나 운영 화면에서 개발자 전용 뷰를 요청하면 종합으로 돌린다.
+// 열린 오버레이를 닫고 메뉴 표시·제목·주소 해시를 맞춘 뒤 `viewchange` 이벤트를 보낸다.
 function showView(requested) {
   const selected = viewNames[requested] && (devMode || !DEV_ONLY_VIEWS.has(requested)) ? requested : 'dashboard';
   activeView = selected;
@@ -101,11 +150,12 @@ function showView(requested) {
     if (active) keepInNavView(item);
   });
   viewTitle.textContent = viewNames[selected];
+  // 방문 기록이 쌓이지 않도록 pushState가 아니라 replaceState로 해시를 바꾼다.
   if (window.location.hash !== `#${selected}`) window.history.replaceState(null, '', `#${selected}`);
   document.dispatchEvent(new CustomEvent('viewchange', { detail: { view: selected } }));
 }
 
-// At phone width the menu is one scrolling row; keep the current item in sight without moving the page.
+// 휴대폰 폭에서는 메뉴가 옆으로 스크롤되는 한 줄이 된다. 페이지는 움직이지 않고 현재 항목이 보이게 메뉴만 스크롤한다.
 function keepInNavView(item) {
   const nav = item.parentElement;
   if (nav.scrollWidth <= nav.clientWidth) return;
@@ -114,18 +164,21 @@ function keepInNavView(item) {
 
 navItems.forEach((item) => item.addEventListener('click', () => showView(item.dataset.view)));
 
-// ---- panels over the page (Pinky detail, enlarged map, password prompt) ----
-// They open below the sticky header, so 전체 정지 stays visible and usable while one is open. The dim area
-// or Esc closes the top one; focus goes back to what opened it.
+// ==== 3. 화면 위 패널(오버레이) ====
+// ---- 페이지 위에 뜨는 패널(핑키 상세, 크게 본 지도, 비밀번호 창) ----
+// 고정된 머리글 아래에서 열리므로 패널이 열려 있어도 전체 정지가 보이고 누를 수 있다. 어두운 바깥을 누르거나
+// Esc를 누르면 맨 위 패널이 닫히고, 포커스는 그 패널을 연 요소로 돌아간다.
 const overlayScrim = document.querySelector('#overlayScrim');
 const pageHeader = document.querySelector('.header');
-const overlayStack = [];  // [{ panel, opener }], last on top
+const overlayStack = [];  // [{ panel, opener }], 마지막 것이 맨 위
 
+// 머리글 아래쪽 위치를 CSS 변수 --overlay-top으로 넘겨, 패널과 어두운 배경이 그 아래에서 시작하게 한다.
 function placeOverlays() {
   const top = Math.max(0, Math.round(pageHeader.getBoundingClientRect().bottom));
   document.documentElement.style.setProperty('--overlay-top', `${top}px`);
 }
 
+// 패널을 스택 맨 위에 연다. 이미 열려 있으면 무시하고, z-index를 쌓인 순서대로 올린 뒤 [data-overlay-focus]에 포커스를 준다.
 function openOverlay(panel, opener = document.activeElement) {
   if (overlayStack.some((entry) => entry.panel === panel)) return;
   placeOverlays();
@@ -136,6 +189,7 @@ function openOverlay(panel, opener = document.activeElement) {
   (panel.querySelector('[data-overlay-focus]') || panel).focus();
 }
 
+// 패널을 스택에서 빼고 닫는다. 'overlayclose' 이벤트를 보내 각 스크립트가 정리하게 한다(비밀번호 지우기, 위치 지정 끝내기).
 function closeOverlay(panel) {
   const index = overlayStack.findIndex((entry) => entry.panel === panel);
   if (index < 0) return;
@@ -158,39 +212,48 @@ document.addEventListener('click', (event) => {
   const close = event.target.closest('[data-overlay-close]');
   if (close) closeOverlay(close.closest('.overlay-panel'));
 });
+// 스크롤·창 크기가 바뀌면 머리글 위치가 달라질 수 있으니 열린 패널의 위치를 다시 잡는다.
 window.addEventListener('scroll', () => { if (overlayStack.length) placeOverlays(); }, { passive: true });
 window.addEventListener('resize', () => { if (overlayStack.length) placeOverlays(); });
+// 주소의 해시가 바뀌면(뒤로 가기, 링크) 그 뷰로 바꾼다.
 window.addEventListener('hashchange', () => showView(window.location.hash.slice(1)));
 
+// ==== 4. 공통 도우미 ====
+// innerHTML에 넣을 값을 HTML 이스케이프한다. 서버나 사용자에게서 온 문자열은 모두 이것을 거친다.
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   })[character]);
 }
 
+// API 오류 응답({error_code, message} 또는 {error})을 화면용 한 줄로 만든다. 코드가 있으면 'CODE · 메시지'다.
 function apiErrorMessage(result, fallback) {
   const message = result.message || result.error || fallback;
   return result.error_code ? `${result.error_code} · ${message}` : message;
 }
 
+// 시:분:초 24시간 표기(ko-KR).
 const clockFormat = new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
-// One big number of a summary card. tone: attention (a person must act) | danger | active | zero.
+// 요약 카드의 큰 숫자 하나. tone: attention(사람이 처리해야 함) | danger | active | zero.
 function setStat(stat, value, { total = null, tone = '' } = {}) {
   const shown = value == null ? '–' : escapeHtml(value);
   stat.querySelector('dd').innerHTML = total == null ? shown : `${shown}<small>/${escapeHtml(total)}</small>`;
   stat.className = `stat${tone ? ` ${tone}` : ''}`;
 }
 
+// ==== 5. 장비·카메라: 요약, 로봇 표, 카메라 카드, 선반 칸 오버레이 ====
 const overviewSummaryTitle = document.querySelector('#overviewSummaryTitle');
 const overviewStatRobots = document.querySelector('#overviewStatRobots');
 const overviewStatCameras = document.querySelector('#overviewStatCameras');
+// 카메라 카드로 보여 줄 카메라 id와 순서. 여기에 없는 카메라는 요약 숫자에서도 빠진다.
 const CAMERA_PREVIEW_IDS = [
   'head_camera', 'front_camera',
   'left_ceiling_camera', 'left_joint_camera',
   'right_ceiling_camera', 'right_joint_camera',
 ];
 
+// 장비·카메라 뷰 맨 위 요약 카드. health가 없으면(서버 연결 실패) 숫자를 비운다.
 function renderOverviewSummary(health, robots, cameras) {
   if (!health) {
     overviewSummaryTitle.textContent = '관제 서버에 연결하지 못했어요';
@@ -208,6 +271,7 @@ function renderOverviewSummary(health, robots, cameras) {
   setStat(overviewStatCameras, streaming, { total: previewCameras.length, tone: streaming < previewCameras.length ? 'attention' : '' });
 }
 
+// 로봇 인터페이스 표(GET /api/robots). state(available/waiting/stale/invalid)를 색 클래스로 바꾼다.
 function renderRobots(robots) {
   if (!robots.length) {
     robotRows.innerHTML = '<tr><td colspan="3" class="loading">등록된 로봇이 없습니다.</td></tr>';
@@ -220,7 +284,8 @@ function renderRobots(robots) {
   }).join('');
 }
 
-// 탑재 목록: what the load camera sees on the Pinky tray in its newest frame (GET /api/cameras pinky_load).
+// 탑재 목록: 적재 카메라가 가장 최근 프레임에서 핑키 쟁반 위에 보는 것(GET /api/cameras의 pinky_load).
+// pinkyArrivalText는 그중 핑키 도착 여부(마커 기준)를 한 줄 글로 만든다. 표시 전용이다.
 function pinkyArrivalText(load) {
   const pinky = load.pinky;
   if (load.state !== 'READY' || !pinky) return load.message || load.state;
@@ -233,6 +298,8 @@ function pinkyArrivalText(load) {
   return pinky.message || pinky.state;
 }
 
+// 카메라의 영역별 집계(pinky_load·head_shelf·head_middle)를 물체 칩으로 만든다. seen_now가 false인 물체는
+// 이번 프레임에는 안 보였지만 최근에 본 것이라 노란 칩(.recent)으로 표시한다.
 function headCountBlocks(view) {
   if (view.state === 'NO_TRAY_REGION') return '검출 영역을 설정해 주세요';
   if (view.state !== 'READY') return escapeHtml(view.message || view.state);
@@ -247,6 +314,7 @@ function headCountBlocks(view) {
   }).join('');
 }
 
+// 정면 카메라(FRONT)의 YOLO 검출을 종류별 개수 칩으로 만든다. 신뢰도 0.5 미만은 세지 않는다.
 function cameraDetectionBlocks(camera) {
   if (camera.detector_state === 'loading') return '모델 불러오는 중';
   if (camera.detector_state === 'error') return '모델 오류';
@@ -263,6 +331,8 @@ function cameraDetectionBlocks(camera) {
   ).join('');
 }
 
+// 카메라 카드 격자. 카드 구성(어떤 카메라가 있는지)이 바뀔 때만 HTML을 새로 만들고, 그 밖에는 data-field 칸의
+// 글자만 바꾼다. 그래야 3초마다 갱신해도 <img> 스트림이 끊기지 않는다.
 function renderCameras(cameras, pinkyLoad = null, headShelf = null, headMiddle = null) {
   const camerasById = new Map(cameras.map((camera) => [camera.id, camera]));
   const visibleCameras = CAMERA_PREVIEW_IDS.map((id) => camerasById.get(id)).filter(Boolean);
@@ -271,7 +341,7 @@ function renderCameras(cameras, pinkyLoad = null, headShelf = null, headMiddle =
     RIGHT_CEILING: '오른쪽 천장 카메라', RIGHT_JOINT: '오른쪽 관절 카메라',
     HEAD: '천장 카메라', JOINT: '조인트 카메라', FRONT: '정면 카메라', SHELF: '선반 카메라 (정면)',
   };
-  // The server names each camera by its job ("왼쪽 팔 탑 캠 (ACT 정책)"); the table above is for older servers.
+  // 서버는 카메라마다 하는 일로 이름을 붙여 보낸다("왼쪽 팔 탑 캠 (ACT 정책)"). 위 표는 예전 서버용이다.
   const cameraName = (camera) => camera.role || names[camera.position] || camera.id;
   const connectionLabel = {
     CONNECTED: '연결됨', DISCONNECTED: '연결 끊김', UNKNOWN: '확인 필요',
@@ -282,6 +352,7 @@ function renderCameras(cameras, pinkyLoad = null, headShelf = null, headMiddle =
   };
   const freshnessLabel = { FRESH: '최신', STALE: '지연', UNKNOWN: '확인 필요' };
   const cameraIds = visibleCameras.map((camera) => camera.id).join(',');
+  // 준비된 검출기의 클래스 이름을 모아(대소문자 무시 중복 제거) 수동 조작 '정면 캠에서 찾을 물건' 입력의 자동완성으로 쓴다.
   const availableClasses = [];
   const availableClassKeys = new Set();
   for (const camera of cameras.filter((item) => item.detector_state === 'ready')) {
@@ -298,6 +369,7 @@ function renderCameras(cameras, pinkyLoad = null, headShelf = null, headMiddle =
     option.label = objectLabel(className);
     return option;
   }));
+  // 카메라 목록이 바뀐 경우에만 카드를 다시 만든다(dataset.cameraIds로 비교).
   if (cameraGrid.dataset.cameraIds !== cameraIds) {
     cameraGrid.dataset.cameraIds = cameraIds;
     cameraGrid.innerHTML = visibleCameras.map((camera) => `
@@ -353,6 +425,7 @@ function renderCameras(cameras, pinkyLoad = null, headShelf = null, headMiddle =
     if (!detectionPanel.hidden) {
       detectionPanel.querySelector('[data-field="camera-detection-blocks"]').innerHTML = cameraDetectionBlocks(camera);
     }
+    // YOLO 검출 줄은 검출기가 있고, 천장(HEAD) 카메라가 아니고, 위의 정면 카메라 검출 칸이 없을 때만 보인다.
     card.querySelector('[data-field="detections-row"]').hidden = !camera.detector_state || camera.position === 'HEAD' || !detectionPanel.hidden;
     card.querySelector('[data-field="detections-row"] span').textContent = camera.detector_model_type === 'YOLO_WORLD_OPEN_VOCAB'
       ? 'YOLO-World 후보 · 관측 전용'
@@ -360,6 +433,7 @@ function renderCameras(cameras, pinkyLoad = null, headShelf = null, headMiddle =
     card.querySelector('[data-field="detections"]').textContent = camera.detector_state === 'ready'
       ? (camera.detections.map((item) => `${objectLabel(item.class_name)} ${Math.round(item.confidence * 100)}% @ (${item.center_px.join(', ')})`).join(', ') || '없음')
       : (detectorLabel[camera.detector_state] || '');
+    // 영역별 집계는 그 집계를 만든 카메라(camera_id)의 카드에만 붙는다.
     const loadGroup = card.querySelector('[data-field="pinky-load-group"]');
     const shelfGroup = card.querySelector('[data-field="head-shelf-group"]');
     const middleGroup = card.querySelector('[data-field="head-middle-group"]');
@@ -380,6 +454,7 @@ function renderCameras(cameras, pinkyLoad = null, headShelf = null, headMiddle =
     if (!shelfGroup.hidden) {
       shelfGroup.querySelector('[data-field="head-shelf"]').innerHTML = headCountBlocks(headShelf);
     }
+    // 검출기 출처(모델 종류·임계값·가중치 해시 등)를 한 줄로 보여 주고, 전체 해시와 프롬프트는 title(마우스 올림)에 둔다.
     const hasDetectorProvenance = Boolean(camera.detector_confidence_threshold != null
       || camera.detector_weights_sha256 || camera.detector_ultralytics_version
       || camera.detector_model_type);
@@ -405,6 +480,8 @@ function renderCameras(cameras, pinkyLoad = null, headShelf = null, headMiddle =
         ...(camera.detector_prompts || []),
       ].filter(Boolean).join('\n');
     }
+    // 스트림 <img>는 한 번만 만든다. 다시 만들면 MJPEG 연결이 끊겼다 다시 붙는다. 오류가 나면 안내 글로 바꾸고,
+    // 다음 갱신 때 <img>가 없으므로 다시 만든다.
     const preview = card.querySelector('[data-field="preview"]');
     if (camera.stream_url && !preview.querySelector('img')) {
       const image = document.createElement('img');
@@ -422,6 +499,7 @@ function renderCameras(cameras, pinkyLoad = null, headShelf = null, headMiddle =
   });
 }
 
+// 선반 칸 보정 상태(slot_zones.status)와 검출의 칸 배정 상태(slot_assignment.status) 표시 이름.
 const slotZoneStatusLabels = {
   READY: '보정 적용', INVALID: '보정 파일 오류', SLOT_MAP_MISMATCH: '칸 정의 버전 다름',
   SLOT_MAP_UNAVAILABLE: '칸 정의 없음', IMAGE_MISMATCH: '카메라 설정 다름',
@@ -430,7 +508,7 @@ const slotAssignmentLabels = { OUTSIDE: '칸 밖', AMBIGUOUS: '칸 경계·애�
 const svgNamespace = 'http://www.w3.org/2000/svg';
 
 function renderSlotZones(card, preview, camera) {
-  // Display only: zone outlines on the stream and the slot each detection's bottom-center falls in.
+  // 표시 전용: 스트림 위에 칸 영역 윤곽을 그리고, 검출마다 바닥 가운데 점이 들어간 칸을 보여 준다.
   const zones = camera.slot_zones;
   const row = card.querySelector('[data-field="slot-zones-row"]');
   row.hidden = !zones;
@@ -454,7 +532,7 @@ function renderSlotZones(card, preview, camera) {
   const detections = camera.detections || [];
   detections.forEach((item) => { if (item.slot_assignment?.status === 'IN_SLOT') occupied.add(item.slot_assignment.slot_id); });
   const shapes = zones.slots.map((slot) => {
-    // The filled shape is the anchor zone that decides the slot; the dashed outline is the whole slot space.
+    // 채운 도형은 칸을 정하는 기준(anchor) 영역이고, 점선 윤곽은 칸 전체 공간이다.
     const volume = document.createElementNS(svgNamespace, 'polygon');
     volume.setAttribute('points', (slot.volume_polygon_px || []).map(([x, y]) => `${x},${y}`).join(' '));
     volume.setAttribute('class', 'slot-volume');
@@ -470,6 +548,7 @@ function renderSlotZones(card, preview, camera) {
     label.textContent = slot.label.replace(' 선반 ', ' ');
     return [volume, polygon, label];
   }).flat();
+  // 검출마다 칸 판정에 쓴 기준점. 칸 안이면 초록, 애매하면 빨강(.unsure)이다.
   const anchors = detections.filter((item) => item.slot_assignment?.anchor_px).map((item) => {
     const dot = document.createElementNS(svgNamespace, 'circle');
     dot.setAttribute('cx', String(item.slot_assignment.anchor_px[0]));
@@ -487,6 +566,9 @@ function renderSlotZones(card, preview, camera) {
   card.querySelector('[data-field="slot-zones"]').textContent = `보정 적용 · 재투영 ${zones.reprojection_rms_px} px${summary.length ? ` · ${summary.join(', ')}` : ' · 검출 없음'}`;
 }
 
+// ==== 6. 수동 조작: 직접 실행(텔레오퍼레이션·정책 1회 실행) ====
+// 텔레오퍼레이션 프로세스 상태(GET /api/arm/status의 arm). 기능이 꺼져 있거나 이미 돌고 있으면 시작 버튼을 막고,
+// 프로세스가 있을 때만 종료 요청을 누를 수 있다.
 function renderArm(arm) {
   const labels = {
     DISABLED: '비활성화', STOPPED: '중지', STARTING: '시작 중',
@@ -499,17 +581,20 @@ function renderArm(arm) {
   showDirectBlock(manualTeleop, arm.enabled || arm.process_alive);
 }
 
-// Teleoperation and the one-off policy run start LeRobot on this PC. They are off unless the server was started
-// with them (run-control-station.sh --arm, CONTROL_STATION_POLICY_ENABLED=1); a switched-off block stays hidden.
+// 텔레오퍼레이션과 정책 1회 실행은 이 PC에서 LeRobot을 직접 띄운다. 서버를 그 기능과 함께 켰을 때만 켜지며
+// (run-control-station.sh --arm, CONTROL_STATION_POLICY_ENABLED=1), 꺼진 블록은 숨긴다.
 const manualDirect = document.querySelector('#manualDirect');
 const manualTeleop = document.querySelector('#manualTeleop');
 const manualPolicyRun = document.querySelector('#manualPolicyRun');
 
+// 기능이 켜졌거나 개발자 화면이면 블록을 보인다. 두 블록이 모두 숨으면 '직접 실행' 묶음 전체를 숨긴다.
 function showDirectBlock(block, enabled) {
   block.hidden = !(enabled || devMode);
   manualDirect.hidden = manualTeleop.hidden && manualPolicyRun.hidden;
 }
 
+// 정책 1회 실행 상태(GET /api/arm/status의 policy_run). 정책 목록이 바뀔 때만 <select>를 다시 채운다(고른 값 유지).
+// 정책이 2개 이상이고 실행 중이 아닐 때만 고를 수 있고, 총 액션 상한(max_action_steps)이 없으면 시작할 수 없다.
 function renderPolicyRun(policyRun) {
   const labels = {
     DISABLED: '비활성화', STOPPED: '중지', STARTING: '시작 중',
@@ -540,6 +625,9 @@ function renderPolicyRun(policyRun) {
   showDirectBlock(manualPolicyRun, policyRun.enabled || policyRun.process_alive);
 }
 
+// ==== 7. 수동 조작: 팔 선택, 명령 목록, 확인 바, 정책으로 집기 ====
+// 팔 명령은 관제 서버의 대기열에 들어가고, 그 팔의 워커(scripts/omx_lerobot_worker.py)가 long-poll로 가져가
+// 수락해야 실제로 움직인다. 이 화면은 대기열에 넣고 상태를 보여 줄 뿐이다.
 const armCommandForm = document.querySelector('#armCommandForm');
 const armCommandMessage = document.querySelector('#armCommandMessage');
 const armCommandRows = document.querySelector('#armCommandRows');
@@ -548,32 +636,34 @@ const armPicker = document.querySelector('#armPicker');
 const manualNow = document.querySelector('#manualNow');
 const manualNowArm = document.querySelector('#manualNowArm');
 const armCommandCount = document.querySelector('#armCommandCount');
+// 팔 명령 상태 이름(명령 기록 표용).
 const armCommandStateLabels = {
   QUEUED: '대기 (워커 미수신)', DISPATCHED: '워커 수신 · 수락 대기', ACCEPTED: '수락',
   RUNNING: '실행 중', SUCCEEDED: '성공', FAILED: '실패', REJECTED: '워커 거부',
   CANCELED: '취소됨', EXPIRED: '만료', UNKNOWN: '결과 불명 · 현장 확인 필요',
 };
-// Short words for the big state chip of the latest command, and its colour.
+// 최신 명령의 큰 상태 칩에 쓸 짧은 말과 색.
 const armCommandStateShort = {
   QUEUED: ['워커 기다리는 중', 'attention'], DISPATCHED: ['수락 기다리는 중', 'attention'], ACCEPTED: ['수락됨', 'active'],
   RUNNING: ['움직이는 중', 'active'], SUCCEEDED: ['끝남', 'good'], FAILED: ['실패', 'danger'], REJECTED: ['워커 거부', 'danger'],
   CANCELED: ['취소됨', ''], EXPIRED: ['만료', ''], UNKNOWN: ['결과 불명', 'attention'],
 };
-const WORKER_LIVE_S = 30;  // a worker that polled within this is treated as attached
+const WORKER_LIVE_S = 30;  // 이 시간(초) 안에 폴링한 워커는 붙어 있다고 본다
 
 const manual = {
-  armId: 'arm-01',   // the arm the buttons send to
-  workers: [],       // from GET /api/arm/commands
+  armId: 'arm-01',   // 버튼이 명령을 보낼 팔
+  workers: [],       // GET /api/arm/commands에서 받음
   commands: [],
-  policies: [],      // trained policies, each with the arm it was recorded on (arm_id null = any arm)
-  busy: false,       // a pick or home request is being sent
+  policies: [],      // 학습된 정책 목록, 정책마다 녹화한 팔이 있다(arm_id null = 어느 팔이나)
+  busy: false,       // 집기나 원상복귀 요청을 보내는 중
 };
 
+// ISO 시각을 시:분:초로 바꾼다. 값이 없으면 '-'. 다른 스크립트도 쓴다.
 function formatClock(iso) {
   return iso ? clockFormat.format(new Date(iso)) : '-';
 }
 
-// Arms come from config/arms.json through the flow view; before it answers, the single arm-01 stands in.
+// 팔 목록은 주문 진행 뷰(/api/flow)를 거쳐 config/arms.json에서 온다. 그 응답이 오기 전에는 arm-01 하나로 대신한다.
 function manualArms() {
   const arms = flowSummary.flow?.arms;
   return arms && arms.length ? arms : [{ arm_id: 'arm-01', label: '팔 1' }];
@@ -583,19 +673,22 @@ function workerFor(armId) {
   return manual.workers.find((item) => item.robot_id === armId);
 }
 
+// 워커가 지금 long-poll로 기다리는 중이거나 WORKER_LIVE_S초 안에 폴링했으면 붙어 있다고 본다.
 function workerLive(worker) {
   if (!worker) return false;
   if (worker.waiting_polls > 0) return true;
   return (Date.now() - new Date(worker.last_poll_at).getTime()) / 1000 < WORKER_LIVE_S;
 }
 
-// An arm can be chosen once its worker is attached. With no worker anywhere, arm-01 stays choosable so a command
-// can wait in the queue for the worker that is about to start.
+// 워커가 붙은 팔만 고를 수 있다. 어느 팔에도 워커가 없으면 arm-01은 고를 수 있게 남겨 둔다. 곧 시작될 워커를 위해
+// 명령이 대기열에서 기다릴 수 있게 하려는 것이다.
 function armSelectable(armId) {
   const anyLive = manual.workers.some(workerLive);
   return workerLive(workerFor(armId)) || (!anyLive && armId === 'arm-01');
 }
 
+// 팔 선택 버튼. 고른 팔을 더 고를 수 없게 되면 고를 수 있는 첫 팔로 옮긴다. HTML이 같으면 다시 쓰지 않는다
+// (1초마다 갱신돼도 누르던 버튼이 바뀌지 않게).
 function renderArmPicker() {
   const arms = manualArms();
   if (!armSelectable(manual.armId)) {
@@ -619,6 +712,7 @@ function renderArmPicker() {
   }
 }
 
+// 팔을 바꾸면 그 팔 기준으로 정책 타일·워커 상태·최신 명령을 다시 그린다.
 armPicker.addEventListener('click', (event) => {
   const button = event.target.closest('[data-arm-id]');
   if (!button || button.disabled || button.dataset.armId === manual.armId) return;
@@ -634,6 +728,7 @@ function armLabel(armId) {
   return manualArms().find((arm) => arm.arm_id === armId)?.label || armId;
 }
 
+// 고른 팔의 워커 연결 상태 한 줄.
 function renderArmWorkers() {
   const worker = workerFor(manual.armId);
   armWorkerState.className = `worker-state${workerLive(worker) ? ' live' : ''}`;
@@ -647,12 +742,14 @@ function renderArmWorkers() {
   }
 }
 
+// 명령이 무엇을 하는지 한 줄(이미 이스케이프된 HTML을 돌려준다).
 function commandWhat(command) {
   const target = command.target;
   return { MOVE_TO_SLOT: '칸 앞으로 이동', RETURN_HOME: '원상복귀' }[command.operation]
     || (target.policy ? `${escapeHtml(target.policy.label)} 집기` : `${escapeHtml(target.object_class)} → ${escapeHtml(command.place.slot_id)}`);
 }
 
+// 명령의 근거 위치: 칸(정면 캠으로 찾았으면 그 신뢰도), 칸 없는 정책 집기면 '정면 캠 확인 없음', 원상복귀면 'home 자세'.
 function commandWhere(command) {
   const target = command.target;
   if (target.pick_slot_id) {
@@ -664,6 +761,8 @@ function commandWhere(command) {
   return target.policy ? '정면 캠 확인 없음' : 'home 자세';
 }
 
+// 명령에 대해 지금 누를 수 있는 버튼. 대기·진행 중이면 [취소](이미 요청했으면 '취소 요청됨'), 결과 불명(UNKNOWN)이고
+// 아직 현장 확인 기록이 없으면 [현장 확인 완료].
 function commandAction(command) {
   const inFlight = ['DISPATCHED', 'ACCEPTED', 'RUNNING'].includes(command.state);
   const id = escapeHtml(command.command_id);
@@ -677,7 +776,7 @@ function commandAction(command) {
   return '';
 }
 
-// The most recent command for the chosen arm, with what to do about it, in one place.
+// 고른 팔의 가장 최근 명령과, 그에 대해 할 일을 한곳에 보여 준다.
 function renderManualNow() {
   manualNowArm.textContent = armLabel(manual.armId);
   const command = manual.commands.find((item) => item.robot_id === manual.armId);
@@ -704,6 +803,7 @@ function renderManualNow() {
   }
 }
 
+// 명령 기록 표(접혀 있는 '명령 기록'). 최근 명령부터.
 function renderArmCommands(commands) {
   armCommandCount.textContent = commands.length ? `최근 ${commands.length}건` : '';
   if (!commands.length) {
@@ -728,7 +828,7 @@ function renderArmCommands(commands) {
   }).join('');
 }
 
-// Cancel and "현장 확인 완료" work the same from the latest-command card and the log.
+// 취소와 "현장 확인 완료"는 최신 명령 카드와 기록 표에서 똑같이 동작한다(이벤트 위임).
 document.querySelector('#view-manual').addEventListener('click', (event) => {
   const cancel = event.target.closest('[data-arm-cancel]');
   if (cancel) {
@@ -742,6 +842,7 @@ document.querySelector('#view-manual').addEventListener('click', (event) => {
   }
 });
 
+// GET /api/arm/commands: 워커 접속 상태와 최근 명령. 1초마다 부른다.
 async function refreshArmCommands() {
   try {
     const response = await fetch('/api/arm/commands', { cache: 'no-store' });
@@ -758,6 +859,7 @@ async function refreshArmCommands() {
   }
 }
 
+// 팔 명령 API에 POST하고 만든 명령을 돌려준다(실패하면 메시지를 보이고 null). 끝나면 항상 목록을 다시 읽는다.
 async function postArmCommand(url, body) {
   armCommandMessage.textContent = '';
   try {
@@ -777,11 +879,12 @@ async function postArmCommand(url, body) {
   }
 }
 
-// One confirm bar for every command that moves the arm. Resolves true only on the confirm button.
+// 팔을 움직이는 모든 명령이 쓰는 확인 바 하나. 확인 버튼을 눌렀을 때만 true로 끝난다.
 const manualConfirm = document.querySelector('#manualConfirm');
 const manualConfirmOk = document.querySelector('#manualConfirmOk');
 let confirmAnswer = null;
 
+// 이미 떠 있는 질문이 있으면 false로 끝내고 새 질문으로 바꾼다. 답은 Promise로 돌려준다.
 function askConfirm({ title, detail, ok }) {
   if (confirmAnswer) confirmAnswer(false);
   document.querySelector('#manualConfirmTitle').textContent = title;
@@ -807,7 +910,7 @@ manualConfirm.addEventListener('keydown', (event) => {
 const cameraCommandForm = document.querySelector('#cameraCommandForm');
 const policyButtons = document.querySelector('#policyButtons');
 cameraCommandForm.addEventListener('submit', async (event) => {
-  // The server picks the slot from the front camera; it refuses unless the object is in exactly one slot.
+  // 서버가 정면 카메라로 칸을 고른다. 물건이 정확히 한 칸에 있을 때만 받아들인다.
   event.preventDefault();
   const button = document.querySelector('#cameraSlotCommand');
   const objectClass = cameraCommandForm.elements.object_class.value.trim();
@@ -834,18 +937,20 @@ cameraCommandForm.addEventListener('submit', async (event) => {
   }
 });
 
-// Front-camera refusals after which the operator may still run the policy; the policy finds the object itself.
+// 정면 캠 확인이 이 이유로 거절되면 작업자가 그래도 정책을 실행할 수 있다. 정책은 물건을 스스로 찾기 때문이다.
 const cameraCheckErrors = new Set([
   'CAMERA_NOT_FOUND', 'CAMERA_NOT_FRESH', 'DETECTOR_NOT_READY', 'SLOT_ZONES_NOT_READY',
   'TARGET_NOT_FOUND', 'TARGET_AMBIGUOUS', 'TARGET_MULTIPLE',
 ]);
 
+// 요청을 보내는 동안 정책 타일과 원상복귀 버튼을 막아 두 번 누르지 않게 한다.
 function setManualBusy(busy) {
   manual.busy = busy;
   policyButtons.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
   document.querySelector('#armReturnHome').disabled = busy;
 }
 
+// 정면 캠 근거 없이 PICK_WITH_POLICY 명령을 바로 대기열에 넣는다. 왜 확인 없이 보냈는지 source.note에 남긴다.
 async function sendPolicyWithoutCamera(policy, armId, why) {
   const command = await postArmCommand('/api/arm/commands', {
     robot_id: armId,
@@ -859,8 +964,8 @@ async function sendPolicyWithoutCamera(policy, armId, why) {
 }
 
 async function pickWithPolicy(policy) {
-  // 1) Confirm with the operator: the arm moves. 2) Ask the server to find the object in the front camera (the slot
-  // becomes evidence in the command). 3) If the camera cannot confirm it, ask once more before sending without it.
+  // 1) 작업자에게 확인한다: 팔이 움직인다. 2) 서버에 정면 카메라에서 물건을 찾아 달라고 한다(칸이 명령의 근거로
+  // 남는다). 3) 카메라로 확인하지 못하면, 확인 없이 보내기 전에 한 번 더 묻는다.
   const armId = manual.armId;
   if (manual.busy) return;
   const go = await askConfirm({
@@ -873,10 +978,11 @@ async function pickWithPolicy(policy) {
   armCommandMessage.textContent = `${policy.label}: 정면 캠에서 확인하는 중`;
   try {
     if (armId !== 'arm-01') {
-      // The server's front-camera check sends to arm-01 only, so the other arm goes without the camera evidence.
+      // 서버의 정면 캠 확인은 arm-01에만 명령을 보내므로, 다른 팔은 카메라 근거 없이 보낸다.
       await sendPolicyWithoutCamera(policy, armId, '정면 캠 확인은 arm-01만 지원');
       return;
     }
+    // arm-01이면 서버가 정면 캠에서 물건을 찾아 칸을 근거로 붙인 PICK_WITH_POLICY 명령을 만든다.
     const response = await fetch('/api/arm/commands/from-camera', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -908,14 +1014,14 @@ async function pickWithPolicy(policy) {
   }
 }
 
-// One request for the trained-policy list, shared by the policy buttons and the object labels of orders.
+// 학습 정책 목록 요청은 한 번만 보내고, 정책 버튼과 주문의 물체 이름표가 함께 쓴다.
 const policyListRequest = fetch('/api/arm/policies', { cache: 'no-store' }).then(async (response) => {
   const result = await response.json();
   if (!response.ok) throw new Error(apiErrorMessage(result, '정책 목록을 불러오지 못했습니다'));
   return result.policies;
 });
 
-// A policy runs only on the arm it was recorded on; arm_id null means it is not tied to one arm.
+// 정책은 녹화한 팔에서만 돈다. arm_id가 null이면 한 팔에 묶이지 않은 정책이다.
 function renderPolicyTiles() {
   const policies = manual.policies.filter((policy) => !policy.arm_id || policy.arm_id === manual.armId);
   if (!policies.length) {
@@ -944,6 +1050,7 @@ function renderPolicyTiles() {
   }));
 }
 
+// 정책 목록을 받아 정책 타일을 그린다.
 async function loadPolicyButtons() {
   try {
     manual.policies = await policyListRequest;
@@ -953,6 +1060,8 @@ async function loadPolicyButtons() {
   }
 }
 
+// ==== 8. 수동 조작(개발용, ?dev=1): 정책 연속 실행 ====
+// 고른 물체들의 정책을 순서대로 한 번씩 실행한다(POST /api/arm/sequences). 각 팔이 초기 자세로 돌아오면 다음 단계로 간다.
 const sequenceChoices = document.querySelector('#sequenceChoices');
 const sequenceOrder = document.querySelector('#sequenceOrder');
 const startSequenceButton = document.querySelector('#startSequence');
@@ -960,10 +1069,13 @@ const sequenceStatus = document.querySelector('#sequenceStatus');
 const sequenceRequestMessage = document.querySelector('#sequenceRequestMessage');
 const sequenceStepDetails = document.querySelector('#sequenceStepDetails');
 const sequenceRunActions = document.querySelector('#sequenceRunActions');
+// sequencePolicies: 고를 수 있는 정책 목록, selectedSequencePolicyIds: 체크한 순서대로의 정책 id(최대 4개),
+// sequenceRunActive: 마지막 연속 실행이 아직 진행 중인지(그동안 시작 버튼을 막는다).
 let sequencePolicies = [];
 let selectedSequencePolicyIds = [];
 let sequenceRunActive = false;
 
+// 정책 목록이 오면 연속 실행 선택지를 그린다. 파일을 읽을 때 바로 한 번 부른다.
 async function loadSequencePolicies() {
   try {
     sequencePolicies = await policyListRequest;
@@ -982,6 +1094,8 @@ function sequenceArmLabel(armId) {
   return '선반 담당 팔';
 }
 
+// 체크 상자(물체 선택, 최대 4개)와 실행 순서 목록(↑ ↓로 순서 바꾸기)을 다시 그린다.
+// 실행 중이거나 고른 것이 없으면 시작 버튼을 막는다.
 function renderSequenceBuilder() {
   if (!sequenceChoices || !sequenceOrder) return;
   sequenceChoices.replaceChildren(...sequencePolicies.map((policy) => {
@@ -1036,6 +1150,7 @@ function renderSequenceBuilder() {
   if (startSequenceButton) startSequenceButton.disabled = sequenceRunActive || selectedSequencePolicyIds.length === 0;
 }
 
+// 고른 순서를 확인 창으로 보여 준 뒤 POST /api/arm/sequences로 연속 실행을 시작한다.
 startSequenceButton?.addEventListener('click', async () => {
   const steps = selectedSequencePolicyIds
     .map((id) => sequencePolicies.find((policy) => policy.policy_id === id))
@@ -1066,6 +1181,8 @@ startSequenceButton?.addEventListener('click', async () => {
   }
 });
 
+// GET /api/arm/sequences의 latest(가장 최근 연속 실행)를 단계별로 그린다. 지금 단계의 팔 명령은
+// GET /api/arm/commands/{id}로 따로 읽어 상태와 마지막 이벤트의 phase를 보여 준다. 1초마다 부른다.
 async function refreshSequences() {
   if (!sequenceStatus) return;
   try {
@@ -1077,6 +1194,7 @@ async function refreshSequences() {
     if (startSequenceButton) startSequenceButton.disabled = sequenceRunActive || selectedSequencePolicyIds.length === 0;
     sequenceRunActions?.replaceChildren();
     if (run) {
+      // 적재(placement_confirmed)를 확인하지 못한 결과가 하나라도 있으면 '적재 여부 미확인'을 덧붙인다.
       const placementUnknown = run.results.some((item) => item.placement_confirmed !== true);
       const runStateLabels = {
         QUEUED: '워커 대기 중', DISPATCHED: '워커에 전달됨', RUNNING: '정책 실행 중',
@@ -1102,6 +1220,7 @@ async function refreshSequences() {
         APPROACH_TARGET: '물체 접근 중', RETURNING_HOME: '초기자세 복귀 중',
         VERIFY_TRANSFER: '물체 이동 확인 중',
       };
+      // 단계마다: 끝난 단계는 결과(result)로, 지금 단계는 현재 명령 상태로, 나머지는 '완료'/'대기'로 쓴다.
       const stepItems = run.steps.map((step, index) => {
         const item = document.createElement('li');
         const result = run.results.find((entry) => entry.step === index);
@@ -1131,6 +1250,7 @@ async function refreshSequences() {
         return item;
       });
       sequenceStepDetails?.replaceChildren(...stepItems);
+      // 아직 끝나지 않은 실행이면 취소 버튼을 단다(POST /api/arm/sequences/{id}/cancel).
       if (['QUEUED', 'DISPATCHED', 'RUNNING', 'CANCELING'].includes(run.state)) {
         const cancel = document.createElement('button');
         cancel.type = 'button'; cancel.className = 'secondary'; cancel.textContent = run.state === 'QUEUED' ? '대기 중인 연속 실행 취소' : '연속 실행 취소 요청';
@@ -1152,35 +1272,40 @@ async function refreshSequences() {
 }
 refreshSequences();
 
+// ==== 9. 주문 표시 공통(물체 이름·핑키 배지)과 토스트 알림 ====
 // ---- 주문 표시 공통 (물체 이름, 핑키 배지) ----
+// 핑키 id → 화면 이름(P0~P2). 다른 스크립트도 쓴다.
 const pinkyNames = { 10: 'P0', 11: 'P1', 12: 'P2' };
-let objectLabels = new Map();  // object_class -> label (사과, 당근…), filled from the policy list
+let objectLabels = new Map();  // object_class -> 이름(사과, 당근…), 정책 목록에서 채운다
 policyListRequest
   .then((policies) => { objectLabels = new Map(policies.map((policy) => [policy.object_class, policy.label])); })
-  .catch(() => {});  // the policy buttons already show the error; labels fall back to the class name
+  .catch(() => {});  // 오류는 정책 버튼이 이미 보여 준다. 이름은 클래스 이름으로 대신한다
 
+// 카메라 검출 클래스의 한국어 이름. 정책 목록의 이름보다 먼저 쓴다.
 const cameraObjectLabels = new Map(Object.entries({
   strawberry: '딸기', car: '자동차', ball: '공', pumpkin: '호박', apple: '사과',
   carrot: '당근', fruits: '열매 송이', potato: '감자', watermelon: '수박',
   tissue: '물티슈', kiwi: '키위', pepper: '고추', pinky: '핑키',
 }));
 
+// 물체 클래스 → 화면 이름. 카메라 이름표 → 정책 이름표 → 클래스 이름 순으로 찾는다.
 function objectLabel(objectClass) {
   return cameraObjectLabels.get(objectClass) || objectLabels.get(objectClass) || objectClass;
 }
 
+// 주문 물건 목록을 '사과 2, 당근 1' 같은 한 줄로 만든다.
 function orderSummary(items) {
   return (items || []).map((item) => `${objectLabel(item.object_class)} ${item.quantity}`).join(', ');
 }
 
-// P0–P2 mark: blue while the Pinky answers, grey when it does not.
+// P0~P2 표시: 핑키가 응답하면 파랑, 응답하지 않으면 회색.
 function pinkyBadge(pinkyId, { offline = false } = {}) {
   if (!pinkyId) return '';
   return `<span class="pinky-badge${offline ? ' offline' : ''}">${escapeHtml(pinkyNames[pinkyId] || pinkyId)}</span>`;
 }
 
-// Short notices in the corner (new order, start result, refused control); they disappear by themselves.
-// kind: info | warning | error. A line break in the detail starts a new line.
+// 화면 구석에 잠깐 뜨는 알림(새 주문, 시작 결과, 거절된 제어). 저절로 사라진다.
+// kind: info | warning | error. detail 안의 줄바꿈은 새 줄로 보인다.
 const toastStack = document.querySelector('#toastStack');
 const TOAST_MS = 5000;
 
@@ -1192,9 +1317,11 @@ function showToast(title, detail = '', kind = 'info', durationMs = TOAST_MS) {
   window.setTimeout(() => toast.remove(), durationMs);
 }
 
-// The worker replays the joint pose it taught for the chosen slot; no coordinates are sent.
+// ==== 10. 수동 조작: 칸으로 이동(개발용)과 원상복귀 ====
+// 워커는 고른 칸에 대해 가르쳐 둔 관절 자세를 다시 재생한다. 좌표는 보내지 않는다.
 const armCommandSlot = document.querySelector('#armCommandSlot');
 
+// GET /api/arm/shelf-slots의 활성 칸으로 '칸' 선택지를 채운다. 못 읽으면 선택지를 막고 이유를 title에 둔다.
 async function loadShelfSlots() {
   try {
     const response = await fetch('/api/arm/shelf-slots', { cache: 'no-store' });
@@ -1212,6 +1339,7 @@ async function loadShelfSlots() {
   }
 }
 
+// 칸으로 이동(개발용): MOVE_TO_SLOT 명령. 대상 종류와 놓을 칸은 기록만 한다.
 armCommandForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const button = armCommandForm.querySelector('button');
@@ -1230,7 +1358,7 @@ armCommandForm.addEventListener('submit', async (event) => {
 });
 
 document.querySelector('#armReturnHome').addEventListener('click', async () => {
-  // No slot or place: the worker moves the arm back to the home pose it recorded.
+  // 칸도 놓을 곳도 없다: 워커가 기록해 둔 home 자세로 팔을 되돌린다.
   const armId = manual.armId;
   if (manual.busy) return;
   const go = await askConfirm({
@@ -1250,6 +1378,7 @@ document.querySelector('#armReturnHome').addEventListener('click', async () => {
   setManualBusy(false);
 });
 
+// ==== 11. 작업 이력용 상태·단계·이벤트 이름표 ====
 const taskStatusLabels = {
   PENDING: '대기', VALIDATING: '검증 중', RUNNING: '실행 중',
   SUCCEEDED: '성공', FAILED: '실패', CANCELING: '취소 중',
@@ -1266,6 +1395,7 @@ const executionLabels = {
   CANCELED: '취소됨', UNKNOWN: '결과 불명', PENDING: '대기',
   QUEUED: '워커 대기열', DISPATCHED: '워커가 가져감', REJECTED: '워커 거부', EXPIRED: '만료',
 };
+// 단계 결과(result.outcome)의 이름. 운영 화면에서는 모의 완료도 '완료'로 보인다.
 const stepOutcomeLabels = {
   SIMULATED_SUCCESS: devMode ? '모의 완료' : '완료',
   CANCEL_CONFIRMED: '취소 확인',
@@ -1276,6 +1406,7 @@ const stepOutcomeLabels = {
   ARM_HOME_PLACEMENT_NOT_VERIFIED: '팔 home 복귀 · 적재 미확인',
   ARM_HOME_PLACEMENT_LEFT_TO_VERIFY_LOAD: '적재 판단은 적재 확인 단계로',
 };
+// 작업 이벤트 이름. 모의 관련 말은 개발자 화면에서만 붙는다(devWord).
 const taskEventLabels = {
   MOCK_SCENARIO_FAILURE: `${devWord('모의 ')}실패 시나리오 발생`,
   MOCK_EXECUTION_FAILED: `${devWord('모의 ')}실행 오류`,
@@ -1295,11 +1426,13 @@ const loadStatusLabels = {
   NOT_VERIFIED: '확인 불가',
 };
 
+// LOAD_OBSERVED 이벤트(적재 확인)를 한 줄로: 상태, 기대 개수, 관측 개수.
 function formatLoadObservation(payload) {
   const observation = payload.observation || {};
   const observed = observation.observed_count == null ? '개수 없음' : `${observation.observed_count}개`;
   return `적재 확인 · ${loadStatusLabels[payload.status] || payload.status} · 기대 ${payload.expected_count}개 · 관측 ${observed}${observation.simulated ? devWord(' · 모의 관측(카메라 미사용)') : ''}`;
 }
+// 확정 주차 판정(status)과 벗어난 정도(deviation_level)의 이름.
 const parkingStatusLabels = {
   ARRIVED: '도착',
   MISALIGNED: '어긋남',
@@ -1309,6 +1442,7 @@ const parkingStatusLabels = {
 };
 const parkingDeviationLabels = { WITHIN: '범위 안', NEAR: '조금 벗어남', FAR: '많이 벗어남' };
 
+// PARKING_OBSERVED 이벤트의 판정 결과를 한 줄로. 핑키 기준 축(forward/left)이 있으면 그것을, 없으면 마커 기준 dx/dy를 쓴다.
 function formatParkingObservation(observation) {
   const parts = [`주차 판정 · ${observation.spot_id} · ${parkingStatusLabels[observation.status] || observation.status}`];
   const offset = observation.offset;
@@ -1329,13 +1463,24 @@ function formatParkingObservation(observation) {
   return parts.join(' · ');
 }
 
+// ==== 12. 장비·카메라: 핑키 도착 확인(주차 판정) 패널 ====
+// 천장 카메라로 핑키 윗면 ArUco 마커를 재서 등록된 주차 위치와 비교한다. 결과는 두 가지다.
+//   - 실시간(GET /api/parking-spots/{spot}/live): C++ 주차 노드가 계속 추적하는 상태. 0.5초마다, 이 뷰가 보일 때만 읽는다.
+//   - 확정 판정(GET /api/parking-spots/{spot}/check): [확정 판정]을 누르면 새 프레임 여러 장으로 한 번 판정한다.
+// 실시간 추적이 되면 패널은 실시간 상태를 보여 주고, 확정 판정은 그 아래 한 줄(parkingConfirm)로만 남는다.
+// 이 패널은 로봇에 명령을 보내지 않는다.
+//
+// parkingBusy: 확정 판정 요청 중, parkingLiveBusy: 실시간 요청 중(겹쳐 보내지 않는다),
+// parkingLive: 서버가 실시간 추적을 켰는지(health.parking.live_tracking), parkingStreamCamera: 지금 <img>가 여는 카메라.
 let parkingBusy = false;
 let parkingLiveBusy = false;
 let parkingLive = false;
 let parkingStreamCamera = null;
-let parkingLiveOk = false;  // the last /live poll succeeded, so the panel shows live state
+let parkingLiveOk = false;  // 마지막 /live 폴링이 성공해 패널이 실시간 상태를 보여 주는 중
+// 판정 단계별 색: 윗면 그림(밝은 배경)용과 카메라 영상 위 그림(어두운 배경)용.
 const parkingColors = { within: '#2f8f4e', near: '#c98a1a', far: '#bd4242', moving: '#3478cb', unknown: '#7a838d' };
 const parkingOverlayColors = { within: '#3fbf6a', near: '#f0a830', far: '#f05a5a', moving: '#5aa2f0', unknown: '#c3c9cf' };
+// 실시간 상태(live.state)의 제목.
 const parkingLiveTitles = {
   NOT_IN_VIEW: '화면 밖 · Pinky 마커가 보이지 않음',
   MOVING: '이동 중',
@@ -1348,6 +1493,7 @@ const parkingLiveTitles = {
   TRACKING_ERROR: '확인 불가 · 추적 프로그램 오류',
   NODE_UNAVAILABLE: '확인 불가 · 주차 판정 노드 연결 안 됨',
 };
+// 판정하지 못한 이유별로 작업자가 할 일.
 const parkingHelp = {
   NOT_IN_VIEW: 'Pinky가 주차 구역 밖에 있거나 윗면 마커가 사람·물건에 가려졌습니다.',
   NOT_FOUND: 'Pinky가 주차 구역에 있는지, 윗면 마커가 사람·물건에 가려졌는지 확인하세요.',
@@ -1364,11 +1510,13 @@ function signedNumber(value, digits = 1) {
   return `${number > 0 ? '+' : ''}${number.toFixed(digits)}`;
 }
 
+// 오차 정도를 색 단계(within/near/far)로 바꾼다. 오프셋이 없으면 unknown.
 function parkingLevel(data) {
   if (!data?.offset) return 'unknown';
   return { WITHIN: 'within', NEAR: 'near', FAR: 'far' }[data.deviation_level] || 'unknown';
 }
 
+// 오프셋을 앞/왼쪽 축으로 꺼낸다. 핑키 기준 값(forward_mm/left_mm)이 없는 예전 응답은 마커 기준 dx/dy로 대신한다.
 function parkingAxes(offset) {
   const pinkyAxes = offset.forward_mm != null;
   return {
@@ -1378,7 +1526,8 @@ function parkingAxes(offset) {
   };
 }
 
-// Small top view in Pinky's own axes: up = Pinky front, left = Pinky left, counterclockwise yaw turns the arrow left.
+// 핑키 자신의 축으로 본 작은 윗면 그림: 위 = 핑키 앞, 왼쪽 = 핑키 왼쪽, 반시계 yaw면 화살표가 왼쪽으로 돈다.
+// 허용 범위와 오프셋이 모두 들어오도록 축척을 정한다(그림 반지름 140).
 function drawParkingMap(data, level) {
   const tolerance = Number(data?.tolerance?.position_mm) || 50;
   const offset = data?.offset;
@@ -1401,6 +1550,7 @@ function drawParkingMap(data, level) {
     <path d="${arrow}" transform="translate(${x} ${y}) rotate(${-Number(offset.dyaw_deg)})" fill="${color}" fill-opacity=".9" stroke="${color}"/>` : ''}`;
 }
 
+// 마커 네 꼭짓점에서 중심과, 핑키 앞쪽(forwardAxis: 마커의 어느 축이 핑키 앞인지)을 가리키는 끝점을 구한다.
 function markerGeometry(corners, forwardAxis) {
   const point = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
   const center = [0, 1].map((i) => corners.reduce((sum, corner) => sum + corner[i], 0) / 4);
@@ -1410,6 +1560,7 @@ function markerGeometry(corners, forwardAxis) {
   return { center, front: point(center, axisEnd, 2.4) };
 }
 
+// 카메라 영상 위 SVG: 고정 마커(점선 원), 등록 위치(흰 점선 사각형과 앞 방향), 지금 마커(색 채움과 화살표), 라벨.
 function drawParkingOverlay(data, level, label) {
   const overlay = data?.image_overlay;
   if (!overlay) {
@@ -1418,11 +1569,11 @@ function drawParkingOverlay(data, level, label) {
   }
   const { width, height } = overlay.image_size_px;
   parkingOverlay.setAttribute('viewBox', `0 0 ${width} ${height}`);
-  // Taken from the overlay so the registered heading is drawn right even when nothing was judged.
+  // 오버레이에서 가져온다. 그래야 판정한 것이 없을 때도 등록된 방향을 바르게 그린다.
   const forwardAxis = overlay.marker_forward_axis ?? data.offset?.marker_forward_axis;
   const color = parkingOverlayColors[level] || parkingOverlayColors.unknown;
   const polygon = (corners) => corners.map(([x, y]) => `${x},${y}`).join(' ');
-  // The judgment subtracts the camera drift measured on the fixed markers, so draw the registered spot moved by it too.
+  // 판정은 고정 마커로 잰 카메라 흔들림(드리프트)을 빼고 하므로, 등록 위치도 그만큼 옮겨 그린다.
   const [shiftX, shiftY] = overlay.view_shift_xy_px || [0, 0];
   const moved = (points) => points.map(([x, y]) => [x + shiftX, y + shiftY]);
   const registeredCorners = moved(overlay.registered_corners_px);
@@ -1444,6 +1595,7 @@ function drawParkingOverlay(data, level, label) {
     <text x="${width - 88}" y="48" text-anchor="middle" font-size="11" fill="#e8ebee">카메라 흐름 ${Math.hypot(shiftX, shiftY).toFixed(1)} px 보정</text>` : ''}`;
 }
 
+// 판정 카메라의 MJPEG 스트림을 연다. 같은 카메라면 다시 열지 않는다.
 function showParkingStream(cameraId) {
   if (!cameraId || cameraId === parkingStreamCamera) return;
   parkingStreamCamera = cameraId;
@@ -1452,6 +1604,7 @@ function showParkingStream(cameraId) {
   parkingStream.src = `/streams/${encodeURIComponent(cameraId)}.mjpg`;
 }
 
+// 스트림 연결을 끊는다(src를 지워야 브라우저가 MJPEG 연결을 닫는다).
 function stopParkingStream() {
   if (!parkingStreamCamera) return;
   parkingStream.removeAttribute('src');
@@ -1460,12 +1613,14 @@ function stopParkingStream() {
   parkingStreamCamera = null;
 }
 
+// 스트림이 끊기면 안내 글로 바꾸고, 다음 showParkingStream 호출이 다시 열 수 있게 카메라 id를 비운다.
 parkingStream.addEventListener('error', () => {
   parkingStream.hidden = true;
   parkingStreamEmpty.hidden = false;
   parkingStreamCamera = null;
 });
 
+// 오차가 허용치의 몇 배인지 보여 주는 막대. 0~3배를 0~100%에 놓고, 3배 이상은 끝에 붙는다.
 function gaugeHtml(label, value, tolerance, ratio, unit) {
   const position = Math.min(Number(ratio), 3) / 3 * 100;
   return `<div class="parking-gauge"><div class="gauge-head"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)} / 허용 ${escapeHtml(tolerance)}${unit} · ${Number(ratio).toFixed(2)}배</strong></div>
@@ -1473,6 +1628,7 @@ function gaugeHtml(label, value, tolerance, ratio, unit) {
     <div class="gauge-scale"><span>0</span><span>허용</span><span>2배</span><span>3배+</span></div></div>`;
 }
 
+// 등록 위치로 맞추려면 어느 쪽으로 얼마나 옮길지(오차의 반대 방향). 1 mm, 0.5° 미만은 말하지 않는다.
 function correctionAdvice(offset) {
   const { pinkyAxes, forward, left } = parkingAxes(offset);
   const steps = [];
@@ -1482,7 +1638,7 @@ function correctionAdvice(offset) {
   return steps.length ? `등록 위치로 맞추려면 ${steps.join(' · ')} 옮겨야 합니다.` : '';
 }
 
-// Numbers, gauges, top view, camera overlay and details shared by live states and confirmed checks.
+// 숫자, 게이지, 윗면 그림, 카메라 오버레이, 세부 항목: 실시간 상태와 확정 판정이 함께 쓴다.
 function renderParkingFields(data, level, overlayLabel, extraRows = []) {
   const offset = data.offset;
   if (offset) {
@@ -1511,7 +1667,8 @@ function renderParkingFields(data, level, overlayLabel, extraRows = []) {
   renderParkingPinky(data);
 }
 
-// Which Pinky carries the marker of each registered spot (/api/pinky: marker.spot_id), for the line under the camera.
+// 등록된 주차 위치마다 그 마커를 단 핑키(/api/pinky의 marker.spot_id). 카메라 아래 줄에 쓴다.
+// 핑키 이름표는 자주 바뀌지 않으니 30초마다만 다시 읽는다.
 let parkingPinkies = new Map();  // spot_id -> { name, markerId }
 let parkingPinkiesAt = 0;
 const PARKING_PINKIES_REFRESH_MS = 30000;
@@ -1526,12 +1683,12 @@ async function loadParkingPinkies() {
     parkingPinkies = new Map((result.pinkies || []).filter((pinky) => pinky.marker?.spot_id)
       .map((pinky) => [pinky.marker.spot_id, { name: pinky.name, markerId: pinky.marker.marker_id }]));
   } catch {
-    parkingPinkiesAt = Date.now() - PARKING_PINKIES_REFRESH_MS + 5000;  // keep what was known, ask again in 5 s
+    parkingPinkiesAt = Date.now() - PARKING_PINKIES_REFRESH_MS + 5000;  // 알던 것은 그대로 두고 5초 뒤에 다시 묻는다
   }
 }
 
-// The line under the camera: the Pinky whose marker the judged spot was registered with. A spot is one Pinky's own
-// registration, so a marker seen at that spot is that Pinky; when it is not seen, the line says whose spot is shown.
+// 카메라 아래 줄: 판정한 주차 위치를 등록한 마커의 핑키. 주차 위치 하나는 핑키 한 대가 등록한 것이라, 그 위치에서
+// 보이는 마커는 곧 그 핑키다. 마커가 보이지 않으면 누구의 자리를 보고 있는지 말한다.
 function renderParkingPinky(data) {
   if (!data?.spot_id) {
     parkingPinky.className = 'parking-pinky absent';
@@ -1558,6 +1715,7 @@ function setParkingAdvice(text) {
   parkingAdvice.textContent = text || '';
 }
 
+// 위 단계 표시(화면 밖 → 이동 중 → 정지·판정)에서 지금 단계와 지난 단계를 칠한다. null이면 모두 끈다.
 function setParkingSteps(state) {
   const order = { NOT_IN_VIEW: 0, MOVING: 1, IN_POSITION: 2, OFF_POSITION: 2 };
   const current = order[state];
@@ -1567,6 +1725,7 @@ function setParkingSteps(state) {
   });
 }
 
+// 실시간 상태(GET .../live의 live)로 패널 전체를 그린다. since는 이 상태가 시작된 시각이다.
 function renderParkingLive(live) {
   const state = live.state;
   const stopped = state === 'IN_POSITION' || state === 'OFF_POSITION';
@@ -1589,6 +1748,7 @@ function renderParkingLive(live) {
   parkingUpdated.textContent = `실시간 ${time}`;
 }
 
+// 확정 판정 결과 한 줄(실시간 패널 아래에 붙는다).
 function confirmLine(observation) {
   const title = observation.status === 'MISALIGNED'
     ? `어긋남(${parkingDeviationLabels[observation.deviation_level] || observation.deviation_level})`
@@ -1597,7 +1757,7 @@ function confirmLine(observation) {
   return `확정 판정 ${clockFormat.format(new Date(observation.captured_until))} · ${title}${distance} · ${observation.frames_used}프레임`;
 }
 
-// Without live tracking (older server or no configured spot) the confirmed check fills the whole panel.
+// 실시간 추적이 없으면(예전 서버이거나 설정된 위치가 없음) 확정 판정이 패널 전체를 채운다.
 function renderParkingCheck(observation) {
   const level = parkingLevel(observation);
   parkingBanner.className = `parking-banner ${level}`;
@@ -1612,7 +1772,7 @@ function renderParkingCheck(observation) {
   parkingUpdated.textContent = `판정 ${time}`;
 }
 
-// Clears every number and drawing so an earlier "정상 위치" never stays on screen after the data is gone.
+// 모든 숫자와 그림을 지워, 데이터가 사라진 뒤에 예전 "정상 위치"가 화면에 남지 않게 한다.
 function clearParkingPanel(title, message) {
   parkingBanner.className = 'parking-banner unknown';
   parkingStatus.textContent = title;
@@ -1629,6 +1789,7 @@ function clearParkingPanel(title, message) {
   renderParkingPinky(null);
 }
 
+// 확정 판정 실패를 한 줄로 알린다. 실시간 상태가 살아 있으면 패널은 그대로 둔다.
 function renderParkingError(message) {
   parkingConfirm.hidden = false;
   parkingConfirm.className = 'parking-confirm';
@@ -1636,6 +1797,7 @@ function renderParkingError(message) {
   if (!(parkingLive && parkingLiveOk)) clearParkingPanel('판정하지 못함', message);
 }
 
+// [확정 판정]: 입력한 주차 위치로 GET .../check를 보낸다. 여러 프레임을 모아 판정하므로 그동안 버튼을 막는다.
 async function checkParking() {
   const spotId = parkingSpotInput.value.trim();
   if (parkingBusy) return;
@@ -1667,24 +1829,25 @@ async function checkParking() {
   }
 }
 
+// 0.5초마다 부른다. 장비·카메라 뷰가 보일 때만 실시간 상태를 읽고, 안 보이면 이 패널의 스트림을 끊는다.
 async function pollParkingLive() {
   const spotId = parkingSpotInput.value.trim();
   if (document.hidden || document.querySelector('#view-overview').hidden) {
-    stopParkingStream();  // the camera card keeps its own stream; this one only matters while the panel is visible
+    stopParkingStream();  // 카메라 카드는 자기 스트림을 따로 연다. 이 스트림은 패널이 보일 때만 필요하다
     return;
   }
   if (!parkingLive || parkingLiveBusy || !spotId) return;
   parkingLiveBusy = true;
   try {
-    if (parkingPinkies.size) loadParkingPinkies();  // refreshes in the background every 30 s
-    else await loadParkingPinkies();  // the first line under the camera waits for the names
+    if (parkingPinkies.size) loadParkingPinkies();  // 30초마다 기다리지 않고 뒤에서 새로 읽는다
+    else await loadParkingPinkies();  // 카메라 아래 첫 줄은 핑키 이름을 받을 때까지 기다린다
     const liveOf = async (id) => {
       const response = await fetch(`/api/parking-spots/${encodeURIComponent(id)}/live`, { cache: 'no-store' });
       return { ok: response.ok, body: await response.json() };
     };
     let { ok, body: result } = await liveOf(spotId);
-    // Each Pinky has its own registration of the loading spot. When the marker of the spot shown is not in view,
-    // show the spot whose marker is: the panel follows whichever Pinky stands there (unless the id is being typed).
+    // 핑키마다 적재 자리를 따로 등록해 두었다. 보여 주는 위치의 마커가 화면에 없으면 마커가 보이는 위치로 바꿔 보여 준다:
+    // 패널이 지금 거기 서 있는 핑키를 따라간다(작업자가 id를 입력하는 중이면 바꾸지 않는다).
     if (document.activeElement !== parkingSpotInput && !(ok && PARKING_TRACKED_STATES.has(result.live?.state))) {
       for (const other of parkingLiveSpots) {
         if (other === spotId) continue;
@@ -1707,9 +1870,11 @@ async function pollParkingLive() {
   }
 }
 
+// 마커가 보이는(추적 중인) 실시간 상태.
 const PARKING_TRACKED_STATES = new Set(['MOVING', 'IN_POSITION', 'OFF_POSITION']);
-let parkingLiveSpots = [];  // every spot followed live (health.parking.live_spots): one per registered Pinky
+let parkingLiveSpots = [];  // 실시간으로 따라가는 모든 위치(health.parking.live_spots), 등록된 핑키마다 하나
 
+// GET /api/health의 parking 설정을 반영한다(3초마다 refresh가 부른다). 입력칸이 비어 있으면 기본 위치를 넣는다.
 function updateParkingConfig(parking) {
   parkingCameraId = parking?.camera_id || null;
   parkingLive = Boolean(parking?.live_tracking);
@@ -1726,6 +1891,8 @@ function updateParkingConfig(parking) {
 parkingCheckButton.addEventListener('click', checkParking);
 drawParkingMap(null, 'unknown');
 
+// ==== 13. 작업 이력 화면 ====
+// 왼쪽 작업 목록. 고른 작업이 목록에 없으면 첫 작업을 고른다. 항목을 누르면 그 작업으로 다시 읽는다.
 function renderTasks(tasks) {
   taskCount.textContent = `${tasks.length}개 작업`;
   if (!tasks.length) {
@@ -1748,6 +1915,10 @@ function renderTasks(tasks) {
   });
 }
 
+// 오른쪽 작업 상세: 단계와 이벤트. 시작 버튼은 mock 모드의 대기 작업에만, 취소 버튼은 mock 모드에서 이 서버
+// 프로세스가 실행 중인(local_execution_owner가 LOCAL_WORKER_ACTIVE) 작업에만 나온다. 저장된 작업이 활성인데
+// 이 프로세스에 실행 주체가 없으면(서버 재시작 등) 그 사실을 알리고, 자동 재개는 하지 않는다.
+// 이벤트는 종류별로 사람이 읽을 한 줄(주차 판정, 적재 확인, 진행률, 물체 확인, 팔 명령 등록)로 바꾼다.
 function renderTaskDetail(task) {
   const steps = task.steps || [];
   const events = task.events || [];
@@ -1820,6 +1991,7 @@ function renderTaskDetail(task) {
   });
 }
 
+// 모의 작업 시작·취소: POST /api/tasks/{id}/start|cancel.
 async function sendTaskAction(taskId, action) {
   taskMessage.textContent = action === 'start' ? '작업을 시작합니다…' : '작업 취소를 요청합니다…';
   try {
@@ -1834,6 +2006,7 @@ async function sendTaskAction(taskId, action) {
   }
 }
 
+// GET /api/tasks로 목록을, 고른 작업이 있으면 GET /api/tasks/{id}로 상세를 읽는다. 1초마다 부른다.
 async function refreshTasks() {
   try {
     const response = await fetch('/api/tasks', { cache: 'no-store' });
@@ -1850,6 +2023,8 @@ async function refreshTasks() {
   }
 }
 
+// 이전 형식 작업 등록(POST /api/tasks). 저장만 하고 인식이나 로봇 명령은 실행하지 않는다.
+// 대상 칸 중 하나라도 채우면 pick_request를 만들고, 비어 있는 색상·선반 층은 보내지 않는다.
 taskForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const formData = new FormData(taskForm);
@@ -1887,6 +2062,9 @@ taskForm.addEventListener('submit', async (event) => {
   }
 });
 
+// ==== 14. 서버 상태 주기 갱신(refresh) ====
+// 서버 상태, 로봇 인터페이스, 카메라, 팔 프로세스를 한꺼번에 읽는다(3초마다). 하나라도 실패하면 서버 연결 실패로 보고
+// 표와 카메라 격자를 오류 글로 바꾼다. 카메라 격자는 다음 성공 때 다시 만들도록 cameraIds를 비운다.
 async function refresh() {
   try {
     const [healthResponse, robotsResponse, camerasResponse, armResponse] = await Promise.all([
@@ -1920,7 +2098,9 @@ async function refresh() {
   }
 }
 
+// ==== 15. 주문 진행 화면: 경보, 로봇 상태, 주문 목록, 모의 세계 ====
 // ---- 주문 진행 화면 ----
+// GET /api/flow(1초마다)로 경보, 핑키·팔 상태, 시작한 주문의 단계, 적재 자리 주인, 모의 세계를 그린다.
 const flowAlerts = document.querySelector('#flowAlerts');
 const flowRobots = document.querySelector('#flowRobots');
 const flowOrders = document.querySelector('#flowOrders');
@@ -1934,21 +2114,26 @@ const orderStatusLabels = {
   PENDING: '시작 대기', VALIDATING: '진행 중', RUNNING: '진행 중', SUCCEEDED: '완료',
   FAILED: '멈춤', CANCELING: '취소 중', CANCELED: '취소됨', NEEDS_INTERVENTION: '확인 필요',
 };
+// 모의 세계에 넣을 수 있는 사고 종류의 이름(개발자 화면).
 const mockFaultLabels = {
   STOCK_SHORT: '선반 재고 없음', PICK_FAILED: '집기 실패(선반에 남음)', ITEM_LOST: '분실(어디에도 없음)',
   EXTRA_ON_PINKY: '핑키에 주문 외 물건', PINKY_MISALIGNED: '핑키 위치 이상', FLEET_REJECT: '핑키 신호 거부',
 };
 const shelfNames = { shelf_a: '왼쪽 선반', shelf_b: '오른쪽 선반' };
 
+// 시작부터 끝(없으면 지금)까지 걸린 시간을 mm:ss로 만든다.
 function elapsed(fromIso, toIso) {
   if (!fromIso) return '';
   const seconds = Math.max(0, Math.round(((toIso ? new Date(toIso) : new Date()) - new Date(fromIso)) / 1000));
   return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
-const pickupSending = new Set();  // order ids whose pickup confirmation is in flight
+const pickupSending = new Set();  // 수령 확인을 보내는 중인 주문 id(도착 확인은 'arrival:' 접두)
+// 마지막으로 그린 경보 HTML. 비우면 다음 갱신 때 반드시 다시 그린다.
 let renderedAlerts = '';
 
+// 경보 오른쪽 버튼: 도착 확인 대기면 [도착 확인], 수령 확인 대기면 [수령 확인], 확인할 수 있는 경보면 [확인].
+// 보내는 중이면 버튼을 막아 두 번 보내지 않는다.
 function alertActionsHtml(alert) {
   const id = escapeHtml(alert.task_id);
   if (alert.arrival) {
@@ -1962,8 +2147,7 @@ function alertActionsHtml(alert) {
   return alert.acknowledgeable ? `<button type="button" class="secondary" data-ack-alert="${id}">확인</button>` : '<span></span>';
 }
 
-// Rewritten only when something changed: the flow polls every second, and a button swapped out under the
-// pointer would lose the click.
+// 바뀐 것이 있을 때만 다시 쓴다: 주문 진행은 1초마다 갱신하는데, 포인터 아래의 버튼이 바뀌면 클릭이 사라진다.
 function renderFlowAlerts(alerts) {
   const html = alerts.map((alert) => `
     <div class="alert-card ${alert.level}" role="alert">
@@ -1979,11 +2163,12 @@ function renderFlowAlerts(alerts) {
   flowAlerts.innerHTML = html;
 }
 
-// The operator confirms that a Pinky without a marker stands right at the loading spot: loading then starts.
+// 마커가 없는 핑키가 적재 자리에 제대로 섰음을 작업자가 확인한다. 그러면 적재가 시작된다.
 async function confirmArrival(orderId) {
   const key = `arrival:${orderId}`;
   if (pickupSending.has(key)) return;
   pickupSending.add(key);
+  // 버튼을 바로 '보내는 중…'으로 다시 그린다.
   renderedAlerts = '';
   await refreshFlow();
   try {
@@ -2000,7 +2185,7 @@ async function confirmArrival(orderId) {
   }
 }
 
-// The operator confirms for the customer (no phone, or the customer left): the Pinky then goes home.
+// 고객 대신 작업자가 수령을 확인한다(휴대폰이 없거나 고객이 떠난 경우). 그러면 핑키가 주차장으로 돌아간다.
 async function confirmPickup(orderId) {
   if (pickupSending.has(orderId)) return;
   if (!window.confirm(`${orderId} 주문을 손님이 받았다고 확인할까요?\n확인하면 핑키가 주차장으로 돌아갑니다.`)) return;
@@ -2021,6 +2206,7 @@ async function confirmPickup(orderId) {
   }
 }
 
+// 경보 버튼 클릭(이벤트 위임). [확인]은 POST /api/flow/alerts/{task_id}/ack로 경보를 확인 처리한다.
 flowAlerts.addEventListener('click', async (event) => {
   const arrival = event.target.closest('[data-arrival-confirm]');
   if (arrival) {
@@ -2042,6 +2228,7 @@ flowAlerts.addEventListener('click', async (event) => {
   await refreshFlow();
 });
 
+// 로봇 상태 줄: 핑키 카드(적재 자리 주인이면 '적재 자리' 표시, 멈춘 주문이 붙어 있으면 빨강)와 팔 카드.
 function renderFlowRobots(view) {
   const pinkies = view.pinkies.map((pinky) => `
     <article class="robot-card${pinky.reachable ? '' : ' unreachable'}${pinky.stopped_order_id ? ' stopped' : ''}">
@@ -2061,6 +2248,8 @@ function renderFlowRobots(view) {
   flowRobots.innerHTML = [...pinkies, ...arms].join('') || '<p class="loading">로봇 설정 없음</p>';
 }
 
+// 팔 적재 계획을 칩으로: 실은 개수(loaded)보다 앞은 끝남, 그다음 하나는 진행 중(집기·옮김 확인 단계) 또는 실패.
+// 종합 화면(dashboard.js)도 쓴다.
 function planChips(order) {
   if (!order.plan) return '';
   return `<div class="plan-chips">${order.plan.map((unit, index) => {
@@ -2072,7 +2261,7 @@ function planChips(order) {
 }
 
 function renderFlowOrders(orders) {
-  // Waiting orders are started or rejected in 주문 접수 above; this list follows them once they run.
+  // 시작 대기 주문은 위 주문 접수에서 시작하거나 거절한다. 이 목록은 시작한 뒤부터 따라간다.
   const started = orders.filter((order) => order.status !== 'PENDING');
   if (!started.length) {
     flowOrders.innerHTML = '<p class="loading">시작한 주문이 없습니다. 접수된 주문은 위 주문 접수에서 시작합니다.</p>';
@@ -2094,6 +2283,7 @@ function renderFlowOrders(orders) {
         <button type="button" class="secondary" data-order-detail="${escapeHtml(order.id)}">단계·기록 보기</button>
       </div>
     </article>`).join('');
+  // [멈추기]는 POST /api/tasks/{id}/cancel, [단계·기록 보기]는 작업 이력 뷰로 옮겨 그 주문을 연다.
   flowOrders.querySelectorAll('[data-order-action]').forEach((button) => {
     button.addEventListener('click', async () => {
       button.disabled = true;
@@ -2110,6 +2300,7 @@ function renderFlowOrders(orders) {
   });
 }
 
+// 모의 세계 패널(개발자 화면이고 서버가 모의 세계를 줄 때만): 선반·핑키 위 재고와 대기 중인 사고.
 function renderMockWorld(world, faultKinds) {
   mockPanel.hidden = !world || !devMode;
   if (!world) return;
@@ -2124,6 +2315,7 @@ function renderMockWorld(world, faultKinds) {
   ].join('');
 }
 
+// 진행 중 주문 제어(지금은 멈추기 = cancel만). 주문도 작업(task)이라 /api/tasks 경로를 쓴다.
 async function orderControl(taskId, action) {
   try {
     const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/${action}`, { method: 'POST' });
@@ -2134,14 +2326,17 @@ async function orderControl(taskId, action) {
   }
 }
 
-// ---- 주문 진행 요약: waiting orders come from the intake poll, the rest from /api/flow ----
+// ---- 주문 진행 요약: 시작 대기 주문 수는 주문 접수 폴링에서, 나머지는 /api/flow에서 가져온다 ----
 const flowSummaryTitle = document.querySelector('#flowSummaryTitle');
 const flowStatWaiting = document.querySelector('#flowStatWaiting');
 const flowStatRunning = document.querySelector('#flowStatRunning');
 const flowStatStopped = document.querySelector('#flowStatStopped');
 const flowStatPinkies = document.querySelector('#flowStatPinkies');
+// waiting: 시작 대기 주문 수(refreshIntake가 채움), flow: 마지막 GET /api/flow 응답(refreshFlow가 채움).
+// dashboard.js와 수동 조작의 팔 목록도 이 값을 읽는다.
 const flowSummary = { waiting: null, flow: null };
 
+// 주문 진행 요약 카드. 문장은 멈춘 주문 → 시작 대기 → 진행 중 순으로 가장 급한 것 하나를 말한다.
 function renderFlowSummary() {
   const { waiting, flow } = flowSummary;
   const running = flow ? flow.orders.filter((order) => ['VALIDATING', 'RUNNING', 'CANCELING'].includes(order.status)).length : null;
@@ -2157,6 +2352,7 @@ function renderFlowSummary() {
   else if (waiting === 0 && flow) flowSummaryTitle.textContent = '기다리는 주문이 없어요';
 }
 
+// GET /api/flow를 읽어 주문 진행 화면 전체를 다시 그린다. 1초마다, 그리고 제어 버튼을 누른 직후에 부른다.
 async function refreshFlow() {
   try {
     const response = await fetch('/api/flow', { cache: 'no-store' });
@@ -2176,6 +2372,7 @@ async function refreshFlow() {
   }
 }
 
+// 모의 사고 넣기: 다음에 해당 상황이 오면 한 번 일어난다(POST /api/mock-world, action: inject).
 document.querySelector('#mockFaultForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -2188,33 +2385,37 @@ document.querySelector('#mockFaultForm').addEventListener('submit', async (event
   await refreshFlow();
 });
 
+// 모의 선반 재고를 처음 상태로 채운다(action: restock).
 document.querySelector('#mockRestock').addEventListener('click', async () => {
   await fetch('/api/mock-world', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'restock' }) });
   mockMessage.textContent = '선반 재고를 처음 상태로 채웠습니다.';
   await refreshFlow();
 });
 
+// ==== 16. 주문 접수와 자동 출발 ====
 // ---- 주문 접수: 주문 창(/order)에서 들어와 작업자의 시작을 기다리는 주문 ----
 const intakeOrders = document.querySelector('#intakeOrders');
 const intakeUpdated = document.querySelector('#intakeUpdated');
 const intakeBadge = document.querySelector('#intakeBadge');
 const pageTitle = document.title;
 const intake = {
-  orders: [],               // GET /api/orders, oldest first
-  seenIds: null,            // ids of the previous poll; null until the first load, so old orders raise no toast
-  previews: new Map(),      // order id -> { result } or { error } from GET /api/orders/{id}/assignment
-  previewLoading: new Set(),
-  notes: new Map(),         // order id -> { title, text, verdicts? } left on the card by a refused start or reject
-  busy: new Map(),          // order id -> 'start' | 'reject' while that request is in flight
-  dispatch: null,           // automatic dispatch from GET /api/orders: { auto, blocked, skipped, started }
+  orders: [],               // GET /api/orders, 오래된 순
+  seenIds: null,            // 지난 폴링의 id 목록. 첫 로드 전에는 null이라 이미 있던 주문은 알림을 띄우지 않는다
+  previews: new Map(),      // 주문 id -> GET /api/orders/{id}/assignment의 { result } 또는 { error }
+  previewLoading: new Set(),  // 미리보기를 요청 중인 주문 id
+  notes: new Map(),         // 주문 id -> { title, text, verdicts? }, 시작·거절이 실패하면 카드에 남기는 안내
+  busy: new Map(),          // 주문 id -> 'start' | 'reject', 그 요청이 오가는 동안
+  dispatch: null,           // GET /api/orders의 자동 출발 상태: { auto, blocked, skipped, started }
 };
-const renderedCards = new WeakMap();  // card element -> the HTML it shows
+const renderedCards = new WeakMap();  // 카드 요소 -> 지금 보여 주는 HTML
+// 폴링 요청 번호. 늦게 도착한 옛 응답이 새 응답을 덮지 않게 한다.
 let intakeRequestSeq = 0;
 
 function itemCount(items) {
   return (items || []).reduce((sum, item) => sum + Number(item.quantity || 0), 0);
 }
 
+// 핑키 후보 판정 목록(순위, 제외 이유). 시작이 PINKY_UNAVAILABLE로 거절됐을 때 카드에 붙인다.
 function verdictListHtml(verdicts, chosenId) {
   return `<ul class="verdict-list">${verdicts.map((verdict) => {
     const chosen = verdict.pinky_id === chosenId;
@@ -2224,7 +2425,7 @@ function verdictListHtml(verdicts, chosenId) {
   }).join('')}</ul>`;
 }
 
-// The plan itself is drawn by intake-plan.js (trays, arm timeline, reasons behind "자세히").
+// 계획 자체는 intake-plan.js가 그린다(쟁반, 팔 시간표, "자세히" 안의 이유). 그 스크립트가 없으면 핑키 요약 한 줄만 보인다.
 function previewHtml(order) {
   const preview = intake.previews.get(order.id);
   if (!preview) return '<p class="preview-state">배정 미리보기를 계산하는 중…</p>';
@@ -2233,6 +2434,8 @@ function previewHtml(order) {
   return `<p class="preview-state">${escapeHtml(preview.result.pinky?.summary || '')}</p>`;
 }
 
+// 접수 카드 하나: 머리(시각, id, 물건, 목적지, 시작·거절 버튼), 배정 미리보기, 자동 출발 안내, 실패 안내.
+// 요청이 오가는 동안에는 두 버튼을 모두 막는다.
 function intakeCardHtml(order) {
   const id = escapeHtml(order.id);
   const busy = intake.busy.get(order.id);
@@ -2255,12 +2458,14 @@ function intakeCardHtml(order) {
       ${note.verdicts ? verdictListHtml(note.verdicts, null) : ''}</div>` : ''}`;
 }
 
-// Automatic dispatch (orders/dispatcher.py): the switch, what the line waits for, and per-card reasons.
+// 자동 출발(orders/dispatcher.py): 스위치, 줄이 무엇을 기다리는지, 카드별 이유.
 const dispatchBar = document.querySelector('#dispatchBar');
 const dispatchAuto = document.querySelector('#dispatchAuto');
 const dispatchState = document.querySelector('#dispatchState');
+// 스위치 변경 요청이 오가는 동안 true. 그동안 폴링이 스위치를 되돌리지 않고, 스위치를 막아 둔다.
 let dispatchBusy = false;
 
+// 자동 출발이 켜졌을 때 이 주문 카드에 붙일 안내: 건너뛴 이유(skipped) 또는 줄 맨 앞에서 기다리는 이유(blocked).
 function dispatchNoteHtml(orderId) {
   const dispatch = intake.dispatch;
   if (!dispatch?.auto) return '';
@@ -2270,6 +2475,7 @@ function dispatchNoteHtml(orderId) {
   return '';
 }
 
+// 자동 출발 막대. 서버가 dispatch 값을 주지 않으면(예전 서버) 숨긴다.
 function renderDispatch() {
   const dispatch = intake.dispatch;
   dispatchBar.hidden = !dispatch;
@@ -2283,6 +2489,8 @@ function renderDispatch() {
   else dispatchState.textContent = '켜짐 · 차례대로 출발시키는 중';
 }
 
+// 켤 때만 확인 창을 거친다. POST /api/dispatch {auto} 응답의 dispatch로 바로 바꾸고, 실패하면 finally의
+// renderDispatch가 스위치를 서버 값으로 되돌린다.
 dispatchAuto.addEventListener('change', async () => {
   const auto = dispatchAuto.checked;
   if (auto && !window.confirm(
@@ -2310,6 +2518,7 @@ dispatchAuto.addEventListener('change', async () => {
   }
 });
 
+// 접수 목록 전체: 자동 출발 막대, 요약 숫자, 메뉴 배지, 탭 제목의 (n), 카드들.
 function renderIntake() {
   const { orders } = intake;
   renderDispatch();
@@ -2323,9 +2532,9 @@ function renderIntake() {
     intakeOrders.innerHTML = '<p class="intake-empty">기다리는 주문이 없어요.<a href="/order" target="_blank" rel="noopener">주문 창 열기</a></p>';
     return;
   }
-  // Cards are keyed by order id and rewritten only when their HTML changes, so a poll never swaps a button out
-  // from under the pointer.
+  // 카드는 주문 id로 찾아 쓰고 HTML이 바뀐 카드만 다시 쓴다. 그래야 폴링이 포인터 아래의 버튼을 바꿔치지 않는다.
   const cards = new Map([...intakeOrders.querySelectorAll('[data-intake-order]')].map((card) => [card.dataset.intakeOrder, card]));
+  // 빈 목록 안내처럼 카드가 아닌 요소는 지운다.
   intakeOrders.querySelectorAll(':scope > :not([data-intake-order])').forEach((node) => node.remove());
   orders.forEach((order, index) => {
     let card = cards.get(order.id);
@@ -2340,11 +2549,14 @@ function renderIntake() {
       card.innerHTML = html;
       renderedCards.set(card, html);
     }
+    // 순서가 다르면 그 자리로 옮긴다(새 카드도 여기서 들어간다).
     if (intakeOrders.children[index] !== card) intakeOrders.insertBefore(card, intakeOrders.children[index] || null);
   });
+  // 목록에서 사라진(시작·거절된) 주문의 카드를 지운다.
   cards.forEach((card) => card.remove());
 }
 
+// 지난 폴링에 없던 주문마다 '새 주문' 알림을 띄운다.
 function announceNewOrders(orders) {
   if (intake.seenIds) {
     orders.filter((order) => !intake.seenIds.has(order.id)).forEach((order) => {
@@ -2354,6 +2566,7 @@ function announceNewOrders(orders) {
   intake.seenIds = new Set(orders.map((order) => order.id));
 }
 
+// 더는 기다리지 않는 주문의 미리보기와 안내를 지운다.
 function forgetGoneOrders() {
   const waiting = new Set(intake.orders.map((order) => order.id));
   [intake.previews, intake.notes].forEach((byOrder) => {
@@ -2361,6 +2574,8 @@ function forgetGoneOrders() {
   });
 }
 
+// 주문 하나의 배정 미리보기(GET /api/orders/{id}/assignment)를 읽는다. 아무것도 예약하지 않는 계산이다.
+// 같은 주문을 겹쳐 요청하지 않는다.
 async function loadPreview(orderId) {
   if (intake.previewLoading.has(orderId)) return;
   intake.previewLoading.add(orderId);
@@ -2374,22 +2589,24 @@ async function loadPreview(orderId) {
   } finally {
     intake.previewLoading.delete(orderId);
   }
-  if (!intake.orders.some((order) => order.id === orderId)) return;  // started or rejected meanwhile
+  if (!intake.orders.some((order) => order.id === orderId)) return;  // 그사이 시작되거나 거절됐다
   intake.previews.set(orderId, preview);
   renderIntake();
 }
 
+// 미리보기는 핑키·재고 상태에 따라 바뀌므로 3초마다 모든 대기 주문을 다시 계산한다.
 function refreshIntakePreviews() {
   intake.orders.forEach((order) => loadPreview(order.id));
 }
 
+// GET /api/orders(2초마다): 시작 대기 주문과 자동 출발 상태. 새 주문에는 미리보기를 바로 요청한다.
 async function refreshIntake() {
   const seq = ++intakeRequestSeq;
   try {
     const response = await fetch('/api/orders', { cache: 'no-store' });
     const result = await response.json();
     if (!response.ok) throw new Error(apiErrorMessage(result, '접수된 주문을 불러오지 못했습니다'));
-    if (seq !== intakeRequestSeq) return;  // a newer poll has been sent; its answer wins
+    if (seq !== intakeRequestSeq) return;  // 더 새 폴링을 이미 보냈다. 그 응답을 쓴다
     announceNewOrders(result.orders);
     intake.orders = result.orders;
     intake.dispatch = result.dispatch || null;
@@ -2402,6 +2619,7 @@ async function refreshIntake() {
   }
 }
 
+// [시작]·[거절]: POST /api/orders/{id}/start|reject. 거절되면 이유를 카드에 남기고, 성공하면 알림을 띄운다.
 async function controlIntakeOrder(order, action) {
   const verb = action === 'start' ? '시작' : '거절';
   intake.busy.set(order.id, action);
@@ -2411,7 +2629,7 @@ async function controlIntakeOrder(order, action) {
     const response = await fetch(`/api/orders/${encodeURIComponent(order.id)}/${action}`, { method: 'POST' });
     const result = await response.json();
     if (!response.ok) {
-      // PINKY_UNAVAILABLE carries the Pinky verdicts of that moment; keep them on the card next to the reason.
+      // PINKY_UNAVAILABLE에는 그 순간의 핑키 판정이 들어 있다. 카드에 이유와 나란히 남겨 둔다.
       intake.notes.set(order.id, {
         title: `${verb}하지 못함`,
         text: apiErrorMessage(result, `주문을 ${verb}하지 못했습니다`),
@@ -2424,7 +2642,7 @@ async function controlIntakeOrder(order, action) {
       showToast(`${order.id} 거절`, orderSummary(order.order_items));
     }
   } catch {
-    // No answer is not a refusal: the order may have changed on the server, so ask for a look instead of retrying.
+    // 응답이 없다고 거절된 것은 아니다: 서버에서 주문이 바뀌었을 수 있으니 다시 보내지 말고 확인해 달라고 한다.
     intake.notes.set(order.id, { title: '결과 확인 필요', text: `${verb} 요청의 응답을 받지 못했습니다. 주문 목록에서 상태를 확인하세요.` });
   } finally {
     intake.busy.delete(order.id);
@@ -2432,6 +2650,7 @@ async function controlIntakeOrder(order, action) {
   }
 }
 
+// 카드 버튼 클릭(이벤트 위임). 거절은 되돌릴 수 없으므로 확인 창을 거친다.
 intakeOrders.addEventListener('click', (event) => {
   const button = event.target.closest('[data-intake-action]');
   const order = button && intake.orders.find((item) => item.id === button.dataset.orderId);
@@ -2443,6 +2662,7 @@ intakeOrders.addEventListener('click', (event) => {
   controlIntakeOrder(order, action);
 });
 
+// ==== 17. 시작과 폴링 주기 ====
 showView(window.location.hash.slice(1));
 refresh();
 refreshFlow();
@@ -2450,6 +2670,9 @@ refreshIntake();
 refreshTasks();
 refreshArmCommands();
 loadShelfSlots();
+// 주기(ms): 서버·장비 3초, 주문 진행 1초, 주문 접수 2초, 배정 미리보기 3초, 작업 이력·팔 명령·연속 실행 1초,
+// 주차 실시간 0.5초. pollParkingLive 말고는 뷰가 보이는지 따지지 않으므로, 어느 뷰에서든 새 주문 알림과
+// 메뉴 배지가 갱신되고 종합 화면이 flowSummary·intake를 바로 쓸 수 있다.
 window.setInterval(refresh, 3000);
 window.setInterval(refreshFlow, 1000);
 window.setInterval(refreshIntake, 2000);

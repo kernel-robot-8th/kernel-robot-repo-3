@@ -1,5 +1,6 @@
-/* Order window (/order): the customer side. Same tokens and type as the operator screen (styles.css), with bigger
- * touch targets and rounder shapes because it is used on a phone and may become a customer app. */
+/* 주문 창(/order, order.html): 고객 쪽 화면. 관제 화면(styles.css)과 같은 토큰과 글꼴을 쓰되, 휴대폰에서 쓰고
+ * 고객 앱이 될 수도 있어서 누르는 곳을 더 크게, 모양을 더 둥글게 했다. 관제 화면 CSS를 불러오지 않으므로
+ * 글꼴과 색 토큰을 여기에 따로 둔다(styles.css와 값을 맞춘다). */
 
 @font-face { font-family: "Pretendard"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/Pretendard-Regular.subset.woff2") format("woff2"); }
 @font-face { font-family: "Pretendard"; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/Pretendard-Medium.subset.woff2") format("woff2"); }
@@ -47,24 +48,25 @@ button:focus-visible { outline: 3px solid rgba(49, 130, 246, .35); outline-offse
 
 .order-page { width: min(100%, 640px); margin: 0 auto; padding: 36px 20px 0; }
 
-/* ---- header ---- */
+/* ---- 머리글 ---- */
 .order-header { display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; padding: 0 4px; }
 .order-header h1 { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 28px; font-weight: 700; letter-spacing: -.03em; line-height: 1.3; }
 .order-header p { flex-basis: 100%; margin-top: 8px; color: var(--text-2); font-size: 16px; }
 
-/* ---- sections ---- */
+/* ---- 구역 ---- */
 .order-form section { margin-top: 32px; }
 .section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 4px 12px; }
 .section-title h2 { font-size: 19px; font-weight: 700; }
 .hint { color: var(--text-3); font-size: 14px; }
 .placeholder { padding: 28px 20px; border-radius: 20px; background: var(--card); color: var(--text-3); font-size: 15px; text-align: center; }
+/* 위 안내 띠(재고 모름 등). .error면 빨강. */
 .notice { display: flex; gap: 12px; margin-bottom: 12px; padding: 16px 18px; border-radius: 18px; background: var(--yellow-soft); color: var(--text); font-size: 15px; }
 .notice::before { content: "!"; display: grid; flex-shrink: 0; width: 24px; height: 24px; place-items: center; border-radius: 50%; background: var(--yellow); font-size: 14px; font-weight: 700; }
 .notice small { display: block; margin-top: 2px; color: var(--text-2); font-size: 13px; }
 .notice.error { background: var(--red-soft); }
 .notice.error::before { background: var(--red-ink); color: #fff; }
 
-/* ---- products ---- */
+/* ---- 물건 ---- */
 .product-list { display: grid; gap: 10px; }
 .product { display: flex; align-items: center; gap: 14px; min-width: 0; padding: 18px; border-radius: 22px; background: var(--card); box-shadow: var(--shadow); transition: box-shadow .15s; }
 .product.selected { box-shadow: 0 0 0 2px var(--blue), var(--shadow); }
@@ -73,7 +75,7 @@ button:focus-visible { outline: 3px solid rgba(49, 130, 246, .35); outline-offse
 .product-name { overflow-wrap: anywhere; font-size: 18px; font-weight: 700; }
 .product-stock { margin-top: 2px; color: var(--text-2); font-size: 14px; }
 .product-adjusted { margin-top: 4px; color: var(--yellow-ink); font-size: 13px; font-weight: 500; }
-/* Objects that cannot be ordered now: muted card, a status chip, disabled steppers. */
+/* 지금 주문할 수 없는 물건: 흐린 카드, 상태 칩, 막힌 수량 조절. */
 .product.unavailable { background: var(--card-muted); box-shadow: none; }
 .product.unavailable .product-name { color: var(--text-3); }
 .product.unavailable .product-mark { background: var(--fill); color: var(--text-3); }
@@ -83,6 +85,7 @@ button:focus-visible { outline: 3px solid rgba(49, 130, 246, .35); outline-offse
 .status-chip.sold-out { background: var(--red-soft); color: var(--red-ink); }
 .status-chip.unknown { background: var(--yellow-soft); color: var(--yellow-ink); }
 
+/* 수량 조절 −/+. + 버튼은 파랑으로 눈에 띄게 한다. */
 .stepper { display: flex; flex-shrink: 0; align-items: center; gap: 6px; }
 .step { display: grid; width: 44px; height: 44px; place-items: center; padding: 0; border: 0; border-radius: 50%; background: var(--fill); color: var(--text); font-size: 24px; line-height: 1; transition: background-color .15s; }
 .step:hover:not(:disabled) { background: var(--fill-strong); }
@@ -92,7 +95,7 @@ button:focus-visible { outline: 3px solid rgba(49, 130, 246, .35); outline-offse
 .step-value { min-width: 2ch; font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; text-align: center; }
 .product.selected .step-value { color: var(--blue); }
 
-/* ---- cart bar: stays at the bottom of the screen on long pages ---- */
+/* ---- 장바구니 막대: 긴 페이지에서도 화면 아래에 붙어 있다 ---- */
 .cart-bar { position: sticky; bottom: 0; margin: 32px -20px 0; padding: 16px 20px calc(16px + env(safe-area-inset-bottom)); border-radius: 24px 24px 0 0; background: var(--card); box-shadow: 0 -4px 16px rgba(0, 0, 0, .06); }
 .cart-row { display: grid; gap: 12px; }
 .cart-summary { min-width: 0; color: var(--text-3); font-size: 15px; overflow-wrap: anywhere; }
@@ -101,6 +104,7 @@ button:focus-visible { outline: 3px solid rgba(49, 130, 246, .35); outline-offse
 .cart-note.error { color: var(--red-ink); font-weight: 500; }
 .form-error { margin-bottom: 12px; padding: 14px 16px; border-radius: 16px; background: var(--red-soft); color: var(--red-ink); font-size: 15px; font-weight: 500; overflow-wrap: anywhere; }
 
+/* 큰 버튼 두 종류: 주요 동작(.primary, 파랑)과 보조(.secondary, 회색). */
 .primary { width: 100%; min-height: 56px; padding: 12px 24px; border: 0; border-radius: 16px; background: var(--blue); color: #fff; font-size: 17px; font-weight: 700; transition: background-color .15s; }
 .primary:hover:not(:disabled) { background: var(--blue-strong); }
 .primary:disabled { background: var(--fill); color: var(--text-disabled); }
@@ -109,7 +113,7 @@ button:focus-visible { outline: 3px solid rgba(49, 130, 246, .35); outline-offse
 .secondary:hover { background: var(--fill-strong); }
 .my-order-link { margin-left: auto; min-height: 36px; padding: 6px 14px; border: 0; border-radius: 999px; background: var(--blue-soft); color: var(--blue-strong); font-size: 14px; font-weight: 600; }
 
-/* ---- tracking: one order, from 접수 to 완료 ---- */
+/* ---- 추적: 주문 하나를 접수부터 완료까지 ---- */
 .tracking { margin-top: 28px; padding: 28px 24px 24px; border-radius: 24px; background: var(--card); box-shadow: var(--shadow); }
 .track-eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 22px; color: var(--blue); font-size: 15px; font-weight: 600; }
 .track-shipment { padding: 2px 10px; border-radius: 999px; background: var(--blue-soft); color: var(--blue-strong); font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -118,7 +122,7 @@ button:focus-visible { outline: 3px solid rgba(49, 130, 246, .35); outline-offse
 .tracking[data-stage="arrived"] .track-eyebrow, .tracking[data-stage="done"] .track-eyebrow { color: var(--green-ink); }
 .tracking[data-stage="problem"] .track-eyebrow, .tracking[data-stage="canceled"] .track-eyebrow { color: var(--red-ink); }
 
-/* The line of stages: done ones are filled, the current one rings, the rest wait in grey. */
+/* 단계 줄: 끝난 것은 채우고, 지금 것은 고리를 두르고, 나머지는 회색으로 기다린다. */
 .track-stages { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); margin: 28px 0 0; padding: 0; list-style: none; }
 .track-stage { position: relative; display: grid; justify-items: center; gap: 8px; color: var(--text-3); font-size: 12px; font-weight: 500; text-align: center; }
 .track-stage::before { content: ""; position: absolute; top: 7px; right: 50%; left: -50%; height: 2px; background: var(--line); }
@@ -132,6 +136,7 @@ button:focus-visible { outline: 3px solid rgba(49, 130, 246, .35); outline-offse
 .track-label { line-height: 1.3; word-break: keep-all; }
 .tracking[data-stage="canceled"] .track-stages, .tracking[data-stage="problem"] .track-stages { opacity: .45; }
 
+/* [받았어요] 버튼은 나타날 때 살짝 올라온다. */
 .pickup { margin-top: 28px; min-height: 60px; font-size: 18px; animation: pickup-in .3s ease-out; }
 @keyframes pickup-in { from { transform: translateY(6px); opacity: 0; } }
 .tracking .form-error { margin: 16px 0 0; }
@@ -146,6 +151,7 @@ button:focus-visible { outline: 3px solid rgba(49, 130, 246, .35); outline-offse
 
 .order-page::after { content: ""; display: block; height: 32px; }
 
+/* 좁은 휴대폰: 여백과 글자를 조금 줄인다. */
 @media (max-width: 480px) {
   .order-page { padding: 24px 16px 0; }
   .order-header h1 { font-size: 24px; }

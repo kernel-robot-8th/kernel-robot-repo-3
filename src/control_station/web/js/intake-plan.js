@@ -1,9 +1,9 @@
-// Intake card plan (관제 → 주문 접수): what GET /api/orders/{id}/assignment decided, drawn instead of listed.
+// 접수 카드의 계획(관제 → 주문 접수): GET /api/orders/{id}/assignment가 정한 것을 목록 대신 그림으로 보여 준다.
 //
-// At a glance: one summary line, each Pinky's tray (4 slots, a big object takes 2) and the arms' loading
-// timeline. "자세히" opens the reasons: the Pinky comparison with the column that decided, the receiving zone
-// candidates, and for every unit the rule that picked its arm with both arms' values side by side.
-// Uses escapeHtml, pinkyBadge and formatClock from app.js (loaded first).
+// 한눈에: 요약 한 줄, 핑키마다 쟁반(4칸, 큰 물건은 2칸 차지)과 팔 적재 시간표. "자세히"를 열면 이유가 나온다:
+// 순위를 가른 열이 표시된 핑키 비교, 수령 구역 후보, 그리고 물건마다 팔을 고른 규칙과 두 팔의 값을 나란히.
+// app.js(먼저 로드됨)의 escapeHtml, pinkyBadge, formatClock을 쓴다. 바깥에 내놓는 것은 window.IntakePlan.html 하나이고,
+// app.js의 previewHtml이 3초마다 미리보기를 다시 그릴 때 부른다. 즉시 실행 함수로 감싸 다른 전역과 섞이지 않게 한다.
 
 (() => {
   const RULE_WORDS = {
@@ -13,7 +13,7 @@
     stock: '재고 많은 선반',
     config: '설정 순서',
   };
-  const PINKY_KEYS = [  // the ranking's order (assignment._preference)
+  const PINKY_KEYS = [  // 순위를 매기는 순서(assignment._preference)
     { key: 'battery', label: '배터리', words: '배터리(10% 단위) 높은 순' },
     { key: 'trips', label: '오늘 운행', words: '오늘 운행 적은 순' },
     { key: 'rested', label: '마지막 완료', words: '오래 쉰 순' },
@@ -25,24 +25,27 @@
     { key: 'config', label: '설정 순서', words: '설정 순서' },
   ];
 
-  const openDetails = new Set();  // order ids whose "자세히" is open; kept across the card's re-renders
+  const openDetails = new Set();  // "자세히"가 열린 주문 id. 카드를 다시 그려도 유지한다
   document.addEventListener('toggle', (event) => {
     const details = event.target;
     if (!(details instanceof HTMLDetailsElement) || !details.dataset.planDetail) return;
     if (details.open) openDetails.add(details.dataset.planDetail);
     else openDetails.delete(details.dataset.planDetail);
-  }, true);  // toggle does not bubble; the capture phase still sees it
+  }, true);  // toggle은 버블링되지 않지만 캡처 단계에서는 보인다
 
+  // esc는 null/undefined를 빈 문자열로 바꾼 뒤 이스케이프하고, seconds는 초를 반올림해 'N초'로 쓴다.
   const esc = (value) => escapeHtml(value == null ? '' : String(value));
   const seconds = (value) => `${Math.round(Number(value) || 0)}초`;
 
-  // ---- which value decided -------------------------------------------------------------------------------
+  // ---- 어느 값이 순위를 갈랐나 --------------------------------------------------------------------------
 
+  // 핑키 판정의 '배터리…' 점검 항목에서 배터리 값을 꺼낸다.
   function batteryOf(verdict) {
     const check = (verdict.checks || []).find((item) => String(item.rule).startsWith('배터리'));
-    return check?.detail || null;  // "92%" or null when the robot does not report it
+    return check?.detail || null;  // "92%", 로봇이 알려 주지 않으면 null
   }
 
+  // 1·2순위 핑키를 비교해 처음으로 값이 달라지는 기준(battery → trips → rested → id)을 돌려준다. 후보가 하나면 'only'.
   function pinkyDecider(verdicts) {
     const ranked = verdicts.filter((v) => v.eligible).sort((a, b) => a.rank - b.rank);
     if (ranked.length < 2) return ranked.length ? 'only' : null;
@@ -53,6 +56,7 @@
     return 'id';
   }
 
+  // 수령 구역도 같은 방식: 오늘 사용 횟수 → 경로 길이 → 설정 순서.
   function zoneDecider(verdicts) {
     const ranked = verdicts.filter((v) => v.eligible).sort((a, b) => a.rank - b.rank);
     if (ranked.length < 2) return ranked.length ? 'only' : null;
@@ -62,18 +66,19 @@
     return 'config';
   }
 
-  // ---- at a glance ---------------------------------------------------------------------------------------
+  // ---- 한눈에 보기 ---------------------------------------------------------------------------------------
 
   function chip(text, kind = '') {
     return `<span class="plan-chip ${kind}">${esc(text)}</span>`;
   }
 
+  // 요약 한 줄: 핑키(주문 때 정했으면 그것, 여러 운송이면 첫 핑키), 수령 구역, 팔 요약, 예상 적재 시간.
   function summaryHtml(order, plan) {
     const chips = [];
     const trips = plan.fleet?.trips || [];
     if (order.pinky_id) chips.push(`<span class="plan-chip">${pinkyBadge(order.pinky_id)} 주문할 때 정한 핑키</span>`);
     else if (trips.length > 1) {
-      // Shipments run one after another; each later one picks its Pinky when it starts (the trips show the guess).
+      // 운송분은 하나씩 차례로 진행한다. 뒤 운송분은 시작할 때 핑키를 고른다(trips에 적힌 핑키는 추정이다).
       chips.push(chip(`운송 ${trips.length}번으로 나눠 차례로`, 'strong'));
       if (trips[0].pinky_id) chips.push(`<span class="plan-chip">${pinkyBadge(trips[0].pinky_id)} 먼저 출발</span>`);
     }
@@ -87,6 +92,7 @@
     return `<p class="plan-summary">${chips.join('')}</p>`;
   }
 
+  // 쟁반 그림: 물건 하나가 size칸을 차지하고 남은 칸은 점선으로 둔다.
   function trayHtml(trip, capacity) {
     const cells = [];
     let used = 0;
@@ -105,6 +111,7 @@
       </div>`;
   }
 
+  // 시간표의 줄(팔) 목록: 배정 후보 순서가 있으면 그것을, 없으면 시간표에 나온 팔을 쓴다.
   function armLanes(trip) {
     const options = trip.arms?.picks?.[0]?.options;
     if (options?.length) return options.map((option) => ({ id: option.arm_id, label: option.arm_label }));
@@ -113,10 +120,12 @@
     return [...seen].map(([id, label]) => ({ id, label }));
   }
 
+  // 눈금이 6개 이하가 되는 간격(초).
   function tickStep(total) {
     return [5, 10, 15, 30, 60, 120].find((step) => total / step <= 6) || 300;
   }
 
+  // 팔별 적재 시간표: 선반에서 집기, 다른 팔이 핑키 위에 있어 기다림, 핑키 위에 놓기를 초 단위 막대로 놓는다.
   function timelineHtml(trip) {
     if (trip.arms?.error) {
       return `<div class="timeline-box"><p class="plan-blocked">${esc(trip.arms.error.message)}</p></div>`;
@@ -149,6 +158,7 @@
       </div>`;
   }
 
+  // 운송분마다 쟁반과 시간표를 한 줄로. fleet.error면 나눌 수 없는 이유를 보여 준다.
   function tripsHtml(plan) {
     const fleet = plan.fleet;
     if (!fleet) return '';
@@ -162,18 +172,20 @@
         </div>`).join('')}</div>`;
   }
 
-  // ---- details -------------------------------------------------------------------------------------------
+  // ---- 자세히 -------------------------------------------------------------------------------------------
 
+  // 제외 조건 점검 결과를 점(통과 초록, 실패 빨강)으로. 마우스를 올리면 규칙과 값이 보인다.
   function checksHtml(checks) {
     return `<span class="check-dots">${(checks || []).map((check) => `<i class="${check.ok ? 'ok' : 'no'}"
       title="${esc(`${check.rule}: ${check.ok ? '통과' : '안 됨'}${check.detail ? ` (${check.detail})` : ''}`)}"></i>`).join('')}</span>`;
   }
 
+  // 핑키 후보 표: 결과·순위, 배터리·오늘 운행·마지막 완료, 조건. 순위를 가른 열 머리에 '결정'을 붙인다.
   function pinkyTableHtml(plan) {
     const verdicts = plan.pinky?.verdicts || [];
     if (!verdicts.length) return '';
     const trips = plan.fleet?.trips || [];
-    const tripOf = new Map();  // a Pinky may carry more than one shipment (they run one after another)
+    const tripOf = new Map();  // 핑키 한 대가 운송분 여러 개를 맡을 수 있다(차례로 진행)
     trips.forEach((trip, index) => { if (trip.pinky_id) tripOf.set(trip.pinky_id, [...(tripOf.get(trip.pinky_id) || []), index + 1]); });
     const decider = pinkyDecider(verdicts);
     const head = (key, label) => `<th class="${decider === key ? 'decider' : ''}">${esc(label)}${decider === key ? '<em>결정</em>' : ''}</th>`;
@@ -199,6 +211,7 @@
         <p class="plan-rule">제외 조건: 진행 중 주문 없음 · 관제 연결 · 주차장 대기 · 운행 준비 · 배터리 30% 이상. 순위: ${esc(rule)}. ${note}</p></section>`;
   }
 
+  // 수령 구역 후보 표. 작업자가 지정한 구역이면 비었는지만 확인한 것이다.
   function zoneTableHtml(plan) {
     const zone = plan.zone;
     if (!zone?.verdicts?.length) return '';
@@ -218,11 +231,12 @@
         <tbody>${rows}</tbody></table></div><p class="plan-rule">${esc(note)}</p></section>`;
   }
 
+  // 물건별 팔 고르기 표.
   function armDecisionsHtml(plan) {
     const trips = (plan.fleet?.trips || []).filter((trip) => trip.arms?.picks?.length);
     if (!trips.length) return '';
-    // One row per unit in the order the arms will pick; each arm's column shows the values the rules compared
-    // when that unit was placed (success rate · units already given · left on its shelf).
+    // 팔이 집는 순서대로 물건 하나에 한 줄. 팔마다의 열은 그 물건을 배정할 때 규칙이 비교한 값이다
+    // (성공률 · 이미 맡은 개수 · 그 선반에 남은 수).
     const blocks = trips.map((trip, index) => {
       const arms = armLanes(trip);
       const rows = trip.arms.picks.map((pick, position) => {
@@ -246,6 +260,7 @@
         <p class="plan-rule">선반에 있고 정책이 있는 팔만 후보. 하나뿐이면 그 팔, 둘이면 성공률 → 맡은 개수 → 남은 재고 → 설정 순서. 더 바쁜 팔이 먼저 시작해요.</p></section>`;
   }
 
+  // '자세히'를 접힌 <details>로 만든다. 열림 상태는 openDetails에 기억해 다시 그려도 유지한다.
   function detailsHtml(order, plan) {
     const body = [pinkyTableHtml(plan), zoneTableHtml(plan), armDecisionsHtml(plan)].join('');
     if (!body) return '';
@@ -253,6 +268,7 @@
         <summary>자세히 · 왜 이렇게 정했는지</summary>${body}</details>`;
   }
 
+  // app.js의 previewHtml이 부르는 공개 함수: 접수 카드에 넣을 계획 HTML.
   window.IntakePlan = {
     html(order, plan) {
       return `<div class="plan">${summaryHtml(order, plan)}${tripsHtml(plan)}${detailsHtml(order, plan)}</div>`;

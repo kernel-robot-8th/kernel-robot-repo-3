@@ -1,25 +1,26 @@
-// 핑키 상세: the panel that opens when a Pinky card is tapped. Its live state and every sensor reading, the route
-// and safety monitor, its marker, its waypoints, and the operator actions that used to live on the fleet dashboard:
-// 정지, 위치 다시 잡기 (the operator puts it on the enlarged map when the automatic place is wrong), 라이다 위치 찾기
-// (with the candidate places to pick from when the cell's symmetry leaves two), 주차장 좌표로
-// 맞추기, 주행준비 (with the map to load), Nav2 복구, 웨이포인트 기록 and 삭제.
+// 핑키 상세: 핑키 카드를 누르면 열리는 패널. 실시간 상태와 모든 센서 값, 경로와 안전 감시, 마커, 웨이포인트,
+// 그리고 예전에 핑키 관제 화면에 있던 작업자 동작들: 정지, 위치 다시 잡기(자동으로 잡은 자리가 틀리면 작업자가
+// 크게 본 지도에 놓는다), 라이다 위치 찾기(작업장이 대칭이라 자리가 둘 남으면 고를 후보와 함께), 주차장 좌표로
+// 맞추기, 주행준비(불러올 지도와 함께), Nav2 복구, 웨이포인트 기록과 삭제.
 //
-// Loaded after pinky.js (pinkyScreen, pinkySheet, pinkyById, pinkyName, sendPinkyCommand, stopPinky, setHtmlIfChanged,
+// pinky.js(pinkyScreen, pinkySheet, pinkyById, pinkyName, sendPinkyCommand, stopPinky, setHtmlIfChanged,
 // batteryStatHtml, readinessChipHtml, markerChipHtml, lastStopHtml, commandOutcome, pinkyRouteLabels,
-// pinkyActionLabels) and pinky-map.js (pinkyMapState).
+// pinkyActionLabels)와 pinky-map.js(pinkyMapState) 뒤에 로드된다.
 //
-// The panel is built once per opened Pinky and then updated in place on every read, so a typed waypoint name or the
-// chosen map is never lost to a poll.
+// 패널은 핑키를 열 때 한 번 만들고, 그다음엔 읽을 때마다 그 자리에서 값만 바꾼다. 그래서 입력 중인 웨이포인트
+// 이름이나 고른 지도가 폴링 때문에 사라지지 않는다.
 
 const pinkySheetTitle = document.querySelector('#pinkySheetTitle');
 const pinkySheetBody = document.querySelector('#pinkySheetBody');
-const pinkyDetail = { pinkyId: null, preview: null, previewing: false };  // preview: GET locate answer for this Pinky
+// pinkyId: 열린 핑키, previewing: 라이다 후보를 계산하는 중.
+const pinkyDetail = { pinkyId: null, preview: null, previewing: false };  // preview: 이 핑키에 대한 GET locate 응답
 
-// The maps the fleet dashboard can bring up; map-proto.yaml carries the keepout mask.
+// 핑키 관제가 띄울 수 있는 지도들. map-proto.yaml에 금지 구역 마스크가 들어 있다.
 const pinkyMaps = [
   ['map-proto.yaml', 'map-proto (금지 구역)'], ['my_map.yaml', 'my_map'], ['pinklab.yaml', 'pinklab'],
 ];
 
+// 경로 상태 한 줄: 상태, 지금 웨이포인트, 진행(completed/total).
 function routeProgressText(route) {
   if (!route?.status) return route?.current_label || '경로 없음';
   const parts = [pinkyRouteLabels[route.status] || route.status];
@@ -28,6 +29,8 @@ function routeProgressText(route) {
   return parts.join(', ');
 }
 
+// 상세 패널의 뼈대 HTML. 핑키를 열 때 한 번만 만들고, 값은 renderPinkyDetail이 data-field 칸에 채운다.
+// data-dev-only 묶음은 개발자 화면에서만 보인다.
 function detailSkeleton(pinkyId) {
   const id = escapeHtml(pinkyId);
   return `
@@ -134,6 +137,7 @@ function detailField(name) {
   return pinkySheetBody.querySelector(`[data-field="${name}"]`);
 }
 
+// 센서마다 값과, 새 값이 아니면 마지막으로 받은 지 얼마나 됐는지.
 function sensorRowsHtml(pinky) {
   const details = pinky.sensor_details || [];
   if (!details.length) {
@@ -148,6 +152,7 @@ function sensorRowsHtml(pinky) {
   }).join('');
 }
 
+// '경로와 안전' 항목: 경로, 안전 감시, 메시지, 빠진 센서, 마커 등록.
 function detailFactsHtml(pinky) {
   const marker = pinky.marker;
   const markerText = !marker ? '마커 정보 없음'
@@ -163,7 +168,8 @@ function detailFactsHtml(pinky) {
   return rows.map(([label, value, tone]) => `<div><dt>${label}</dt><dd${tone ? ` class="${tone}"` : ''}>${escapeHtml(value)}</dd></div>`).join('');
 }
 
-// Waypoints come from the map read. Deleting needs the waypoint's id, which only an answer that carries it offers.
+// 웨이포인트는 지도 읽기(GET /api/pinky/map)에서 온다. 지우려면 웨이포인트 id가 필요해서, id를 실은 응답일 때만
+// [삭제]가 나온다.
 function waypointRowsHtml(pinkyId) {
   const data = pinkyMapState.data;
   if (!data) return '<li class="muted">지도를 불러오는 중…</li>';
@@ -174,14 +180,16 @@ function waypointRowsHtml(pinkyId) {
       ${point.id ? `<button type="button" class="secondary small" data-waypoint-delete="${escapeHtml(point.id)}" data-waypoint-label="${escapeHtml(point.label)}">삭제</button>` : ''}</li>`).join('');
 }
 
+// 웨이포인트 기록 안내. 수령 구역은 경로 마지막 웨이포인트의 위치를 쓴다.
 function waypointHint() {
   const zones = (pinkyMapState.data?.zones || []).filter((zone) => zone.waypoint);
   const zoneText = zones.map((zone) => `${zone.label}는 경로 마지막 웨이포인트 ${zone.waypoint}의 위치를 써요.`).join(' ');
   return `핑키가 지금 서 있는 곳을 이 이름으로 기록해요. 경로는 1–9 번호를 씁니다. ${zoneText}`;
 }
 
-// ---- LiDAR localization: the current map pose, the last result and the places to pick from ----
+// ---- 라이다 위치 찾기: 지금 지도 위치, 마지막 결과, 고를 수 있는 후보 자리 ----
 
+// yaw를 45° 단위 8방향 글자로 바꾼다(지도 기준, 위쪽이 +y).
 const FACING = ['→ 오른쪽', '↗', '↑ 위쪽', '↖', '← 왼쪽', '↙', '↓ 아래쪽', '↘'];
 
 function facingText(yaw) {
@@ -189,7 +197,7 @@ function facingText(yaw) {
   return `${FACING[step]}을 봄`;
 }
 
-// The nearest named place on the map (parking slots, station 5, junction 7) to say where a pose is.
+// 자세가 어디인지 말하려고 지도에서 가장 가까운 이름 있는 곳(주차 칸, 적재 자리 5, 교차로 7)을 찾는다.
 function placeText(x, y) {
   const data = pinkyMapState.data || {};
   const named = [
@@ -201,6 +209,7 @@ function placeText(x, y) {
   return `${near.label} ${near.d < 0.15 ? '자리' : `에서 ${Math.round(near.d * 100)} cm`} (x ${x.toFixed(2)}, y ${y.toFixed(2)})`;
 }
 
+// '지도 위치' 묶음의 요약: 지금 위치와 마지막 위치 잡기 결과(작업자 지정, 라이다 적용·찾음·실패). loc.at은 초 단위다.
 function locSummaryText(pinky) {
   const pose = pinky.pose || {};
   const now = pose.x_m == null ? '지금 지도 위치가 없어요.' : `지금 위치: ${placeText(pose.x_m, pose.y_m)}, ${facingText(pose.yaw_rad)}.`;
@@ -213,6 +222,8 @@ function locSummaryText(pinky) {
   return `${now} ${when}라이다: ${result}`;
 }
 
+// 보여 줄 후보: [후보 보기]로 방금 받은 것이 있으면 그것, 아니면 라이다가 자리를 정하지 못했을 때 남긴 후보.
+// pinky-map.js도 지도에 후보를 그릴 때 쓴다.
 function candidatesFor(pinky) {
   if (pinkyDetail.preview?.pinkyId === pinky.pinky_id) return pinkyDetail.preview.candidates;
   const loc = pinky.localization;
@@ -231,7 +242,7 @@ function candidateRowsHtml(pinky) {
       <button type="button" class="small" data-pick-candidate="${i}">이 자리</button></li>`).join('');
 }
 
-// The operator says which candidate place the Pinky really stands on (the 이 자리 button, or its number on the map).
+// 작업자가 핑키가 실제로 선 후보 자리를 알려 준다('이 자리' 버튼, 또는 지도의 번호). 확인 뒤 그 자세로 localize를 보낸다.
 function pickCandidate(pinkyId, index) {
   const pinky = pinkyById(pinkyId);
   const candidate = pinky && candidatesFor(pinky)[index];
@@ -245,6 +256,7 @@ function pickCandidate(pinkyId, index) {
   });
 }
 
+// GET /api/pinky/{id}/locate: 라이다로 맞는 자리를 계산만 하고 아무것도 바꾸지 않는다.
 async function previewCandidates(pinkyId) {
   pinkyDetail.previewing = true;
   renderPinkyDetail();
@@ -262,28 +274,30 @@ async function previewCandidates(pinkyId) {
   renderPinkyDetail();
 }
 
-// ---- 시운전: a test mission without an order, and the operator's signals along it ----
+// ---- 시운전: 주문 없는 시험 임무와, 그 길에서 작업자가 보내는 신호 ----
 
+// 핑키 단계(phase) → [보낼 신호, 버튼 이름, 안내]. 그 단계에 있을 때만 버튼이 나온다(POST .../signal).
 const MISSION_SIGNALS = {
   docking_manual: ['dock_complete', '도킹완료', '5번에 섰어요. 제자리에 붙었으면 눌러 주세요.'],
   docked_manual: ['received', '적재 완료 · 출발', '물건을 실었으면 눌러 주세요. 20 cm 뒤로 빠진 뒤 배달 목적지로 가요.'],
   course_complete: ['mission_complete', '수령 완료 · 복귀', '배달 목적지에 섰어요. 물건을 받았으면 눌러 주세요. 자기 주차 칸으로 돌아가요.'],
 };
 
-// Every recorded waypoint of the map (a receiving zone recorded by any Pinky counts), except 5, the loading spot.
+// 지도에 기록된 모든 웨이포인트(어느 핑키가 기록한 수령 구역이든 포함). 적재 자리인 5는 뺀다.
 function dropoffLabels() {
   const all = Object.values(pinkyMapState.data?.waypoints || {}).flat().map((point) => point.label);
   return [...new Set(all)].filter((label) => label !== '5');
 }
 
-// "9,7" → ['9', '7']: waypoints to pass on the way out (and back in reverse), e.g. the passage past the middle wall.
+// "9,7" → ['9', '7']: 나갈 때 지나갈 웨이포인트(돌아올 때는 거꾸로). 예: 가운데 벽 옆 통로.
 function viaLabels() {
   return detailField('via').value.split(/[,\s→]+/).map((label) => label.trim()).filter(Boolean);
 }
 
+// 배달 목적지 선택지. 목록이 바뀔 때만 다시 채우고 고르던 값을 지킨다(처음에는 '수령'이 든 이름).
 function renderDropoffs() {
   const select = detailField('dropoff');
-  // 원점: load at 5, back out, and drive back to where it started (no hand-over stop).
+  // 원점: 5번에서 싣고 뒤로 빠진 뒤 출발한 자리로 돌아온다(넘겨주는 정차 없음).
   const labels = ['주차장', '원점', ...dropoffLabels()];
   const names = { 주차장: '주차장 (적재 후 바로 복귀)', 원점: '원점 (적재 후 후진·복귀)' };
   const html = labels.map((label) => `<option value="${escapeHtml(label)}">${escapeHtml(names[label] || label)}</option>`).join('');
@@ -294,6 +308,7 @@ function renderDropoffs() {
   select.value = labels.includes(previous) ? previous : (labels.find((label) => label.includes('수령')) || labels[0] || '');
 }
 
+// 시험 임무 상태 한 줄. auto_return_at(초)이 있으면 자동 복귀까지 남은 시간을 붙인다.
 function missionStatusText(pinky) {
   if (!pinky.mission) return '진행 중인 시험 임무가 없어요. 배달 목적지는 수령존에서 [지금 위치 기록]으로 찍은 웨이포인트를 고르면 돼요.';
   const route = pinky.route?.status ? (pinkyRouteLabels[pinky.route.status] || pinky.route.status) : '';
@@ -302,6 +317,7 @@ function missionStatusText(pinky) {
   return `${pinky.mission.message || '시험 임무'} · ${route}${pinky.phase_label ? ` · 지금: ${pinky.phase_label}` : ''}${wait}`;
 }
 
+// 지금 단계에 맞는 신호 버튼 하나(없으면 빈 문자열).
 function missionSignalHtml(pinky) {
   const signal = MISSION_SIGNALS[pinky.phase];
   if (!signal) return '';
@@ -310,6 +326,7 @@ function missionSignalHtml(pinky) {
     <button type="button" data-pinky-signal="${action}">${escapeHtml(label)}</button></div>`;
 }
 
+// 이 핑키에 보낸 최근 명령 6건.
 function detailLogHtml(pinkyId) {
   const entries = (pinkyScreen.view?.log || []).filter((entry) => entry.pinky_id === pinkyId).slice(0, 6);
   if (!entries.length) return '<li class="muted">보낸 명령이 없어요</li>';
@@ -322,6 +339,8 @@ function detailLogHtml(pinkyId) {
   }).join('');
 }
 
+// 열린 상세의 값만 바꾼다(뼈대는 그대로라 입력 중인 글자와 고른 지도가 남는다). 보내는 중인 동작의 버튼은 막는다.
+// 'pinkyview'·'pinkymap' 이벤트마다 불린다.
 function renderPinkyDetail() {
   if (pinkySheet.hidden || !pinkyDetail.pinkyId) return;
   const pinky = pinkyById(pinkyDetail.pinkyId);
@@ -351,6 +370,7 @@ function renderPinkyDetail() {
   setHtmlIfChanged(detailField('log'), detailLogHtml(id));
 }
 
+// 핑키 카드·종합 화면에서 상세를 연다. 다른 핑키면 뼈대를 새로 만들고, 열자마자 핑키와 지도를 새로 읽는다.
 function openPinkyDetail(pinkyId, opener) {
   if (pinkyDetail.pinkyId !== pinkyId || !pinkySheetBody.childElementCount) {
     pinkyDetail.pinkyId = pinkyId;
@@ -363,8 +383,9 @@ function openPinkyDetail(pinkyId, opener) {
   refreshPinkyMap({ force: true });
 }
 
-// ---- actions ----
+// ---- 동작 ----
 
+// data-pinky-action 버튼 → 보낼 경로(POST /api/pinky/{id}/{path}), 기록 이름, 본문, 필요하면 확인 창 문구.
 const pinkyDetailActions = {
   ready: { path: 'ready', label: '주행준비', body: () => ({ map: detailField('map').value }) },
   localize: { path: 'localize', label: '라이다 위치 찾기', body: () => ({}) },
@@ -392,6 +413,7 @@ const pinkyDetailActions = {
   },
 };
 
+// 상세 안의 버튼 클릭(이벤트 위임): 정지, 웨이포인트 삭제, 시운전 신호, 위치 다시 잡기, 후보 보기·고르기, 그 밖의 동작.
 pinkySheetBody.addEventListener('click', (event) => {
   const pinkyId = pinkyDetail.pinkyId;
   if (!pinkyId) return;
@@ -436,6 +458,7 @@ pinkySheetBody.addEventListener('click', (event) => {
   sendPinkyCommand(pinkyId, button.dataset.pinkyAction, { path: action.path, body: action.body(), label: action.label });
 });
 
+// 웨이포인트 기록: 지금 선 곳을 입력한 이름으로 기록한다. 접수되면 입력칸을 비운다.
 pinkySheetBody.addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = event.target.closest('[data-waypoint-form]');

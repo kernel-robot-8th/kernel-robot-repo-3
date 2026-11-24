@@ -1,19 +1,22 @@
-// 전체 주행 테스트 (핑키 화면): every Pinky through the whole course without an order.
+// 전체 주행 테스트(핑키 화면): 주문 없이 모든 핑키가 코스 전체를 돈다.
 //   자기 주차 칸 → (9번 통로, 한 대씩) → 대기 자리 4 → 적재 자리 5 (정면 진입) → [도킹완료] → [적재 완료]
 //   → 20 cm 후진 → 수령 구역 → [수령 완료] → 자기 주차 칸
-// [전체 출발] starts the Pinkys in FLEET_TEST_ORDER; the fleet dashboard's traffic zones make them wait in turn (the
-// passage one at a time, one at the queue spot, station 5 in the order they asked). Each row shows where its Pinky
-// is and the one button its phase needs. The chip shows the ceiling camera's judgment of the loading spot.
+// [전체 출발]은 FLEET_TEST_ORDER 순서로 핑키를 출발시키고, 핑키 관제의 교통 구역이 차례로 기다리게 한다(통로는
+// 한 대씩, 대기 자리에 한 대, 5번은 요청한 순서대로). 줄마다 그 핑키가 어디 있는지와 지금 단계에 필요한 버튼
+// 하나가 나온다. 칩은 천장 카메라가 적재 자리를 어떻게 판정하는지 보여 준다.
 //
-// Loaded after pinky-detail.js (sendPinkyCommand, pinkyBadge, pinkyScreen, setHtmlIfChanged, dropoffLabels).
+// pinky-detail.js(dropoffLabels) 뒤에 로드된다. sendPinkyCommand·pinkyScreen·setHtmlIfChanged는 pinky.js,
+// pinkyBadge는 app.js에 있다.
 
-const FLEET_TEST_ORDER = ['12', '10', '11'];  // 12 carries the registered ArUco marker (21), so it loads first
-const FLEET_TEST_SPOT = 'pinky_dock_1';       // the ceiling camera's registered loading spot
+const FLEET_TEST_ORDER = ['12', '10', '11'];  // 12번이 등록된 ArUco 마커(21)를 달고 있어 먼저 싣는다
+const FLEET_TEST_SPOT = 'pinky_dock_1';       // 천장 카메라에 등록된 적재 자리
+// 핑키 단계 → [신호, 버튼 이름, 버튼 모양]. 'redock'은 카메라 보정값을 붙여 보낸다(fleetTestRedock).
 const FLEET_TEST_SIGNALS = {
   docking_manual: [['dock_complete', '도킹완료'], ['redock', '다시 맞추기', 'secondary']],
   docked_manual: [['received', '적재 완료 · 출발'], ['redock', '다시 들어오기', 'secondary']],
   course_complete: [['mission_complete', '수령 완료 · 주차장으로']],
 };
+// 경로가 진행 중인 상태. PARKING_WORDS는 적재 자리 카메라 실시간 상태의 화면 말이다.
 const FLEET_TEST_ACTIVE = new Set(['starting', 'running', 'cancel_requested']);
 const PARKING_WORDS = { IN_POSITION: '도착 (정상 위치)', OFF_POSITION: '어긋남', NOT_IN_VIEW: '핑키 안 보임', VIEW_UNVERIFIED: '카메라 시야 확인 안 됨', MOVING: '움직이는 중' };
 
@@ -21,19 +24,20 @@ const fleetTestRows = document.querySelector('#fleetTestRows');
 const fleetTestCamera = document.querySelector('#fleetTestCamera');
 const fleetTestAuto = document.querySelector('#fleetTestAuto');
 const fleetTestRepeat = document.querySelector('#fleetTestRepeat');
-// dock: per Pinky, the server's last answer for its stop at the loading spot (POST /api/pinky/{id}/dock-handshake:
-// the camera's judgment at that Pinky's own registration, what to do about it, what was sent, the stop's log);
-// told: the log lines already shown as a toast. Both are cleared when the Pinky leaves the loading spot.
-// picked: which Pinkys the two buttons on top act on (all by default); one Pinky alone can be run this way.
+// dock: 핑키마다 적재 자리 정차에 대한 서버의 마지막 답(POST /api/pinky/{id}/dock-handshake: 그 핑키 자신의
+// 등록 위치에서의 카메라 판정, 할 일, 보낸 것, 그 정차의 기록). told: 이미 알림으로 보여 준 기록 줄.
+// 둘 다 핑키가 적재 자리를 떠나면 지운다.
+// picked: 위의 두 버튼이 움직일 핑키(기본은 모두). 이렇게 핑키 한 대만 돌릴 수도 있다.
 const fleetTest = { zone: {}, busy: false, camera: null, dock: {}, told: {}, picked: {} };
 const fleetTestPicked = (id) => fleetTest.picked[id] !== false;
+// 적재 자리에서 카메라 판정을 주고받는 단계와, 판정 동작별 색.
 const FLEET_TEST_DOCK_PHASES = new Set(['docking_manual', 'redocking']);
 const FLEET_TEST_DOCK_TONE = { COMPLETE: 'good', OPERATOR: 'attention', REDOCK: 'attention' };
 
-// What the camera <-> Pinky exchange says for a Pinky at the loading spot: [tone, text], or null when it is not there.
-// The deciding is the server's (control_station/dock_handshake.py), the same as an order's: seen in place twice ->
-// 도킹완료; steadily off -> 다시 맞추기 with the camera's offset, then wait until it is back; no registration, a blind
-// camera or three redocks used -> a person looks. With 자동 off the server only judges and the buttons send.
+// 적재 자리에 선 핑키에 대해 카메라 <-> 핑키 주고받기가 말하는 것: [색, 글]. 거기 없으면 null.
+// 결정은 서버가 한다(control_station/dock_handshake.py, 주문과 같다): 제자리로 두 번 보이면 -> 도킹완료,
+// 계속 어긋나면 -> 카메라 오프셋과 함께 다시 맞추기, 그 뒤 돌아올 때까지 기다림. 등록이 없거나 카메라가 못 보거나
+// 다시 맞추기를 세 번 다 쓰면 -> 사람이 본다. 자동이 꺼져 있으면 서버는 판정만 하고 버튼이 보낸다.
 function fleetTestVerdict(pinky) {
   if (!FLEET_TEST_DOCK_PHASES.has(pinky.phase) || !FLEET_TEST_ACTIVE.has(pinky.route?.status)) return null;
   const dock = fleetTest.dock[pinky.pinky_id];
@@ -53,22 +57,25 @@ function fleetTestVerdict(pinky) {
     `${decision.action === 'COMPLETE' || settled ? '✓ ' : ''}${decision.message || ''}${numbers}${hint}${last ? ` · ${last.message}` : ''}${dock.repeat ? ` · 반복 테스트 성공 ${dock.repeat.successes}/${dock.repeat.target} (들어온 횟수 ${dock.repeat.trials})` : ''}`];
 }
 
+// 고를 수 있는 수령 구역: 이름에 '수령'이 든 웨이포인트.
 function fleetTestZones() {
   return dropoffLabels().filter((label) => label.includes('수령'));
 }
 
+// FLEET_TEST_ORDER 순서로 정렬한 핑키 목록.
 function fleetTestPinkies() {
   const all = pinkyScreen.view?.pinkies || [];
   return [...all].sort((a, b) => FLEET_TEST_ORDER.indexOf(a.pinky_id) - FLEET_TEST_ORDER.indexOf(b.pinky_id));
 }
 
+// 핑키마다 수령 구역을 하나 정해 둔다. 아직 없거나 사라진 구역이면 순서대로 돌려 나눈다.
 function fleetTestZoneFor(pinkyId, index, zones) {
   if (!zones.includes(fleetTest.zone[pinkyId])) fleetTest.zone[pinkyId] = zones[index % Math.max(1, zones.length)];
   return fleetTest.zone[pinkyId];
 }
 
-// Battery as the fleet dashboard reports it: [text, tone]. Under 20 % the Pinky should be charged before it drives
-// (weak motors and an unstable Pi, 2026-11-17: P0 at 14 % lost its base and kept failing to bring Nav2 up).
+// 핑키 관제가 알려 준 배터리: [글, 색]. 20 % 미만이면 주행 전에 충전해야 한다
+// (모터가 약해지고 Pi가 불안정해진다. 2026-11-17: 14 %의 P0가 베이스를 잃고 Nav2를 계속 띄우지 못했다).
 function fleetTestBattery(pinky) {
   const percent = pinky.battery_percent;
   if (!pinky.connected || percent == null) return ['배터리 모름', ''];
@@ -76,6 +83,7 @@ function fleetTestBattery(pinky) {
   return [`🔋 ${Math.round(percent)}%${volts}`, percent < 20 ? 'danger' : percent < 30 ? 'attention' : 'good'];
 }
 
+// 핑키 한 줄: 포함 체크, 순서, 지금 하는 일, 배터리, 수령 구역(주행 중에는 못 바꿈), 눌러야 할 버튼, 카메라 판정.
 function fleetTestRowHtml(pinky, index, zones) {
   const id = escapeHtml(pinky.pinky_id);
   const active = FLEET_TEST_ACTIVE.has(pinky.route?.status);
@@ -88,7 +96,7 @@ function fleetTestRowHtml(pinky, index, zones) {
     `<button type="button" class="${tone || ''}" data-fleet-signal="${action}" data-pinky="${id}">${label}</button>`).join('')
     || (!active && pinky.connected && pinky.ready
       ? `<button type="button" data-fleet-start="${id}">이 핑키만 출발</button><button type="button" class="secondary" data-fleet-home="${id}">주차장으로</button>` : '')
-    // A Pinky that went off while holding a zone (the passage, the loading spot): the others wait for it for ever.
+    // 구역(통로, 적재 자리)을 잡은 채 꺼진 핑키: 다른 핑키들이 그 핑키를 끝없이 기다린다.
     || (!pinky.connected && (pinky.holding || []).length
       ? `<button type="button" data-fleet-release="${id}">치웠어요 · 자리 비우기</button>` : '');
   const select = `<select data-fleet-zone="${id}" aria-label="${escapeHtml(pinky.name)} 수령 구역" ${active ? 'disabled' : ''}>${
@@ -104,8 +112,8 @@ function fleetTestRowHtml(pinky, index, zones) {
     ${fleetTestVerdict(pinky) ? `<span class="fleet-test-verdict chip ${fleetTestVerdict(pinky)[0]}">${escapeHtml(fleetTestVerdict(pinky)[1])}</span>` : ''}</li>`;
 }
 
-// The box is the control station's own switch (dock_auto in GET /api/pinky): the station steps the camera <-> Pinky
-// exchange itself, so it goes on with this screen closed. Ticking it here changes the station's setting.
+// 이 상자는 관제 자체의 스위치다(GET /api/pinky의 dock_auto): 관제가 카메라 <-> 핑키 주고받기를 스스로 진행하므로
+// 이 화면을 닫아도 계속된다. 여기서 체크하면 관제의 설정이 바뀐다(POST /api/pinky/dock-auto).
 let fleetTestAutoBusy = false;
 fleetTestAuto.addEventListener('change', async () => {
   const auto = fleetTestAuto.checked;
@@ -126,6 +134,8 @@ fleetTestAuto.addEventListener('change', async () => {
   }
 });
 
+// 전체 주행 테스트 카드를 다시 그린다(핑키 뷰일 때만). 위 버튼은 고른 핑키 중 연결되고 준비됐고 주행 중이 아닌
+// 핑키가 있어야 켜지고, 출발은 수령 구역이 하나라도 있어야 한다.
 function renderFleetTest() {
   if (!fleetTestAutoBusy && typeof pinkyScreen.view?.dock_auto === 'boolean') fleetTestAuto.checked = pinkyScreen.view.dock_auto;
   if (activeView !== 'pinky' || !fleetTestRows) return;
@@ -149,12 +159,14 @@ function renderFleetTest() {
   fleetTestCamera.className = `chip ${live?.state === 'IN_POSITION' ? 'good' : live?.state === 'OFF_POSITION' ? 'attention' : ''}`;
 }
 
+// 핑키 하나를 시험 임무로 출발시킨다(경유 없이, 고른 수령 구역으로).
 function fleetTestStartOne(pinky) {
   return sendPinkyCommand(pinky.pinky_id, 'test-mission', {
     path: 'test-mission', label: '전체 주행 테스트 출발', body: { dropoff: fleetTest.zone[pinky.pinky_id], via: [] },
   });
 }
 
+// 고른 핑키 중 출발할 수 있는 핑키마다 차례로 run을 부른다. 그동안 위 버튼을 막는다.
 async function fleetTestEach(run) {
   fleetTest.busy = true;
   renderFleetTest();
@@ -162,7 +174,7 @@ async function fleetTestEach(run) {
     for (const pinky of fleetTestPinkies()) {
       if (!fleetTestPicked(pinky.pinky_id) || !pinky.connected || !pinky.ready || FLEET_TEST_ACTIVE.has(pinky.route?.status)) continue;
       await run(pinky);
-      await new Promise((resolve) => window.setTimeout(resolve, 1500));  // in order, so the first asks for the zones first
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));  // 차례를 지켜 앞 핑키가 구역을 먼저 요청하게 한다
     }
   } finally {
     fleetTest.busy = false;
@@ -170,6 +182,7 @@ async function fleetTestEach(run) {
   }
 }
 
+// 위 버튼들: 고른 핑키 출발, 주차장 복귀, 배터리 확인.
 document.querySelector('#fleetTestStart').addEventListener('click', () => {
   const names = fleetTestPinkies().filter((pinky) => fleetTestPicked(pinky.pinky_id) && pinky.connected && pinky.ready && !FLEET_TEST_ACTIVE.has(pinky.route?.status))
     .map((pinky) => `${pinky.name} → ${fleetTest.zone[pinky.pinky_id]}`);
@@ -182,13 +195,14 @@ document.querySelector('#fleetTestHome').addEventListener('click', () => {
   fleetTestEach((pinky) => sendPinkyCommand(pinky.pinky_id, 'return_home', { path: 'return-home', label: '주차장 복귀', body: { via: [] } }));
 });
 document.querySelector('#fleetTestBattery').addEventListener('click', async () => {
-  await refreshPinky({ force: true });  // read the Pinkys again now, then say it in one line
+  await refreshPinky({ force: true });  // 지금 다시 읽은 뒤 한 줄로 알린다
   const pinkies = fleetTestPinkies();
   const low = pinkies.filter((pinky) => pinky.connected && pinky.battery_percent != null && pinky.battery_percent < 20);
   showToast('핑키 배터리', pinkies.map((pinky) => `${pinky.name} ${fleetTestBattery(pinky)[0].replace('🔋 ', '')}`).join('  ·  ')
     + (low.length ? `  — ${low.map((pinky) => pinky.name).join(', ')} 충전이 필요해요` : ''), low.length ? 'error' : 'info', 10000);
   renderFleetTest();
 });
+// 줄 안의 수령 구역 선택과 포함 체크.
 fleetTestRows.addEventListener('change', (event) => {
   const select = event.target.closest('[data-fleet-zone]');
   if (select) fleetTest.zone[select.dataset.fleetZone] = select.value;
@@ -198,6 +212,7 @@ fleetTestRows.addEventListener('change', (event) => {
     renderFleetTest();
   }
 });
+// 줄 안의 버튼: 신호(다시 맞추기는 카메라 보정과 함께), 자리 비우기, 이 핑키만 복귀·출발.
 fleetTestRows.addEventListener('click', (event) => {
   const signal = event.target.closest('[data-fleet-signal]');
   if (signal) {
@@ -230,10 +245,10 @@ fleetTestRows.addEventListener('click', (event) => {
   if (pinky && window.confirm(`${pinky.name} 핑키만 출발시킬까요? 다른 핑키는 그대로 있어요.\n적재 자리 → ${fleetTest.zone[pinky.pinky_id]} → 자기 주차 칸`)) fleetTestStartOne(pinky);
 });
 
-// 다시 맞추기: a fresh camera judgment (the check over new frames, not the live preview) goes along, so the Pinky
-// comes in corrected by what the camera measured. The judgment is this Pinky's own: each carries its own marker with
-// its own registration of the loading spot (config/pinky-markers.json), and another Pinky's offset would send it to
-// the wrong place. Without a registration or a usable judgment it comes in again at the same spot, and the label says so.
+// 다시 맞추기: 새 카메라 판정(실시간 미리보기가 아니라 새 프레임으로 한 확정 판정)을 함께 보내, 핑키가 카메라가
+// 잰 만큼 고쳐서 들어오게 한다. 판정은 그 핑키 자신의 것이다: 핑키마다 자기 마커와 자기 적재 자리 등록이 있고
+// (config/pinky-markers.json), 다른 핑키의 오프셋은 엉뚱한 곳으로 보낸다. 등록이나 쓸 만한 판정이 없으면 같은
+// 자리로 다시 들어오고, 버튼 이름표에 그렇게 적는다.
 async function fleetTestRedock(id, label) {
   const marker = pinkyById(id)?.marker;
   let guide = null;
@@ -246,7 +261,7 @@ async function fleetTestRedock(id, label) {
       if (seen && [seen.forward_mm, seen.left_mm, seen.dyaw_deg].every(Number.isFinite)) {
         guide = { forward_mm: seen.forward_mm, left_mm: seen.left_mm, dyaw_deg: seen.dyaw_deg };
       }
-    } catch { /* no judgment: plain redock */ }
+    } catch { /* 판정 없음: 보정 없이 다시 맞추기 */ }
   }
   sendPinkyCommand(id, 'redock', {
     path: 'signal', body: guide ? { action: 'redock', offset: guide } : { action: 'redock' },
@@ -254,9 +269,10 @@ async function fleetTestRedock(id, label) {
   });
 }
 
+// 1.5초마다(핑키 뷰이고 탭이 보일 때만): 적재 자리 카메라와, 적재 자리에 선 핑키별 판정을 읽는다.
 async function pollFleetTestCamera() {
   if (activeView !== 'pinky' || document.hidden || fleetTest.polling) return;
-  fleetTest.polling = true;  // a judgment takes several frames: the next tick waits for this one
+  fleetTest.polling = true;  // 판정은 여러 프레임이 걸린다. 다음 주기는 이번 것을 기다린다
   try {
     await pollFleetTestDock();
   } finally {
@@ -264,6 +280,9 @@ async function pollFleetTestCamera() {
   }
 }
 
+// GET /api/parking-spots/{FLEET_TEST_SPOT}/live로 적재 자리 상태를 읽고, 적재 자리 단계인 핑키마다
+// POST /api/pinky/{id}/dock-handshake를 보낸다. auto면 서버가 도킹완료·다시 맞추기를 알아서 보내고, repeat은
+// 반복 진입 테스트에서 성공해야 할 횟수(0~20)다. 적재 자리를 떠난 핑키의 기록은 지운다.
 async function pollFleetTestDock() {
   try {
     const response = await fetch(`/api/parking-spots/${FLEET_TEST_SPOT}/live`, { cache: 'no-store', signal: AbortSignal.timeout(4000) });
@@ -272,7 +291,7 @@ async function pollFleetTestDock() {
   } catch {
     fleetTest.camera = { state: '관제 응답 없음' };
   }
-  pinkyMapState.dockState = fleetTest.camera?.state || null;  // the map colours the loading spot with it
+  pinkyMapState.dockState = fleetTest.camera?.state || null;  // 지도가 이 값으로 적재 자리를 칠한다
   for (const pinky of pinkyScreen.view?.pinkies || []) {
     const id = pinky.pinky_id;
     if (!FLEET_TEST_DOCK_PHASES.has(pinky.phase) || !FLEET_TEST_ACTIVE.has(pinky.route?.status)) {
@@ -290,7 +309,7 @@ async function pollFleetTestDock() {
     } catch {
       fleetTest.dock[id] = { error: '관제 서버의 답을 받지 못했어요' };
     }
-    // Each new line of the stop's log once, as a toast: what was sent, how a redock turned out, when a person is needed.
+    // 그 정차 기록의 새 줄마다 한 번씩 알림으로: 보낸 것, 다시 맞추기 결과, 사람이 필요할 때.
     const log = fleetTest.dock[id].log || [];
     const shown = fleetTest.told[id] || 0;
     log.filter((entry) => entry.at > shown).forEach((entry) => showToast(`${pinky.name} · 적재 자리`, entry.message, 'info', 8000));
@@ -299,6 +318,7 @@ async function pollFleetTestDock() {
   renderFleetTest();
 }
 
+// 핑키·지도 갱신과 뷰 전환 때 다시 그리고, 카메라 판정은 1.5초마다 읽는다.
 document.addEventListener('pinkyview', renderFleetTest);
 document.addEventListener('pinkymap', renderFleetTest);
 document.addEventListener('viewchange', () => { renderFleetTest(); pollFleetTestCamera(); });
