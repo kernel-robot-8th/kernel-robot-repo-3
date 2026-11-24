@@ -3,6 +3,10 @@
 # 안내: docs/implementation/omx-ros-practice.md
 # 모든 단계가 같은 ROS 환경(Jazzy + omx_interfaces, 격리 domain, localhost)을 쓰도록 맞춰 줄 뿐,
 # 이동 로직과 안전장치는 scripts/omx_slot_motion.py에 있습니다. 하드웨어 전원 차단을 대신하지 않습니다.
+#
+# 사용법: scripts/omx_ros_practice.sh check|shell|worker fake|dry|real|probe|record <이름>|goal <칸>|release
+# 실물 팔을 움직이는 것은 `worker real`(목표를 받으면 이동)과 `release`(토크 끔 → 팔이 처질 수 있음)뿐이며,
+# 둘 다 정해진 단어를 직접 입력해야 진행합니다.
 set -u
 
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -49,6 +53,7 @@ as_dialout() {
   if id -nG | grep -qw dialout; then "$@"; else sg dialout -c "$(printf '%q ' "$@")"; fi
 }
 
+# 위험한 단계 앞에서 안내를 보여 주고, 정해진 단어($2)를 그대로 입력해야만 계속합니다. 다르면 아무것도 보내지 않고 끝냅니다.
 confirm() {
   printf '%s\n입력 "%s" 후 Enter (그 밖에는 취소): ' "$1" "$2"
   local answer
@@ -56,6 +61,7 @@ confirm() {
   [[ "$answer" == "$2" ]] || { echo "취소했습니다. 아무것도 보내지 않았습니다."; exit 1; }
 }
 
+# 팔로워 포트가 없으면 연결된 by-id 장치 목록을 보여 주고 끝냅니다.
 need_port() {
   [[ -e "$FOLLOWER_PORT" ]] && return 0
   echo "팔로워 포트가 없습니다: ${FOLLOWER_PORT}" >&2
@@ -63,6 +69,7 @@ need_port() {
   exit 1
 }
 
+# 0단계: 설치·권한·포트·기록된 자세를 확인만 합니다. 모터와는 통신하지 않습니다.
 check() {
   local missing=0
   item() { if eval "$2" >/dev/null 2>&1; then echo "  ✓ $1"; else echo "  ✗ $1${3:+  → $3}"; missing=1; fi; }
@@ -119,6 +126,7 @@ case "${1:-}" in
       *) usage >&2; exit 2 ;;
     esac
     ;;
+  # 내부용: as_dialout(sg) 안에서 ROS 환경을 다시 맞춘 뒤 워커를 실행합니다. 사용자가 직접 부르지 않습니다.
   __ros_worker)
     ros_env
     cd "$REPO_DIR" || exit 1
@@ -135,6 +143,7 @@ case "${1:-}" in
     cd "$REPO_DIR" || exit 1
     as_dialout "$LEROBOT_PY" scripts/record_omx_pose.py "$2" --port "$FOLLOWER_PORT" "${@:3}"
     ;;
+  # 클라이언트는 모터를 열지 않으므로 dialout 권한이나 LeRobot 가상환경 없이 시스템 python3로 실행합니다.
   goal)
     shift
     ros_env

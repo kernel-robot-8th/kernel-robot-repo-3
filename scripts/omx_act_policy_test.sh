@@ -33,14 +33,19 @@ OVERHEAD="${CONTROL_STATION_ACT_OVERHEAD_CAMERA:-}"
 POSES="${CONTROL_STATION_OMX_POSES:-$REPO_DIR/config/omx-slot-poses.json}"
 POLICIES="$REPO_DIR/config/omx-act-policies.json"
 
+# 팔 포트를 쓸 수 있는 프로세스(워커, 텔레옵, 녹화, 정책 클라이언트)가 하나라도 떠 있는지 본다. client 전용 검사.
 arm_busy() {
   pgrep -f "omx_lerobot_worker.py|omx_ros_worker.py|lerobot-teleoperate|lerobot.teleoperate|lerobot-record|robot_client import async_client" >/dev/null
 }
 
+# worker 전용 검사: HTTP 워커(omx_lerobot_worker.py)는 팔마다 하나씩 떠 있어도 되므로 여기서는 빼고,
+# 그 워커가 같은 팔인지는 worker_busy_for_robot이 따로 본다.
 other_arm_process_busy() {
   pgrep -f "omx_ros_worker.py|lerobot-teleoperate|lerobot.teleoperate|lerobot-record|robot_client import async_client" >/dev/null
 }
 
+# /proc/*/cmdline을 훑어 --robot-id가 같은 omx_lerobot_worker.py가 이미 떠 있으면 0(사용 중)을 돌려준다.
+# --robot-id가 없는 워커는 arm-01로 본다(워커 기본값과 같음). Linux 전용.
 worker_busy_for_robot() {
   python3 - "$1" <<'PY'
 import os, sys
@@ -67,10 +72,12 @@ PY
 }
 
 case "${1:-}" in
+  # 정책 서버: LeRobot 비동기 추론 서버를 127.0.0.1:8080에 띄운다. GPU에서 추론만 하고 모터에는 연결하지 않는다.
   server)
     exec "$PY" -m lerobot.async_inference.policy_server \
       --host=127.0.0.1 --port=8080 --fps=30 --inference_latency=0.033 --obs_queue_timeout=1
     ;;
+  # 수동 시험: 관제 없이 정책 클라이언트를 바로 실행한다. 팔이 실제로 움직인다.
   client)
     [ -n "$OVERHEAD" ] || { echo "CONTROL_STATION_ACT_OVERHEAD_CAMERA를 지정하세요 (선반을 위에서 보는 카메라)." >&2; exit 1; }
     for dev in "$FOLLOWER" "$OVERHEAD" "$GRIPPER"; do
@@ -121,11 +128,14 @@ EOF
       # True면 종료 뒤 matplotlib 창이 떠서 닫을 때까지 프로세스가 끝나지 않는다.
       --debug_visualize_queue_size=false
     )
+    # dialout 그룹 권한으로 실행한다(다시 로그인하지 않아도 시리얼 포트를 열 수 있게). Ctrl+C 종료도 정상으로 본다.
     sg dialout -c "$(printf '%q ' "${CLIENT[@]}")" || true
     echo
     echo "정책 종료. 팔과 그리퍼는 마지막 자세에서 토크를 유지합니다."
     echo "물체를 놓았고 그리퍼가 벌어졌는지 확인한 뒤: $0 worker → 관제 화면 원상복귀"
     ;;
+  # 관제 연동: HTTP 워커를 느린 속도 프로파일(5), 최대 이동량 1500틱, 도착 허용 오차 25틱으로 실행한다.
+  # 뒤에 준 옵션이 이 기본값보다 나중에 붙으므로 덮어쓸 수 있다.
   worker)
     shift
     ROBOT_ID=arm-01

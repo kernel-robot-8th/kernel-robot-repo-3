@@ -1,4 +1,19 @@
 <!doctype html>
+<!--
+  선반 기준점 입력 도구 (브라우저에서 여는 단독 HTML 페이지).
+
+  하는 일: 정면 카메라(shelf_camera)로 찍은 원본 프레임 위에서 선반 모서리(기준점)를 클릭해,
+  scripts/calibrate_shelf_pose.py가 solvePnP로 선반 위치를 계산할 때 쓸 2D-3D 대응 JSON
+  (shelf-pose-points.json)을 내려받게 한다. 기준점 이름과 3D 좌표는 config/shelf-slots.json의
+  keypoints(scripts/derive_shelf_slots.py가 만듦)에서 읽는다. 최소 6개 점이 있어야 내려받을 수 있다.
+
+  여는 법: Web Crypto(SHA-256 계산)가 필요하므로 file:// 대신 로컬 http 서버로 연다.
+    예) python3 -m http.server -d scripts 8080  →  http://127.0.0.1:8080/shelf_pose_editor.html
+
+  관제 서버 API, 카메라, 로봇과는 통신하지 않는다. 사용자가 고른 파일만 브라우저 안에서 읽고,
+  원본 프레임과 칸 정의 파일의 SHA-256을 결과 JSON에 함께 남겨 어떤 입력으로 만든 점인지 추적한다.
+  좌표는 원본 픽셀 기준이며, 확대해서 찍으면 0.5 px 단위로 반올림해 기록한다. 하드웨어를 움직이지 않는다.
+-->
 <html lang="ko">
 <head>
   <meta charset="utf-8">
@@ -32,6 +47,7 @@
   <h1>선반 기준점 입력 도구</h1>
   <p class="note">정면 카메라 원본 프레임에서 선반 모서리를 찍어 <code>scripts/calibrate_shelf_pose.py</code>에 넘길 JSON을 만듭니다. 기준점과 3D 좌표는 <code>config/shelf-slots.json</code>의 <code>keypoints</code>에서 읽습니다. 보이는 점만 찍으면 되고 최소 6개가 필요합니다. 팔이 선반을 가리지 않는 프레임을 쓰세요. 좌표는 원본 픽셀 기준이며, 확대해서 찍으면 0.5 px 단위까지 기록합니다.</p>
 
+  <!-- 입력: 원본 프레임, 칸 정의 파일, 카메라 ID, 확대 배율, 그리고 점 지우기·내려받기 버튼 -->
   <div class="controls">
     <label>원본 프레임 (PNG·JPEG)<input id="imageFile" type="file" accept="image/png,image/jpeg"></label>
     <label>칸 정의 파일<input id="slotFile" type="file" accept="application/json,.json"></label>
@@ -42,6 +58,7 @@
   </div>
 
   <p id="imageInfo" class="note" aria-live="polite">프레임과 칸 정의 파일을 선택하세요.</p>
+  <!-- 왼쪽: 프레임을 그리고 클릭을 받는 캔버스, 오른쪽: keypoints 목록(찍은 점은 좌표가 표시됨) -->
   <div class="layout">
     <div class="canvas-wrap"><canvas id="canvas" aria-label="선반 기준점을 찍는 이미지"></canvas></div>
     <div>

@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
-"""Derive the shelf slot map (config/shelf-slots.json) from the team's Blender glTF shelf models.
+"""팀의 Blender glTF 선반 모델에서 선반 칸 정의(config/shelf-slots.json)를 만든다.
 
-Each model holds one shelf node (e.g. `shelf_a`) with a mesh and child empties named
-`slot_<shelf>_<level>_<index>` placed on the deck top surface. This script reads those empties and
-the mesh's horizontal faces, and expresses every slot in one shelf frame shared by both shelves:
+모델마다 선반 노드 하나(예: `shelf_a`)가 메시와, 단 바닥판 윗면에 놓인 자식 empty
+`slot_<선반>_<단>_<번호>`를 갖고 있다. 이 스크립트는 그 empty들과 메시의 수평 면을 읽어,
+모든 칸을 두 선반이 함께 쓰는 하나의 선반 좌표계로 나타낸다.
 
-  origin  bottom of the seam between the two shelves, on their front plane
-  x       into the shelf (away from the front camera)
-  y       left as seen from the front
-  z       up (heights are from the shelf base, not the floor or table)
+  원점  두 선반이 맞닿는 이음새의 밑면, 선반 정면 평면 위
+  x     선반 안쪽 (정면 카메라에서 멀어지는 방향)
+  y     정면에서 볼 때 왼쪽
+  z     위 (높이는 바닥이나 책상이 아니라 선반 밑면 기준)
 
-Values come from the model only. They are not verified against the printed shelves.
+값은 모델에서만 나온다. 출력한 실물 선반과 맞는지는 확인하지 않았다.
+(--lower-deck-shift로 실측한 아래 단 높이 차이만 보정해 넣을 수 있다.)
+
+사용법:
+  python scripts/derive_shelf_slots.py shelf_a.glb shelf_b.glb --inactive slot_b_1_1,slot_b_1_2 \\
+      [--lower-deck-shift -0.035 --adjustment-note "..."] [--output config/shelf-slots.json] [--force]
+
+모델 파일을 읽고 JSON 파일 하나를 쓸 뿐이며 카메라·로봇과는 통신하지 않는다.
+결과 파일의 SHA-256이 칸 정의 버전(slot_map_version)이 되므로, 다시 만들면 관제를 재시작하고
+OMX 워커의 칸별 자세도 새 버전 기준으로 다시 확인해야 한다.
 """
 
 from __future__ import annotations
@@ -27,14 +36,22 @@ from typing import Any
 import numpy as np
 
 
+# 칸 empty 이름: slot_<선반 문자>_<단 번호>_<칸 번호>
 _SLOT_NAME = re.compile(r"^slot_([a-z])_(\d+)_(\d+)$")
+# glTF accessor의 componentType 번호 → numpy 자료형 (5126 float, 5123 ushort, 5125 uint, 5121 ubyte)
 _COMPONENTS = {5126: np.float32, 5123: np.uint16, 5125: np.uint32, 5121: np.uint8}
 _WIDTHS = {"SCALAR": 1, "VEC2": 2, "VEC3": 3}
+# glTF는 y축이 위다.
 _UP = np.array([0.0, 1.0, 0.0])
+# 모델 파일 크기 상한(16 MiB). 선반 모델은 이보다 훨씬 작다.
 MAX_MODEL_BYTES = 16 * 1024 * 1024
 
 
 def _load_glb(path: Path) -> tuple[dict[str, Any], bytes, str]:
+    """.glb(바이너리 glTF 2.0)를 JSON 문서, BIN 청크, 파일 SHA-256으로 나눈다.
+
+    구조: 12바이트 헤더(magic, version, 전체 길이) → JSON 청크(길이, 종류, 내용) → BIN 청크.
+    """
     raw = path.read_bytes()
     if len(raw) > MAX_MODEL_BYTES:
         raise ValueError(f"{path} is larger than {MAX_MODEL_BYTES} bytes")
@@ -53,6 +70,7 @@ def _load_glb(path: Path) -> tuple[dict[str, Any], bytes, str]:
 
 
 def _accessor(document: dict[str, Any], binary: bytes, index: int) -> np.ndarray:
+    """accessor 하나를 numpy 배열로 읽는다. 값이 섞여 저장된(interleaved) 버퍼는 지원하지 않는다."""
     accessor = document["accessors"][index]
     view = document["bufferViews"][accessor["bufferView"]]
     if view.get("byteStride"):
@@ -66,6 +84,7 @@ def _accessor(document: dict[str, Any], binary: bytes, index: int) -> np.ndarray
 
 
 def _rotation(quaternion: list[float]) -> np.ndarray:
+    """glTF 순서 (x, y, z, w) 쿼터니언을 3x3 회전 행렬로 바꾼다."""
     x, y, z, w = quaternion
     return np.array(
         [
@@ -77,7 +96,10 @@ def _rotation(quaternion: list[float]) -> np.ndarray:
 
 
 def _horizontal_faces(triangles: np.ndarray, facing_up: bool) -> dict[float, dict[str, Any]]:
-    """Group horizontal triangles by height (mm resolution): area and x/z extent per height."""
+    """수평 삼각형을 높이별(mm 해상도)로 묶어 높이마다 면적과 x/z 범위를 모은다.
+
+    법선의 y 성분이 0.98을 넘으면(약 11° 이내) 위를 보는 면, -0.98 미만이면 아래를 보는 면으로 본다.
+    """
     normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
     areas = np.linalg.norm(normals, axis=1) / 2
     units = normals / np.maximum(np.linalg.norm(normals, axis=1, keepdims=True), 1e-12)
@@ -93,7 +115,10 @@ def _horizontal_faces(triangles: np.ndarray, facing_up: bool) -> dict[float, dic
 
 
 def _side_profile(positions: np.ndarray) -> dict[str, float]:
-    """Front corners of the stepped side frame (local z = front, y = up), read from its outer face."""
+    """계단 모양 옆판의 앞쪽 모서리들을 옆판 바깥 면에서 읽는다 (로컬 z = 앞, y = 위).
+
+    아래 앞 모서리, 계단 높이, 위 앞 모서리, 맨 위 높이를 돌려준다. 정면 카메라 보정 기준점에 쓴다.
+    """
     outer = positions[np.abs(np.abs(positions[:, 0]) - np.abs(positions[:, 0]).max()) < 1e-4]
     low_front = float(outer[outer[:, 1] < 0.005][:, 2].max())
     step_height = float(outer[outer[:, 2] > low_front - 1e-4][:, 1].max())
@@ -108,6 +133,10 @@ def _side_profile(positions: np.ndarray) -> dict[str, float]:
 
 
 def read_shelf(path: Path) -> dict[str, Any]:
+    """선반 모델 하나를 읽어 선반 노드의 자세와 칸별 바닥판·천장·앞 턱 정보를 돌려준다.
+
+    선반 노드는 정확히 하나여야 하고, 크기 조정이 없으며, 세로축으로만 회전해 서 있어야 한다.
+    """
     document, binary, sha256 = _load_glb(path)
     nodes = document["nodes"]
     shelves = [node for node in nodes if "mesh" in node and node.get("name", "").startswith("shelf_")]
@@ -138,16 +167,16 @@ def read_shelf(path: Path) -> dict[str, Any]:
         deck = up_faces.get(round(float(marker[1]), 3))
         if deck is None:
             raise ValueError(f"{path}: {child['name']} is not on an upward deck surface")
-        # The lowest downward surface above the deck that covers most of it bounds object height.
+        # 바닥판 위에서 바닥판의 대부분(면적 50% 이상)을 덮는 가장 낮은 아래 방향 면이 물건 높이의 한계다.
         ceilings = [
             height
             for height, group in down_faces.items()
             if height > marker[1] and group["area"] >= 0.5 * deck["area"]
         ]
-        # The deck's front lip: the upward face just above the deck that reaches the deck front edge,
-        # and the deck underside just below. These edges are what the front camera actually sees.
+        # 바닥판 앞 턱: 바닥판 바로 위(3 cm 이내)에서 바닥판 앞 가장자리까지 닿는 위 방향 면과,
+        # 바로 아래(1 cm 이내)의 바닥판 밑면이다. 정면 카메라에 실제로 보이는 것은 이 모서리들이다.
         deck_front = max(deck["z"])
-        deck_height = round(float(marker[1]), 3)  # the grouping key of the deck surface itself
+        deck_height = round(float(marker[1]), 3)  # 바닥판 면 자체의 묶음 키(높이)
         lip_tops = [
             height
             for height, group in up_faces.items()
@@ -190,7 +219,10 @@ def build_slot_map(
     lower_deck_shift: float = 0.0,
     adjustment_note: str | None = None,
 ) -> dict[str, Any]:
-    """Build the slot map. `lower_deck_shift` (m) moves the lower deck and its lip to a measured height."""
+    """칸 정의를 만든다. `lower_deck_shift`(m)는 아래 단과 그 앞 턱을 실측한 높이로 옮긴다.
+
+    두 선반은 같은 방향을 보고 옆으로 붙어 있어야 한다(중심 간격 = 두 폭의 합의 절반, 1 mm 허용).
+    """
     if len(shelves) != 2:
         raise ValueError("exactly two shelf models are expected")
     fronts = [shelf["rotation"] @ np.array([0.0, 0.0, 1.0]) for shelf in shelves]
@@ -233,7 +265,7 @@ def build_slot_map(
         for slot in shelf["slots"]:
             to_world = lambda local: shelf["translation"] + shelf["rotation"] @ np.asarray(local, dtype=float)
             marker = to_frame(to_world(slot["marker_local"]))
-            # Split the deck footprint at the shelf center line into this slot's half.
+            # 바닥판 영역을 선반 가운데 선에서 나눠 이 칸에 해당하는 절반만 남긴다.
             corners = [
                 to_frame(to_world([x, slot["marker_local"][1], z]))
                 for x in (slot["deck_x"][0], 0.0, slot["deck_x"][1])
@@ -275,7 +307,7 @@ def build_slot_map(
                     ),
                 }
             )
-    # Side-frame front corners the operator can click in the front camera image (for solvePnP).
+    # 운영자가 정면 카메라 영상에서 클릭할 수 있는 옆판 앞 모서리들 (solvePnP용).
     keypoints = []
     profile = shelves[0]["side_profile"]
     if shelves[1]["side_profile"] != profile:
@@ -286,7 +318,7 @@ def build_slot_map(
         ("right_end", "오른쪽 끝 옆판", -1.0),
     ):
         y = offset_y * 2 * profile["half_width"]
-        # The side-frame step is left out: it lines up with the lower lip only in the model.
+        # 옆판의 계단 모서리는 넣지 않는다. 모델에서만 아래 단 턱과 높이가 맞고, 실물 아래 단은 3.5 cm 낮기 때문이다.
         for corner, corner_label, local_z, height in (
             ("bottom_front", "아래 앞 모서리", profile["low_front_z"], 0.0),
             ("top_front", "위 앞 모서리", profile["high_front_z"], profile["top_height"]),
@@ -302,8 +334,8 @@ def build_slot_map(
                     },
                 }
             )
-    # Corners of the front lip of each deck with a used slot. The deck surface itself hides behind the
-    # lip, so the lip's top and bottom edges are the lines the front camera shows.
+    # 사용하는 칸이 있는 단마다 앞 턱의 모서리를 넣는다. 바닥판 면은 턱 뒤에 가려지므로,
+    # 정면 카메라에 보이는 선은 턱의 윗변과 아랫변이다.
     for shelf in shelf_entries:
         for level, level_label in (("UPPER", "위"), ("LOWER", "아래")):
             deck = [
@@ -359,6 +391,7 @@ def build_slot_map(
 
 
 def main() -> int:
+    """CLI 진입점. 기존 출력 파일은 --force 없이 덮어쓰지 않는다."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("models", nargs=2, type=Path, help="the two shelf .glb files")
     parser.add_argument("--inactive", default="", help="comma-separated slot IDs that exist but are not used")
@@ -375,6 +408,7 @@ def main() -> int:
     if args.output.exists() and not args.force:
         print(f"{args.output} already exists; pass --force to replace it", file=sys.stderr)
         return 1
+    # 실측 보정에는 언제·어떻게 쟀는지 기록이 반드시 따라가야 한다.
     if args.lower_deck_shift and not args.adjustment_note:
         print("--lower-deck-shift needs --adjustment-note describing the measurement", file=sys.stderr)
         return 1

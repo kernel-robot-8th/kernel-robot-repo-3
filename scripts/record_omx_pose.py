@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Record the OMX follower's current joint positions under a pose name. Reads only; never writes.
+"""OMX 팔로워의 현재 관절 위치를 자세 이름으로 기록한다. 읽기만 하고 모터에 절대 쓰지 않는다.
 
-Put the follower in place by hand (torque off) or with the leader, then run:
+팔로워를 손으로(토크 꺼짐) 또는 리더로 자세에 놓은 뒤 실행한다:
 
     sg dialout -c "~/lerobot-venv/bin/python scripts/record_omx_pose.py home"
     sg dialout -c "~/lerobot-venv/bin/python scripts/record_omx_pose.py slot_a_2_1"
 
-Positions are raw Dynamixel ticks (4096 per turn, extended position mode) of the five arm joints and the
-gripper. The file also keeps the follower board serial and the slot map version, so the worker can refuse
-poses recorded on a different arm or for a different slot map. A pose name must be `home` or an active
-slot ID; recording an existing name needs --replace.
+위치는 팔 관절 다섯 개와 그리퍼의 원시 Dynamixel 틱(1회전 4096, 확장 위치 모드)이다. 파일에는 팔로워 보드
+일련번호와 칸 정의 버전도 함께 남겨, 워커가 다른 팔에서 기록했거나 다른 칸 정의용으로 기록한 자세를 거부할 수 있게
+한다. 자세 이름은 `home`이거나 사용 중인 칸 ID여야 한다(코드는 place_*, pick_* 이름도 받는다). 이미 있는 이름을
+다시 기록하려면 --replace가 필요하다.
+결과는 기본 config/omx-slot-poses.json에 임시 파일을 쓴 뒤 바꿔 넣는 방식으로 저장한다.
+다른 모듈(omx_slot_motion.py, omx_lerobot_worker.py)이 open_follower()와 check_calibration()을 가져다 쓴다.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from omx_slot_motion import DEFAULT_PORT, board_serial
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+# 팔로워 관절 이름 → (모터 ID, 모델). xl430은 어깨·팔꿈치, xl330은 손목·그리퍼다.
 FOLLOWER_MOTORS = {
     "shoulder_pan": (11, "xl430-w250"),
     "shoulder_lift": (12, "xl430-w250"),
@@ -37,20 +40,25 @@ FOLLOWER_MOTORS = {
     "wrist_roll": (15, "xl330-m288"),
     "gripper": (16, "xl330-m288"),
 }
-# Registers the follower must already hold (LeRobot OMX factory calibration) for ticks to mean the same thing.
+# 틱 값이 같은 뜻이 되려면 팔로워가 이미 갖고 있어야 하는 레지스터 값(LeRobot OMX 공장 보정).
 EXPECTED_CALIBRATION = {"Homing_Offset": 0, "Drive_Mode": 0}
 
 
 def open_follower(port: str) -> DynamixelMotorsBus:
+    """팔로워 포트를 LeRobot Dynamixel 버스로 연다. 연결만 하고 모터 설정은 쓰지 않는다."""
     bus = DynamixelMotorsBus(
         port=port,
         motors={name: Motor(motor_id, model, MotorNormMode.RANGE_M100_100) for name, (motor_id, model) in FOLLOWER_MOTORS.items()},
     )
-    bus.connect(handshake=True)  # opens the port and pings every motor; writes nothing
+    bus.connect(handshake=True)  # 포트를 열고 모든 모터에 ping한다. 아무것도 쓰지 않는다
     return bus
 
 
 def check_calibration(bus: DynamixelMotorsBus) -> None:
+    """Homing_Offset·Drive_Mode가 공장값(0)인지 읽어 확인하고, 다르면 ValueError를 던진다.
+
+    보정이 다르면 같은 틱 값이 다른 관절 각도를 뜻하므로, 기록한 자세를 재생하면 엉뚱한 곳으로 간다.
+    """
     for register, expected in EXPECTED_CALIBRATION.items():
         values = bus.sync_read(register, normalize=False, num_retry=3)
         wrong = {name: value for name, value in values.items() if value != expected}
@@ -59,7 +67,12 @@ def check_calibration(bus: DynamixelMotorsBus) -> None:
 
 
 def capture_held_pose(bus: DynamixelMotorsBus, seconds: float) -> dict[str, int] | None:
-    """Longest stretch (at least 1 s) where no joint moved more than 6 ticks, away from where the arm started."""
+    """팔이 처음 있던 곳에서 떨어진 채, 어느 관절도 6틱 넘게 움직이지 않은 가장 긴 구간(최소 1초)의 가운데 자세를 고른다.
+
+    토크가 꺼진 팔은 손을 놓으면 처지므로, 손으로 붙잡고 있던 동안의 자세를 골라내기 위한 것이다.
+    0.2초 간격으로 읽으므로 6개 간격(j - i >= 5 다음 표본까지) ≈ 1초이고, 시작 자세에서 100틱(약 9°)
+    넘게 떨어져야 "옮긴 자세"로 본다. 그런 구간이 없으면 None이다.
+    """
     import time
 
     samples = []
@@ -86,6 +99,7 @@ def capture_held_pose(bus: DynamixelMotorsBus, seconds: float) -> dict[str, int]
 
 
 def main() -> int:
+    """이름 검사 → 자세 파일의 보드·칸 정의 버전 대조 → 모터 읽기 → 원자적 저장."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("name", help="'home' or an active slot ID such as slot_a_2_1")
     parser.add_argument("--port", default=DEFAULT_PORT)
@@ -101,8 +115,8 @@ def main() -> int:
 
     slot_raw = args.slots.read_bytes()
     active = {slot["slot_id"] for slot in json.loads(slot_raw)["slots"] if slot["active"]}
-    # "place_*" poses are where the arm puts an object down (for example place_pinky above the cart);
-    # "pick_*" poses are taught pick poses (for example pick_apple_above, pick_apple_grasp).
+    # "place_*" 자세는 팔이 물체를 내려놓는 곳이다(예: 카트 위의 place_pinky).
+    # "pick_*" 자세는 기록해 둔 집기 자세다(예: pick_apple_above, pick_apple_grasp).
     if args.name != "home" and not args.name.startswith(("place_", "pick_")) and args.name not in active:
         print(f"error: name must be 'home', place_<where>, pick_<what> or one of {sorted(active)}", file=sys.stderr)
         return 1
@@ -117,6 +131,7 @@ def main() -> int:
         "slot_map_sha256": slot_map_sha,
         "poses": {},
     }
+    # 기존 파일이 다른 보드나 다른 칸 정의에서 기록됐으면 섞지 않고 멈춘다.
     if document.get("follower_board") != board_serial(args.port):
         print(f"error: {args.output} was recorded on board {document.get('follower_board')}", file=sys.stderr)
         return 1
@@ -146,6 +161,7 @@ def main() -> int:
         "torque_enabled_while_recording": {name: bool(value) for name, value in torque.items()},
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    # 같은 폴더에 임시 파일로 다 쓴 뒤 replace로 바꿔 넣어, 중간에 끊겨도 자세 파일이 반쯤 쓰인 채 남지 않게 한다.
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=args.output.parent, delete=False, suffix=".tmp") as handle:
         json.dump(document, handle, ensure_ascii=False, indent=2)
         handle.write("\n")

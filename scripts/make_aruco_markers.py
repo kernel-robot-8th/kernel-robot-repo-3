@@ -1,11 +1,14 @@
-"""Print sheet of the Pinky ArUco markers at true size (A4 PDF + one PNG per marker).
+"""핑키 ArUco 마커를 실제 크기로 인쇄할 종이를 만든다 (A4 PDF + 마커마다 PNG 한 장).
 
-The markers and their size must match what the parking judgment was registered with: DICT_4X4_50, 70 mm side
-(.control-station/parking-spots/*.json), and the marker numbers each Pinky carries (config/pinky-markers.json).
-The sheet carries a 50 mm ruler: print at 100 % ("actual size") and measure it before cutting.
+마커 종류와 크기는 주차 판정에 등록한 값과 같아야 한다: DICT_4X4_50, 한 변 70 mm
+(.control-station/parking-spots/*.json), 그리고 핑키마다 붙이는 마커 번호(config/pinky-markers.json).
+종이에는 50 mm 잣대가 들어 있다. 100 %("실제 크기")로 인쇄하고 오리기 전에 잣대를 자로 재 본다.
 
-    .venv/bin/python scripts/make_aruco_markers.py            # markers from config/pinky-markers.json
-    .venv/bin/python scripts/make_aruco_markers.py --ids 1 23 # any markers
+    .venv/bin/python scripts/make_aruco_markers.py            # config/pinky-markers.json의 마커
+    .venv/bin/python scripts/make_aruco_markers.py --ids 1 23 # 원하는 번호의 마커
+
+파일(기본 docs/markers/)을 쓸 뿐이며 카메라·로봇과는 통신하지 않는다.
+첫 줄은 argparse 설명(__doc__.splitlines()[0])으로 쓰이므로 한 줄 요약으로 둔다.
 """
 
 from __future__ import annotations
@@ -19,33 +22,37 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
+# 인쇄 해상도. mm 단위 치수를 이 DPI의 픽셀로 바꿔 그린다.
 DPI = 600
 A4_MM = (210.0, 297.0)
-QUIET_MM = 10.0  # white margin kept around the black square when cutting; the detector needs it
+QUIET_MM = 10.0  # 오릴 때 검은 사각형 둘레에 남기는 흰 여백. 검출기가 마커 경계를 찾으려면 필요하다
 FONT = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
 FONT_REGULAR = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
 
 
 def px(mm: float) -> int:
+    """mm를 DPI 기준 픽셀 수로 바꾼다 (1 inch = 25.4 mm)."""
     return round(mm / 25.4 * DPI)
 
 
 def font(size_mm: float, bold: bool = True) -> ImageFont.FreeTypeFont:
+    """글자 높이 size_mm의 Noto CJK 글꼴. 글꼴 파일이 없으면 기본 글꼴(한글이 깨질 수 있음)로 대신한다."""
     path = FONT if bold else FONT_REGULAR
     try:
-        return ImageFont.truetype(path, px(size_mm), index=1)  # index 1 = Korean in the Noto CJK collection
+        return ImageFont.truetype(path, px(size_mm), index=1)  # index 1 = Noto CJK 모음 파일 안의 한국어 글꼴
     except OSError:
         return ImageFont.load_default()
 
 
 def marker_image(marker_id: int, side_mm: float) -> Image.Image:
+    """검은 테두리 1칸을 포함해 한 변이 side_mm인 DICT_4X4_50 마커 그림을 만든다."""
     dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
     square = cv2.aruco.generateImageMarker(dictionary, marker_id, px(side_mm), borderBits=1)
     return Image.fromarray(square).convert("L")
 
 
 def pinky_markers() -> list[tuple[int, str, str]]:
-    """(marker id, Pinky name, spot id) from config/pinky-markers.json, P0 first."""
+    """config/pinky-markers.json에서 (마커 번호, 핑키 이름, 자리 ID)를 P0부터 순서대로 읽는다."""
     names = {"10": "P0", "11": "P1", "12": "P2"}
     document = json.loads((ROOT / "config" / "pinky-markers.json").read_text(encoding="utf-8"))
     return [(int(entry["marker_id"]), names.get(pinky_id, pinky_id), entry["spot_id"])
@@ -53,6 +60,7 @@ def pinky_markers() -> list[tuple[int, str, str]]:
 
 
 def draw_sheet(markers: list[tuple[int, str, str]], side_mm: float) -> Image.Image:
+    """A4 한 장에 안내 문구, 마커(최대 4칸, 실제로는 3개), 점선 자르는 선을 그리고 남는 칸에 잣대를 넣는다."""
     page = Image.new("L", (px(A4_MM[0]), px(A4_MM[1])), 255)
     draw = ImageDraw.Draw(page)
     draw.text((px(15), px(12)), f"핑키 ArUco 마커 · DICT_4X4_50 · 한 변 {side_mm:.0f} mm", fill=0, font=font(6))
@@ -76,6 +84,7 @@ def draw_sheet(markers: list[tuple[int, str, str]], side_mm: float) -> Image.Ima
 
 
 def dashed_square(draw: ImageDraw.ImageDraw, x_mm: float, y_mm: float, size_mm: float) -> None:
+    """오릴 자리를 3 mm 선, 2 mm 간격의 점선 사각형으로 그린다."""
     left, top, right, bottom = px(x_mm), px(y_mm), px(x_mm + size_mm), px(y_mm + size_mm)
     dash, gap = px(3), px(2)
     for start in range(left, right, dash + gap):
@@ -87,7 +96,7 @@ def dashed_square(draw: ImageDraw.ImageDraw, x_mm: float, y_mm: float, size_mm: 
 
 
 def ruler(draw: ImageDraw.ImageDraw, x_mm: float, y_mm: float) -> None:
-    """A 50 mm bar with 10 mm ticks to check the print scale."""
+    """인쇄 배율을 확인하는 50 mm 막대와 10 mm 눈금을 그린다."""
     y = px(y_mm + 30)
     draw.line([(px(x_mm), y), (px(x_mm + 50), y)], fill=0, width=6)
     for tick in range(0, 51, 10):
@@ -97,6 +106,7 @@ def ruler(draw: ImageDraw.ImageDraw, x_mm: float, y_mm: float) -> None:
 
 
 def main() -> None:
+    """A4 PDF 한 장과 마커별 PNG를 --out 폴더에 저장한다."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--ids", type=int, nargs="*", help="marker numbers (default: config/pinky-markers.json)")
     parser.add_argument("--side-mm", type=float, default=70.0)

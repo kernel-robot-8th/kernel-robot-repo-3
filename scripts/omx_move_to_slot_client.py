@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Send one /omx/move_to_slot goal, print its feedback and result, and cancel it on Ctrl+C.
+"""/omx/move_to_slot 목표 하나를 보내고 진행과 결과를 출력하며, Ctrl+C를 누르면 취소를 보낸다.
 
-`ros2 action send_goal` does not send a cancel when interrupted (Jazzy, 2026-11-04), so this client exists for
-hands-on practice: Ctrl+C (or --cancel-after) asks the worker to stop, and the worker holds the arm where it is.
-It also fills slot_map_version and valid_until, which are tedious to type by hand.
+`ros2 action send_goal`은 중단해도 취소를 보내지 않으므로(Jazzy, 2026-11-04) 직접 해 보는 실습용으로 이 클라이언트를
+만들었다. Ctrl+C(또는 --cancel-after)는 워커에 멈추라고 요청하고, 워커는 팔을 그 자리에 세운다.
+손으로 치기 번거로운 slot_map_version과 valid_until도 채워 준다.
 
     source /opt/ros/jazzy/setup.bash && source cpp/install/setup.bash
     export ROS_DOMAIN_ID=87 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
     python3 scripts/omx_move_to_slot_client.py slot_a_2_1
     python3 scripts/omx_move_to_slot_client.py home --cancel-after 1.5
 
-Exit code 0 only when the outcome is SUCCEEDED with pose_reached; a simulated result says so on its last line.
-This does not replace the hardware power cut.
+종료 코드는 outcome이 SUCCEEDED이고 pose_reached일 때만 0이다. 모의 결과면 마지막 줄에 그렇게 표시한다.
+워커(omx_ros_worker.py)가 실물 모드면 이 목표로 실물 팔이 움직인다. 하드웨어 전원 차단을 대신하지 않는다.
 """
 
 from __future__ import annotations
@@ -31,12 +31,17 @@ from omx_interfaces.action import MoveToSlot
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+# action_msgs의 GoalStatus 번호 → 출력용 이름
 STATUS_NAMES = {
     GoalStatus.STATUS_SUCCEEDED: "succeeded", GoalStatus.STATUS_CANCELED: "canceled", GoalStatus.STATUS_ABORTED: "aborted",
 }
 
 
 def build_goal(args: argparse.Namespace) -> MoveToSlot.Goal:
+    """CLI 인자로 MoveToSlot 목표를 만든다.
+
+    slot_map_version은 따로 주지 않으면 --slots 파일의 SHA-256이고, valid_until은 지금부터 --valid-for초 뒤다.
+    """
     goal = MoveToSlot.Goal()
     goal.command_id = args.command_id or f"PRACTICE-{time.strftime('%H%M%S')}"
     goal.slot_id = args.slot_id
@@ -48,6 +53,7 @@ def build_goal(args: argparse.Namespace) -> MoveToSlot.Goal:
 
 
 def main() -> int:
+    """목표 하나를 보내고 결과를 기다린다. 서버가 없으면 2, 거부·실패면 1, 성공이면 0을 돌려준다."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("slot_id", help="a slot ID such as slot_a_2_1, or 'home' when it is recorded")
     parser.add_argument("--action", default="/omx/move_to_slot")
@@ -59,7 +65,7 @@ def main() -> int:
     parser.add_argument("--server-timeout", type=float, default=5.0)
     args = parser.parse_args()
 
-    # rclpy's own SIGINT handler shuts the context down, after which no cancel can be sent; keep Python's.
+    # rclpy 자체 SIGINT 처리기는 컨텍스트를 종료해 그 뒤로는 취소를 보낼 수 없다. Python 기본 처리기를 그대로 둔다.
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     node = Node("omx_move_to_slot_client")
     client = ActionClient(node, MoveToSlot, args.action)
@@ -83,6 +89,7 @@ def main() -> int:
             return 1
         print("  수락됨 (수락은 이동 성공이 아닙니다)", flush=True)
 
+        # 0.1초씩 돌며 결과를 기다린다. Ctrl+C(KeyboardInterrupt)나 --cancel-after 시각이 되면 취소를 한 번만 보낸다.
         result_future = handle.get_result_async()
         cancel_at = None if args.cancel_after is None else time.monotonic() + args.cancel_after
         cancel_sent = False
