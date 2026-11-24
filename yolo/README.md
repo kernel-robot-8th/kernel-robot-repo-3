@@ -1,9 +1,33 @@
-# 딸기·자동차·공 YOLO 검출 모델
+# YOLO 물체 검출
 
-로봇팔 카메라 화면에서 **딸기(0)·자동차(1)·공(2)** 을 물체마다 각각 박스로 찾는 YOLO 모델의 라벨링·학습·테스트 코드다.
-관제 서버와는 독립된 Python 스크립트이며, 결과물은 `best.pt` 모델 파일 하나다.
+선반 재고와 핑키 위 물건을 세는 YOLO 모델의 데이터 준비·학습 스크립트와 팀 모델이 있다.
+관제 서버와는 독립된 Python 스크립트이고, 관제는 결과물인 `.pt` 모델 파일만 읽는다.
 
-## 준비
+## 관제가 쓰는 모델
+
+| 모델 | 쓰는 곳 | 설정 |
+|---|---|---|
+| `best25` (커밋 `74b40c0`, 12클래스) | 천장 카메라·선반 카메라의 기본 검출 | `CONTROL_STATION_HEAD_YOLO_WEIGHTS`, `CONTROL_STATION_SHELF_YOLO_WEIGHTS`. `scripts/check_setup.sh --vision`이 Git 기록에서 꺼내 `.control-station/models/`에 둔다 |
+| [`models/best26.pt`](models/best26.pt) | 정면·상단 카메라 일반 검출 (선택) | `CONTROL_STATION_HEAD_YOLO_WEIGHTS`, `CONTROL_STATION_FRONT_YOLO_WEIGHTS` |
+| [`models/pinky_cargo_5class_v2.pt`](models/pinky_cargo_5class_v2.pt) | 핑키 쟁반 위 물건 보조 검출. 같은 프레임의 일반 검출과 합쳐 탑재 목록과 주문 확인에 쓴다 | `CONTROL_STATION_LOAD_YOLO_WEIGHTS`, `CONTROL_STATION_LOAD_YOLO_CONF` |
+
+설정 예시는 [control-station.env.example](../.control-station/control-station.env.example)에 있다. 관제가 검출 결과로 개수를 세는 방법은 [주문 흐름](../docs/implementation/order-flow.md)과 `src/control_station/cameras/counts.py`에 있다.
+
+## 스크립트
+
+| 파일 | 하는 일 |
+|---|---|
+| `capture_pinky_tray.py` | 천장 카메라에서 핑키 쟁반 평가용 사진을 배치 이름별로 저장한다. 예: `python yolo/capture_pinky_tray.py carrot1_tissue1` |
+| `prepare_pinky_tray.py` | 찍은 사진에 박스를 그려 핑키 적재 전용 데이터셋을 만든다. `--cargo-only`, `--auto-weights`(자동 라벨 초안 검토) 등을 지원한다 |
+| `train_finetune.py` | 이미 학습한 모델에 현장 사진을 조금 더 넣어 이어서 학습한다. 앞쪽 층을 고정하고 낮은 학습률로 짧게 학습해 다른 클래스를 잊지 않게 한다 |
+| `capture_frames.py` | 여러 카메라에서 일정 간격으로 프레임을 저장한다 |
+| `label.py`, `camera_label.py`, `prepare_data.py`, `train.py`, `test.py`, `camera_test.py` | 첫 모델(딸기·자동차·공)부터 쓴 라벨링·분할·학습·확인 도구. 아래 [첫 모델](#첫-모델-딸기자동차공-2026-10-28)에 설명이 있다 |
+
+## 첫 모델: 딸기·자동차·공 (2026-10-28)
+
+로봇팔 카메라 화면에서 **딸기(0)·자동차(1)·공(2)** 을 물체마다 박스로 찾는 첫 모델의 기록이다. 결과물은 `best.pt` 모델 파일 하나다.
+
+### 준비
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
@@ -14,7 +38,7 @@ pip install -r yolo/requirements.txt
 - 사전학습 가중치 `yolo26n.pt`(Ultralytics YOLO26 nano)를 미리 받아 두고 `train.py --pretrained`로 지정한다. 기본값은 `../omx_ws/yolo26n.pt`다.
 - 사진·데이터셋·모델(`.pt`)은 용량이 커서 git에 넣지 않는다 (`yolo/.gitignore`).
 
-## 폴더 구조
+### 폴더 구조
 
 ```
 video/                                  원본 사진 (저장소 밖에서 따로 공유)
@@ -31,7 +55,7 @@ yolo/
 
 라벨은 YOLO 형식이다. 사진과 같은 이름의 txt에 박스마다 한 줄씩 `클래스 중심x 중심y 너비 높이`(0~1 비율)를 적는다.
 
-## 전체 순서
+### 전체 순서
 
 ```bash
 pip install -r yolo/requirements.txt   # 처음 한 번. albumentations가 추가됐다
@@ -58,7 +82,7 @@ python yolo/camera_test.py         # 4) 카메라 실시간 검출로 확인
 - 같은 이름의 결과 폴더가 있으면 YOLO가 `-2`, `-3`처럼 번호를 붙인다.
 - 학습 횟수는 `--epochs`로 바꾼다.
 
-## 학습 중 증강 (`train.py`)
+### 학습 중 증강 (`train.py`)
 
 사진을 미리 만들지 않고, 매 학습마다 무작위로 변형해서 같은 사진도 매번 다르게 본다. 증강이 강한 만큼 기본 학습 횟수를 150회로 늘렸다.
 
@@ -78,7 +102,7 @@ python yolo/camera_test.py         # 4) 카메라 실시간 검출로 확인
 
 증강은 사진 속 물체의 방향과 화질만 바꾼다. 위에서 내려다본 3D 시점이나 실제로 가려진 모습은 만들 수 없으므로 실제 카메라 사진을 따로 모아야 한다.
 
-## 카메라 라벨링 (`camera_label.py`)
+### 카메라 라벨링 (`camera_label.py`)
 
 ```bash
 python yolo/camera_label.py             # 외장 USB 카메라 (/dev/video0)
@@ -98,18 +122,18 @@ python yolo/camera_label.py --camera 2  # 다른 카메라 번호
 여러 물체가 함께 나온 카메라 사진이 실제 사용 화면과 가장 비슷하므로 주 학습 데이터로 삼는다.
 물체 위치·간격·겹침·카메라 거리를 바꿔 가며 50장 이상 찍는 것을 목표로 한다.
 
-## 변형 사진 (`prepare_augmented.py`)
+### 변형 사진 (`prepare_augmented.py`)
 
 - **밝기** 0.4 ~ 1.6배, **회전** -20° / 0° / 20°
 - **크기** 0.05 ~ 1.5배. 0.05·0.1·0.2·0.3은 아주 먼 거리로, 640 화면에서 물체가 약 10~60px로 보인다. 빈 공간은 원본의 바닥 부분을 반복해 채운다.
 - **크롭**: 물체마다 상·하·좌·우 중 한쪽을 잘라 40% 또는 70%만 보이게 하고, 나머지 방향의 배경은 남긴다. 화면 안의 다른 물체도 보이는 만큼 정답에 들어간다. 파일 이름은 `crop_<방향><남은 비율>_b<물체 번호>_원본이름.jpg`다.
 - 원본과 그 변형이 train과 val에 섞이지 않도록 분할한 뒤에 변형한다.
 
-## 학습 기록
+### 학습 기록
 
 회차별로 실제 카메라에서 발견한 문제와 그래서 바꾼 학습을 [docs/training-log.docx](docs/training-log.docx) (화면 사진 포함)에 적는다.
 
-## 현재 결과 (2026-10-28)
+### 현재 결과 (2026-10-28)
 
 `strawberry_car_ball_expanded-6` (기존 사진 130장 + 카메라 사진 5장, 추가 학습 10회)
 
@@ -119,14 +143,14 @@ python yolo/camera_label.py --camera 2  # 다른 카메라 번호
 검증 사진은 학습 사진과 같은 영상·장면에서 나왔으므로 이 점수를 일반 성능으로 해석하지 않는다.
 실제 성능은 새로 배치한 물체를 `camera_test.py`로 확인한다.
 
-## 알려진 한계
+### 알려진 한계
 
 - 원본 딸기 라벨이 몸통 아래의 초록 끈까지 포함한다. 몸통 기준으로 다시 라벨링해야 박스가 정확해진다.
 - 카메라 사진이 아직 5장이라 선반 배경·실제 거리에 대한 학습이 부족하다.
 - 10px 정도로 작은 물체는 YOLO26n·입력 640의 한계에 가깝다. 필요하면 `imgsz`를 키우는 것을 검토한다.
 - 클래스를 늘릴 때는 `camera_label.py`의 `classes`, `prepare_data.py`의 `class_ids`·`data.yaml` 이름을 같이 고친다. 기존 번호는 바꾸지 않고 뒤에 붙인다.
 
-## 다른 곳에서 모델 쓰기
+### 다른 곳에서 모델 쓰기
 
 `runs/<최신 폴더>/weights/best.pt` 파일 하나만 넘기면 된다. 클래스 이름이 파일 안에 들어 있다.
 받는 쪽은 `ultralytics>=8.4`가 필요하다 (YOLO26 지원).

@@ -1,8 +1,34 @@
 # 실행 방법
 
+## 새 PC 환경 확인
+
+새 PC에서 처음 작업한다면 필요한 것이 준비됐는지 먼저 확인합니다. 옵션 없이 실행하면 확인만 하고 아무것도 바꾸지 않습니다.
+
+```bash
+scripts/check_setup.sh                               # 확인만 (✓ 준비됨 · ✗ 필수 항목 없음 · △ 선택 항목 없음)
+scripts/check_setup.sh --install                     # 빠진 apt 패키지(sudo 필요)와 .venv 의존성 설치
+scripts/check_setup.sh --vision                      # YOLO(ultralytics, PyTorch)와 팀 모델 준비. 용량이 큼
+scripts/check_setup.sh --install --vision --dry-run  # 실행할 명령만 보기
+```
+
+| 확인 영역 | 확인하는 것 | 필요한 때 |
+|---|---|---|
+| 관제 서버 (필수) | Python 3.10 이상, `.venv`, SQLAlchemy·Alembic, OpenCV 4.x | 항상 |
+| 카메라 | `v4l2-ctl`, 연결된 카메라의 by-path 목록, 장치 권한 | 실물 카메라를 쓸 때 |
+| 핑키 주차 판정 | 천장 카메라 내부 보정 파일, 등록된 주차 위치, 창을 띄우는 OpenCV | 주차 판정을 쓸 때 |
+| YOLO / GPU | GPU, ultralytics, PyTorch CUDA, 팀 YOLO 모델 | 카메라에 YOLO를 띄울 때 |
+| ROS 2 Jazzy | ROS 2, colcon, `cv_bridge`·`rclcpp_components` 등 ROS 패키지, `.venv`의 PyYAML | 주차 판정 노드, `ros:` 카메라, ROS 모드 |
+| C++ 빌드 | cmake, OpenCV·nlohmann-json·OpenSSL·GTest 개발 패키지 | `cpp/` 빌드 |
+
+필수 항목이 빠지면 종료 코드 1로 끝나고, 빠진 항목마다 설치 명령을 보여 줍니다.
+
+- `--vision`을 쓰면 ultralytics가 `opencv-python` 5.x를 함께 설치해 `cv2`를 덮어씁니다. 이 저장소는 `opencv-python-headless` 4.x를 쓰므로 스크립트가 설치 뒤 4.x로 되돌립니다.
+- 스크립트가 준비하는 팀 YOLO 모델은 커밋 `74b40c0`의 `best25.pt`입니다. Git 기록에서 꺼내 `.control-station/models/`에 둡니다.
+- ROS 2 Jazzy 설치, 카메라 내부 보정, 주차 위치 등록은 스크립트가 하지 않습니다. [ROS 2 설치 안내](https://docs.ros.org/en/jazzy/Installation.html), [카메라 내부 보정](camera-intrinsic-calibration.md), [천장 카메라 Pinky 주차 판정](#천장-카메라-pinky-주차-판정)을 따릅니다.
+
 ## 대시보드와 API만 실행
 
-처음이라면 `scripts/check_setup.sh`로 필요한 것이 준비됐는지 먼저 확인합니다(사용법은 [README](../../README.md#시작-전-환경-확인)). Python 3.10 이상 환경에서 저장소 의존성을 설치한 뒤 실행합니다. 기본 모드에는 별도 LeRobot 폴더가 필요하지 않습니다.
+처음이라면 `scripts/check_setup.sh`로 필요한 것이 준비됐는지 먼저 확인합니다(사용법은 [새 PC 환경 확인](#새-pc-환경-확인)). Python 3.10 이상 환경에서 저장소 의존성을 설치한 뒤 실행합니다. 기본 모드에는 별도 LeRobot 폴더가 필요하지 않습니다.
 
 ```bash
 python3 -m venv .venv
