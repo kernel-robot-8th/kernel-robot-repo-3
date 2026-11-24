@@ -24,7 +24,7 @@ PYTHONPATH=src .venv/bin/python -m control_station.app
 - 임무 단계: `docking_manual` → `dock_complete` → `docking_anchor` → `docked_manual` → `received` → 주행 → `course_complete` → `mission-complete` → 복귀
 - 가운데 벽은 통로 점(`navigation.json`의 `wall_passages`)으로 지나가고, 5번 앞에서는 정면 진입점에 먼저 섭니다.
 - `dock_exit_reverse`가 false면 5번에서 후진 없이 나갑니다.
-- 다시 맞추기(`redock`): 35 cm 물러났다가 정면 진입점에서 다시 들어옵니다. 세 번까지입니다.
+- 다시 맞추기(`redock`): 35 cm 물러났다가 정면 진입점에서 다시 들어옵니다. 관제는 최대 5번까지 부르고(`max_redocks`), 가상 핑키 자체 한도는 실제 핑키 관제와 같은 30번입니다.
 
 ## 가상에만 있는 것
 
