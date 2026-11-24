@@ -103,11 +103,12 @@ function inventoryRowSkeleton(product) {
         <h3>${escapeHtml(product.label)}</h3>
         <span class="inventory-chips" data-field="chips"></span>
       </div>
-      <dl class="inventory-available"><div class="stat"><dt>주문 가능</dt><dd data-field="available">–</dd></div></dl>
+      <dl class="inventory-available"><div class="stat"><dt>카메라 재고</dt><dd data-field="camera-stock">–</dd></div></dl>
     </div>
     <dl class="inventory-counts">
       ${shelves}
       <div class="stat"><dt>선반 합계</dt><dd data-field="total">–</dd></div>
+      <div class="stat"><dt>주문 가능</dt><dd data-field="available">–</dd></div>
       <div class="stat"><dt>주문이 잡아 둔 개수</dt><dd data-field="reserved">–</dd></div>
     </dl>
     <p class="inventory-hint" data-field="hint" hidden></p>
@@ -155,22 +156,28 @@ function updateInventoryRow(row, product) {
 }
 
 function renderInventoryProducts() {
-  const products = inventoryScreen.data?.products;
-  if (!products) return;
-  if (!products.length) {
-    inventoryProducts.dataset.keys = '';
-    inventoryProducts.innerHTML = '<p class="loading">주문할 수 있는 물건이 없어요. 정책 정의 파일을 확인하세요.</p>';
-    return;
-  }
-  const keys = products.map((product) => `${product.object_class}:${product.label}`).join('|');
+  const data = inventoryScreen.data;
+  if (!data) return;
+  const rows = (data.camera_stock || []).map((stock) => ({
+    stock, product: data.products.find((item) => item.object_class === stock.object_class),
+  }));
+  const keys = rows.map(({ stock, product }) => `${stock.object_class}:${Boolean(product)}`).join('|');
   if (inventoryProducts.dataset.keys !== keys) {
     inventoryProducts.dataset.keys = keys;
-    inventoryProducts.innerHTML = products.map((product) => `
-      <article class="inventory-row" data-object-class="${escapeHtml(product.object_class)}" aria-label="${escapeHtml(product.label)} 재고">
-        ${inventoryRowSkeleton(product)}
-      </article>`).join('');
+    inventoryProducts.innerHTML = rows.map(({ stock, product }) => `
+      <article class="inventory-row" data-object-class="${escapeHtml(stock.object_class)}" aria-label="${escapeHtml(stock.label)} 재고">
+        ${product ? inventoryRowSkeleton(product) : `
+          <div class="inventory-head">
+            <div class="inventory-name"><h3>${escapeHtml(stock.label)}</h3></div>
+            <dl class="inventory-available"><div class="stat"><dt>카메라 재고</dt><dd data-field="camera-stock">–</dd></div></dl>
+          </div>`}
+      </article>`).join('') || '<p class="loading">카메라 재고를 불러오는 중…</p>';
   }
-  products.forEach((product, index) => updateInventoryRow(inventoryProducts.children[index], product));
+  rows.forEach(({ stock, product }, index) => {
+    const row = inventoryProducts.children[index];
+    if (product) updateInventoryRow(row, product);
+    row.querySelector('[data-field="camera-stock"]').textContent = stock.count == null ? '?' : String(stock.count);
+  });
 }
 
 // ---- recent changes ----

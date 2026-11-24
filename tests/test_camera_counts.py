@@ -13,7 +13,7 @@ from unittest import mock
 from control_station.act_policies import load_act_policies
 from control_station.arms import load_arms
 from control_station.camera_counts import (
-    CountUnavailable, PinkyLoadCounter, ShelfStockCounter, sample_frames, tray_region_from_spot,
+    CountUnavailable, PinkyLoadCounter, ShelfStockCounter, camera_inventory, head_middle_view_from_env, head_shelf_view_from_env, sample_frames, tray_region_from_spot,
 )
 from control_station.mock_world import MockWorld
 from control_station.models import CameraConnectionState, CameraSnapshot, CameraStreamState, FrameFreshness
@@ -125,6 +125,34 @@ class CountTests(unittest.TestCase):
         self.assertFalse(live["usable_for_robot_control"])
         empty = PinkyLoadCounter(FakeCamera("head_camera", [[]]).snapshots, "head_camera", region).live()
         self.assertEqual((empty["state"], empty["counts"]), ("READY", {}))
+
+    def test_camera_inventory_uses_max_per_class_and_filters_regions(self) -> None:
+        apple = detection("apple", [30, 20, 50, 40])
+        head = FakeCamera("head_camera", [[apple, detection("carrot", [400, 100, 420, 120])]])
+        front = FakeCamera("front_camera", [[apple, detection("kiwi", [80, 20, 100, 40]),
+                            {**detection("watermelon", [30, 50, 50, 70]), "confidence": 0.49}]])
+        rows = camera_inventory(lambda: head.snapshots() + front.snapshots(),
+                                [20, 0, 155, 480], [0, 0, 640, 480])
+        self.assertEqual([(row["label"], row["count"]) for row in rows],
+                         [("사과", 1), ("수박", 0), ("당근", 0), ("키위", 1)])
+        self.assertTrue(all(row["count"] is None for row in camera_inventory(lambda: [], None, None)))
+
+    def test_head_display_filters_region_and_confidence(self) -> None:
+        shelf = {**detection("apple", [40, 20, 60, 40]), "confidence": 0.5}
+        low = {**detection("kiwi", [40, 40, 60, 60]), "confidence": 0.49}
+        tray = detection("carrot", [410, 120, 430, 140])
+        car = detection("car", [90, 260, 130, 290])
+        pinky = detection("pinky", [40, 60, 60, 80])
+        middle = detection("kiwi", [230, 60, 250, 80])
+        camera = FakeCamera("head_camera", [[shelf, low, tray, car, pinky, middle]])
+        with mock.patch.dict(os.environ, {"CONTROL_STATION_HEAD_SHELF_REGION": "20,0,155,480"}):
+            view = head_shelf_view_from_env(camera.snapshots)
+        self.assertEqual(view.live()["counts"], {"apple": 1, "car": 1})
+        with mock.patch.dict(os.environ, {"CONTROL_STATION_HEAD_MIDDLE_REGION": "156,0,365,480"}):
+            workbench = head_middle_view_from_env(camera.snapshots)
+        self.assertEqual(workbench.live()["counts"], {"kiwi": 1})
+        load = PinkyLoadCounter(camera.snapshots, "head_camera", [366, 108, 522, 264])
+        self.assertEqual(load.live()["counts"], {"carrot": 1})
 
     def test_live_load_keeps_an_object_that_flickers_below_the_threshold_in_some_frames(self) -> None:
         melon = detection("watermelon", [410, 170, 430, 190])

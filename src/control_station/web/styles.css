@@ -664,11 +664,16 @@ td:nth-child(2) { width: 23%; white-space: nowrap; }
 .camera-detail strong { color: var(--text-2); font-weight: 500; text-align: right; }
 .camera-detail[data-field="detections-row"], .camera-detail[data-field="detector-provenance-row"] { grid-column: 1 / -1; }
 .camera-detail[data-field="detector-provenance-row"] strong { overflow-wrap: anywhere; }
-/* 핑키 도착·적재 목록: the whole width, green when the Pinky stands at the spot / an object is on the tray */
-.camera-detail[data-field="pinky-arrival-row"], .camera-detail[data-field="pinky-load-row"] { grid-column: 1 / -1; align-items: center; font-size: 13px; }
+.camera-detail[data-field="pinky-arrival-row"] { grid-column: 1 / -1; align-items: center; font-size: 13px; }
 .camera-detail[data-field="pinky-arrival-row"][data-state="ARRIVED"] strong { color: var(--green-ink); font-weight: 700; }
-.camera-detail[data-field="pinky-load-row"] strong { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.load-chip { padding: 3px 10px; border-radius: 999px; background: var(--green-soft); color: var(--green-ink); border: 1px solid var(--green); font-size: 14px; font-weight: 700; }
+.head-counts { display: flex; gap: 10px; padding: 12px 18px 0; }
+.head-counts[hidden], .head-counts section[hidden] { display: none; }
+.head-counts section { flex: 1 1 0; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
+.camera-detection-panel { margin: 12px 18px 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
+.head-counts h4, .camera-detection-panel h4 { margin: 0 0 8px; font-size: 13px; }
+.head-count-items { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px; font-size: 12px; color: var(--text-3); }
+.load-chip { padding: 4px 7px; border-radius: 6px; background: var(--green-soft); color: var(--green-ink); border: 1px solid var(--green); font-size: 12px; font-weight: 700; }
+.load-chip.recent { background: var(--yellow-soft); color: var(--yellow-ink); border-color: var(--yellow); }
 .camera-card > .note { margin: 0 18px 14px; }
 .camera-card > .note:empty { display: none; }
 

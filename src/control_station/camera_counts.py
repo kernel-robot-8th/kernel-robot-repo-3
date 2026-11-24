@@ -126,11 +126,42 @@ def parse_region(text: str) -> list[float] | None:
     return values if len(values) == 4 and values[0] < values[2] and values[1] < values[3] else None
 
 
+INVENTORY_CAMERA_PRODUCTS = (
+    ("apple", "사과"), ("watermelon", "수박"), ("carrot", "당근"), ("kiwi", "키위"),
+)
+
+
+def camera_inventory(snapshots: Callable[[], list[Any]], shelf_region: list[float] | None,
+                     front_region: list[float] | None) -> list[dict[str, Any]]:
+    frames = {camera.id: camera.to_dict() for camera in snapshots()}
+    views = []
+    for camera_id, region in (("head_camera", shelf_region), ("front_camera", front_region)):
+        frame = frames.get(camera_id)
+        if not region or not frame or (frame["detector_state"], frame["stream_state"], frame["frame_freshness"]) != (
+            "ready", "STREAMING", "FRESH"
+        ):
+            continue
+        x1, y1, x2, y2 = region
+        counts: Counter = Counter()
+        for item in frame["detections"]:
+            box = item.get("bbox_xyxy_px")
+            if not box or len(box) != 4 or float(item.get("confidence") or 0) < 0.5:
+                continue
+            x, y = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                counts[item["class_name"]] += 1
+        views.append(counts)
+    # Without a shared item ID, keep the larger count observed from either view.
+    return [{"object_class": name, "label": label,
+             "count": max((counts[name] for counts in views), default=None)}
+            for name, label in INVENTORY_CAMERA_PRODUCTS]
+
+
 class PinkyLoadCounter:
     """Order flow `pinky_load(pinky_id)`: {class: count} on the Pinky tray at the loading spot."""
 
     def __init__(self, snapshots: Callable[[], list[Any]], camera_id: str, region: list[float] | None,
-                 ignore: frozenset[str] = frozenset({"car"}), frames: int = 5, max_wait_s: float = 4.0,
+                 ignore: frozenset[str] = frozenset({"car", "pinky"}), frames: int = 5, max_wait_s: float = 4.0,
                  arrivals: list[dict[str, Any]] | None = None, arrival_tolerance_px: float = 30.0) -> None:
         self.snapshots, self.camera_id, self.region, self.ignore = snapshots, camera_id, region, ignore
         self.frames, self.max_wait_s = frames, max_wait_s
@@ -143,6 +174,7 @@ class PinkyLoadCounter:
         except ValueError:
             self.live_hold_s = 5.0
         self._held: dict[str, dict[str, Any]] = {}
+        self.live_min_confidence = 0.5
 
     def region_or_none(self) -> str:
         return "영역 " + ",".join(f"{value:.0f}" for value in self.region) if self.region else "영역 없음"
@@ -204,10 +236,13 @@ class PinkyLoadCounter:
         counts: Counter = Counter()
         best: dict[str, dict[str, Any]] = {}
         markers: dict[int, dict[str, Any]] = {}
+        newest_counts: Counter = Counter()
         for sample in frames:
             seen = [item for item in sample.get("detections") or []
-                    if self._on_tray(item) and str(item.get("class_name")) not in self.ignore]
-            counts |= Counter(str(item.get("class_name")) for item in seen)
+                    if self._on_tray(item) and str(item.get("class_name")) not in self.ignore
+                    and float(item.get("confidence") or 0) >= self.live_min_confidence]
+            newest_counts = Counter(str(item.get("class_name")) for item in seen)
+            counts |= newest_counts
             for item in seen:
                 name = str(item.get("class_name"))
                 if name not in best or float(item.get("confidence") or 0) > float(best[name].get("confidence") or 0):
@@ -228,7 +263,7 @@ class PinkyLoadCounter:
             del self._held[name]
         return {**base, "state": "READY", "captured_at": _now(),
                 "counts": {name: held["count"] for name, held in sorted(self._held.items())},
-                "items": [{"class_name": name, "confidence": held["confidence"], "seen_now": name in counts,
+                "items": [{"class_name": name, "confidence": held["confidence"], "seen_now": name in newest_counts,
                            "seen_s_ago": round(now - held["seen"], 1)} for name, held in sorted(self._held.items())],
                 "frames": [int(sample.get("frame_sequence") or 0) for sample in frames],
                 "hold_s": self.live_hold_s, "pinky": pinky}
@@ -266,6 +301,21 @@ class PinkyLoadCounter:
         return {"state": "NOT_SEEN", "message": "핑키 마커가 보이지 않습니다"}
 
 
+def head_region_view(snapshots: Callable[[], list[Any]], setting: str, default: str) -> PinkyLoadCounter:
+    region = parse_region(os.environ.get(setting, default))
+    view = PinkyLoadCounter(snapshots, "head_camera", region, ignore=frozenset({"pinky"}))
+    view.live_frames = 1
+    return view
+
+
+def head_shelf_view_from_env(snapshots: Callable[[], list[Any]]) -> PinkyLoadCounter:
+    return head_region_view(snapshots, "CONTROL_STATION_HEAD_SHELF_REGION", "20,0,155,480")
+
+
+def head_middle_view_from_env(snapshots: Callable[[], list[Any]]) -> PinkyLoadCounter:
+    return head_region_view(snapshots, "CONTROL_STATION_HEAD_MIDDLE_REGION", "156,0,365,480")
+
+
 def load_counter_from_env(snapshots: Callable[[], list[Any]], repository_root: Path, spot_id: str | None) -> PinkyLoadCounter:
     camera_id = os.environ.get("CONTROL_STATION_LOAD_CAMERA", "head_camera").strip() or "head_camera"
     region = parse_region(os.environ.get("CONTROL_STATION_PINKY_TRAY_REGION", ""))
@@ -275,7 +325,7 @@ def load_counter_from_env(snapshots: Callable[[], list[Any]], repository_root: P
         except ValueError:
             margin = 1.6
         region = tray_region_from_spot(repository_root / ".control-station" / "parking-spots" / f"{spot_id}.json", margin)
-    ignore = frozenset(
+    ignore = frozenset({"pinky"}) | frozenset(
         name.strip() for name in os.environ.get("CONTROL_STATION_LOAD_IGNORE_CLASSES", "car").split(",") if name.strip()
     )
     try:

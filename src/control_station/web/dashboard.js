@@ -425,16 +425,13 @@ function dashRenderStock() {
     setHtmlIfChanged(dashStock, '<p class="dash-empty">재고를 불러오는 중…</p>');
     return;
   }
-  const words = { sold_out: '품절', unknown: '모름', closed: '판매 중지' };
-  setHtmlIfChanged(dashStock, (inventory.products || []).map((product) => {
-    const count = product.status === 'available' || product.status === 'sold_out' ? product.available : null;
-    return `<button type="button" class="dash-stock-item ${escapeHtml(product.status)}" data-dash-goto="inventory">
+  const stock = inventory.camera_stock || [];
+  setHtmlIfChanged(dashStock, stock.map((product) => `
+    <button type="button" class="dash-stock-item" data-dash-goto="inventory">
       <span class="dash-stock-name">${escapeHtml(product.label)}</span>
-      <strong>${count == null ? escapeHtml(words[product.status] || '–') : `${escapeHtml(count)}<small>개</small>`}</strong>
-      ${product.reserved ? `<span class="dash-stock-sub">주문이 ${escapeHtml(product.reserved)}개 잡아 둠</span>` : product.status !== 'available' && count != null ? `<span class="dash-stock-sub">${escapeHtml(words[product.status] || '')}</span>` : ''}
-    </button>`;
-  }).join('') || '<p class="dash-empty">파는 물건이 없어요</p>');
-  dashStockNote.textContent = inventory.simulated ? '재고 카메라 연결 전' : `갱신 ${formatClock(inventory.checked_at)}`;
+      <strong>${product.count == null ? '확인 대기' : `${escapeHtml(product.count)}<small>개</small>`}</strong>
+    </button>`).join('') || '<p class="dash-empty">카메라 재고를 불러오는 중…</p>');
+  dashStockNote.textContent = `갱신 ${formatClock(inventory.checked_at)}`;
 }
 
 // ---- map ----
