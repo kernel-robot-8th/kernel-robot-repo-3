@@ -16,6 +16,10 @@ def get_cameras(h: ControlStationHandler, route: str, parts: list[str], body: No
     load_view = getattr(h.app, "load_view", None)
     if load_view is not None:  # 탑재 목록: the newest frame's objects on the Pinky tray (display only)
         payload["pinky_load"] = load_view.live()
+    for region in ("head_shelf", "head_middle"):
+        view = getattr(h.app, f"{region}_view", None)
+        if view is not None:
+            payload[region] = view.live()
     h._json(200, payload)
 
 

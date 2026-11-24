@@ -45,6 +45,30 @@ def _sha256_file(path: str) -> str:
     return digest.hexdigest()
 
 
+def _same_load_object(first: dict[str, object], second: dict[str, object]) -> bool:
+    first_name, second_name = first["class_name"], second["class_name"]
+    if first_name != second_name and ({first_name, second_name} & {"pinky", "car"}):
+        return False
+    ax1, ay1, ax2, ay2 = first["bbox_xyxy_px"]
+    bx1, by1, bx2, by2 = second["bbox_xyxy_px"]
+    intersection = max(0, min(ax2, bx2) - max(ax1, bx1)) * max(0, min(ay2, by2) - max(ay1, by1))
+    union = (ax2 - ax1) * (ay2 - ay1) + (bx2 - bx1) * (by2 - by1) - intersection
+    threshold = 0.35 if first_name == second_name else 0.55
+    return union > 0 and intersection / union >= threshold
+
+
+def _merge_load_detections(
+    dedicated: list[dict[str, object]], general: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    # Keep the specialist's class and box when both models see the same item.
+    primary = [item for item in dedicated if float(item["confidence"]) >= 0.5]
+    additional = [
+        item.copy() for item in general if float(item["confidence"]) >= 0.5
+        and not any(_same_load_object(item, matched) for matched in primary)
+    ]
+    return primary + additional
+
+
 @dataclass
 class _CameraFeed:
     camera_id: str
@@ -62,6 +86,8 @@ class _CameraFeed:
     error_message: str | None = None
     sequence: int = 0
     detector: "_YoloDetector | None" = None
+    load_detector: "_YoloDetector | None" = None
+    load_detections: list[dict[str, object]] = field(default_factory=list)
     robot_id: str | None = "arm-01"
     detections: list[dict[str, object]] = field(default_factory=list)
     markers: list[dict[str, object]] = field(default_factory=list)
@@ -201,7 +227,7 @@ class _YoloDetector:
         self.state = "ready"
         return True
 
-    def _predict(self, image):  # type: ignore[no-untyped-def]
+    def _predict(self, image, *, render: bool):  # type: ignore[no-untyped-def]
         floor = min([self.confidence, *self.class_confidence.values()])
         result = self._model.predict(
             source=image,
@@ -226,13 +252,13 @@ class _YoloDetector:
             }
             for box in result.boxes
         ]
-        return result.plot(), detections
+        return (result.plot() if render else image), detections
 
-    def annotate(self, image):  # type: ignore[no-untyped-def]
+    def annotate(self, image, *, render: bool = True):  # type: ignore[no-untyped-def]
         with self._inference_lock:
             if self.state != "ready" or self._model is None:
                 raise RuntimeError("YOLO detector is no longer ready")
-            return self._predict(image)
+            return self._predict(image, render=render)
 
 
 class UnconfiguredArmCameraStreamManager:
@@ -485,6 +511,10 @@ class OpenCVArmCameraStreamManager:
         if not front_feed.device:
             front_feed.error_message = "Front Camera 장치 경로 미설정 (CONTROL_STATION_FRONT_CAMERA)"
         self._add_arm_feeds(_load_arm_devices() if arm_cameras is None else arm_cameras, joint_enabled)
+        load_weights = os.environ.get("CONTROL_STATION_LOAD_YOLO_WEIGHTS", "").strip()
+        load_camera_id = os.environ.get("CONTROL_STATION_LOAD_CAMERA", "").strip() or "head_camera"
+        if load_weights and load_camera_id in self._feeds:
+            self._feeds[load_camera_id].load_detector = _YoloDetector(load_weights, "CONTROL_STATION_LOAD_YOLO")
         by_device: dict[str, list[_CameraFeed]] = {}
         for feed in self._feeds.values():
             # Policy-owned feeds are presence-only and do not open the camera. They may share the preview feed's
@@ -675,8 +705,9 @@ class OpenCVArmCameraStreamManager:
                 feed.error_message = "OpenCV 미설치: 관제 서버 가상환경에서 requirements.txt를 설치하세요"
             return
 
-        if feed.detector is not None:
-            feed.detector.load()
+        for detector in (feed.detector, feed.load_detector):
+            if detector is not None:
+                detector.load()
 
         if feed.device and feed.device.startswith(ROS_SOURCE_PREFIX):
             self._ros_capture_loop(feed, feed.device.removeprefix(ROS_SOURCE_PREFIX), cv2)
@@ -851,12 +882,21 @@ class OpenCVArmCameraStreamManager:
         frame_sha256 = hashlib.sha256(image.tobytes(order="C")).hexdigest()
         detections: list[dict[str, object]] = []
         markers = self._find_markers(feed, image, cv2)  # on the raw frame, before YOLO draws on it
+        load_detections: list[dict[str, object]] = []
+        load_detector = feed.load_detector
+        if load_detector is not None and load_detector.state == "ready":
+            try:
+                _, load_detections = load_detector.annotate(image, render=False)
+            except Exception as exc:
+                load_detector.state, load_detector.error_message = "error", f"탑재 YOLO 추론 실패: {exc}"
         detector = feed.detector
         if detector is not None and detector.state == "ready":
             try:
                 image, detections = detector.annotate(image)
             except Exception as exc:  # keep streaming raw frames if inference fails
                 detector.state, detector.error_message = "error", f"YOLO 추론 실패: {exc}"
+        if load_detector is not None and load_detector.state == "ready":
+            load_detections = _merge_load_detections(load_detections, detections)
         encoded, jpeg = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 80])
         if not encoded:
             return
@@ -867,7 +907,7 @@ class OpenCVArmCameraStreamManager:
             feed.frame_width = int(frame_width)
             feed.frame_height = int(frame_height)
             feed.frame_sha256 = frame_sha256
-            for detection in detections:
+            for detection in (*detections, *load_detections):
                 detection.update(
                     {
                         "camera_id": feed.camera_id,
@@ -879,6 +919,7 @@ class OpenCVArmCameraStreamManager:
                 )
             feed.frame = jpeg.tobytes()
             feed.detections = detections
+            feed.load_detections = load_detections
             feed.markers = markers
             feed.last_frame_at = captured_at
             feed.last_frame_monotonic = captured_monotonic
@@ -942,6 +983,12 @@ class OpenCVArmCameraStreamManager:
         )
 
     def snapshots(self) -> list[CameraSnapshot]:
+        return self._snapshots(for_load=False)
+
+    def load_snapshots(self) -> list[CameraSnapshot]:
+        return self._snapshots(for_load=True)
+
+    def _snapshots(self, *, for_load: bool) -> list[CameraSnapshot]:
         result = []
         for feed in self._feeds.values():
             if feed.camera_id == "front_camera" and not feed.device:
@@ -949,6 +996,9 @@ class OpenCVArmCameraStreamManager:
             with feed.lock:
                 if feed.watch_only:
                     self._watch(feed)
+                use_load_detector = for_load and feed.load_detector is not None
+                detector = feed.load_detector if use_load_detector else feed.detector
+                detections = feed.load_detections if use_load_detector else feed.detections
                 configured = feed.device is not None
                 # Closed for a policy run still counts as plugged in.
                 linked = configured and (
@@ -986,35 +1036,35 @@ class OpenCVArmCameraStreamManager:
                         frame_rate=frame_rate,
                         error_message=(
                             feed.error_message
-                            or (feed.detector.error_message if feed.detector else None)
+                            or (detector.error_message if detector else None)
                             or (None if configured else "카메라 장치 경로 미설정")
                         ),
-                        detector_state=feed.detector.state if feed.detector else None,
+                        detector_state=detector.state if detector else None,
                         detector_model_type=(
-                            feed.detector.detector_model_type if feed.detector else None
+                            detector.detector_model_type if detector else None
                         ),
                         detector_prompts=(
-                            list(feed.detector.prompts) if feed.detector else None
+                            list(detector.prompts) if detector else None
                         ),
                         detector_classes=(
-                            list(feed.detector.class_names)
-                            if feed.detector and feed.detector.state == "ready"
+                            list(detector.class_names)
+                            if detector and detector.state == "ready"
                             else None
                         ),
                         detector_confidence_threshold=(
-                            feed.detector.confidence_threshold if feed.detector else None
+                            detector.confidence_threshold if detector else None
                         ),
                         detector_weights_sha256=(
-                            feed.detector.weights_sha256 if feed.detector else None
+                            detector.weights_sha256 if detector else None
                         ),
                         detector_inference_image_size=(
-                            feed.detector.inference_image_size if feed.detector else None
+                            detector.inference_image_size if detector else None
                         ),
-                        detector_device=(feed.detector.device if feed.detector else None),
+                        detector_device=(detector.device if detector else None),
                         detector_ultralytics_version=(
-                            feed.detector.ultralytics_version if feed.detector else None
+                            detector.ultralytics_version if detector else None
                         ),
-                        detections=list(feed.detections),
+                        detections=list(detections),
                         markers=list(feed.markers),
                         stream_url=(
                             f"/streams/{feed.camera_id}.mjpg"

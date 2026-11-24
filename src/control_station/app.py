@@ -21,7 +21,10 @@ from control_station.arm_action_ros import RosPickTransport
 from control_station.arm_pick import ArmActionPick, ArmQueuePick
 from control_station.arms import ArmConfigError, load_arms
 from control_station.policy_run_supervisor import PolicyRunSupervisor
-from control_station.camera_counts import ShelfStockCounter, load_counter_from_env
+from control_station.camera_counts import (
+    ShelfStockCounter, camera_inventory, head_middle_view_from_env, head_shelf_view_from_env,
+    load_counter_from_env, parse_region,
+)
 from control_station.camera_adapters import (
     OpenCVArmCameraStreamManager,
     UnconfiguredArmCameraStreamManager,
@@ -189,6 +192,7 @@ def main() -> None:
         os.environ.get(name, "").strip()
         for name in (
             "CONTROL_STATION_HEAD_YOLO_WEIGHTS",
+            "CONTROL_STATION_LOAD_YOLO_WEIGHTS",
             "CONTROL_STATION_HEAD_YOLO_WORLD_PROMPTS",
         )
     )
@@ -415,11 +419,21 @@ def main() -> None:
     shelf_stock, pinky_load = world.shelf_stock, world.pinky_load
     # "탑재 목록" on the load camera card: what the camera sees on the Pinky tray right now. Display only, in every
     # mode; it never feeds the order flow (that uses the counters below).
-    server.load_view = load_counter_from_env(server.camera_manager.snapshots, Path(__file__).resolve().parents[2],
+    load_snapshots = getattr(server.camera_manager, "load_snapshots", server.camera_manager.snapshots)
+    server.load_view = load_counter_from_env(load_snapshots, Path(__file__).resolve().parents[2],
                                              parking_spot_id)
+    server.head_shelf_view = head_shelf_view_from_env(server.camera_manager.snapshots)
+    server.head_middle_view = head_middle_view_from_env(server.camera_manager.snapshots)
+    server.camera_inventory = partial(
+        camera_inventory, server.camera_manager.snapshots, server.head_shelf_view.region,
+        parse_region(os.environ.get("CONTROL_STATION_FRONT_INVENTORY_REGION", "0,0,640,480")),
+    )
+    if server.load_view.camera_id == "head_camera" and server.load_view.region is None:
+        # Default for the current 640×480 head-camera display. Order validation still requires a registered region.
+        server.load_view.region = [366.6, 107.8, 522.3, 263.5]
     if os.environ.get("CONTROL_STATION_ORDER_COUNTS", "").strip() == "camera":
         shelf_stock = ShelfStockCounter(server.camera_manager.snapshots, server.shelf_slot_zones, slot_map, server.arms)
-        load_counter = load_counter_from_env(server.camera_manager.snapshots, Path(__file__).resolve().parents[2],
+        load_counter = load_counter_from_env(load_snapshots, Path(__file__).resolve().parents[2],
                                              parking_spot_id)
         pinky_load = load_counter
         print(f"주문 흐름의 개수 세기: 카메라 YOLO (핑키 쟁반 {load_counter.camera_id} {load_counter.region_or_none()})",

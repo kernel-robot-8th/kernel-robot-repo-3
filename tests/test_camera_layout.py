@@ -48,6 +48,46 @@ class CameraLayoutTest(unittest.TestCase):
     def by_id(manager: OpenCVArmCameraStreamManager) -> dict:
         return {camera.id: camera for camera in manager.snapshots()}
 
+    def test_load_combines_detections_on_the_same_frame(self) -> None:
+        manager = self.manager(CONTROL_STATION_LOAD_YOLO_WEIGHTS="cargo.pt")
+        head = manager._feeds["head_camera"]
+        self.assertEqual(head.load_detector.weights, "cargo.pt")
+
+        raw = mock.Mock(shape=(480, 640, 3))
+        raw.tobytes.return_value = b"raw pixels"
+        annotated = mock.Mock(shape=raw.shape)
+        head.detector = mock.Mock(state="ready", prompts=[], class_names=[])
+        def detection(name, confidence, box):
+            return {"class_name": name, "confidence": confidence, "bbox_xyxy_px": box}
+
+        kiwi = [400, 140, 425, 165]
+        head.detector.annotate.return_value = (annotated, [
+            detection("tissue", 0.8, [455, 145, 492, 170]),
+            detection("kiwi", 0.8, kiwi),
+            detection("apple", 0.9, kiwi),
+            detection("carrot", 0.49, [430, 200, 455, 230]),
+            detection("kiwi", 0.7, [400, 200, 425, 225]),
+        ])
+        head.load_detector = mock.Mock(state="ready", prompts=[], class_names=[])
+        head.load_detector.annotate.return_value = (raw, [detection("kiwi", 0.7, kiwi)])
+        cv2 = mock.Mock()
+        cv2.imencode.return_value = True, mock.Mock()
+        with mock.patch.object(manager, "_find_markers", return_value=[]):
+            manager._publish_frame(head, raw, "2026-11-24T00:00:00Z", 0.0, cv2)
+
+        head.load_detector.annotate.assert_called_once_with(raw, render=False)
+        head.detector.annotate.assert_called_once_with(raw)
+        self.assertIs(cv2.imencode.call_args.args[1], annotated)
+        normal = self.by_id(manager)["head_camera"]
+        load = next(camera for camera in manager.load_snapshots() if camera.id == "head_camera")
+        self.assertEqual(normal.detections[0]["class_name"], "tissue")
+        self.assertEqual([item["class_name"] for item in load.detections], ["kiwi", "tissue", "kiwi"])
+        self.assertEqual(len(normal.detections), 5)
+        self.assertEqual(normal.frame_sequence, load.frame_sequence)
+        head.load_detector.state = "error"
+        self.assertEqual(manager.load_snapshots()[0].detector_state, "error")
+        self.assertEqual(self.by_id(manager)["head_camera"].detector_state, "ready")
+
     def test_four_arm_cameras_with_role_arm_and_link_state(self) -> None:
         manager = self.manager(
             CONTROL_STATION_ARM01_GRIPPER_CAMERA=self.device("left_gripper"),

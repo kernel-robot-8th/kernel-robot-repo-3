@@ -185,6 +185,7 @@ const overviewSummaryTitle = document.querySelector('#overviewSummaryTitle');
 const overviewStatRobots = document.querySelector('#overviewStatRobots');
 const overviewStatCameras = document.querySelector('#overviewStatCameras');
 const CAMERA_PREVIEW_IDS = [
+  'head_camera', 'front_camera',
   'left_ceiling_camera', 'left_joint_camera',
   'right_ceiling_camera', 'right_joint_camera',
 ];
@@ -231,19 +232,37 @@ function pinkyArrivalText(load) {
   return pinky.message || pinky.state;
 }
 
-// HTML for the 적재 목록 row: a green chip per kind seen on the tray ("✓ 사과", "✓ 당근 2개").
-function pinkyLoadHtml(load) {
-  if (load.state !== 'READY') return escapeHtml(load.message || load.state);
-  // Only a marker seen away from the spot means the Pinky is not there; a hidden marker (cargo on it) still lists.
-  if (load.pinky && load.pinky.state === 'NOT_AT_SPOT') return '핑키 도착 대기';
-  const entries = Object.entries(load.counts || {});
+function headCountBlocks(view) {
+  if (view.state === 'NO_TRAY_REGION') return '검출 영역을 설정해 주세요';
+  if (view.state !== 'READY') return escapeHtml(view.message || view.state);
+  if (view.pinky?.state === 'NOT_AT_SPOT') return '핑키 도착 대기';
+  const entries = Object.entries(view.counts || {});
   if (!entries.length) return '비어 있음';
-  return entries.map(([name, count]) => (
-    `<span class="load-chip">✓ ${escapeHtml(objectLabel(name))}${count > 1 ? ` ${count}개` : ''}</span>`
-  )).join('');
+  const items = new Map((view.items || []).map((item) => [item.class_name, item]));
+  return entries.map(([name, count]) => {
+    const item = items.get(name);
+    const recent = item?.seen_now === false;
+    return `<span class="load-chip${recent ? ' recent' : ''}">${escapeHtml(objectLabel(name))} ${count}개</span>`;
+  }).join('');
 }
 
-function renderCameras(cameras, pinkyLoad = null) {
+function cameraDetectionBlocks(camera) {
+  if (camera.detector_state === 'loading') return '모델 불러오는 중';
+  if (camera.detector_state === 'error') return '모델 오류';
+  if (camera.detector_state !== 'ready') return '모델 미설정';
+  if (camera.stream_state !== 'STREAMING' || camera.frame_freshness !== 'FRESH') return '새 프레임 대기 중';
+  const counts = new Map();
+  for (const item of camera.detections || []) {
+    if (item.confidence < 0.5) continue;
+    counts.set(item.class_name, (counts.get(item.class_name) || 0) + 1);
+  }
+  if (!counts.size) return '검출된 물체 없음';
+  return [...counts].map(([name, count]) =>
+    `<span class="load-chip">${escapeHtml(objectLabel(name))} ${count}개</span>`
+  ).join('');
+}
+
+function renderCameras(cameras, pinkyLoad = null, headShelf = null, headMiddle = null) {
   const camerasById = new Map(cameras.map((camera) => [camera.id, camera]));
   const visibleCameras = CAMERA_PREVIEW_IDS.map((id) => camerasById.get(id)).filter(Boolean);
   const names = {
@@ -275,6 +294,7 @@ function renderCameras(cameras, pinkyLoad = null) {
   detectorClassOptions.replaceChildren(...availableClasses.map((className) => {
     const option = document.createElement('option');
     option.value = className;
+    option.label = objectLabel(className);
     return option;
   }));
   if (cameraGrid.dataset.cameraIds !== cameraIds) {
@@ -283,6 +303,21 @@ function renderCameras(cameras, pinkyLoad = null) {
       <article class="camera-card" data-camera-id="${escapeHtml(camera.id)}">
         <header class="camera-head"><h3>${escapeHtml(cameraName(camera))}</h3><span class="camera-position">${escapeHtml(camera.position)}</span></header>
         <div class="camera-preview" data-field="preview"><span>영상 스트림 미연결</span></div>
+        <div class="head-counts" data-field="head-counts" hidden>
+          <section data-field="head-shelf-group" hidden>
+            <h4>왼쪽 선반</h4><div class="head-count-items" data-field="head-shelf"></div>
+          </section>
+          <section data-field="head-middle-group" hidden>
+            <h4>가운데 작업대</h4><div class="head-count-items" data-field="head-middle"></div>
+          </section>
+          <section data-field="pinky-load-group" hidden>
+            <h4>오른쪽 핑키 탑재</h4><div class="head-count-items" data-field="pinky-load"></div>
+          </section>
+        </div>
+        <section class="camera-detection-panel" data-field="camera-detection-panel" hidden>
+          <h4>정면 카메라 검출</h4>
+          <div class="head-count-items" data-field="camera-detection-blocks"></div>
+        </section>
         <div class="camera-details">
           <div class="camera-detail"><span>연결</span><strong data-field="connection"></strong></div>
           <div class="camera-detail"><span>스트림</span><strong data-field="stream"></strong></div>
@@ -292,7 +327,6 @@ function renderCameras(cameras, pinkyLoad = null) {
           <div class="camera-detail"><span>프레임률</span><strong data-field="frame-rate"></strong></div>
           <div class="camera-detail" data-field="detections-row" hidden><span>YOLO 검출</span><strong data-field="detections"></strong></div>
           <div class="camera-detail" data-field="pinky-arrival-row" hidden><span>핑키 도착 · 표시 전용</span><strong data-field="pinky-arrival"></strong></div>
-          <div class="camera-detail" data-field="pinky-load-row" hidden><span>적재 목록 · 표시 전용</span><strong data-field="pinky-load"></strong></div>
           <div class="camera-detail" data-field="slot-zones-row" hidden><span>선반 칸 · 표시 전용</span><strong data-field="slot-zones"></strong></div>
           <div class="camera-detail" data-field="detector-provenance-row" hidden><span>YOLO 설정 / 모델</span><strong data-field="detector-provenance"></strong></div>
         </div>
@@ -313,24 +347,37 @@ function renderCameras(cameras, pinkyLoad = null) {
     card.querySelector('[data-field="frame-rate"]').textContent = camera.frame_rate == null ? '—' : `${camera.frame_rate} fps`;
     card.querySelector('[data-field="error"]').textContent = camera.error_message || '';
     const detectorLabel = { loading: '모델 불러오는 중', error: '모델 오류' };
-    card.querySelector('[data-field="detections-row"]').hidden = !camera.detector_state;
+    const detectionPanel = card.querySelector('[data-field="camera-detection-panel"]');
+    detectionPanel.hidden = camera.position !== 'FRONT';
+    if (!detectionPanel.hidden) {
+      detectionPanel.querySelector('[data-field="camera-detection-blocks"]').innerHTML = cameraDetectionBlocks(camera);
+    }
+    card.querySelector('[data-field="detections-row"]').hidden = !camera.detector_state || camera.position === 'HEAD' || !detectionPanel.hidden;
     card.querySelector('[data-field="detections-row"] span').textContent = camera.detector_model_type === 'YOLO_WORLD_OPEN_VOCAB'
       ? 'YOLO-World 후보 · 관측 전용'
       : 'YOLO 검출 · 관측 전용';
     card.querySelector('[data-field="detections"]').textContent = camera.detector_state === 'ready'
-      ? (camera.detections.map((item) => `${item.class_name} ${Math.round(item.confidence * 100)}% @ (${item.center_px.join(', ')})`).join(', ') || '없음')
+      ? (camera.detections.map((item) => `${objectLabel(item.class_name)} ${Math.round(item.confidence * 100)}% @ (${item.center_px.join(', ')})`).join(', ') || '없음')
       : (detectorLabel[camera.detector_state] || '');
-    const loadRow = card.querySelector('[data-field="pinky-load-row"]');
-    loadRow.hidden = !pinkyLoad || pinkyLoad.camera_id !== camera.id;
+    const loadGroup = card.querySelector('[data-field="pinky-load-group"]');
+    const shelfGroup = card.querySelector('[data-field="head-shelf-group"]');
+    const middleGroup = card.querySelector('[data-field="head-middle-group"]');
+    middleGroup.hidden = !headMiddle || headMiddle.camera_id !== camera.id;
+    if (!middleGroup.hidden) {
+      middleGroup.querySelector('[data-field="head-middle"]').innerHTML = headCountBlocks(headMiddle);
+    }
+    loadGroup.hidden = !pinkyLoad || pinkyLoad.camera_id !== camera.id;
+    shelfGroup.hidden = !headShelf || headShelf.camera_id !== camera.id;
+    card.querySelector('[data-field="head-counts"]').hidden = loadGroup.hidden && shelfGroup.hidden && middleGroup.hidden;
     const arrivalRow = card.querySelector('[data-field="pinky-arrival-row"]');
-    arrivalRow.hidden = loadRow.hidden;
-    if (!arrivalRow.hidden) {
+    arrivalRow.hidden = loadGroup.hidden;
+    if (!loadGroup.hidden) {
       arrivalRow.querySelector('[data-field="pinky-arrival"]').textContent = pinkyArrivalText(pinkyLoad);
       arrivalRow.dataset.state = pinkyLoad.pinky?.state || pinkyLoad.state;
+      loadGroup.querySelector('[data-field="pinky-load"]').innerHTML = headCountBlocks(pinkyLoad);
     }
-    if (!loadRow.hidden) {
-      loadRow.querySelector('[data-field="pinky-load"]').innerHTML = pinkyLoadHtml(pinkyLoad);
-      loadRow.dataset.state = pinkyLoad.state;
+    if (!shelfGroup.hidden) {
+      shelfGroup.querySelector('[data-field="head-shelf"]').innerHTML = headCountBlocks(headShelf);
     }
     const hasDetectorProvenance = Boolean(camera.detector_confidence_threshold != null
       || camera.detector_weights_sha256 || camera.detector_ultralytics_version
@@ -1111,8 +1158,14 @@ policyListRequest
   .then((policies) => { objectLabels = new Map(policies.map((policy) => [policy.object_class, policy.label])); })
   .catch(() => {});  // the policy buttons already show the error; labels fall back to the class name
 
+const cameraObjectLabels = new Map(Object.entries({
+  strawberry: '딸기', car: '자동차', ball: '공', pumpkin: '호박', apple: '사과',
+  carrot: '당근', fruits: '열매 송이', potato: '감자', watermelon: '수박',
+  tissue: '물티슈', kiwi: '키위', pepper: '고추', pinky: '핑키',
+}));
+
 function objectLabel(objectClass) {
-  return objectLabels.get(objectClass) || objectClass;
+  return cameraObjectLabels.get(objectClass) || objectLabels.get(objectClass) || objectClass;
 }
 
 function orderSummary(items) {
@@ -1785,7 +1838,7 @@ async function refresh() {
     serverStatus.innerHTML = `<span class="dot"></span><span><strong>API 정상</strong>${modeWords}</span>`;
     renderOverviewSummary(health, robotData.robots, cameraData.cameras);
     renderRobots(robotData.robots);
-    renderCameras(cameraData.cameras, cameraData.pinky_load);
+    renderCameras(cameraData.cameras, cameraData.pinky_load, cameraData.head_shelf, cameraData.head_middle);
     renderArm(armData.arm);
     renderPolicyRun(armData.policy_run);
     updatedAt.textContent = `갱신 ${clockFormat.format(new Date())}`;

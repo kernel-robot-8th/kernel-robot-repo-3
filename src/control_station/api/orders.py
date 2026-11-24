@@ -38,9 +38,17 @@ def get_catalog(h: ControlStationHandler, route: str, parts: list[str], body: No
     h._json(200, h.app.order_desk.catalog())
 
 
+def _inventory_view(app) -> dict[str, Any]:
+    view = app.inventory.snapshot()
+    camera_inventory = getattr(app, "camera_inventory", None)
+    if camera_inventory is not None:
+        view["camera_stock"] = camera_inventory()
+    return view
+
+
 def get_inventory(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
     """선반 재고: 물건별 선반 수량, 예약, 주문 가능 수량, 품절 여부와 최근 변화"""
-    h._json(200, h.app.inventory.snapshot())
+    h._json(200, _inventory_view(h.app))
 
 
 def post_inventory(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:
@@ -53,7 +61,7 @@ def post_inventory(h: ControlStationHandler, route: str, parts: list[str], body:
     except ValueError as exc:
         h._json_error(400, "INVENTORY_OVERRIDE_INVALID", str(exc))
         return
-    h._json(200, h.app.inventory.snapshot())
+    h._json(200, _inventory_view(h.app))
 
 
 def get_orders(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
