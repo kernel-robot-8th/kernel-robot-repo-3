@@ -1,6 +1,7 @@
-"""What the operator screen shows for orders: where each order is, what each robot is doing, and what needs a person.
+"""관제 화면의 주문 진행 탭에 보일 것: 주문마다 어디까지 왔는지, 로봇마다 무엇을 하는지, 무엇에 사람이 필요한지.
 
-Built only from stored order steps/events plus the Pinky fleet status; it changes nothing.
+저장된 주문 단계·이벤트와 핑키 관제 상태만으로 만들고, 아무것도 바꾸지 않는다. API(api/flow.py)가
+build_flow_view를 불러 화면에 보낸다.
 """
 
 from __future__ import annotations
@@ -8,8 +9,10 @@ from __future__ import annotations
 from typing import Any
 
 from control_station.pinky.fleet_client import STATION_PHASES
+# PINKY_NAMES는 api/flow.py가 이 모듈에서 가져다 쓴다(다시 내보내기).
 from control_station.storage.store import PINKY_NAMES, shipment_of  # noqa: E402  (re-exported for the API)
 
+# 핑키 관제가 보고하는 임무 단계(route.phase) → 화면 글자. pinky/gateway.py도 쓴다.
 PHASE_LABELS = {
     "parked": "주차장 대기", "driving": "이동 중", "docking_manual": "5번 도착 · 정지",
     "docking_anchor": "도킹완료 · 위치 재설정 중", "docked_manual": "정지 유지 · 수령 대기",
@@ -17,7 +20,7 @@ PHASE_LABELS = {
     "recovering": "장애물 우회 중",
     "course_complete": "코스 완주", "returning": "복귀 중",
 }
-# The order pipeline on the screen, each stage made of step types.
+# 화면의 주문 진행 줄: (키, 글자, 그 칸에 속한 단계 종류들).
 STAGES = (
     ("ORDER", "주문 접수", ("VALIDATE_ORDER",)),
     ("STOCK", "선반 확인", ("CHECK_SHELF_STOCK",)),
@@ -26,17 +29,19 @@ STAGES = (
     ("LOAD", "적재", ("PICK_ITEM", "VERIFY_TRANSFER")),
     ("TOTAL", "총량 확인", ("VERIFY_LOAD_TOTAL",)),
     ("SIGNAL", "완료 신호", ("NOTIFY_PINKY_RECEIVED", "FINALIZE_TASK")),
-    # Only orders with a receiving zone have these steps; for the others the stage is left out.
+    # 수령 구역이 있는 주문에만 이 단계들이 있다. 없는 주문은 이 칸을 빼고 보인다.
     ("DELIVER", "수령", ("WAIT_AT_RECEIVING_ZONE", "CONFIRM_PICKUP", "WAIT_PINKY_PARKED")),
 )
-ACTIVE_STEP = frozenset({"COMMAND_SENT", "ACCEPTED", "RUNNING"})
+ACTIVE_STEP = frozenset({"COMMAND_SENT", "ACCEPTED", "RUNNING"})  # 실행 중으로 보는 단계 상태
+# 진행 중인 단계에 경고(warning)를 띄우는 이벤트.
 ALERT_EVENTS = frozenset({"PINKY_POSITION_ABNORMAL", "PINKY_FLEET_UNREACHABLE"})
-# Events after which a waiting alert no longer holds.
+# 이 이벤트가 그 뒤에 오면 앞의 경고는 더 이상 유효하지 않다.
 ALERT_CLEARED_BY = frozenset({"PARKING_OBSERVED", "PINKY_STATUS", "ORDER_STEP_COMPLETED", "ARRIVAL_NEEDS_OPERATOR"})
-# What the arrival wait last said about the Pinky at the loading spot: the operator is asked only while the newest
-# of these is the question itself (a later judgment, redock or phase change means the camera took over again).
+# 도착 대기 단계가 적재 자리의 핑키에 대해 마지막으로 한 말. 이 중 가장 최근 것이 질문(ARRIVAL_NEEDS_OPERATOR)
+# 자체일 때만 운영자에게 묻는다(그 뒤의 판정, 다시 맞추기, 단계 변화는 카메라가 다시 맡았다는 뜻이다).
 ARRIVAL_STATE_EVENTS = frozenset({"ARRIVAL_NEEDS_OPERATOR", "PINKY_POSITION_ABNORMAL", "PINKY_REDOCK", "PINKY_REDOCK_RESULT",
                                   "PARKING_OBSERVED"})
+# 주문을 멈춘 오류 코드 → 경보 제목. 없는 코드는 "주문 멈춤".
 ERROR_TITLES = {
     "SHELF_STOCK_SHORT": "선반 재고 부족", "ITEM_LOST": "물건 분실", "PICK_FAILED_STILL_ON_SHELF": "집기 실패",
     "TRANSFER_NOT_VERIFIED": "옮김 확인 불가", "LOAD_INCOMPLETE": "적재 부족", "LOAD_EXTRA_ITEM": "주문 외 물건",
@@ -49,11 +54,14 @@ ERROR_TITLES = {
 
 
 def _unit_name(detail: dict[str, Any] | None) -> str:
+    """물체 단위의 이름(예: "당근 #2")."""
     detail = detail or {}
     return f"{detail.get('label') or detail.get('object_class', '?')} #{detail.get('unit', '?')}"
 
 
 def _stage_state(steps: list[dict[str, Any]]) -> str:
+    """화면 칸 하나의 상태: 실패가 하나라도 있으면 failed, 모두 성공이면 done, 실행 중이거나 일부만 성공했으면
+    active, 모두 취소면 skipped, 아니면 todo."""
     if not steps:
         return "todo"
     statuses = [step["status"] for step in steps]
@@ -69,6 +77,7 @@ def _stage_state(steps: list[dict[str, Any]]) -> str:
 
 
 def _current_text(order: dict[str, Any], step: dict[str, Any] | None, events: list[dict[str, Any]]) -> str:
+    """주문 카드의 '지금 하는 일' 한 줄. 진행 중이면 그 단계의 가장 최근 이벤트 메시지를 먼저 쓴다."""
     if order["status"] == "PENDING":
         return "시작 대기"
     if order["status"] == "SUCCEEDED":
@@ -98,7 +107,8 @@ def _current_text(order: dict[str, Any], step: dict[str, Any] | None, events: li
 
 
 def _shipments(order: dict[str, Any], active: dict[str, Any] | None) -> tuple[int, int]:
-    """(current shipment, shipments) of an order; (1, 1) when it is not split."""
+    """주문의 (지금 운송분, 운송분 수). 나누지 않은 주문은 (1, 1). 진행 중이 아니면 끝난 주문은 마지막,
+    멈춘 주문은 멈춘 단계의 운송분이다."""
     steps = order.get("steps", [])
     count = max((int((step.get("detail") or {}).get("shipments") or 1) for step in steps), default=1)
     if count == 1:
@@ -112,10 +122,14 @@ def _shipments(order: dict[str, Any], active: dict[str, Any] | None) -> tuple[in
 
 
 def summarize_order(order: dict[str, Any]) -> dict[str, Any]:
+    """주문 하나 → 화면 카드: 칸별 진행, 적재 개수, 지금 하는 일, 경보 하나.
+
+    경보는 뒤에서 정한 것이 앞의 것을 덮는다: 단계 경고(warning) → 도착 확인·수령 확인 요청(action) → 운영자가
+    아직 확인하지 않은 멈춤(error). 그래서 멈춘 주문은 언제나 오류 경보를 보인다."""
     steps, events = order.get("steps", []), order.get("events", [])
     active = next((step for step in steps if step["id"] == order.get("active_step_id") and step["status"] in ACTIVE_STEP), None)
     current, count = _shipments(order, active)
-    # A split order shows the stages of the shipment under way; shared steps (stock, plan, finish) count for each.
+    # 나눈 주문은 지금 운송분의 칸을 보인다. 공통 단계(재고 확인, 계획, 마무리)는 모든 운송분에 들어간다.
     steps_now = [step for step in steps if (step.get("detail") or {}).get("shipment") in (None, current)]
     by_type: dict[str, list[dict[str, Any]]] = {}
     for step in steps_now:
@@ -146,7 +160,8 @@ def summarize_order(order: dict[str, Any]) -> dict[str, Any]:
                 break
     if (alert is None and order["status"] in {"RUNNING", "VALIDATING"} and active is not None
             and active["step_type"] == "WAIT_PINKY_ARRIVAL"):
-        # Not a fault: the Pinky has no marker, so a person confirms that it stands at the loading spot.
+        # 고장이 아니다: 핑키에 마커가 없어 사람이 적재 자리에 섰는지 확인한다. 카메라가 오래 판정하지 못하거나
+        # 다시 맞추기를 다 쓴 경우도 같은 요청이다(pinky/docking.py의 OPERATOR).
         asked = next((event for event in reversed(events) if event.get("step_id") == active["id"]
                       and event["event_type"] in ARRIVAL_STATE_EVENTS), None)
         if asked is not None and asked["event_type"] == "ARRIVAL_NEEDS_OPERATOR":
@@ -154,7 +169,7 @@ def summarize_order(order: dict[str, Any]) -> dict[str, Any]:
                      "message": asked["payload"].get("message"), "at": asked["received_at"], "task_id": order["id"],
                      "arrival": True}
     if alert is None and active is not None and active["step_type"] == "CONFIRM_PICKUP":
-        # Not a fault: a person has to confirm the pickup (the customer's app, or the operator for them).
+        # 고장이 아니다: 사람이 수령을 확인해야 한다(손님 앱, 또는 손님 대신 운영자).
         waiting = next((event for event in reversed(events) if event["event_type"] == "PICKUP_WAITING"), None)
         alert = {"level": "action", "code": "PICKUP_WAITING", "title": "수령 확인 대기",
                  "message": (waiting or {}).get("payload", {}).get("message") or "손님 수령 확인을 기다립니다",
@@ -189,13 +204,16 @@ def build_flow_view(
     station_owner: str | None,
     arm_workers: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """주문 진행 탭 전체: 주문 카드, 핑키 세 대의 상태, 팔 상태, 적재 자리 주인, 경보 목록(오류 먼저, 그다음 시각 순).
+
+    pinky_statuses는 핑키 번호 → 핑키 관제 상태, arms는 팔 설정 레지스트리(None이면 팔 줄이 비어 있다)."""
     summaries = [summarize_order(order) for order in orders]
     running = [order for order in orders if order["status"] in {"VALIDATING", "RUNNING", "CANCELING"}]
     pinkies = []
     for pinky_id, name in PINKY_NAMES.items():
         status = pinky_statuses.get(pinky_id) or {}
         holder = next((order["id"] for order in running if order.get("pinky_id") == pinky_id), None)
-        # A Pinky still standing at the station after its order stopped needs a person, not a new order.
+        # 주문이 멈춘 뒤에도 적재 자리에 서 있는 핑키는 새 주문이 아니라 사람이 필요하다.
         latest = next((order for order in orders if order.get("pinky_id") == pinky_id), None)
         stopped = (
             latest["id"] if holder is None and latest is not None and latest["status"] == "FAILED"
@@ -203,7 +221,7 @@ def build_flow_view(
         )
         pinkies.append({
             "pinky_id": pinky_id, "name": name, "phase": status.get("phase"),
-            # Without a connection the fleet has no route for it, which would otherwise read as "parked".
+            # 연결이 끊기면 핑키 관제에 그 핑키의 경로가 없는데, 그대로 두면 "parked"(주차장 대기)로 읽힌다.
             "phase_label": "연결 끊김" if status.get("connected") is False
             else PHASE_LABELS.get(status.get("phase"), status.get("phase") or "상태 모름"),
             "message": status.get("message") or status.get("error"), "location": status.get("location"),

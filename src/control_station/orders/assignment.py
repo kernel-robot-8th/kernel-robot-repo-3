@@ -1,8 +1,11 @@
-"""Who serves an order: one Pinky for the trip, and an OMX arm for every unit it carries.
+"""누가 주문을 맡는가: 운행을 맡을 핑키 한 대, 수령 구역, 그리고 실을 물체 한 개마다 OMX 팔 한 대.
 
-Both choices are ordered rule lists rather than weighted scores, so every decision reads as one sentence on the
-operator screen ("P1 · 배터리 80%대 · 오늘 1회"). Nothing here talks to a device or the database: callers pass in
-what they observed, which keeps the rules the same in mock and real mode and easy to test.
+선택은 모두 가중치 점수가 아니라 차례가 있는 규칙 목록이다. 그래서 모든 결정이 운영자 화면에서 한 문장으로
+읽힌다("P1 · 배터리 80%대 · 오늘 1회"). 여기서는 장치나 DB와 말하지 않는다: 부르는 쪽(desk.py, flow.py)이 본 것을
+넘겨주므로, 규칙이 모의·실제 모드에서 같고 시험하기 쉽다.
+
+구성: 핑키 고르기(choose_pinky) / 수령 구역 고르기(choose_zone) / 팔 배정(plan_arms) /
+큰 주문을 운송분으로 나누기(split_into_shipments, assign_fleet) / 두 팔의 적재 시간표(schedule_loading).
 """
 
 from __future__ import annotations
@@ -14,45 +17,49 @@ from dataclasses import asdict, dataclass
 from functools import partial
 from typing import Any
 
-MIN_BATTERY_PERCENT = 30.0
+MIN_BATTERY_PERCENT = 30.0  # 배터리가 이보다 낮은 핑키(%)는 새 주문에서 뺀다
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# Pinky
+# 핑키
 # ---------------------------------------------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class PinkyCandidate:
-    """What is known about one Pinky at the moment an order is assigned."""
+    """주문을 배정하는 순간 핑키 하나에 대해 알고 있는 것."""
 
     pinky_id: str
     name: str
-    holding_order: str | None = None  # an unfinished order that keeps this Pinky
-    reachable: bool = True  # the fleet answered for it
-    phase: str | None = None  # mission phase reported by the fleet ("parked", "driving", ...)
-    ready_for_motion: bool | None = None  # fleet readiness; None when the source does not report it
-    readiness_label: str | None = None
+    holding_order: str | None = None  # 이 핑키를 쥐고 있는 끝나지 않은 주문
+    reachable: bool = True  # 핑키 관제가 이 핑키에 대해 답했다
+    phase: str | None = None  # 핑키 관제가 보고한 임무 단계("parked", "driving", ...)
+    ready_for_motion: bool | None = None  # 핑키 관제의 운행 준비 여부. 출처가 알려 주지 않으면 None
+    readiness_label: str | None = None  # 준비 안 된 이유(사람용 글자)
     battery_percent: float | None = None
     trips_today: int = 0
-    last_finished_at: str | None = None  # ISO time its last order ended; None if it has not run
+    last_finished_at: str | None = None  # 마지막 주문이 끝난 ISO 시각. 한 번도 안 달렸으면 None
 
 
 @dataclass(frozen=True)
 class PinkyVerdict:
+    """핑키 하나의 판정: 갈 수 있는지, 이유, 순위, 규칙별 통과 여부, 순위 비교값."""
+
     pinky_id: str
     name: str
     eligible: bool
-    reason: str
-    rank: int | None = None  # 1 = chosen; None when excluded
-    # Every exclusion rule as {rule, ok, detail}, so the screen can show the whole matrix, not only the first miss.
+    reason: str  # 빠졌으면 첫 번째로 걸린 이유, 아니면 비교값 요약
+    rank: int | None = None  # 1 = 뽑힘. 빠졌으면 None
+    # 모든 제외 규칙을 {rule, ok, detail}로. 첫 번째로 걸린 것만이 아니라 표 전체를 화면에 보이려고.
     checks: tuple[dict[str, Any], ...] = ()
-    # The values the ranking compared, in order: battery band (%), trips today, last finished.
+    # 순위에서 비교한 값, 차례대로: 배터리 구간(%), 오늘 운행 횟수, 마지막으로 끝난 시각.
     keys: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
 class PinkyAssignment:
+    """핑키 고르기 결과: 뽑힌 핑키(없으면 None), 한 줄 요약, 핑키마다의 판정."""
+
     pinky_id: str | None
     summary: str
     verdicts: tuple[PinkyVerdict, ...]
@@ -62,7 +69,7 @@ class PinkyAssignment:
 
 
 def _exclusion(candidate: PinkyCandidate, min_battery: float) -> str | None:
-    """Why this Pinky cannot take a new order now, or None when it can."""
+    """이 핑키가 지금 새 주문을 맡을 수 없는 이유, 맡을 수 있으면 None. 배터리를 모르면 배터리로는 빼지 않는다."""
     if candidate.holding_order:
         return f"주문 {candidate.holding_order} 진행 중"
     if not candidate.reachable:
@@ -77,7 +84,7 @@ def _exclusion(candidate: PinkyCandidate, min_battery: float) -> str | None:
 
 
 def _checks(candidate: PinkyCandidate, min_battery: float) -> tuple[dict[str, Any], ...]:
-    """Each exclusion rule, passed or not, in the order `_exclusion` applies them."""
+    """제외 규칙마다 통과했는지, `_exclusion`이 적용하는 순서대로."""
     battery = candidate.battery_percent
     return (
         {"rule": "진행 중 주문 없음", "ok": not candidate.holding_order,
@@ -91,22 +98,25 @@ def _checks(candidate: PinkyCandidate, min_battery: float) -> tuple[dict[str, An
 
 
 def _keys(candidate: PinkyCandidate) -> dict[str, Any]:
+    """순위에서 비교한 값(화면용). 배터리 구간은 % 단위로 보인다(80 = 80%대, 모르면 None)."""
     band = _battery_band(candidate)
     return {"battery_band": None if band < 0 else band * 10, "trips_today": candidate.trips_today,
             "last_finished_at": candidate.last_finished_at}
 
 
 def _battery_band(candidate: PinkyCandidate) -> int:
-    # 10 % bands so that a 1-2 % difference does not flip the choice; an unknown battery ranks below any known one.
+    # 10 % 구간으로 본다: 1~2 % 차이로 선택이 뒤집히지 않게. 배터리를 모르면(-1) 아는 어떤 핑키보다 뒤다.
     return -1 if candidate.battery_percent is None else int(candidate.battery_percent // 10)
 
 
 def _preference(candidate: PinkyCandidate) -> tuple[int, int, str, str]:
-    """Sort key, best first: higher battery band, fewer trips today, rested longer, lower id."""
+    """정렬 키, 좋은 것부터: 배터리 구간이 높은 순 → 오늘 운행이 적은 순 → 오래 쉰 순(마지막 끝난 시각이 이른 순,
+    한 번도 안 달렸으면 맨 앞) → 번호 순."""
     return (-_battery_band(candidate), candidate.trips_today, candidate.last_finished_at or "", candidate.pinky_id)
 
 
 def _describe(candidate: PinkyCandidate) -> str:
+    """화면에 보일 한 줄(예: "배터리 80%대 · 오늘 1회")."""
     band = _battery_band(candidate)
     battery = "배터리 정보 없음" if band < 0 else f"배터리 {band * 10}%대"
     return f"{battery} · 오늘 {candidate.trips_today}회"
@@ -115,7 +125,9 @@ def _describe(candidate: PinkyCandidate) -> str:
 def choose_pinky(
     candidates: Sequence[PinkyCandidate], *, min_battery: float = MIN_BATTERY_PERCENT
 ) -> PinkyAssignment:
-    """Pick the Pinky for one order: drop the ones that cannot go, then rank the rest by `_preference`."""
+    """주문 하나의 핑키를 고른다: 갈 수 없는 핑키를 빼고, 남은 핑키를 `_preference`로 순위를 매겨 1등을 고른다.
+
+    남은 핑키가 없으면 pinky_id=None("배정 가능한 핑키 없음")이다. 판정은 빠진 핑키까지 모두 담는다."""
     excluded = {c.pinky_id: reason for c in candidates if (reason := _exclusion(c, min_battery)) is not None}
     ranked = sorted((c for c in candidates if c.pinky_id not in excluded), key=_preference)
     rank_of = {c.pinky_id: index for index, c in enumerate(ranked, start=1)}
@@ -132,38 +144,42 @@ def choose_pinky(
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# Receiving zone
+# 수령 구역
 # ---------------------------------------------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class ZoneCandidate:
-    """One receiving zone at the moment an order starts (config/receiving-zones.json order)."""
+    """주문을 시작하는 순간의 수령 구역 하나(config/receiving-zones.json 순서로 넘긴다)."""
 
     zone_id: str
     label: str
-    route_length: int  # waypoints the Pinky passes on its way there; fewer is a shorter trip
-    holding_order: str | None = None  # a started order not yet picked up there keeps the zone
-    uses_today: int = 0  # orders started today that went to this zone
+    route_length: int  # 거기까지 가며 지나는 웨이포인트 수. 적을수록 짧은 길이다
+    holding_order: str | None = None  # 시작했고 아직 거기서 수령되지 않은 주문이 구역을 쥔다
+    uses_today: int = 0  # 오늘 시작해 이 구역으로 간 주문 수
 
 
 @dataclass(frozen=True)
 class ZoneVerdict:
+    """구역 하나의 판정(PinkyVerdict와 같은 모양)."""
+
     zone_id: str
     label: str
     eligible: bool
     reason: str
-    rank: int | None = None  # 1 = chosen; None when excluded
+    rank: int | None = None  # 1 = 뽑힘. 빠졌으면 None
     checks: tuple[dict[str, Any], ...] = ()
-    keys: dict[str, Any] | None = None  # what the ranking compared: uses today, route length, config order
+    keys: dict[str, Any] | None = None  # 순위에서 비교한 값: 오늘 사용 횟수, 경로 길이, 설정 순서
 
 
 @dataclass(frozen=True)
 class ZoneAssignment:
+    """구역 고르기 결과. zone_id가 None이면 쓸 구역이 없고 summary가 이유다."""
+
     zone_id: str | None
     summary: str
     verdicts: tuple[ZoneVerdict, ...]
-    operator_chosen: bool = False  # the zone came with the order (an operator's choice) and was only checked
+    operator_chosen: bool = False  # 구역이 주문과 함께 왔고(작업자 지정) 비었는지만 확인했다
 
     def as_dict(self) -> dict[str, Any]:
         return {"zone_id": self.zone_id, "summary": self.summary, "operator_chosen": self.operator_chosen,
@@ -171,10 +187,12 @@ class ZoneAssignment:
 
 
 def _zone_reason(candidate: ZoneCandidate) -> str:
+    """화면에 보일 한 줄(예: "오늘 1회 · 경로 2곳")."""
     return f"오늘 {candidate.uses_today}회 · 경로 {candidate.route_length}곳"
 
 
 def _zone_verdicts(candidates: Sequence[ZoneCandidate]) -> tuple[tuple[ZoneVerdict, ...], list[ZoneCandidate]]:
+    """(구역마다의 판정, 빈 구역을 좋은 순서로). 순서: 오늘 덜 쓴 구역 → 짧은 경로 → 설정 순서."""
     order = {c.zone_id: index for index, c in enumerate(candidates)}
     free = sorted((c for c in candidates if not c.holding_order),
                   key=lambda c: (c.uses_today, c.route_length, order[c.zone_id]))
@@ -194,12 +212,11 @@ def _zone_verdicts(candidates: Sequence[ZoneCandidate]) -> tuple[tuple[ZoneVerdi
 
 
 def choose_zone(candidates: Sequence[ZoneCandidate], *, requested: str | None = None) -> ZoneAssignment:
-    """Where the Pinky takes this order: a zone no started order is still using, then the one used least today,
-    then the shorter route, then config order. Two orders never share a zone, so a customer never meets someone
-    else's Pinky there.
+    """핑키가 이 주문을 가져갈 곳: 시작한 다른 주문이 아직 쓰지 않는 구역 중에서, 오늘 덜 쓴 구역 → 짧은 경로 →
+    설정 순서로 고른다. 두 주문이 한 구역을 나눠 쓰는 일은 없으므로, 손님이 거기서 남의 핑키를 만나지 않는다.
 
-    `requested` is a zone that came with the order (an operator's choice): it is kept, never swapped for another,
-    and only checked to be free, like a customer who waits for the spot they picked."""
+    `requested`는 주문과 함께 온 구역(작업자 지정)이다: 다른 구역으로 바꾸지 않고 비었는지만 확인한다. 자기가
+    고른 자리를 기다리는 손님처럼. 비어 있지 않거나 설정에 없으면 zone_id=None이다."""
     verdicts, free = _zone_verdicts(candidates)
     if requested is not None:
         wanted = next((c for c in candidates if c.zone_id == requested), None)
@@ -217,15 +234,18 @@ def choose_zone(candidates: Sequence[ZoneCandidate], *, requested: str | None = 
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# OMX arms
+# OMX 팔
 # ---------------------------------------------------------------------------------------------------------------
 
-# (successes, attempts) of one policy on one arm, from finished transfer checks.
+# (policy_id, arm_id) → 끝난 옮김 확인에서 센 (성공 수, 시도 수). TaskStore.pick_success_stats가 만든다.
 PickStats = Mapping[tuple[str, str], tuple[int, int]]
+# (물체, 팔 id) → 그 팔에서 그 물체를 집도록 학습된 정책, 없으면 None.
 PolicyResolver = Callable[[str, str], Mapping[str, Any] | None]
 
 
 class ArmPlanError(ValueError):
+    """팔 계획을 세울 수 없다. error_code는 SHELF_STOCK_SHORT 또는 POLICY_NOT_FOR_ARM이다."""
+
     def __init__(self, error_code: str, message: str) -> None:
         super().__init__(message)
         self.error_code = error_code
@@ -233,20 +253,20 @@ class ArmPlanError(ValueError):
 
 @dataclass(frozen=True)
 class ArmPick:
-    """One unit of the order, the arm that picks it, and why that arm."""
+    """주문의 물체 한 개(단위), 그것을 집을 팔, 그 팔인 이유."""
 
     object_class: str
     label: str
-    unit: int
-    of: int
+    unit: int  # 같은 물체 중 몇 번째인지(1부터)
+    of: int  # 같은 물체의 주문 수량
     arm_id: str
     arm_label: str
     shelf_id: str
     policy_id: str
     reason: str
-    # Which rule decided: only_option, success_rate, balance, stock or config (see plan_arms).
+    # 어느 규칙이 정했는지: only_option, success_rate, balance, stock, config 중 하나(plan_arms 참고).
     rule: str = ""
-    # Every arm as it stood when this unit was placed: {arm_id, arm_label, possible, why, success_rate,
+    # 이 단위를 배정할 때 모든 팔의 형편: {arm_id, arm_label, possible, why, success_rate,
     # assigned, remaining, chosen}.
     options: tuple[dict[str, Any], ...] = ()
 
@@ -256,7 +276,9 @@ class ArmPick:
 
 @dataclass(frozen=True)
 class ArmPlan:
-    picks: tuple[ArmPick, ...]  # in execution order
+    """팔 계획: 실행 순서대로의 집기와 한 줄 요약(예: "왼쪽 팔 2개 → 오른쪽 팔 1개")."""
+
+    picks: tuple[ArmPick, ...]  # 실행 순서대로
     summary: str
 
     def as_dict(self) -> dict[str, Any]:
@@ -264,7 +286,7 @@ class ArmPlan:
 
 
 def success_rate(stats: PickStats, policy_id: str, arm_id: str) -> float:
-    """Laplace-smoothed pick success, (s + 1) / (n + 2): 0.5 with no history, and a single result moves it little."""
+    """라플라스 보정한 집기 성공률 (s + 1) / (n + 2): 기록이 없으면 0.5이고, 결과 하나로는 조금만 움직인다."""
     successes, attempts = stats.get((policy_id, arm_id), (0, 0))
     return (successes + 1) / (attempts + 2)
 
@@ -277,20 +299,23 @@ def plan_arms(
     label_for: Callable[[str], str],
     stats: PickStats | None = None,
 ) -> ArmPlan:
-    """Give every unit an arm, then order the picks so the arms take turns at the single loading spot.
+    """단위마다 팔을 정하고, 하나뿐인 적재 자리에서 팔이 차례를 지키도록 집기 순서를 정한다.
 
-    An arm picks only from its own shelf and only objects it has a trained policy for, and no shelf gives more
-    units than its camera counted. The unit with the fewest workable arms is placed first (most-constrained
-    first), so an object found on one shelf only is not starved by one that both arms could pick. Between two
-    workable arms the better success rate wins, then the arm with fewer units so far (two busy arms finish sooner
-    when their picks overlap), then the shelf with more of that object left, then config order.
+    팔은 자기 선반에서만, 학습된 정책이 있는 물체만 집고, 어떤 선반도 카메라가 센 것보다 많이 내주지 않는다.
+    집을 수 있는 팔이 가장 적은 단위부터 정한다(가장 제약이 큰 것 먼저). 그래서 한 선반에만 있는 물체가 두 팔이 다
+    집을 수 있는 물체에 밀려 굶지 않는다. 두 팔이 다 되면 성공률이 높은 팔 → 지금까지 맡은 개수가 적은 팔(집기가
+    겹칠 수 있다면 두 팔이 함께 바쁠 때 더 빨리 끝난다) → 그 물체가 더 많이 남은 선반 → 설정 순서로 고른다.
+
+    units는 {object_class, unit, of} dict들, stock은 선반 → 물체 → 개수, arms는 {arm_id, label, shelf_id} 설정이다.
+    어떤 단위도 맡을 팔이 없으면 ArmPlanError.
     """
     stats = stats or {}
     remaining = {shelf: Counter(counts) for shelf, counts in stock.items()}
     order = {arm["arm_id"]: index for index, arm in enumerate(arms)}
-    assigned: Counter = Counter()  # units given to each arm so far
+    assigned: Counter = Counter()  # 지금까지 팔마다 맡긴 단위 수
 
     def workable(object_class: str) -> list[tuple[Mapping[str, Any], Mapping[str, Any]]]:
+        """이 물체를 지금 집을 수 있는 (팔, 정책): 정책이 있고 그 팔의 선반에 아직 남은 팔."""
         options = []
         for arm in arms:
             policy = resolve_policy(object_class, arm["arm_id"])
@@ -301,6 +326,7 @@ def plan_arms(
     pending = list(enumerate(units))
     placed: list[tuple[int, ArmPick]] = []
     while pending:
+        # 집을 수 있는 팔이 가장 적은 단위(같으면 주문 순서)를 먼저 정한다. 남은 수량이 줄 때마다 다시 센다.
         position, unit = min(pending, key=lambda entry: (len(workable(entry[1]["object_class"])), entry[0]))
         pending.remove((position, unit))
         object_class = unit["object_class"]
@@ -312,6 +338,7 @@ def plan_arms(
                                              assigned=assigned, remaining=remaining, order=order))
         arm, policy = ranked[0]
         rule, reason = _arm_reason(ranked, object_class, stats, remaining, assigned)
+        # 화면용 기록은 이 단위를 빼기 전의 형편으로 남긴다.
         options = _arm_options(arms, object_class, resolve_policy, stats, remaining, assigned, arm["arm_id"])
         remaining[arm["shelf_id"]][object_class] -= 1
         assigned[arm["arm_id"]] += 1
@@ -321,8 +348,8 @@ def plan_arms(
             policy_id=policy["policy_id"], reason=reason, rule=rule, options=options,
         )))
 
-    # One arm finishes before the other starts (they share the loading spot): the busier arm goes first, and each
-    # arm keeps the order's own unit order.
+    # 한 팔이 끝나야 다른 팔이 시작한다(적재 자리를 같이 쓰므로): 맡은 개수가 많은 팔이 먼저 하고, 팔마다 주문의
+    # 단위 순서를 지킨다.
     load = Counter(pick.arm_id for _, pick in placed)
     placed.sort(key=lambda entry: (-load[entry[1].arm_id], order[entry[1].arm_id], entry[0]))
     picks = tuple(pick for _, pick in placed)
@@ -340,7 +367,8 @@ def _arm_preference(
     remaining: Mapping[str, Counter],
     order: Mapping[str, int],
 ) -> tuple[float, int, int, int]:
-    """Sort key for the arms that can take a unit, best first (see plan_arms)."""
+    """단위를 맡을 수 있는 팔의 정렬 키, 좋은 것부터(plan_arms 참고): 성공률 높은 순, 맡은 개수 적은 순,
+    남은 수량 많은 순, 설정 순서."""
     arm, policy = option
     return (
         -success_rate(stats, policy["policy_id"], arm["arm_id"]),
@@ -357,7 +385,7 @@ def _arm_reason(
     remaining: Mapping[str, Counter],
     assigned: Counter,
 ) -> tuple[str, str]:
-    """(rule, words): the first rule that separated the chosen arm from the runner-up."""
+    """(규칙, 설명): 뽑힌 팔과 2등을 처음으로 가른 규칙. 팔이 하나뿐이면 only_option."""
     (arm, policy), *others = ranked
     if not others:
         return "only_option", f"{arm['label']} 쪽에서만 집을 수 있음"
@@ -383,7 +411,7 @@ def _arm_options(
     assigned: Counter,
     chosen_arm_id: str,
 ) -> tuple[dict[str, Any], ...]:
-    """Every arm as it stood for this unit: why it could not take it, or the values the rules compared."""
+    """이 단위에 대해 팔마다의 형편: 맡을 수 없었던 이유, 또는 규칙이 비교한 값."""
     options = []
     for arm in arms:
         policy = resolve_policy(object_class, arm["arm_id"])
@@ -400,6 +428,8 @@ def _arm_options(
 def _no_arm_error(
     object_class: str, label: str, arms: Sequence[Mapping[str, Any]], remaining: Mapping[str, Counter]
 ) -> ArmPlanError:
+    """팔을 못 찾은 이유: 어느 팔의 선반에도 남지 않았으면 SHELF_STOCK_SHORT, 남았는데 그 팔에 정책이 없으면
+    POLICY_NOT_FOR_ARM."""
     seen_on = [arm["label"] for arm in arms if remaining.get(arm["shelf_id"], Counter())[object_class] > 0]
     if not seen_on:
         return ArmPlanError("SHELF_STOCK_SHORT", f"{label}: 선반에 남은 수량이 주문보다 적습니다")
@@ -407,11 +437,13 @@ def _no_arm_error(
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# Several Pinkys for one order
+# 한 주문에 핑키 여러 대
 # ---------------------------------------------------------------------------------------------------------------
 
 
 class ShipmentError(ValueError):
+    """주문을 운송분으로 나눌 수 없다(ITEM_TOO_BIG_FOR_PINKY: 핑키 한 대에 실리지 않는 물체)."""
+
     def __init__(self, error_code: str, message: str) -> None:
         super().__init__(message)
         self.error_code = error_code
@@ -419,7 +451,7 @@ class ShipmentError(ValueError):
 
 @dataclass(frozen=True)
 class Shipment:
-    """The units one Pinky carries for an order, and how much of its tray they take."""
+    """핑키 한 대가 주문에서 나르는 단위들과 그것이 차지하는 쟁반 칸 수(load)."""
 
     units: tuple[Mapping[str, Any], ...]
     load: int
@@ -431,10 +463,11 @@ def split_into_shipments(
     size_of: Callable[[str], int],
     label_for: Callable[[str], str],
 ) -> tuple[Shipment, ...]:
-    """Split an order over as few Pinkys as the tray capacity allows, with the load spread evenly between them.
+    """쟁반 칸 수가 허락하는 가장 적은 핑키에 주문을 나누고, 짐은 고르게 펼친다.
 
-    Start from the fewest Pinkys that could hold the total, place the largest units first, each on the least loaded
-    tray it still fits on; add a Pinky only when a unit fits nowhere. Heaviest shipment first."""
+    전체 크기를 담을 수 있는 최소 대수부터 시작해, 큰 단위부터 아직 들어가는 쟁반 중 가장 덜 찬 쟁반에 놓는다.
+    어디에도 안 들어가는 단위가 생길 때만 핑키를 한 대 늘려 다시 한다. 결과는 무거운 운송분부터다.
+    단위마다 크기가 capacity 이하임을 먼저 확인하므로, 핑키 수가 단위 수에 이르면 반드시 끝난다."""
     sizes = [size_of(unit["object_class"]) for unit in units]
     for unit, size in zip(units, sizes, strict=True):
         if size > capacity:
@@ -447,11 +480,11 @@ def split_into_shipments(
         for index in sorted(range(len(units)), key=lambda i: (-sizes[i], i)):
             fitting = [tray for tray in range(count) if loads[tray] + sizes[index] <= capacity]
             if not fitting:
-                break
+                break  # 이 대수로는 안 된다: 아래 else를 건너뛰고 한 대 늘린다
             tray = min(fitting, key=lambda t: (loads[t], t))
             trays[tray].append(index)
             loads[tray] += sizes[index]
-        else:
+        else:  # 모든 단위가 들어갔다
             shipments = [Shipment(tuple(units[i] for i in sorted(tray)), load) for tray, load in zip(trays, loads, strict=True)]
             return tuple(sorted(shipments, key=lambda shipment: -shipment.load))
         count += 1
@@ -459,7 +492,7 @@ def split_into_shipments(
 
 @dataclass(frozen=True)
 class Trip:
-    """One shipment and the Pinky that carries it; no Pinky means it waits for one to come free."""
+    """운송분 하나와 그것을 나를 핑키. 핑키가 없으면 빈 핑키를 기다린다."""
 
     shipment: Shipment
     pinky_id: str | None
@@ -473,12 +506,15 @@ class Trip:
 
 @dataclass(frozen=True)
 class FleetPlan:
+    """운송분마다의 핑키 계획(미리보기용)."""
+
     trips: tuple[Trip, ...]
-    pinky: PinkyAssignment  # every Pinky's verdict and rank
+    pinky: PinkyAssignment  # 모든 핑키의 판정과 순위
     summary: str
 
     @property
     def complete(self) -> bool:
+        """모든 운송분에 지금 핑키가 있는지."""
         return all(trip.pinky_id is not None for trip in self.trips)
 
     def as_dict(self) -> dict[str, Any]:
@@ -489,7 +525,7 @@ class FleetPlan:
 def assign_fleet(
     shipments: Sequence[Shipment], candidates: Sequence[PinkyCandidate], *, min_battery: float = MIN_BATTERY_PERCENT
 ) -> FleetPlan:
-    """Give the heaviest shipment to the best ranked Pinky, the next to the next; the rest wait for a free one."""
+    """가장 무거운 운송분을 1등 핑키에게, 다음 것을 2등에게 준다. 남는 운송분은 빈 핑키를 기다린다."""
     ranking = choose_pinky(candidates, min_battery=min_battery)
     ranked = sorted((v for v in ranking.verdicts if v.eligible), key=lambda v: v.rank or 0)
     trips = tuple(
@@ -506,25 +542,27 @@ def assign_fleet(
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# Two arms, one loading spot
+# 두 팔, 적재 자리 하나
 # ---------------------------------------------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class PickTiming:
-    """Seconds one pick takes, split where the arm enters the shared space above the Pinky."""
+    """집기 하나가 걸리는 시간(초). 팔이 핑키 위 공용 공간에 들어가는 순간에서 둘로 나눈다."""
 
-    shelf_s: float  # at its own shelf: grasp and lift to the waiting pose, outside the loading space
-    place_s: float  # waiting pose -> over the Pinky -> release -> back out: inside the loading space
+    shelf_s: float  # 자기 선반에서: 잡아서 대기 자세까지 들어 올림. 적재 공간 밖
+    place_s: float  # 대기 자세 → 핑키 위 → 놓기 → 빠져나옴. 적재 공간 안
 
 
 @dataclass(frozen=True)
 class TimedPick:
+    """시간표 위의 집기 하나. 시각은 적재 시작부터의 초."""
+
     pick: ArmPick
     shelf_start_s: float
     place_start_s: float
     place_end_s: float
-    waited_s: float  # held at the waiting pose because the other arm was over the Pinky
+    waited_s: float  # 다른 팔이 핑키 위에 있어 대기 자세로 기다린 시간
 
     def as_dict(self) -> dict[str, Any]:
         return {**self.pick.as_dict(), "shelf_start_s": self.shelf_start_s, "place_start_s": self.place_start_s,
@@ -533,7 +571,9 @@ class TimedPick:
 
 @dataclass(frozen=True)
 class LoadingSchedule:
-    picks: tuple[TimedPick, ...]  # in the order they reach the Pinky
+    """적재 시간표: 집기들, 전체 시간, 한 팔씩 통째로 했을 때의 시간(비교용), 겹치기 여부."""
+
+    picks: tuple[TimedPick, ...]  # 핑키에 닿는 순서대로
     total_s: float
     one_arm_at_a_time_s: float
     overlap: bool = True
@@ -546,13 +586,12 @@ class LoadingSchedule:
 def schedule_loading(
     picks: Sequence[ArmPick], timing: Callable[[ArmPick], PickTiming], arm_ids: Sequence[str], *, overlap: bool = True
 ) -> LoadingSchedule:
-    """When each pick happens.
+    """집기마다 언제 일어나는지 계산한다(미리보기용 추정, 장치는 움직이지 않는다).
 
-    Without `overlap`, one whole pick after another in plan order: what the arms do while each ACT policy runs
-    grasp -> place -> rest in one go. With it, the loading space above the Pinky is the only shared resource and
-    becomes a lock: an arm grasps at its own shelf while the other places, then waits at its waiting pose until the
-    space is free. The arm that is ready first places first (ties: the arm with more picks left, then config
-    order), which makes the arms alternate whenever both have work. Each arm keeps the plan's order for its picks."""
+    `overlap`이 없으면 계획 순서대로 집기 하나를 통째로 하나씩: ACT 정책이 잡기 → 놓기 → 쉬기를 한 번에 돌리는
+    지금 팔이 하는 그대로다. 있으면 핑키 위 적재 공간만이 공용 자원이고 잠금이 된다: 한 팔이 놓는 동안 다른 팔은
+    자기 선반에서 잡고, 공간이 빌 때까지 대기 자세로 기다린다. 먼저 준비된 팔이 먼저 놓는다(같으면 남은 집기가
+    많은 팔, 그다음 설정 순서). 그래서 두 팔 모두 일이 있으면 번갈아 놓는다. 팔마다 계획의 집기 순서는 지킨다."""
     sequential = sum(timing(pick).shelf_s + timing(pick).place_s for pick in picks)
     if not overlap:
         timeline, clock = [], 0.0
@@ -566,6 +605,7 @@ def schedule_loading(
     space_free_at = 0.0
     timeline: list[TimedPick] = []
     while any(queues.values()):
+        # (선반 쪽을 마치고 준비되는 시각, 남은 집기가 많은 팔 먼저, 설정 순서)가 가장 작은 팔이 다음에 놓는다.
         ready_at, _, _, arm = min(
             (free_at[arm] + timing(queue[0]).shelf_s, -len(queue), position, arm)
             for position, (arm, queue) in enumerate(queues.items()) if queue
@@ -574,5 +614,6 @@ def schedule_loading(
         place_start = max(ready_at, space_free_at)
         place_end = place_start + timing(pick).place_s
         timeline.append(TimedPick(pick, free_at[arm], place_start, place_end, place_start - ready_at))
+        # 놓고 빠져나와야 그 팔도 다음 집기를 시작하고 적재 공간도 빈다.
         free_at[arm] = space_free_at = place_end
     return LoadingSchedule(tuple(timeline), max((p.place_end_s for p in timeline), default=0.0), sequential, overlap=True)

@@ -1,23 +1,24 @@
-"""Shelf inventory from the cameras: what is on the shelves, what open orders have claimed, what can still be sold.
+"""카메라로 본 선반 재고: 선반에 무엇이 있는지, 열린 주문이 얼마나 잡아 두었는지, 아직 팔 수 있는 것이 얼마인지.
 
-The shelf counter (camera_counts.ShelfStockCounter, or the mock world) already takes the median of a few frames,
-but YOLO counts still flicker between readings and an arm reaching into a shelf hides what is behind it. So:
+선반 개수 세기(camera_counts.ShelfStockCounter 또는 모의 세계)는 이미 몇 프레임의 중앙값을 쓰지만, YOLO 개수는
+읽을 때마다 여전히 흔들리고 선반에 손을 뻗은 팔은 뒤의 물체를 가린다. 그래서:
 
-- A changed count is accepted only after it reads the same `confirm_readings` times in a row.
-- While an arm is working (the loading spot is held, or a policy runs) readings are not used: the book keeps the
-  last confirmed counts, and the units being picked are still covered by their orders' reservations.
-- With no usable reading for `stale_after_s` (camera gone, detector not ready) the stock is unknown, never zero.
+- 바뀐 개수는 같은 값이 `confirm_readings`번 연속으로 읽혀야 받아들인다.
+- 팔이 일하는 동안(적재 자리가 잡혀 있거나 정책이 돌고 있음)은 읽은 값을 쓰지 않는다. 장부는 마지막으로 확정한
+  개수를 유지하고, 집고 있는 물체는 여전히 그 주문의 예약으로 덮여 있다.
+- `stale_after_s` 동안 쓸 만한 읽기가 없으면(카메라 없음, 검출기 준비 안 됨) 재고는 0이 아니라 '모름'이다.
 
-Our own picks are booked as they happen: when the order flow confirms a unit moved from a shelf onto a Pinky,
-that shelf's count drops by one at once (a ledger), and the camera later only confirms it. A change the camera
-confirms that we did not make (someone took an object, or restocked) is logged as such.
+우리가 집은 것은 일어나는 즉시 장부에 적는다: 주문 흐름이 선반에서 핑키 위로 옮겼다고 확인하면 그 선반 개수를
+바로 하나 줄이고(장부), 카메라는 나중에 그것을 확인만 한다. 우리가 하지 않은 변화를 카메라가 확정하면(누가 물체를
+가져갔거나 채워 넣음) 그렇게 기록한다.
 
-Available = shelf counts - reserved by open orders (ordered and not yet moved onto a Pinky). It is what the order
-window may sell. An object whose stock is unknown is closed for ordering, and both windows say why.
+팔 수 있는 수량 = 선반 개수 − 열린 주문의 예약(주문했고 아직 핑키 위로 옮기지 않은 것). 주문 창이 팔 수 있는 만큼이다.
+재고를 모르는 물체는 주문을 닫고, 주문 창과 관제 화면 둘 다 그 이유를 보인다.
 
-The operator can override any object (InventoryOverrides, kept in a small JSON file): `closed` stops selling it,
-`manual` sells from a count the operator typed instead of the camera's (e.g. while a camera is down), `auto` goes
-back to the camera.
+운영자는 물체마다 덮어쓸 수 있다(InventoryOverrides, 작은 JSON 파일에 저장): `closed`는 판매 중지, `manual`은 카메라
+대신 운영자가 입력한 개수로 판다(예: 카메라가 꺼진 동안), `auto`는 카메라로 돌아간다.
+
+연결: app.py가 InventoryMonitor를 만들어 2초마다 선반을 읽고, OrderDesk가 snapshot()으로 판매 가능 수량을 본다.
 """
 
 from __future__ import annotations
@@ -33,37 +34,42 @@ from typing import Any
 
 from control_station import utc_now_iso
 
-CONFIRM_READINGS = 3
-STALE_AFTER_S = 10.0
-READ_PERIOD_S = 2.0
-EVENT_LOG_SIZE = 40
+CONFIRM_READINGS = 3  # 바뀐 개수를 받아들이기 전에 같은 값이 연속으로 읽혀야 하는 횟수
+STALE_AFTER_S = 10.0  # 쓸 만한 읽기가 이만큼(초) 없으면 재고를 '모름'으로 본다
+READ_PERIOD_S = 2.0  # 선반을 읽는 주기(초)
+EVENT_LOG_SIZE = 40  # 변화 기록을 최근 몇 건까지 들고 있을지
 
 
 @dataclass(frozen=True)
 class StockReading:
-    """One look at the shelves: counts per shelf, or why there are none; `busy` when an arm is at work."""
+    """선반을 한 번 본 결과: 선반별 개수, 또는 개수가 없는 이유. 팔이 일하는 중이면 `busy`."""
 
-    at: float  # monotonic seconds
+    at: float  # time.monotonic() 초
     shelves: Mapping[str, Mapping[str, int]] | None = None
     error: str | None = None
     busy: bool = False
 
 
 class InventoryBook:
-    """Confirmed shelf counts, built from readings; no I/O, so the rules are testable with plain readings."""
+    """읽은 값으로 쌓은 확정 선반 개수. 입출력이 없어서 규칙을 평범한 읽기 값만으로 시험할 수 있다.
+
+    스레드 안전하지 않다. InventoryMonitor가 자기 락 안에서만 부른다."""
 
     def __init__(self, *, confirm_readings: int = CONFIRM_READINGS, stale_after_s: float = STALE_AFTER_S) -> None:
         self.confirm_readings = confirm_readings
         self.stale_after_s = stale_after_s
         self._confirmed: dict[tuple[str, str], int] = {}
-        self._pending: dict[tuple[str, str], tuple[int, int]] = {}  # key -> (value seen, readings in a row)
-        self._has_confirmed = False
+        self._pending: dict[tuple[str, str], tuple[int, int]] = {}  # 키 → (본 값, 연속으로 읽힌 횟수)
+        self._has_confirmed = False  # 첫 전체 그림이 확정됐는지. 그 전에는 재고 상태가 'unknown'이다
         self._last_usable_at: float | None = None
         self._last_error: str | None = None
         self._busy = False
 
     def observe(self, reading: StockReading) -> list[dict[str, Any]]:
-        """Take one reading; returns the changes it confirmed (restocked or removed), oldest first."""
+        """읽기 하나를 받는다. 이 읽기로 확정된 변화(채움 또는 바깥에서 가져감)를 순서대로 돌려준다.
+
+        오류 읽기는 이유만 기억하고, busy 읽기는 장부를 건드리지 않는다. 읽기에 없는 키는 0개로 본다(선반에서
+        사라진 물체도 같은 규칙으로 0이 확정된다)."""
         if reading.error is not None:
             self._last_error = reading.error
             return []
@@ -89,22 +95,25 @@ class InventoryBook:
             self._confirmed[key] = value
             if self._has_confirmed and value != before:
                 shelf, name = key
-                # Our own picks are already booked, so a change confirmed here came from outside the order flow.
+                # 우리가 집은 것은 이미 장부에 있으므로, 여기서 확정된 변화는 주문 흐름 밖에서 온 것이다.
                 changes.append({"shelf_id": shelf, "object_class": name, "from": before, "to": value,
                                 "kind": "RESTOCKED" if value > before else "REMOVED_OUTSIDE"})
         if not self._has_confirmed and not self._pending:
-            self._has_confirmed = True  # every key read the same `confirm_readings` times: the first full picture
+            self._has_confirmed = True  # 모든 키가 같은 값으로 `confirm_readings`번 읽힘: 첫 전체 그림
         return changes
 
     def book_moves(self, moves: Iterable[tuple[str, str]]) -> None:
-        """Our confirmed transfers, (shelf, object) each: take them off the shelf now, before the camera sees it."""
+        """확인된 우리 옮김들((선반, 물체) 하나씩): 카메라가 보기 전에 지금 선반에서 하나씩 뺀다.
+
+        그 키의 대기 중인 읽기도 버린다: 옮기기 전 개수를 다시 확정하지 않게 하려는 것이다."""
         for shelf, name in moves:
             key = (shelf, name)
             self._confirmed[key] = max(0, self._confirmed.get(key, 0) - 1)
             self._pending.pop(key, None)
 
     def state(self, now: float) -> tuple[str, str | None]:
-        """(state, reason): live, held (an arm is at work), unknown (no confirmed picture or no reading lately)."""
+        """(상태, 이유): live(살아 있음), held(팔이 일하는 중이라 마지막 확정값), unknown(확정된 그림이 없거나
+        최근 읽기가 없음)."""
         if not self._has_confirmed:
             return "unknown", self._last_error or "재고를 확인하는 중입니다"
         if self._busy:
@@ -114,6 +123,7 @@ class InventoryBook:
         return "live", None
 
     def on_shelves(self) -> dict[str, dict[str, int]]:
+        """확정된 개수 중 0보다 큰 것만, 선반 → 물체 → 개수."""
         shelves: dict[str, dict[str, int]] = {}
         for (shelf, name), count in sorted(self._confirmed.items()):
             if count > 0:
@@ -122,9 +132,8 @@ class InventoryBook:
 
     def snapshot(self, products: Iterable[Mapping[str, str]], reserved: Mapping[str, int], now: float,
                  overrides: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
-        """Per product: where the count comes from, on each shelf, reserved, available, and its status:
-        available (some left), sold_out, unknown (camera count missing, closed for ordering), closed (by the
-        operator)."""
+        """상품마다: 개수의 출처, 선반별 개수, 예약, 팔 수 있는 수량, 상태. 상태는 available(남음), sold_out(품절),
+        unknown(카메라 개수 없음, 주문 닫힘), closed(운영자가 판매 중지)다. 운영자 덮어쓰기가 카메라보다 먼저다."""
         state, reason = self.state(now)
         shelves = self.on_shelves()
         overrides = overrides or {}
@@ -153,13 +162,14 @@ class InventoryBook:
 
 
 class InventoryOverrides:
-    """The operator's per-object settings, kept in a JSON file so they survive a restart."""
+    """운영자의 물체별 설정. 서버를 다시 켜도 남도록 JSON 파일에 둔다. closed/manual만 저장하고 auto는 항목을 지운다."""
 
     MODES = frozenset({"auto", "closed", "manual"})
 
     def __init__(self, path: Path) -> None:
         self.path = path
         self._lock = threading.Lock()
+        # 파일이 없거나 깨졌으면 빈 설정(모두 auto)으로 시작한다. 모르는 모드는 버린다.
         try:
             loaded = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -170,11 +180,14 @@ class InventoryOverrides:
         }
 
     def all(self) -> dict[str, dict[str, Any]]:
+        """저장된 덮어쓰기 전부의 복사본."""
         with self._lock:
             return {name: dict(value) for name, value in self._values.items()}
 
     def set(self, object_class: str, mode: str, count: object = None) -> dict[str, Any] | None:
-        """Set one object's mode; returns the stored override (None for auto). Raises ValueError on bad input."""
+        """물체 하나의 모드를 정하고 저장한 덮어쓰기를 돌려준다(auto면 None). 잘못된 입력은 ValueError.
+
+        수동 수량은 0~99 정수다."""
         if mode not in self.MODES:
             raise ValueError("mode는 auto, closed, manual 중 하나여야 합니다")
         if mode == "manual" and (isinstance(count, bool) or not isinstance(count, int) or not 0 <= count <= 99):
@@ -186,6 +199,7 @@ class InventoryOverrides:
             else:
                 self._values[object_class] = {**value, "set_at": utc_now_iso()}
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            # 임시 파일에 쓰고 replace로 바꿔 끼운다: 쓰다가 죽어도 반쯤 쓰인 파일이 남지 않는다.
             temporary = self.path.with_suffix(".tmp")
             temporary.write_text(json.dumps(self._values, ensure_ascii=False, indent=2), encoding="utf-8")
             temporary.replace(self.path)
@@ -193,7 +207,10 @@ class InventoryOverrides:
 
 
 class InventoryMonitor:
-    """Reads the shelves every `period_s` on a background thread and keeps the book and a short change log."""
+    """백그라운드 스레드에서 `period_s`마다 선반을 읽어 장부와 짧은 변화 기록을 유지한다.
+
+    입력은 모두 함수로 받는다: read_shelves(선반 개수), busy(팔이 일하는 중인지), products(주문할 수 있는 물체),
+    reserved(열린 주문의 예약, TaskStore.reserved_units), transfers(확인된 옮김, TaskStore.confirmed_transfers)."""
 
     def __init__(self, read_shelves: Callable[[], Mapping[str, Any]], busy: Callable[[], bool],
                  products: Callable[[], list[dict[str, str]]], reserved: Callable[[], Mapping[str, int]],
@@ -205,7 +222,7 @@ class InventoryMonitor:
         self.products = products
         self.reserved = reserved
         self.transfers = transfers
-        # Transfers that happened before this start are already reflected in what the camera sees.
+        # 이 모니터를 시작하기 전에 있었던 옮김은 이미 카메라가 보는 개수에 들어가 있으므로 다시 빼지 않는다.
         self._booked = {step_id for step_id, _, _ in transfers()}
         self.book = book or InventoryBook()
         self.overrides = overrides
@@ -218,6 +235,7 @@ class InventoryMonitor:
         self._thread: threading.Thread | None = None
 
     def read_once(self) -> None:
+        """한 번 읽는다: 새로 확인된 옮김을 장부에 적고, 팔이 쉬는 중이면 선반을 읽어 장부에 넣는다."""
         moves = [(step_id, shelf, name) for step_id, shelf, name in self.transfers() if step_id not in self._booked]
         busy = bool(self.busy())
         try:
@@ -225,7 +243,7 @@ class InventoryMonitor:
             if answer is not None:
                 self._simulated = bool(answer.get("simulated"))
             reading = StockReading(self.clock(), None if answer is None else answer["shelves"], busy=busy)
-        except Exception as exc:  # camera gone, detector not ready, no fresh frames: the stock becomes unknown
+        except Exception as exc:  # 카메라 없음, 검출기 준비 안 됨, 새 프레임 없음: 재고가 '모름'이 된다
             reading = StockReading(self.clock(), error=f"선반 재고를 읽지 못했습니다: {exc}")
         with self._lock:
             self.book.book_moves((shelf, name) for _, shelf, name in moves)
@@ -234,12 +252,13 @@ class InventoryMonitor:
                 self._events.append({"at": utc_now_iso(), **change})
 
     def snapshot(self) -> dict[str, Any]:
+        """화면과 주문 창이 보는 재고: 상품별 행, 상태, 최근 변화(최신부터)."""
         reserved = self.reserved()
         overrides = self.overrides.all() if self.overrides is not None else {}
         with self._lock:
             view = self.book.snapshot(self.products(), reserved, self.clock(), overrides)
             view["events"] = list(self._events)[::-1]
-        # Counts from the mock world are labeled as such, never as the camera's.
+        # 모의 세계의 개수는 카메라 개수로 보이지 않게 그렇다고 표시한다.
         view["simulated"] = self._simulated
         if self._simulated:
             for row in view["products"]:
@@ -249,7 +268,7 @@ class InventoryMonitor:
         return view
 
     def set_override(self, object_class: str, mode: str, count: object = None) -> dict[str, Any] | None:
-        """The operator closes, hand-counts or returns an object to the camera; the change is logged."""
+        """운영자가 물체를 판매 중지하거나, 손으로 센 개수를 넣거나, 카메라로 되돌린다. 변화 기록에도 남긴다."""
         if self.overrides is None:
             raise ValueError("재고 수정 기능이 켜져 있지 않습니다")
         if object_class not in {product["object_class"] for product in self.products()}:
@@ -261,6 +280,7 @@ class InventoryMonitor:
         return stored
 
     def start(self) -> InventoryMonitor:
+        """읽기 루프 스레드를 띄운다."""
         def loop() -> None:
             while not self._stop.is_set():
                 self.read_once()
@@ -270,6 +290,7 @@ class InventoryMonitor:
         return self
 
     def close(self) -> None:
+        """루프를 멈추고 스레드를 최대 5초 기다린다."""
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=5)

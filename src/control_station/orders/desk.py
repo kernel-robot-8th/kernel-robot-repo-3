@@ -1,10 +1,12 @@
-"""The order desk: orders from the order window wait here until an operator starts them.
+"""주문 창구: 주문 창에서 들어온 주문은 운영자(또는 자동 출발)가 시작할 때까지 여기서 기다린다.
 
-Receiving an order stores it without a Pinky and, unless an operator named one, without a receiving zone. The
-preview shows which Pinky, which arms and which receiving zone would serve it right now, and why; starting runs the
-same choices again with the state of that moment, records them on the order and hands the order to the task
-orchestrator. The arm plan is made again inside the order flow, after the
-shelf check, so the preview is advice and never a reservation. Nothing here moves a device.
+주문을 받으면 핑키 없이, 그리고 운영자가 지정하지 않았다면 수령 구역도 없이 저장한다. 미리보기는 지금 시작하면
+어느 핑키·팔·수령 구역이 맡을지와 그 이유를 보여 준다. 시작하면 그 순간의 상태로 같은 선택을 다시 하고, 주문에
+기록한 뒤 작업 실행기(MockTaskOrchestrator)에 넘긴다. 팔 계획은 주문 흐름 안에서 선반 확인 뒤에 다시 세우므로,
+미리보기는 조언일 뿐 예약이 아니다. 여기서는 장치를 움직이지 않는다.
+
+손님 쪽(주문 창·추적 화면)과 운영자 쪽(접수 목록·미리보기·시작·거절) API가 모두 이 클래스를 부른다.
+선택 규칙 자체는 orders/assignment.py의 순수 함수다.
 """
 
 from __future__ import annotations
@@ -49,7 +51,7 @@ from control_station.storage.store import (
 
 
 class OrderDeskError(RuntimeError):
-    """A request the desk refuses; `status` is the HTTP status the API answers with."""
+    """창구가 거절한 요청. `status`는 API가 답할 HTTP 상태, details는 응답 본문에 덧붙일 값이다."""
 
     def __init__(self, error_code: str, message: str, status: int = 409, **details: object) -> None:
         super().__init__(message)
@@ -58,7 +60,7 @@ class OrderDeskError(RuntimeError):
         self.details = details
 
 
-# The customer's stages of one order, and which order-flow steps belong to each.
+# 손님에게 보이는 주문 단계(키, 글자)와, 주문 흐름의 단계가 각각 어느 손님 단계에 속하는지.
 _CUSTOMER_STAGES = (("received", "접수"), ("preparing", "준비"), ("pinky_coming", "핑키 출발"),
                     ("loading", "싣는 중"), ("delivering", "가는 중"), ("arrived", "도착"), ("done", "완료"))
 _STAGE_INDEX = {key: index for index, (key, _) in enumerate(_CUSTOMER_STAGES)}
@@ -69,6 +71,7 @@ _STEP_STAGE = {
     "WAIT_AT_RECEIVING_ZONE": "delivering", "CONFIRM_PICKUP": "arrived", "WAIT_PINKY_PARKED": "done",
     "FINALIZE_TASK": "done",
 }
+# 손님 단계 → (제목, 설명). {zone}, {moved}, {total}은 track()이 채운다.
 _CUSTOMER_TEXT = {
     "received": ("주문을 받았어요", "곧 준비를 시작해요"),
     "preparing": ("주문을 준비하고 있어요", "선반 재고를 확인하고 로봇을 배정해요"),
@@ -80,19 +83,20 @@ _CUSTOMER_TEXT = {
     "canceled": ("주문이 취소됐어요", "다시 주문할 수 있어요"),
     "problem": ("주문 처리에 문제가 생겼어요", "직원이 확인하고 있어요"),
 }
-# What the customer sees in place of the zone until the order starts and the server picks one.
+# 주문이 시작되어 서버가 구역을 정하기 전까지 손님에게 구역 대신 보이는 말.
 ZONE_PENDING_NOTE = "받을 곳은 로봇이 출발할 때 알려 드려요"
-# An order's destination until its zone is assigned (shown on the operator screen).
+# 구역이 배정되기 전 주문의 목적지 글자(운영자 화면에 보인다).
 ZONE_PENDING_LABEL = "수령 구역 (시작 때 배정)"
 
 
 def _request_hash(order_items: list[dict[str, Any]], zone_id: object) -> str:
-    """Fingerprint of what an order asks for, to tell a resent request from a different one with the same key."""
+    """주문 내용의 지문(sha256). 같은 키로 온 요청이 재전송인지, 다른 주문인지 가르는 데 쓴다."""
     body = json.dumps({"items": order_items, "receiving_zone": zone_id}, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
 def _customer_stage(status: str, step_type: str | None) -> str:
+    """작업 상태와 지금 단계 → 손님 단계 키. 멈춘 주문은 손님에게 "problem"으로만 보인다."""
     if status == "PENDING":
         return "received"
     if status == "CANCELED":
@@ -104,12 +108,12 @@ def _customer_stage(status: str, step_type: str | None) -> str:
     return _STEP_STAGE.get(step_type or "", "preparing")
 
 
-# What the order window says under a product that cannot be ordered as usual.
+# 평소처럼 주문할 수 없는 상품 아래에 주문 창이 보이는 말(재고 상태 → 글자).
 _PRODUCT_NOTICE = {"unknown": "재고 확인 중이라 주문을 닫았습니다", "closed": "판매 중지", "sold_out": "품절"}
 
 
 def _topic(word: str) -> str:
-    """The word with its Korean topic particle: 은 after a final consonant, 는 otherwise (사과는, 당근은)."""
+    """낱말에 주제 조사를 붙인다: 받침이 있으면 은, 없으면 는(사과는, 당근은). 한글로 끝나지 않으면 "은(는)"."""
     last = word[-1:] if word else ""
     if "가" <= last <= "힣":
         return word + ("은" if (ord(last) - ord("가")) % 28 else "는")
@@ -117,35 +121,38 @@ def _topic(word: str) -> str:
 
 
 def _start_of_today() -> str:
-    """Local midnight as a UTC ISO time, comparable with the store's timestamps."""
+    """오늘 현지 자정을 UTC ISO 시각으로. 저장소 시각과 문자열로 비교할 수 있다('오늘 운행 횟수'의 기준)."""
     midnight = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
     return midnight.astimezone(timezone.utc).isoformat(timespec="microseconds")
 
 
 @dataclass
 class OrderDesk:
+    """주문 접수·미리보기·시작·추적을 맡는 창구. 상태는 모두 저장소에 있고, 이 객체는 접수 잠금만 가진다."""
+
     store: TaskStore
     orchestrator: Any  # .start(task_id) -> (task, changed)
     devices: OrderDevices
-    arms: Any  # control_station.arms.config registry (.arms: list of arm dicts in config order)
-    policies: Any  # control_station.arms.policies registry
+    arms: Any  # control_station.arms.config 레지스트리(.arms: 설정 순서의 팔 dict 목록)
+    policies: Any  # control_station.arms.policies 레지스트리
     zones: Mapping[str, ReceivingZone]
     pick_stats: Callable[[], PickStats]
     planning: FleetPlanning = field(default_factory=load_fleet_planning)
-    today: Callable[[], str] = _start_of_today
-    # The shelf inventory (inventory.InventoryMonitor.snapshot). With it the window sells what is available
-    # (shelves minus open orders) and refuses more; without it the desk reads the shelves directly.
+    today: Callable[[], str] = _start_of_today  # '오늘'의 시작 시각(시험에서 바꿔 끼운다)
+    # 선반 재고(inventory.InventoryMonitor.snapshot). 있으면 주문 창은 팔 수 있는 만큼(선반 − 열린 주문)만 팔고
+    # 그 이상은 거절한다. 없으면 창구가 선반을 직접 읽는다.
     inventory: Callable[[], dict[str, Any]] | None = None
-    # OrderFlow.confirm_pickup: True when the order's Pinky was waiting at its receiving zone.
+    # OrderFlow.confirm_pickup: 주문의 핑키가 수령 구역에서 기다리고 있었으면 True.
     pickup: Callable[[str], bool] | None = None
-    # OrderFlow.confirm_arrival: True when the order was waiting for the operator to confirm its Pinky's arrival.
+    # OrderFlow.confirm_arrival: 주문이 운영자의 핑키 도착 확인을 기다리고 있었으면 True.
     arrival: Callable[[str], bool] | None = None
+    # 재고 확인과 주문 저장을 한 덩어리로 묶는 잠금(두 창이 마지막 하나를 동시에 팔지 못하게).
     _intake: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    # ---- the order window ----------------------------------------------------------------------------------
+    # ---- 주문 창 ----------------------------------------------------------------------------------------------
 
     def catalog(self) -> dict[str, Any]:
-        """What can be ordered (objects with a trained policy), how many the shelves hold, and where to collect."""
+        """주문할 수 있는 것(학습 정책이 있는 물체), 팔 수 있는 수량과 상태, 수령 구역(참고용) — GET /api/catalog."""
         if self.policies is None:
             return {"products": [], "stock_error": "정책 정의 파일이 없어 주문을 받을 수 없습니다", "zones": []}
         zones = [zone.as_dict() for zone in self.zones.values()]
@@ -176,25 +183,26 @@ class OrderDesk:
         }
 
     def receive(self, items: object, zone_id: object = None) -> dict[str, Any]:
-        """Store a new order in the intake (status PENDING, no Pinky yet).
+        """새 주문을 접수 목록에 저장한다(상태 PENDING, 아직 핑키 없음).
 
-        The customer does not pick a receiving zone: `start` assigns one (choose_zone). A zone given here is an
-        operator's choice and is kept as it is."""
+        손님은 수령 구역을 고르지 않는다: `start`가 정한다(choose_zone). 여기서 구역을 주면 작업자의 선택으로 보고
+        그대로 둔다."""
         return self.receive_once(items, zone_id)[0]
 
     def receive_once(self, items: object, zone_id: object = None, idempotency_key: str | None = None,
                      ) -> tuple[dict[str, Any], bool]:
-        """`receive` that a resent request cannot double: (order, made now).
+        """다시 보낸 요청이 주문을 두 번 만들지 못하는 `receive`: (주문, 지금 만들었는지).
 
-        With an Idempotency-Key the first request makes the order and every later one with the same key and body
-        gets that same order back (made now = False), even when stock has since run out because of it. The same key
-        with a different body is refused: it would hide a second order behind the first."""
+        Idempotency-Key가 있으면 첫 요청이 주문을 만들고, 같은 키·같은 본문의 뒤 요청은 모두 그 주문을 돌려받는다
+        (지금 만들었는지 = False). 그 주문 때문에 재고가 바닥났더라도 마찬가지다. 같은 키에 다른 본문은 거절한다
+        (IDEMPOTENCY_KEY_REUSED): 두 번째 주문이 첫 주문 뒤에 숨어 버리기 때문이다.
+        거절: ORDER_INVALID, RECEIVING_ZONE_*, ITEM_CLOSED, OUT_OF_STOCK, ITEM_TOO_BIG_FOR_PINKY."""
         try:
             order_items = validate_order_items(items, self.policies)
         except ValueError as exc:
             raise OrderDeskError("ORDER_INVALID", str(exc), status=400) from exc
         request_hash = _request_hash(order_items, zone_id)
-        # Check and reserve as one step, so two windows cannot both sell the last unit.
+        # 확인과 예약(주문 저장)을 한 번에 한다: 두 창이 마지막 하나를 둘 다 팔 수 없게.
         with self._intake:
             if idempotency_key is not None:
                 known = self.store.order_request(idempotency_key)
@@ -211,6 +219,7 @@ class OrderDesk:
             zone = None if zone_id is None else self._zone(zone_id)
             summary = " · ".join(f"{self._label(item['object_class'])} {item['quantity']}" for item in order_items)
             self._check_available(order_items)
+            # 쟁반 하나에 다 안 실리면 처음부터 운송분 단계로 만든다.
             shipments = self._shipments({"order_items": order_items})
             order = self.store.create_task(
                 zone.label if zone else ZONE_PENDING_LABEL, f"{summary} 적재", order_items=order_items,
@@ -221,7 +230,7 @@ class OrderDesk:
             return order, True
 
     def _shipments(self, order: dict[str, Any]) -> tuple[Any, ...]:
-        """The order's Pinky loads (tray capacity and sizes from config/fleet-planning.json), heaviest first."""
+        """주문의 핑키 적재분(쟁반 칸 수와 크기는 config/fleet-planning.json), 무거운 것부터."""
         try:
             return split_into_shipments(self._units(order), self.planning.pinky_capacity, self.planning.size_of,
                                         self._label)
@@ -229,8 +238,8 @@ class OrderDesk:
             raise OrderDeskError(exc.error_code, str(exc), status=400) from exc
 
     def _check_available(self, order_items: list[dict[str, Any]]) -> None:
-        """Refuse what cannot be sold now: an object closed (stock unknown, or by the operator), or more than the
-        shelves cover after open orders. Every refused object is named in one message."""
+        """지금 팔 수 없는 것은 거절한다: 닫힌 물체(재고 모름, 또는 운영자가 중지), 또는 열린 주문을 빼고 선반이
+        채울 수 있는 것보다 많은 수량. 거절한 물체를 모두 한 메시지에 담는다. 재고 장부가 없으면 확인하지 않는다."""
         if self.inventory is None:
             return
         rows = {row["object_class"]: row for row in self.inventory()["products"]}
@@ -247,19 +256,18 @@ class OrderDesk:
         if closed or short:
             raise OrderDeskError("ITEM_CLOSED" if closed else "OUT_OF_STOCK", " · ".join(closed + short))
 
-    # ---- the operator's intake ---------------------------------------------------------------------------
+    # ---- 운영자의 접수 목록 -------------------------------------------------------------------------------
 
     def pending(self) -> list[dict[str, Any]]:
-        """Orders waiting for an operator, oldest first."""
+        """운영자를 기다리는 주문들, 오래된 것부터."""
         return self.store.pending_orders()
 
     def preview(self, order_id: str) -> dict[str, Any]:
-        """Who would serve this order if it started now, and why. Changes nothing.
+        """이 주문을 지금 시작하면 누가 맡을지와 그 이유. 아무것도 바꾸지 않는다(GET /api/orders/{id}/assignment).
 
-        `pinky` and `arms` describe a one-Pinky order; `fleet` splits a larger order into shipments (tray capacity
-        from config/fleet-planning.json) that run one after another and, per shipment, plans the arms and times the
-        loading. The first shipment's Pinky is the one `start` would choose; a later one is chosen again when that
-        shipment starts, so the preview shows the best guess with the earlier trips counted."""
+        `pinky`와 `arms`는 핑키 한 대 주문을 설명한다. `fleet`은 큰 주문을 차례로 도는 운송분으로 나누고(쟁반 칸 수는
+        config/fleet-planning.json), 운송분마다 팔을 계획하고 적재 시간을 잰다. 첫 운송분의 핑키는 `start`가 고를
+        그 핑키다. 뒤 운송분의 핑키는 그 운송분이 시작할 때 다시 고르므로, 미리보기는 앞 운행을 센 최선의 추측이다."""
         order = self._pending_order(order_id)
         units = self._units(order)
         candidates = self.pinky_candidates()
@@ -277,13 +285,13 @@ class OrderDesk:
         arm_ids = [arm["arm_id"] for arm in self.arms.arms]
         stats = self.pick_stats()
         trips = []
-        for index, trip in enumerate(fleet.trips):  # later trips plan with what the earlier ones leave on the shelves
+        for index, trip in enumerate(fleet.trips):  # 뒤 운송분은 앞 운송분이 선반에 남긴 것으로 계획한다
             entry = trip.as_dict()
-            if len(fleet.trips) > 1:  # shipments run one after another: the Pinky of each is chosen as it starts
+            if len(fleet.trips) > 1:  # 운송분은 차례로 돈다: 각 핑키는 그 운송분이 시작할 때 고른다
                 guess = guesses[index]
                 entry.update(pinky_id=guess.pinky_id, pinky_name=PINKY_NAMES.get(guess.pinky_id or ""),
                              reason=guess.summary if index == 0 else f"앞 운송이 끝나면 다시 고름 · 지금 기준 {guess.summary}")
-            for unit in entry["units"]:  # what the tray drawing needs: the name and how many slots it takes
+            for unit in entry["units"]:  # 쟁반 그림에 필요한 것: 이름과 차지하는 칸 수
                 unit["label"] = self._label(unit["object_class"])
                 unit["size"] = self.planning.size_of(unit["object_class"])
             if stock_error is not None:
@@ -312,9 +320,10 @@ class OrderDesk:
                           "capacity": self.planning.pinky_capacity, "trips": trips, "sequential": sequential}}
 
     def start(self, order_id: str) -> tuple[dict[str, Any], bool]:
-        """Assign the receiving zone and the Pinky now (where the order has none) and start the order flow.
+        """수령 구역과 핑키를 지금 정하고(주문에 없을 때만) 주문 흐름을 시작한다(POST /api/orders/{id}/start).
 
-        Both are checked before either is written, so a refusal leaves the order as it was."""
+        둘 다 쓰기 전에 둘 다 확인하므로, 확인 단계의 거절(ZONE_BUSY, PINKY_UNAVAILABLE, ORDER_NEEDS_SHIPMENTS)은
+        주문을 그대로 둔다. 이미 시작한 주문이면 실행기에 그대로 넘긴다(시작 요청 반복은 멱등)."""
         order = self._pending_order(order_id, allow_started=True)
         if order["status"] == "PENDING":
             self._refuse_unsplit(order)
@@ -327,19 +336,19 @@ class OrderDesk:
                     raise OrderDeskError("PINKY_UNAVAILABLE", assignment.summary, assignment=assignment.as_dict())
                 try:
                     self.store.assign_pinky(order_id, assignment.pinky_id, assignment.as_dict())
-                except PinkyUnavailable as exc:  # taken by another order between the choice and the write
+                except PinkyUnavailable as exc:  # 고른 뒤 쓰기 전에 다른 주문이 가져갔다
                     raise OrderDeskError("PINKY_UNAVAILABLE", str(exc)) from exc
             if order["receiving_zone"] is None:
                 try:
                     self.store.assign_zone(order_id, zone.zone_id, self.zones[zone.zone_id].label, zone.as_dict())
-                except ZoneUnavailable as exc:  # another order started there between the choice and the write
+                except ZoneUnavailable as exc:  # 고른 뒤 쓰기 전에 다른 주문이 거기서 시작했다
                     raise OrderDeskError("ZONE_BUSY", f"수령 구역이 모두 사용 중이에요: {exc}") from exc
         return self.orchestrator.start(order_id)
 
     @staticmethod
     def _later_pinkys(candidates: list[PinkyCandidate], count: int) -> list[Any]:
-        """The Pinky choice for each shipment if they ran now one after another: the Pinky of each earlier
-        shipment counts one more trip today and has just finished."""
+        """운송분들을 지금 차례로 돌린다고 칠 때 운송분마다의 핑키 선택. 앞 운송분의 핑키는 오늘 운행이 하나 늘고
+        방금 끝난 것으로 쳐서 다음 선택에 반영한다."""
         now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
         pool = list(candidates)
         choices = []
@@ -351,8 +360,8 @@ class OrderDesk:
         return choices
 
     def _refuse_unsplit(self, order: dict[str, Any]) -> None:
-        """An order received before shipments existed (or by the older /api/tasks path) has one load's steps; if it
-        no longer fits one tray it cannot run as it is."""
+        """운송분이 생기기 전에 받은 주문(또는 이전 /api/tasks 경로로 받은 주문)은 적재분 하나의 단계만 갖는다.
+        이제 쟁반 하나에 다 실리지 않으면 그대로는 돌 수 없으니 ORDER_NEEDS_SHIPMENTS로 거절한다."""
         needed = len(self._shipments(order))
         have = max((shipment_of(step) for step in order["steps"]), default=1)
         if needed > have:
@@ -363,10 +372,11 @@ class OrderDesk:
             )
 
     def assign_next_shipment(self, order_id: str, shipment: int) -> dict[str, Any]:
-        """The Pinky for a later shipment of a running order, chosen now and written on the order.
+        """진행 중인 주문의 뒤 운송분 핑키를 지금 골라 주문에 적는다(OrderFlow의 START_SHIPMENT가 부른다).
 
-        The order's own Pinky of the previous shipment is parked again by now and may go again; the ranking (battery,
-        trips today, last finished) usually sends another one. No free Pinky: {"pinky_id": None} and the flow waits."""
+        앞 운송분의 핑키는 이제 주차장에 돌아와 있으니 다시 가도 된다. 다만 순위(배터리, 오늘 운행, 마지막 끝난
+        시각) 때문에 보통 다른 핑키가 간다. 빈 핑키가 없으면 {"pinky_id": None}을 돌려주고 흐름이 기다린다."""
+        # 이 주문 자신이 쥔 핑키는 '진행 중 주문 있음'으로 빼지 않는다.
         candidates = [replace(candidate, holding_order=None) if candidate.holding_order == order_id else candidate
                       for candidate in self.pinky_candidates()]
         assignment = choose_pinky(candidates)
@@ -380,7 +390,8 @@ class OrderDesk:
         return {"pinky_id": assignment.pinky_id, "summary": assignment.summary, "assignment": assignment.as_dict()}
 
     def confirm_arrival(self, order_id: str) -> dict[str, Any]:
-        """The operator confirms that the order's marker-less Pinky stands right at the loading spot."""
+        """운영자가 주문의 핑키가 적재 자리에 제대로 섰다고 확인한다([도착 확인]). 마커가 없거나 카메라가 판정하지
+        못해 흐름이 사람을 기다릴 때만 받는다(아니면 ARRIVAL_NOT_WAITING)."""
         order = self.store.get_task(order_id)
         if order is None or order.get("order_items") is None:
             raise OrderDeskError("ORDER_NOT_FOUND", f"주문 {order_id}이 없습니다", status=404)
@@ -389,7 +400,8 @@ class OrderDesk:
         return {"order_id": order_id, "accepted": True, "message": "도착 확인을 받았습니다. 적재를 시작합니다"}
 
     def confirm_pickup(self, order_id: str) -> dict[str, Any]:
-        """The customer took the order at the receiving zone; the flow then sends the Pinky home."""
+        """손님이 수령 구역에서 주문을 받았다. 그러면 흐름이 핑키를 주차장으로 돌려보낸다. 핑키가 아직 구역에서
+        기다리지 않으면 PICKUP_NOT_READY."""
         order = self.store.get_task(order_id)
         if order is None or order.get("order_items") is None:
             raise OrderDeskError("ORDER_NOT_FOUND", f"주문 {order_id}이 없습니다", status=404)
@@ -398,7 +410,7 @@ class OrderDesk:
         return {"order_id": order_id, "accepted": True, "message": "수령 확인을 받았습니다. 핑키가 주차장으로 돌아갑니다"}
 
     def track(self, order_id: str) -> dict[str, Any]:
-        """The customer's view of one order: where it is, in plain words, and whether pickup can be confirmed."""
+        """손님이 보는 주문 하나: 어디까지 왔는지 쉬운 말로, 그리고 [받았어요]를 누를 수 있는지(/track 화면)."""
         order = self.store.get_task(order_id)
         if order is None or order.get("order_items") is None:
             raise OrderDeskError("ORDER_NOT_FOUND", f"주문 {order_id}이 없습니다", status=404)
@@ -410,7 +422,7 @@ class OrderDesk:
         between = False
         if count > 1 and active is not None and order["status"] in {"RUNNING", "VALIDATING"}:
             if active["step_type"] == "WAIT_PINKY_PARKED" and current < count:
-                current, between = current + 1, True  # this load was picked up; the next one is on its way
+                current, between = current + 1, True  # 이 적재분은 수령됐고 다음 적재분이 오는 중이다
             elif active["step_type"] == "START_SHIPMENT":
                 between = True
             if between:
@@ -438,7 +450,7 @@ class OrderDesk:
             "zone": zone_label, "zone_note": None if zone_label else ZONE_PENDING_NOTE,
             "pinky": PINKY_NAMES.get(order.get("pinky_id") or ""),
             "loaded": moved, "total": total, "can_confirm_pickup": stage == "arrived",
-            # A larger order comes in several loads, one after another; each one is picked up on its own.
+            # 큰 주문은 여러 적재분으로 차례로 온다. 적재분마다 따로 수령한다.
             "shipment": current, "shipments": count,
             "shipment_items": ([{"label": self._label(name), "quantity": quantity} for name, quantity in load.items()]
                                if count > 1 else None),
@@ -446,24 +458,26 @@ class OrderDesk:
         }
 
     def reject(self, order_id: str) -> dict[str, Any]:
-        """Turn down an order that has not started; no device was involved yet."""
+        """시작하지 않은 주문을 거절(CANCELED)한다. 아직 어떤 장치도 움직이지 않았다."""
         self._pending_order(order_id)
         return self.store.cancel_pending_task(order_id)
 
-    # ---- what the zone and Pinky choices are made from ---------------------------------------------------
+    # ---- 구역·핑키 선택의 재료 -------------------------------------------------------------------------
 
     def zone_candidates(self) -> list[ZoneCandidate]:
+        """설정의 구역마다: 경로 길이, 지금 쥔 주문, 오늘 사용 횟수."""
         holding = self.store.busy_zones()
         usage = self.store.zone_usage(self.today())
         return [ZoneCandidate(zone.zone_id, zone.label, len(zone.route_labels), holding.get(zone.zone_id),
                               usage.get(zone.zone_id, 0)) for zone in self.zones.values()]
 
     def zone_plan(self, order: dict[str, Any]) -> ZoneAssignment:
-        """The zone this order would go to now: its own (an operator's choice, only checked) or choose_zone's.
-        A waiting order holds no zone itself, so it never stands in its own way."""
+        """이 주문이 지금 갈 구역: 자기 구역(작업자 지정, 확인만 함) 또는 choose_zone이 고른 구역.
+        기다리는 주문은 구역을 쥐지 않으므로 자기 자신에게 막히는 일은 없다."""
         return choose_zone(self.zone_candidates(), requested=order.get("receiving_zone"))
 
     def pinky_candidates(self) -> list[PinkyCandidate]:
+        """핑키마다 지금 상태: 쥔 주문, 오늘 운행, 핑키 관제가 알려 준 단계·준비·배터리. 답이 없으면 reachable=False."""
         holding = self.store.busy_pinkies()
         usage = self.store.pinky_usage(self.today())
         candidates = []
@@ -484,32 +498,36 @@ class OrderDesk:
             ))
         return candidates
 
-    # ---- helpers -------------------------------------------------------------------------------------------
+    # ---- 도우미 --------------------------------------------------------------------------------------------
 
     def _stock(self) -> tuple[dict[str, Counter], str | None]:
+        """(선반 → 물체 → 개수, 오류 문장). 못 읽으면 ({}, 이유)."""
         try:
             shelves = self.devices.shelf_stock()["shelves"]
-        except Exception as exc:  # camera not ready, no frame, node down: the window says why
+        except Exception as exc:  # 카메라 준비 안 됨, 프레임 없음, 노드 꺼짐: 창이 이유를 보인다
             return {}, f"선반 재고를 읽지 못했습니다: {exc}"
         return {shelf: Counter(counts) for shelf, counts in shelves.items()}, None
 
     @staticmethod
     def _units(order: dict[str, Any]) -> list[dict[str, Any]]:
+        """주문 물체를 한 개씩 편 단위 목록: {object_class, unit(1부터), of(수량)}."""
         return [{"object_class": item["object_class"], "unit": index, "of": item["quantity"]}
                 for item in order["order_items"] for index in range(1, int(item["quantity"]) + 1)]
 
     def _zone(self, zone_id: object) -> ReceivingZone:
-        """A zone named with the order (an operator's choice)."""
+        """주문과 함께 이름이 온 구역(작업자 지정). 설정에 없으면 RECEIVING_ZONE_UNKNOWN."""
         if not isinstance(zone_id, str) or zone_id not in self.zones:
             known = ", ".join(self.zones) or "없음"
             raise OrderDeskError("RECEIVING_ZONE_UNKNOWN", f"알 수 없는 수령 구역이에요 (가능: {known})", status=400)
         return self.zones[zone_id]
 
     def _label(self, object_class: str) -> str:
+        """물체 클래스 → 사람이 읽는 이름(정책 파일의 label). 없으면 클래스 그대로."""
         found = self.policies.matches(object_class)
         return found[0]["label"] if found else object_class
 
     def _pending_order(self, order_id: str, *, allow_started: bool = False) -> dict[str, Any]:
+        """주문 하나(접수 상태여야 함, allow_started면 시작한 것도). 없으면 ORDER_NOT_FOUND, 시작했으면 ORDER_NOT_PENDING."""
         order = self.store.get_task(order_id)
         if order is None or order.get("order_items") is None:
             raise OrderDeskError("ORDER_NOT_FOUND", f"주문 {order_id}이 없습니다", status=404)

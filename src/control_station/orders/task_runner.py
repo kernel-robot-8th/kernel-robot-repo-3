@@ -17,6 +17,11 @@ VERIFY_ARM_RESULT는 판단을 VERIFY_LOAD에 넘긴다고 기록하고, 모의�
   성공 확인"). 관측기가 핑키 위에서 본 개수를 알려 주면 judge_load가 기대 개수와 비교한다. 팔이 놓았다고 보고한
   것은 별개의 결과이고, 핑키 위에서 본 것으로 치지 않는다. 관측기는 아직 MockLoadObserver뿐이다. 카메라를 열지
   않고 설정한 개수를 알려 주므로 관측 결과에 simulated가 붙는다.
+
+스레드와 잠금
+  start()가 작업마다 작업 스레드 하나(_run)를 띄우고 단계를 차례로 돌린다. 시작·취소·실패 마무리는 `_lock`(RLock)으로
+  줄 세워, 취소 요청과 실패 처리가 겹쳐도 먼저 잠금을 잡은 쪽의 끝 상태 하나만 기록된다. 저장소의 CAS가 그 밖의
+  경쟁을 막는다. 작업이 끝나면 주문 흐름에 release를 알려 적재 자리를 비우거나(멈춘 주문은) 쥔 채로 둔다.
 """
 
 from __future__ import annotations
@@ -42,16 +47,17 @@ from control_station.storage.store import (
 
 # ──── 적재 확인 (VERIFY_LOAD) ─────────────────────────────────────────────────────────────────────────────────
 
-# One object per task while the flow is being verified (decided 2026-11-03). Orders can hold several items (e.g. 3);
-# those are planned as a check after every placement (the count before and after must differ by exactly one) plus
-# this total check before Pinky leaves, once tasks carry a quantity.
+# 흐름을 검증하는 동안 작업 하나에 물체 하나(2026-11-03 결정). 주문은 여러 물체(예: 3개)를 담을 수 있다. 그런
+# 주문은 놓을 때마다 확인(앞뒤 개수가 정확히 하나 차이)하고, 핑키가 떠나기 전에 이 총량 확인을 하는 것으로 계획했다
+# (작업이 수량을 갖게 되면). 지금 그 일은 주문 흐름(flow.py의 VERIFY_TRANSFER, VERIFY_LOAD_TOTAL)이 한다.
 EXPECTED_LOAD_COUNT = 1
 LOAD_OBSERVATION_SCHEMA_VERSION = 1
 
-# Returns {"source", "observed_count": int | None, "reason", ...}; raises with an error_code attribute when the
-# observation could not start.
+# {"source", "observed_count": int | None, "reason", ...}를 돌려준다. 관측을 시작조차 못 하면 error_code 속성이
+# 있는 예외를 올린다.
 LoadObserver = Callable[[], dict[str, Any]]
 
+# judge_load 결과 → 작업 오류 코드.
 LOAD_ERROR_CODES = {
     "INCOMPLETE": "LOAD_INCOMPLETE",
     "EXCESS": "LOAD_EXCESS",
@@ -60,7 +66,8 @@ LOAD_ERROR_CODES = {
 
 
 def judge_load(observation: dict[str, Any], expected_count: int) -> str:
-    """LOADED only when the observed count equals the expected count; a missing count is NOT_VERIFIED."""
+    """관측 개수가 기대 개수와 같을 때만 LOADED. 적으면 INCOMPLETE, 많으면 EXCESS, 개수가 없거나 정수가 아니면
+    NOT_VERIFIED(bool은 int로 치지 않는다)."""
     count = observation.get("observed_count")
     if not isinstance(count, int) or isinstance(count, bool) or count < 0:
         return "NOT_VERIFIED"
@@ -70,7 +77,7 @@ def judge_load(observation: dict[str, Any], expected_count: int) -> str:
 
 
 class MockLoadObserver:
-    """Reports a fixed count without looking at anything, to exercise the VERIFY_LOAD flow in mock mode."""
+    """아무것도 보지 않고 정해 둔 개수를 보고한다. 모의 모드에서 VERIFY_LOAD 흐름을 시험하려는 것이다."""
 
     def __init__(self, observed_count: int) -> None:
         self.observed_count = observed_count
@@ -87,6 +94,7 @@ class MockLoadObserver:
 
 
 def mock_load_observer_from_env() -> MockLoadObserver | None:
+    """CONTROL_STATION_MOCK_LOAD_OBSERVED가 있으면 그 개수를 보고하는 모의 관측기, 없으면 None. 음수·숫자 아님은 ValueError."""
     raw = os.environ.get("CONTROL_STATION_MOCK_LOAD_OBSERVED", "").strip()
     if not raw:
         return None
@@ -102,19 +110,19 @@ def mock_load_observer_from_env() -> MockLoadObserver | None:
 # ──── 작업 실행 ───────────────────────────────────────────────────────────────────────────────────────────────
 
 class MockScenarioFailure(RuntimeError):
-    """An explicitly configured mock-only failure at one workflow step."""
+    """모의 전용으로 일부러 설정한 단계 실패(CONTROL_STATION_MOCK_FAIL_STEP)."""
 
 
-# Returns one parking observation (interface-contracts "Pinky 주차 정렬 관측"); raises with
-# an error_code attribute when the observation could not start.
+# 주차 관측 하나를 돌려준다(interface-contracts의 "Pinky 주차 정렬 관측"). 관측을 시작하지 못하면 error_code 속성이
+# 있는 예외를 올린다.
 ArrivalCheck = Callable[[], dict[str, Any]]
-# Front-camera evidence for one object class: the selection record of shelf_slot_zones.select_slot_for_class.
-# Raises SlotSelectionError (error_code, details) when the camera does not single out one slot.
+# 물체 클래스 하나에 대한 정면 카메라 근거: shelf_slot_zones.select_slot_for_class의 선택 기록.
+# 카메라가 칸 하나를 집어내지 못하면 SlotSelectionError(error_code, details)를 올린다.
 TargetEvidence = Callable[[str], dict[str, Any]]
 
 
 class ArrivalNotConfirmed(RuntimeError):
-    """The parking observation after navigation did not show Pinky on its registered spot."""
+    """이동 뒤 주차 관측에서 핑키가 등록 자리에 있지 않았다."""
 
     def __init__(self, error_code: str, message: str) -> None:
         super().__init__(message)
@@ -122,7 +130,7 @@ class ArrivalNotConfirmed(RuntimeError):
 
 
 class LoadNotConfirmed(RuntimeError):
-    """The load observation after the arm step did not show the expected items on the cart."""
+    """팔 단계 뒤 적재 관측에서 기대한 물건이 카트(핑키) 위에 보이지 않았다."""
 
     def __init__(self, error_code: str, message: str, source: str) -> None:
         super().__init__(message)
@@ -131,17 +139,17 @@ class LoadNotConfirmed(RuntimeError):
 
 
 class ArmTaskNotConfirmed(RuntimeError):
-    """The arm command for EXECUTE_ARM_TASK could not be sent or did not end back home."""
+    """EXECUTE_ARM_TASK의 팔 명령을 보낼 수 없었거나, 팔이 원위치로 돌아와 끝나지 않았다."""
 
     def __init__(self, error_code: str, message: str, source: str = "arm_worker") -> None:
         super().__init__(message)
         self.error_code = error_code
-        # Which side could not confirm: the front camera (no command made) or the arm worker / control station.
+        # 어느 쪽이 확인하지 못했는지: 정면 카메라(명령을 만들지 않음) 또는 팔 워커 / 관제.
         self.source = source
 
 
 def policy_for_arm_job(registry: Any, arm_job: str) -> dict[str, Any] | None:
-    """The trained policy whose object name appears in the arm job text ("당근 집기" -> carrot policy)."""
+    """팔 일 글자에 물체 이름이 들어 있는 학습 정책("당근 집기" → carrot 정책). 정확히 일치하는 것을 먼저 본다."""
     if registry is None:
         return None
     exact = registry.resolve(arm_job)
@@ -155,7 +163,7 @@ def policy_for_arm_job(registry: Any, arm_job: str) -> dict[str, Any] | None:
 
 
 def policy_for_task(registry: Any, task: dict[str, Any]) -> dict[str, Any] | None:
-    """The policy for the ordered object: pick_request.category first ("carrot" or "당근"), then the arm job text."""
+    """주문한 물체의 정책: pick_request.category("carrot" 또는 "당근")를 먼저, 그다음 팔 일 글자로 찾는다."""
     if registry is None:
         return None
     category = (task.get("pick_request") or {}).get("category")
@@ -167,6 +175,8 @@ def policy_for_task(registry: Any, task: dict[str, Any]) -> dict[str, Any] | Non
 
 
 class TaskExecutionConflict(RuntimeError):
+    """작업을 시작·취소할 수 없다. error_code는 API가 돌려줄 코드, task는 그때의 작업(있으면)."""
+
     def __init__(
         self,
         message: str,
@@ -180,7 +190,10 @@ class TaskExecutionConflict(RuntimeError):
 
 
 class MockTaskOrchestrator:
-    """Run the persisted workflow without opening a device or ROS connection."""
+    """저장된 작업 흐름을 장치나 ROS 연결을 직접 열지 않고 실행한다.
+
+    이전 형식 작업은 단계마다 모의 결과를 남기고, 주문은 단계를 OrderFlow에 맡긴다(실제 장치는 OrderFlow 안의
+    OrderDevices가 다룬다). mode가 "mock"이 아니면 시작·취소를 거절한다."""
 
     def __init__(
         self,
@@ -193,26 +206,27 @@ class MockTaskOrchestrator:
         order_flow: OrderFlow | None = None,
     ) -> None:
         self.task_store = task_store
-        # Runs the steps of orders (tasks with order_items); None refuses to start an order.
+        # 주문(order_items가 있는 작업)의 단계를 돌린다. None이면 주문 단계에서 ORDER_FLOW_NOT_CONFIGURED로 멈춘다.
         self.order_flow = order_flow
         self.mode = mode
-        # When set, EXECUTE_ARM_TASK sends a real PICK_WITH_POLICY arm command instead of a mock success.
+        # 있으면 EXECUTE_ARM_TASK가 모의 성공 대신 실제 PICK_WITH_POLICY 팔 명령을 보낸다.
         self.arm_commands = arm_commands
-        # Required for that real arm command: no front-camera evidence, no command (SR-13).
+        # 그 실제 팔 명령에 꼭 필요하다: 정면 카메라 근거가 없으면 명령도 없다(SR-13).
         self.target_evidence = target_evidence
-        self._arm_results: dict[str, dict[str, Any]] = {}
-        # When set, VERIFY_ARRIVAL succeeds only on an ARRIVED parking observation.
+        self._arm_results: dict[str, dict[str, Any]] = {}  # 작업 id → EXECUTE_ARM_TASK 결과(VERIFY_LOAD가 닫는다)
+        # 있으면 VERIFY_ARRIVAL은 주차 관측이 ARRIVED일 때만 성공한다.
         self.arrival_check = arrival_check
-        # When set, VERIFY_LOAD succeeds only when the observed count on the cart equals the expected count.
+        # 있으면 VERIFY_LOAD는 카트 위 관측 개수가 기대 개수와 같을 때만 성공한다.
         self.load_check = load_check
         self.step_delay = self._read_step_delay()
         self.fail_step = self._read_failure_step() if mode == "mock" else None
         self._lock = threading.RLock()
-        self._cancel_events: dict[str, threading.Event] = {}
-        self._threads: dict[str, threading.Thread] = {}
+        self._cancel_events: dict[str, threading.Event] = {}  # 작업 id → 그 작업 스레드의 취소 신호
+        self._threads: dict[str, threading.Thread] = {}  # 이 프로세스가 돌리는 작업 스레드
 
     @staticmethod
     def _read_step_delay() -> float:
+        """모의 단계 하나의 시간(초): CONTROL_STATION_MOCK_STEP_DELAY, 0.05~2.0으로 자른다. 잘못된 값이면 0.25."""
         raw = os.environ.get("CONTROL_STATION_MOCK_STEP_DELAY", "0.25")
         try:
             return min(2.0, max(0.05, float(raw)))
@@ -221,6 +235,7 @@ class MockTaskOrchestrator:
 
     @staticmethod
     def _read_failure_step() -> str | None:
+        """CONTROL_STATION_MOCK_FAIL_STEP: 일부러 실패시킬 단계 종류. 없는 단계 이름이면 시작부터 ValueError."""
         raw = os.environ.get("CONTROL_STATION_MOCK_FAIL_STEP", "").strip()
         if not raw:
             return None
@@ -232,6 +247,10 @@ class MockTaskOrchestrator:
         return raw
 
     def start(self, task_id: str) -> tuple[dict[str, Any], bool]:
+        """작업을 선점하고 작업 스레드를 띄운다: (작업, 새로 시작했는지).
+
+        이미 이 프로세스에서 돌고 있으면 그대로 돌려준다(멱등). 저장소에는 진행 중인데 이 프로세스에 스레드가 없으면
+        (예: 서버가 다시 켜짐) 주인이 불분명하니 TASK_WORKER_OWNERSHIP_UNCERTAIN으로 운영자에게 넘긴다."""
         if self.mode != "mock":
             raise TaskExecutionConflict(
                 "작업 실행은 모의 모드에서만 제공됩니다. 장치 명령은 보내지 않았습니다.",
@@ -248,7 +267,7 @@ class MockTaskOrchestrator:
                 ) from exc
             if not claimed:
                 if task["status"] in {TaskStatus.VALIDATING.value, TaskStatus.RUNNING.value}:
-                    # A repeated start is idempotent and never creates a second worker.
+                    # 시작을 반복해도 같은 결과이고 두 번째 작업 스레드는 절대 만들지 않는다.
                     if task_id in self._threads:
                         return task, False
                     raise TaskExecutionConflict(
@@ -273,6 +292,7 @@ class MockTaskOrchestrator:
             try:
                 worker.start()
             except RuntimeError as exc:
+                # 스레드를 못 띄웠다: 첫 단계를 실패로, 나머지를 실행 안 함으로 닫고 작업을 FAILED로 끝낸다.
                 self._cancel_events.pop(task_id, None)
                 self._threads.pop(task_id, None)
                 if task["steps"]:
@@ -309,6 +329,8 @@ class MockTaskOrchestrator:
             return self.task_store.get_task(task_id) or task, True
 
     def cancel(self, task_id: str) -> tuple[dict[str, Any], bool]:
+        """작업을 취소한다: (작업, 이번에 바꿨는지). 시작 전이면 바로 CANCELED, 진행 중이면 CANCELING으로 바꾸고
+        작업 스레드에 취소 신호를 보낸다(스레드가 지금 단계를 멈추고 CANCELED로 마무리한다)."""
         if self.mode != "mock":
             raise TaskExecutionConflict(
                 "작업 취소는 모의 모드에서만 제공됩니다. 장치 명령은 보내지 않았습니다.",
@@ -376,7 +398,7 @@ class MockTaskOrchestrator:
             return updated, True
 
     def local_worker_state(self, task_id: str) -> str:
-        """Report local ownership without inferring or changing persisted task state."""
+        """이 프로세스가 그 작업의 스레드를 갖고 있는지 알려 준다. 저장된 작업 상태를 추정하거나 바꾸지 않는다."""
         with self._lock:
             task = self.task_store.get_task(task_id)
             if task is None:
@@ -397,6 +419,7 @@ class MockTaskOrchestrator:
             )
 
     def close(self) -> None:
+        """서버 종료: 진행 중인 작업을 CANCELING으로 바꾸고 취소 신호를 보낸 뒤, 스레드마다 최대 3초 기다린다."""
         with self._lock:
             workers = list(self._threads.values())
             for task_id, event in self._cancel_events.items():
@@ -419,6 +442,8 @@ class MockTaskOrchestrator:
             worker.join(timeout=3.0)
 
     def _run(self, task_id: str, cancel_event: threading.Event) -> None:
+        """작업 스레드 본체: 첫 단계(VALIDATING) → RUNNING → 나머지 단계 → SUCCEEDED. 예외는 _finish_error가,
+        취소는 _finish_cancel이 마무리한다. 끝나면 주문 흐름에 release를 알린다(멈춘 주문은 핑키를 쥔 채로)."""
         active_step_id: str | None = None
         try:
             task = self.task_store.get_task(task_id)
@@ -428,7 +453,7 @@ class MockTaskOrchestrator:
             if not steps:
                 raise RuntimeError("Task has no persisted steps")
 
-            # Readiness is simulated explicitly and labeled as mock evidence.
+            # 준비 확인(첫 단계)은 모의임을 밝히고 모의 근거로 표시한다.
             active_step_id = steps[0]["id"]
             if not self._run_step(task_id, steps[0], cancel_event):
                 self._finish_cancel(task_id, active_step_id)
@@ -478,6 +503,11 @@ class MockTaskOrchestrator:
         step: dict[str, Any],
         cancel_event: threading.Event,
     ) -> bool:
+        """단계 하나를 돌린다. 성공하면 True, 취소되면 False, 실패는 예외로 올린다.
+
+        단계를 COMMAND_SENT → ACCEPTED → RUNNING으로 바꾼 뒤(잠금 안에서, 취소와 겹치지 않게) 단계 종류에 따라
+        주문 흐름 / 실제 팔 명령 / 모의 진행 중 하나로 실행하고 SUCCEEDED로 닫는다. 첫 단계는 작업이 VALIDATING,
+        나머지는 RUNNING이어야 한다."""
         step_id = step["id"]
         expected_task_status = (
             TaskStatus.VALIDATING
@@ -597,9 +627,10 @@ class MockTaskOrchestrator:
         expected_task_status: TaskStatus,
         cancel_event: threading.Event,
     ) -> bool:
+        """주문 단계를 OrderFlow.run_step으로 돌리고 결과를 단계 결과로 저장한다. 취소면 False."""
         if self.order_flow is None:
             raise OrderFlowError("ORDER_FLOW_NOT_CONFIGURED", "주문 흐름이 설정되지 않아 주문을 진행할 수 없습니다")
-        # Re-read: PLAN_ARM_SEQUENCE fills in the arm of later steps after the task started.
+        # 다시 읽는다: PLAN_ARM_SEQUENCE가 작업 시작 뒤에 뒤 단계의 팔을 채우기 때문이다.
         task = self.task_store.get_task(task_id) or {}
         step = next(item for item in task["steps"] if item["id"] == step_id)
         source = {"VERIFY_TRANSFER": "cameras", "VERIFY_LOAD_TOTAL": "cameras", "CHECK_SHELF_STOCK": "shelf_camera",
@@ -614,7 +645,7 @@ class MockTaskOrchestrator:
                     expected_task_status=expected_task_status,
                 )
             except StateTransitionConflict:
-                pass  # canceled meanwhile; the cancel path records the outcome
+                pass  # 그사이 취소됐다. 결과는 취소 경로가 기록한다
 
         def set_plan(target_step_id: str, robot_id: str | None, detail: dict[str, Any]) -> None:
             self.task_store.set_step_plan(task_id, target_step_id, robot_id, detail)
@@ -636,7 +667,10 @@ class MockTaskOrchestrator:
         base: dict[str, Any],
         cancel_event: threading.Event,
     ) -> dict[str, Any] | None:
-        """Queue PICK_WITH_POLICY for the ordered object and wait for the worker. None means canceled."""
+        """주문한 물체의 PICK_WITH_POLICY를 큐에 넣고 워커를 기다린다. None이면 취소됐다.
+
+        잘 끝난 경우도 "원위치로 돌아옴, 놓은 것은 미확인"(UNKNOWN/PLACE_NOT_VERIFIED + pose_reached)이 최선이다.
+        그 밖의 끝은 모두 ArmTaskNotConfirmed다. 0.5초마다 명령 상태를 본다."""
         assert self.arm_commands is not None
         task = self.task_store.get_task(task_id) or {}
         policy = policy_for_task(self.arm_commands.act_policies, task)
@@ -646,7 +680,7 @@ class MockTaskOrchestrator:
                 "ARM_JOB_POLICY_NOT_FOUND", f"주문 물체 '{ordered}'에 맞는 학습 정책이 없습니다",
                 source="control_station",
             )
-        # SR-13: the object must be seen in exactly one slot by the front camera before the arm is asked to pick.
+        # SR-13: 팔에 집으라고 하기 전에 정면 카메라가 그 물체를 정확히 한 칸에서 봐야 한다.
         if self.target_evidence is None:
             raise ArmTaskNotConfirmed(
                 "TARGET_EVIDENCE_NOT_CONFIGURED", "정면 카메라 확인 경로가 없어 팔 명령을 만들지 않았습니다",
@@ -674,7 +708,7 @@ class MockTaskOrchestrator:
                     "valid_for_s": 60,
                     "target": {"object_class": policy["object_class"], "pick_slot_id": evidence.get("slot_id")},
                     "place": {"slot_id": "CART_1"},
-                    "source": {"kind": "OPERATOR_INPUT"},  # replaced by the camera evidence
+                    "source": {"kind": "OPERATOR_INPUT"},  # camera_source로 넘긴 카메라 근거로 바뀐다
                 },
                 camera_source=evidence,
             )
@@ -704,11 +738,12 @@ class MockTaskOrchestrator:
                     )
                 except StateTransitionConflict:
                     pass
+            # 큐에 있거나 워커가 실행 중이 아니면(끝 상태) 기다림을 끝낸다.
             if state != "QUEUED" and state not in {s.value for s in IN_FLIGHT}:
                 break
             if cancel_event.is_set() and not cancel_sent:
                 try:
-                    self.arm_commands.cancel(arm_id)  # the worker stops the arm where it is
+                    self.arm_commands.cancel(arm_id)  # 워커가 팔을 그 자리에서 멈춘다
                 except ArmCommandConflict:
                     pass
                 cancel_sent = True
@@ -730,8 +765,8 @@ class MockTaskOrchestrator:
         )
 
     def _close_arm_command_after_load(self, task_id: str, load_result: dict[str, Any]) -> None:
-        """A real (non-mock) load confirmation is the evidence the arm worker lacked; record it on the arm command
-        so the next command is allowed. A mock load count leaves the command UNKNOWN for the operator."""
+        """실제(모의가 아닌) 적재 확인은 팔 워커에게 없던 근거다. 그것을 팔 명령에 기록해 다음 명령을 허락한다.
+        모의 적재 개수라면 명령을 UNKNOWN으로 두어 운영자가 보게 한다."""
         arm_result = self._arm_results.pop(task_id, None)
         if self.arm_commands is None or not arm_result or load_result.get("source") == "mock":
             return
@@ -750,7 +785,7 @@ class MockTaskOrchestrator:
         command_id: str,
         base: dict[str, Any],
     ) -> dict[str, Any]:
-        # Navigation has already succeeded, so the check judges only frames captured from now on.
+        # 이동은 이미 성공했으니, 판정은 지금부터 찍은 프레임만으로 한다.
         assert self.arrival_check is not None
         try:
             observation = self.arrival_check()
@@ -776,7 +811,7 @@ class MockTaskOrchestrator:
         )
         status = observation.get("status")
         if status != "ARRIVED":
-            # No automatic re-drive: the operator sees the offset and decides (pinky-arrival-gate plan).
+            # 자동으로 다시 몰지 않는다: 운영자가 어긋남을 보고 판단한다(pinky-arrival-gate 계획).
             raise ArrivalNotConfirmed(
                 "PARKING_MISALIGNED" if status == "MISALIGNED" else "PARKING_NOT_VERIFIED",
                 f"주차 판정 {status}: {observation.get('reason')}",
@@ -794,6 +829,7 @@ class MockTaskOrchestrator:
         command_id: str,
         base: dict[str, Any],
     ) -> dict[str, Any]:
+        """적재 관측을 받아 기대 개수(EXPECTED_LOAD_COUNT)와 비교한다. LOADED가 아니면 LoadNotConfirmed."""
         assert self.load_check is not None
         try:
             observation = self.load_check()
@@ -822,7 +858,7 @@ class MockTaskOrchestrator:
             expected_task_status=TaskStatus.RUNNING,
         )
         if status != "LOADED":
-            # Pinky does not leave with a load that was not confirmed; the operator decides what happens next.
+            # 확인되지 않은 짐을 싣고 핑키가 떠나지 않는다. 다음 일은 운영자가 정한다.
             raise LoadNotConfirmed(
                 LOAD_ERROR_CODES[status],
                 f"적재 확인 {status}: 기대 {EXPECTED_LOAD_COUNT}개, 관측 {observation.get('observed_count')}개"
@@ -837,6 +873,7 @@ class MockTaskOrchestrator:
         }
 
     def _finish_cancel(self, task_id: str, active_step_id: str | None) -> None:
+        """취소 마무리: 진행 중이던 단계를 CANCELED로, 남은 단계를 실행 안 함으로 닫고, CANCELING이면 CANCELED로."""
         task = self.task_store.get_task(task_id)
         if task is None:
             return
@@ -874,6 +911,7 @@ class MockTaskOrchestrator:
             )
 
     def _mark_pending_steps_not_executed(self, task_id: str, *, reason: str) -> None:
+        """아직 대기 중인 단계를 모두 CANCELED(NOT_EXECUTED_AFTER_CANCEL 또는 _FAILURE)로 닫는다."""
         if reason not in {"CANCEL", "FAILURE"}:
             raise ValueError(f"Unsupported pending-step closure reason: {reason}")
         outcome = f"NOT_EXECUTED_AFTER_{reason}"
@@ -904,8 +942,8 @@ class MockTaskOrchestrator:
         active_step_id: str | None,
         error: Exception,
     ) -> None:
-        # Serialize terminal failure handling with a concurrent cancel request.
-        # Whichever acquires the lock first determines the recorded terminal path.
+        # 실패 마무리를 동시에 온 취소 요청과 줄 세운다.
+        # 잠금을 먼저 잡은 쪽이 기록될 끝 경로를 정한다.
         with self._lock:
             self._finish_error_locked(task_id, active_step_id, error)
 
@@ -915,6 +953,8 @@ class MockTaskOrchestrator:
         active_step_id: str | None,
         error: Exception,
     ) -> None:
+        """예외 종류로 출처·오류 코드·이벤트 이름을 정하고, 진행 중 단계를 FAILED로, 남은 단계를 실행 안 함으로 닫고,
+        작업을 FAILED로 끝낸다. 이미 취소 중이면 취소로 마무리한다. 자동 재시도는 없다."""
         task = self.task_store.get_task(task_id)
         if task is None:
             return
@@ -980,6 +1020,6 @@ class MockTaskOrchestrator:
 
     @staticmethod
     def _mock_robot_id(step: dict[str, Any]) -> str | None:
-        """Resolve legacy robot kinds while preserving configured robot IDs."""
+        """이전 형식의 로봇 종류("MOBILE"/"ARM")는 로봇 id로 바꾸고, 설정된 로봇 id는 그대로 둔다."""
         robot_kind = step.get("robot_id")
         return ROBOT_ID_BY_KIND.get(robot_kind, robot_kind) if isinstance(robot_kind, str) else None
