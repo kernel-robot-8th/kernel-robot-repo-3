@@ -28,7 +28,8 @@ from urllib.parse import unquote
 from scripts.route_geometry import DOCK_APPROACH_M, build_dense_route, build_mission_route, clean_dock_guide, corrected_dock
 from scripts.line_following import default_profile, capture_profile, normalize, validate_profile
 from scripts.ir_profiles import IRProfiles
-from scripts.fleet_ops import operational_status, indicator
+from scripts.fleet_ops import operational_status, indicator, activity, BatteryView
+from scripts.yielding import YieldArbiter, PROTECTED_PHASES
 from scripts.traffic import TrafficCoordinator
 from scripts.runtime_bundle import install_command
 from scripts.motion_gate import geometry
@@ -200,6 +201,13 @@ _low=_any_waypoint(_low_label) if _low_label else None
 if _low:
     _zones['wait_low']=dict(x_m=_low['x_m'],y_m=_low['y_m'],request_radius_m=.30,request_labels=[_low_label])
 TRAFFIC=TrafficCoordinator(ROOT/'data/traffic_reservations.json',_zones)
+# Two Pinkys nose to nose outside the zones: one is told to give way (scripts/yielding.py, 2026-11-24).
+# navigation.json: head_on_yield (false turns it off), yield_back_m (how far it reverses, 0-0.40), yield_meet_m.
+def _yield_number(key,default,low,high):
+    value=_traffic_settings.get(key,default)
+    return min(high,max(low,float(value))) if isinstance(value,(int,float)) and not isinstance(value,bool) else default
+YIELD_ENABLED=_traffic_settings.get('head_on_yield',True) is not False
+YIELD=YieldArbiter(meet_m=_yield_number('yield_meet_m',.50,.30,.80),back_m=_yield_number('yield_back_m',.25,0.,.40))
 TRAFFIC_BOOT=uuid.uuid4().hex
 TRAFFIC_SEQUENCE=0
 SHUTTING_DOWN=threading.Event()
@@ -394,6 +402,7 @@ class Telemetry:
         self.traffic_publishers = {}
         self.initial_pose_publishers = {}
         self.indicator_publishers = {}
+        self.yield_publishers = {}
         self.dock_guide_publishers = {}
         self.domain_nodes = {}
         self.domain_readers = []
@@ -405,6 +414,7 @@ class Telemetry:
             executor.add_node(node)
             self.domain_readers.append((context,node,executor))
             self.traffic_publishers[rid]=node.create_publisher(String,'/fleet/lease',QoSProfile(depth=1,reliability=ReliabilityPolicy.BEST_EFFORT))
+            self.yield_publishers[rid]=node.create_publisher(String,'/fleet/yield',QoSProfile(depth=1,reliability=ReliabilityPolicy.BEST_EFFORT))
             # A reliable publisher matches AMCL's /initialpose subscription whether it is reliable or best effort.
             self.initial_pose_publishers[rid]=node.create_publisher(PoseWithCovarianceStamped,'/initialpose',QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE))
             self.domain_nodes[rid]=node
@@ -1178,6 +1188,24 @@ def _ir_profile_install_command(profile: dict[str, Any]) -> str:
             f"mv {target}.tmp {target} && echo IR_PROFILE_SAVED")
 
 
+def _reload_display(robot_id: str) -> tuple[int, dict[str, Any]]:
+    """Put this PC's scripts/status_display.py on the robot and start it again: the screen only, no bringup, Nav2
+    or route is touched, so it may be done while the Pinky drives."""
+    target = '/home/pinky/.cache/pinky-fleet/nav2/status_display.py'
+    payload = base64.b64encode((ROOT / 'scripts/status_display.py').read_bytes()).decode('ascii')
+    ok, output = _ssh_run(robot_id, "mkdir -p /home/pinky/.cache/pinky-fleet/nav2 && "
+                          f"printf '%s' {shlex.quote(payload)} | base64 -d > {target}.tmp && "
+                          f"mv {target}.tmp {target} && echo DISPLAY_SCRIPT_SAVED")
+    if not ok or 'DISPLAY_SCRIPT_SAVED' not in output:
+        return 502, {"error": "화면 스크립트를 로봇에 올리지 못했습니다: " + (output.strip() or 'SSH 오류')}
+    _ssh_run(robot_id, _stop_script_command("status_display"))
+    ok, output = _ssh_run(robot_id, _remote_start_command(robot_id, "status_display", f"python3 {target}"))
+    if not ok or not any(token in output for token in ("STARTED", "ALREADY_RUNNING")):
+        return 502, {"error": "화면 스크립트를 다시 시작하지 못했습니다: " + (output.strip() or 'SSH 오류')}
+    JOURNAL.record('display_reload', robot_id=robot_id)
+    return 200, {"ok": True, "robot": robot_id}
+
+
 def _nav2_runtime_install_command(robot_id: str, map_name: str) -> str:
     settings=json.loads((ROOT/'config/robot_geometry.json').read_text())
     dimensions=geometry({**settings['default'],**settings.get('robots',{}).get(robot_id,{})})
@@ -1277,8 +1305,10 @@ def _start_navigation_with_safety(robot_id: str, map_path: str, map_name: str,
         if not ok or not any(token in output for token in ("STARTED", "ALREADY_RUNNING")):
             return False, output or "라이다·초음파 퓨전 노드를 시작하지 못했습니다."
     for stage, lamp_command in (("lamp", "ros2 run pinky_lamp_control main_node"), ("led", "ros2 run pinky_led led_server"),
-                                ("status_lamp", "python3 /home/pinky/.cache/pinky-fleet/nav2/status_lamp.py")):
-        # status_display.py is not started: this Pinky's pinkylib has no LCD (it only cost CPU, 2026-11-16).
+                                ("status_lamp", "python3 /home/pinky/.cache/pinky-fleet/nav2/status_lamp.py"),
+                                ("status_display", "python3 /home/pinky/.cache/pinky-fleet/nav2/status_display.py")):
+        # The screen script was off from 2026-11-16 (pinkylib has no LCD here, it only cost CPU). It now looks for
+        # pinky_emotion's LCD driver first, and ends by itself when it finds no screen it can draw on.
         _ssh_run(robot_id, _remote_start_command(robot_id, stage, lamp_command))
 
     if keep_nav2:
@@ -2123,21 +2153,70 @@ def _traffic_observations(telemetry):
 
 
 def _indicator_loop() -> None:
-    """Twice a second, each Pinky's lamp colour (scripts/fleet_ops.indicator) to its own domain."""
+    """Four times a second, each Pinky's lamp colour (scripts/fleet_ops.indicator) and what it is doing
+    (scripts/fleet_ops.activity, for its screen) to its own domain."""
     from std_msgs.msg import String
+    batteries = {rid: BatteryView() for rid in ROBOTS}
     while True:
-        time.sleep(0.5)
+        time.sleep(0.25)  # four times a second since 2026-11-24, so the screen follows a change sooner
         if TELEMETRY is None:
             continue
         try:
             telemetry = TELEMETRY.snapshot()
             with STATE.lock:
-                wanted = {rid: indicator(info, STATE.routes[rid], operational_status(info, telemetry.get(rid, {})))
-                          for rid, info in STATE.robots.items()}
+                wanted = {}
+                for rid, info in STATE.robots.items():
+                    topics = telemetry.get(rid, {})
+                    operational = operational_status(info, topics)
+                    reading = topics.get('battery_percent', {})
+                    battery, low = batteries[rid].update((reading.get('value') or {}).get('percent')
+                                                         if reading.get('fresh') else None)
+                    behaviour = topics.get('line_control', {})
+                    waiting = bool(behaviour.get('fresh')) and (behaviour.get('value') or {}).get('state') == 'traffic_wait'
+                    # The lamp reads color and mode; the screen (status_display.py) also shows what it is doing.
+                    wanted[rid] = {**indicator(info, STATE.routes[rid], operational),
+                                   **activity(info, STATE.routes[rid], operational, battery, low, waiting)}
             for rid, value in wanted.items():
                 TELEMETRY.indicator_publishers[rid].publish(String(data=json.dumps(value)))
         except Exception as exc:  # the lamp is a convenience; never let it stop the dashboard
             JOURNAL.record('indicator_error', state=str(exc))
+
+
+def _yield_robots(telemetry):
+    """What scripts/yielding.YieldArbiter needs to know about each Pinky, from the dashboard's own state."""
+    robots={}
+    passage=(TRAFFIC.owners.get('passage9') or {}).get('robot_id')
+    for rid in ROBOTS:
+        position=telemetry.get(rid,{}).get('tf_pose',{});p=position.get('value') or {}
+        pose=[p.get('x_m'),p.get('y_m'),p.get('yaw_rad')]
+        fresh=bool(position.get('fresh') and position.get('age_s') is not None and position.get('age_s')<1.
+                   and all(isinstance(v,(int,float)) and math.isfinite(v) for v in pose))
+        route=STATE.routes[rid] or {}
+        labels=route.get('labels') or []
+        robots[rid]=dict(pose=tuple(pose) if fresh else None,fresh=fresh,
+                         driving=route.get('status')=='running' and not route.get('stop_pending'),
+                         protected=route.get('phase') in PROTECTED_PHASES,passage=passage==rid,
+                         loaded='5' in labels and int(route.get('completed') or 0)>labels.index('5'),
+                         queue=TRAFFIC.queue.get(rid))
+    return robots
+
+
+def _yield_tick(telemetry):
+    """One round of the head-on arbiter: publish the order to each Pinky that gives way now, and note on its route
+    whom it gives way to (the screens show it)."""
+    from std_msgs.msg import String
+    with STATE.lock:
+        orders=YIELD.update(_yield_robots(telemetry),time.monotonic()) if YIELD_ENABLED else {}
+        for rid in ROBOTS:
+            route=STATE.routes[rid]
+            if not route:continue
+            to=(orders.get(rid) or {}).get('to')
+            if route.get('yield_to')!=to:
+                route['yield_to']=to
+                JOURNAL.record('yield',robot_id=rid,state=to or 'released',data=orders.get(rid))
+    for rid,order in orders.items():
+        try:TELEMETRY.yield_publishers[rid].publish(String(data=json.dumps(order)))
+        except Exception as exc:JOURNAL.record('yield_publish_error',state=str(exc),robot_id=rid)
 
 
 def _traffic_loop():
@@ -2157,6 +2236,8 @@ def _traffic_loop():
                 payload=dict(token=token,zones=zones,boot=TRAFFIC_BOOT,sequence=TRAFFIC_SEQUENCE)
                 try:TELEMETRY.traffic_publishers[rid].publish(String(data=json.dumps(payload)))
                 except Exception as exc:JOURNAL.record('traffic_publish_error',state=str(exc),robot_id=rid)
+        try:_yield_tick(TELEMETRY.snapshot())
+        except Exception as exc:JOURNAL.record('yield_error',state=str(exc))  # giving way is a help, never a reason to stop the leases
 
 
 def _health_loop() -> None:
@@ -2846,6 +2927,10 @@ class Handler(BaseHTTPRequestHandler):
                 route['stop_pending']=True
             WORKERS.submit(_cancel_waypoint_route, robot_id)
             self._json(202, {"ok": True, "message": "경로 취소를 요청했습니다."})
+            return
+        display_match = re.fullmatch(r"/api/robots/(10|11|12)/display/reload", path)
+        if display_match:
+            self._json(*_reload_display(display_match.group(1)))
             return
         clear_match = re.fullmatch(r"/api/robots/(10|11|12)/route/clear", path)
         if clear_match:
