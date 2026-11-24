@@ -1,39 +1,12 @@
 #!/usr/bin/env python3
-"""라이다 + 초음파 센서 퓨전: 로봇 둘레의 확률 점유 격자, 칸(기둥)마다 높이 두 층.
+"""라이다 + 초음파 퓨전: 로봇 둘레 확률 점유 격자(log-odds), 칸마다 높이 두 층.
 
-실행 위치: PC·로봇 양쪽. 로봇에서는 주행준비 때 runtime_bundle로 ~/.cache/pinky-fleet/nav2/에 올라가고,
-  navigation.ultrasonic_fusion이 켜져 있을 때만 app.py가 SSH로 이 노드(main)를 띄운다.
-  PC에서는 app.py가 validated()만 import해 로봇에 올리기 전에 navigation.json의 fusion_grid 설정을 검사한다.
-사용처: app.py, scripts/fusion_eval.py(오프라인 재생), tests/test_fusion_grid.py, tests/ros_fusion_smoke.py.
-  Nav2 쪽 연결(costmap VoxelLayer 소스)은 scripts/install_nav2_runtime.py의 ULTRASONIC_SOURCES에 있다.
-
-왜: 라이다는 바닥에서 약 12.5 cm 높이의 평면 하나만 보므로 그보다 낮은 상자는 보이지 않는다. 전면 초음파는
-바닥에서 약 3.7 cm 높이를 보고 그 상자를 보지만, "약 15도 원뿔 안 어딘가, 이 거리에 무언가 있다"로만 본다.
-어느 센서도 혼자서는 쓸 만한 낮은 장애물을 주지 못하고, 둘을 합치면 준다.
-
-방법 (log-odds 형태의 역센서 모델로 하는 점유 격자 지도 작성, Probabilistic Robotics 9장):
-  * 같은 칸들 위에 log-odds 층 두 개: `high`(라이다 평면)와 `low`(초음파 평면). 각 센서는 자기 높이 층만
-    고치므로, 낮은 상자 위를 지나가는 라이다 빔이 그 상자를 지우는 일이 없다.
-  * 라이다 역모델: 빔이 지나간 칸은 비어 있을 가능성이, 측정 거리 +-sigma 안의 칸은 점유일 가능성이 커진다.
-    가는 빔이라 근거가 날카롭고 강하다.
-  * 초음파 역모델: 원뿔 안에서 반사 거리보다 가까운 곳 -> 비어 있음, 반사 거리의 호 위 -> 점유(측정 거리
-    노이즈의 가우시안으로 가중). 호가 넓어 칸 하나에 주는 근거는 약하다: 엉뚱한 반사 한 번으로는 장애물이
-    생기지 않고, 일관된 반사가 쌓여야 생긴다.
-  * 센서 간 연관: 원뿔의 각도 모호성을 라이다로 푼다. 호가 라이다가 이미 점유로 보는 칸과 만나면 반사는 그
-    장애물이고 근거는 그 칸에만 간다. 라이다가 자기 높이에서 그 호를 비었다고 봤으면 반사는 라이다 평면 아래에서
-    온 것이다: 낮은 장애물로 보고 호 전체에 퍼뜨린다. 라이다가 본 적 없는 곳이면 역시 퍼뜨리되 unresolved로 보고한다.
-  * 기둥 규칙: 어느 높이든 점유면 그 칸은 로봇을 막는다(Nav2 VoxelLayer의 mark_threshold 0과 같다). 근거는
-    층마다 다른 시간 상수로 "모름" 쪽으로 감쇠하므로, 옮긴 상자나 잘못 찍힌 표시는 사라진다.
-
-FusionGrid에는 ROS가 없어 단위 테스트하고, 녹화한 주행에 오프라인으로 재생한다(scripts/fusion_eval.py).
-로봇에서는 main()이 /scan, /us_sensor/range, TF를 읽어 다음을 발행한다:
-  /fusion/low_marks  PointCloud2 (base_footprint): 점유된 low 층 칸, Nav2의 marking 소스
-  /fusion/low_clear  PointCloud2 (base_footprint): 센서 높이에서 창 가장자리에 둔 링, clearing 소스.
-                     이 광선은 라이다 평면 아래에 머무르므로 Nav2의 낮은 칸은 이 격자를 따르고 라이다 칸은 그대로다
-  /fusion/grid       OccupancyGrid (odom): 합친 기둥 확률, RViz와 관제용
-  /fusion/status     String JSON: 칸 수, 마지막 반사의 분류, 가장 가까운 낮은 장애물, 갱신 시간
-설정: /home/pinky/.cache/pinky-fleet/nav2/runtime_config.json -> navigation.fusion_grid.
-최종 정지(velocity_guard.py)는 이 노드를 쓰지 않고 센서를 직접 본다: 퓨전이 죽거나 틀려도 마지막 정지는 따로 돈다.
+실행 위치: 로봇(navigation.ultrasonic_fusion일 때 app.py가 SSH로 main 실행). PC는 validated()만 쓴다.
+왜: 라이다(약 12.5 cm 높이)는 낮은 상자를 못 보고, 초음파(약 3.7 cm)는 보지만 15도 원뿔 어딘가로만 안다.
+high(라이다)·low(초음파) 층을 각 센서가 따로 고치고, 반사 호를 라이다가 비었다고 보면 낮은 장애물로 본다.
+어느 층이든 점유면 막히고, 근거는 층별 시간 상수로 감쇠한다. 발행: /fusion/low_marks·low_clear(Nav2 소스),
+/fusion/grid, /fusion/status. 최종 정지(velocity_guard.py)는 이 노드 없이 센서를 직접 본다.
+자세한 설명: docs/implementation/sensor-fusion.md
 """
 from __future__ import annotations
 
@@ -44,42 +17,35 @@ from pathlib import Path
 
 import numpy as np
 
-# 기본 설정. navigation.json의 fusion_grid에 적은 값이 이를 덮는다(validated). 단위: m, rad, s, 확률 p는 0..1.
+# 기본값, navigation.json fusion_grid가 덮는다. 단위 m, rad, s, 확률 0..1.
 DEFAULTS = dict(
-    size_m=2.0,                 # 로봇 중심의 정사각형 창 (한 변 m)
-    resolution_m=0.02,          # 칸 한 변 2 cm -> 100 x 100 칸
-    # 라이다(약 12.5 cm 높이): sigma는 노이즈 측정값, 나머지는 역모델 확률. beam_stride 2는 빔을 하나 걸러 쓴다
+    size_m=2.0,
+    resolution_m=0.02,          # 2 cm 칸
+    # 라이다: sigma는 노이즈 측정값, beam_stride 2는 빔 하나 걸러
     lidar_sigma_m=0.01, lidar_hit_p=0.85, lidar_free_p=0.35, lidar_beam_stride=2,
-    # 초음파(약 3.7 cm 높이). 시야 0.26 rad(약 15도), 3 cm보다 가까운 값은 믿지 않는다
+    # 초음파: 시야 약 15도, 3 cm 미만은 안 믿음
     us_sigma_m=0.015, us_fov_rad=0.26, us_min_range_m=0.03,
-    us_mark_max_range_m=0.6,    # 더 먼 반사는 비우기만 한다: 3.7 cm 높이에서는 원뿔이 바닥에 닿는다
-    us_clear_max_range_m=0.8,   # 반사가 없을 때 비었다고 보는 거리
-    us_hit_p=0.62,              # 호 위 칸마다: 약하게, 물체는 호 어딘가에 있다
-    us_explained_p=0.80,        # 라이다도 점유로 보는 호 위 칸
+    us_mark_max_range_m=0.6,    # 더 먼 반사는 비우기만(원뿔이 바닥에 닿음)
+    us_clear_max_range_m=0.8,
+    us_hit_p=0.62,
+    us_explained_p=0.80,
     us_free_p=0.40,
-    # 연관: 라이다 칸이 이만큼 확실하면 반사를 설명한다. 호의 이 비율 이상이 라이다로 비었으면 "라이다 아래"
     explain_p=0.7, lidar_free_known_p=0.35, known_free_share=0.5,
-    # "모름" 쪽 감쇠(시간 상수 s). 라이다는 1초에 10번 둘레 전체를 다시 보지만 초음파는 좁은 원뿔 하나만 보므로,
-    # 로봇이 낮은 장애물을 돌아 피하는 동안 그것을 기억하게 low 층은 오래 둔다.
+    # low 층은 피해 도는 동안 기억하게 오래 둔다(초음파는 좁게 보므로)
     decay_high_s=4.0, decay_low_s=30.0,
-    # OctoMap과 같은 clamping(0.12 / 0.97): 여러 번 비었다고 본 칸도 상자를 놓으면 반사 몇 번 만에 점유가 되고,
-    # 점유 칸도 적당한 시간 안에 다시 비워진다. occupied_p 이상이면 점유로 판단한다.
+    # OctoMap식 clamping: 빈 칸도 반사 몇 번에 점유가 되고 점유 칸도 다시 비워진다
     clamp_free_p=0.12, clamp_occupied_p=0.97, occupied_p=0.7,
-    # 비교 실험용 스위치 (scripts/fusion_eval.py)
+    # 비교 실험용(scripts/fusion_eval.py)
     use_ultrasonic=True, associate=True,
-    us_accumulate=True,         # False: 읽을 때마다 칸을 덮어쓴다 (이진 표시/비우기, 기억 없음)
+    us_accumulate=True,         # False: 매번 덮어쓰기(기억 없음)
 )
 
-# 초음파 한 번의 분류(/fusion/status의 last_echo, echo_counts). lidar_obstacle: 라이다가 본 장애물의 반사,
-# low_obstacle: 라이다는 비었다고 본 호(라이다 아래 물체), unresolved: 라이다가 본 적 없는 호,
-# echo: associate=False일 때의 반사, far: mark_max..clear_max 사이 반사(비우기만), free: 반사 없음,
-# unsure: NaN·최소 거리 미만·호가 창 밖, off: use_ultrasonic=False.
+# 반사 분류. low_obstacle: 라이다는 빈 호, unresolved: 라이다가 안 본 호, far: 비우기만.
 ECHO_CLASSES = ('lidar_obstacle', 'low_obstacle', 'unresolved', 'echo', 'far', 'free', 'unsure', 'off')
 
 
 def logit(p: float) -> float:
-    """확률 p를 log-odds log(p / (1 - p))로 바꾼다. 0.5 -> 0(모름), 점유 쪽은 양수, 비어 있음 쪽은 음수다.
-    log-odds에서는 독립 측정을 합치는 베이즈 갱신이 덧셈이 된다."""
+    """p -> log-odds. 0.5는 0(모름), 베이즈 갱신이 덧셈이 된다."""
     return math.log(p / (1.0 - p))
 
 
@@ -88,7 +54,7 @@ def _wrap(angle):
 
 
 def _shifted(a: np.ndarray, di: int, dj: int) -> np.ndarray:
-    """new[i, j] = a[i + di, j + dj]. 그 자리가 배열 밖이면 0(모름)이다."""
+    """new[i, j] = a[i + di, j + dj], 밖이면 0."""
     n_i, n_j = a.shape
     out = np.zeros_like(a)
     if abs(di) >= n_i or abs(dj) >= n_j:
@@ -99,7 +65,7 @@ def _shifted(a: np.ndarray, di: int, dj: int) -> np.ndarray:
 
 
 def validated(settings: dict | None) -> dict:
-    """DEFAULTS에 settings를 덮어 검사한 설정. 모르는 키, 0 이하 값, 0.5 반대편 확률이면 ValueError다."""
+    """DEFAULTS에 settings를 덮어 검사한다(틀리면 ValueError)."""
     s = {**DEFAULTS, **(settings or {})}
     unknown = set(s) - set(DEFAULTS)
     if unknown:
@@ -130,10 +96,7 @@ def validated(settings: dict | None) -> dict:
 
 
 class FusionGrid:
-    """로봇 둘레 창 안의 log-odds 층 두 개(high = 라이다 평면, low = 초음파 평면), odom 좌표계.
-
-    칸 (i, j)는 x가 origin_x + [j, j+1) * res, y가 origin_y + [i, i+1) * res 범위다
-    (nav_msgs/OccupancyGrid처럼 행 = y)."""
+    """odom 창 안의 log-odds 층 high(라이다)·low(초음파). 행 = y (OccupancyGrid처럼)."""
 
     def __init__(self, settings: dict | None = None):
         self.s = s = validated(settings)
@@ -150,32 +113,30 @@ class FusionGrid:
         self.last_echo: dict = dict(kind='none')
         self.echo_counts = {kind: 0 for kind in ECHO_CLASSES}
 
-    # -- 프레임 유지(격자를 로봇 중심으로 옮기기) ---------------------------------------------------------------------------------
+    # -- 프레임 유지 --
     def center(self) -> np.ndarray:
         return self.origin + self.n * self.res / 2
 
     def recenter(self, x: float, y: float) -> None:
-        """로봇을 창 중앙(반 칸 이내)에 둔다: 층을 칸 단위로 밀고, 새로 들어온 가장자리는 모름(0)이다."""
+        """로봇을 창 중앙에 두도록 층을 칸 단위로 민다. 새 가장자리는 0."""
         dj, di = (int(round(v)) for v in (np.array([x, y]) - self.center()) / self.res)
         if di or dj:
             self.high = _shifted(self.high, di, dj)
             self.low = _shifted(self.low, di, dj)
             self.origin = self.origin + np.array([dj, di]) * self.res
 
-    # 지난 호출 이후 dt초만큼 log-odds에 exp(-dt / 시간 상수)를 곱해 0(모름) 쪽으로 줄인다.
     def decay(self, now: float) -> None:
         if self.last_decay is None:
             self.last_decay = now
             return
         dt = now - self.last_decay
         if dt <= 0:
-            return  # 재생한 메시지는 순서가 조금 뒤바뀌어 올 수 있다
+            return  # 재생 메시지 순서 뒤바뀜
         self.high *= np.float32(math.exp(-dt / self.s['decay_high_s']))
         self.low *= np.float32(math.exp(-dt / self.s['decay_low_s']))
         self.last_decay = now
 
     def cell_index(self, xs, ys):
-        """점들이 든 칸의 1차원(flat) 인덱스. 창 안의 점만 낸다."""
         j = np.floor((np.asarray(xs) - self.origin[0]) / self.res).astype(np.int64)
         i = np.floor((np.asarray(ys) - self.origin[1]) / self.res).astype(np.int64)
         inside = (i >= 0) & (i < self.n) & (j >= 0) & (j < self.n)
@@ -183,28 +144,28 @@ class FusionGrid:
 
     def cell_centers(self):
         axis = (np.arange(self.n) + 0.5) * self.res
-        return np.meshgrid(self.origin[0] + axis, self.origin[1] + axis)  # X[i, j], Y[i, j]
+        return np.meshgrid(self.origin[0] + axis, self.origin[1] + axis)
 
     def _clip(self) -> None:
         np.clip(self.high, self.l['floor'], self.l['ceiling'], out=self.high)
         np.clip(self.low, self.l['floor'], self.l['ceiling'], out=self.low)
 
     def _low(self, mask: np.ndarray, delta) -> None:
-        """low 층에 초음파 근거를 넣는다: 더하거나(베이즈 갱신), 덮어쓴다(비교용 이진 기준선)."""
+        """low 층에 근거를 더하거나(베이즈) 덮어쓴다(이진 기준선)."""
         if self.s['us_accumulate']:
             self.low[mask] += delta
         else:
             self.low[mask] = np.where(np.asarray(delta) > 0, self.l['ceiling'], self.l['floor'])
 
-    # -- LiDAR ---------------------------------------------------------------------------------------------------
+    # -- LiDAR --
     def update_scan(self, pose, angles, ranges, range_min: float, range_max: float, now: float) -> dict:
-        """pose = odom에서 라이다의 (x, y, yaw), angles는 라이다 좌표계 기준(rad). high 층만 고친다."""
+        """pose = odom에서 라이다 (x, y, yaw). high 층만 고친다."""
         self.decay(now)
         x, y, yaw = pose
         stride = max(1, int(self.s['lidar_beam_stride']))
         angles = np.asarray(angles, float)[::stride]
         r = np.asarray(ranges, float)[::stride]
-        # +inf는 "반사 없음"(창 끝까지 비어 있음)으로 쓴다. 빔을 반 칸 간격 점으로 따라가며 빈 칸을 모은다
+        # +inf는 반사 없음(창 끝까지 빔)
         no_return = np.isinf(r) & (r > 0)
         valid = (np.isfinite(r) & (r >= range_min) & (r <= range_max)) | no_return
         r, a = r[valid], angles[valid] + yaw
@@ -231,9 +192,9 @@ class FusionGrid:
         self._clip()
         return dict(beams=int(len(r)), hits=int(hit.sum()))
 
-    # -- ultrasonic ----------------------------------------------------------------------------------------------
+    # -- ultrasonic --
     def update_range(self, pose, distance: float, fov: float | None, now: float) -> str:
-        """pose = odom에서 초음파의 (x, y, yaw). low 층만 고치고 반사의 분류(ECHO_CLASSES)를 돌려준다."""
+        """pose = odom에서 초음파 (x, y, yaw). low 층만 고치고 ECHO_CLASSES 하나를 돌려준다."""
         self.decay(now)
         kind = self._update_range(pose, float(distance), fov)
         self.echo_counts[kind] += 1
@@ -254,7 +215,7 @@ class FusionGrid:
         sigma = max(float(s['us_sigma_m']), self.res / 2)
         band = 2 * sigma
         if not math.isfinite(r) or r > s['us_mark_max_range_m']:
-            # 반사가 없거나 바닥일 수도 있을 만큼 먼 반사: "그 앞에 낮은 것은 없다"만 넣는다
+            # 반사 없음 또는 먼 반사: 비우기만
             reach = s['us_clear_max_range_m'] if not math.isfinite(r) else min(r, s['us_clear_max_range_m'])
             self._low(cone & (d < reach - band), self.l['us_free'])
             self._clip()
@@ -279,25 +240,23 @@ class FusionGrid:
         self._clip()
         return kind
 
-    # -- results -------------------------------------------------------------------------------------------------
+    # -- results --
     def low_occupied(self) -> np.ndarray:
         return self.low >= self.l['occupied']
 
     def low_obstacle_cells(self) -> np.ndarray:
-        """low 층은 점유인데 라이다는 점유로 보지 않는 칸: 라이다 평면 아래의 장애물."""
+        """low는 점유, 라이다는 아닌 칸: 라이다 아래 장애물."""
         return self.low_occupied() & (self.high < self.l['explain'])
 
     def column_occupied(self) -> np.ndarray:
         return (self.high >= self.l['occupied']) | self.low_occupied()
 
     def points(self, mask: np.ndarray) -> np.ndarray:
-        """mask 칸들의 중심 odom 좌표, 모양 (k, 2)."""
         i, j = np.nonzero(mask)
         return np.column_stack([self.origin[0] + (j + 0.5) * self.res, self.origin[1] + (i + 0.5) * self.res])
 
     def occupancy_data(self) -> np.ndarray:
-        """nav_msgs/OccupancyGrid용 int8 행 우선 배열, -1 = 모름. 점유 근거가 있는 높이가 기둥을 정하고(큰 쪽),
-        없으면 더 확실히 빈 쪽을 보인다. 그래서 라이다로 비었고 낮은 높이는 본 적 없는 칸은 50이 아니라 빈 칸이다."""
+        """OccupancyGrid용 int8, -1 = 모름. 점유 근거가 있는 층이 기둥을 정하고, 없으면 더 확실히 빈 쪽."""
         top = np.maximum(self.high, self.low)
         p = 1.0 / (1.0 + np.exp(-np.where(top > 0, top, np.minimum(self.high, self.low))))
         data = np.round(100 * p).astype(np.int8)
@@ -305,7 +264,7 @@ class FusionGrid:
         return data.reshape(-1)
 
     def status(self, robot_xy=None) -> dict:
-        """/fusion/status에 담는 요약: 칸 수, 로봇에서 가장 가까운 낮은 장애물(m), 반사 분류."""
+        """/fusion/status 요약."""
         low_cells = self.low_obstacle_cells()
         nearest = None
         if robot_xy is not None and low_cells.any():
@@ -316,14 +275,14 @@ class FusionGrid:
                     last_echo=self.last_echo, echo_counts=dict(self.echo_counts))
 
 
-# 반지름 radius, 높이 z의 원 위 점 count개(2도 간격). /fusion/low_clear의 광선 끝점으로 쓴다.
+# /fusion/low_clear 광선 끝점 링(2도 간격)
 def ring(radius: float, z: float, count: int = 180) -> list[tuple[float, float, float]]:
     return [(radius * math.cos(2 * math.pi * k / count), radius * math.sin(2 * math.pi * k / count), z)
             for k in range(count)]
 
 
 def to_local(points: np.ndarray, pose) -> np.ndarray:
-    """odom 점들을 pose = (x, y, yaw) 좌표계로 옮긴다."""
+    """odom 점들을 pose 좌표계로."""
     x, y, yaw = pose
     c, s = math.cos(yaw), math.sin(yaw)
     dx, dy = points[:, 0] - x, points[:, 1] - y
@@ -334,7 +293,7 @@ def yaw_of(q) -> float:
     return math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
 
 
-LOW_Z_MAX = 0.045  # 낮은 점군은 라이다 평면 아래, Nav2 voxel의 가장 낮은 5 cm 줄에 머물러야 한다 (m)
+LOW_Z_MAX = 0.045  # 라이다 아래, Nav2 voxel 맨 아래 5 cm 줄 안 (m)
 
 
 def main() -> None:
@@ -363,14 +322,13 @@ def main() -> None:
             self.grid = FusionGrid(settings)
             self.tf = Buffer()
             self.tf_listener = TransformListener(self.tf, self)
-            # 점군은 센서 QoS(best-effort): Nav2 costmap 관측 소스가 sensor_data로 구독한다
+            # Nav2가 sensor_data QoS로 구독
             self.marks = self.create_publisher(PointCloud2, '/fusion/low_marks', qos_profile_sensor_data)
             self.clear = self.create_publisher(PointCloud2, '/fusion/low_clear', qos_profile_sensor_data)
             self.grid_pub = self.create_publisher(OccupancyGrid, '/fusion/grid', 1)
             self.status_pub = self.create_publisher(String, '/fusion/status', 10)
             self.create_subscription(LaserScan, '/scan', self.on_scan, qos_profile_sensor_data)
             self.create_subscription(Range, '/us_sensor/range', self.on_range, qos_profile_sensor_data)
-            # 표시·비우기 점군 5 Hz, RViz·관제용 격자 2 Hz
             self.create_timer(0.2, self.publish)
             self.create_timer(0.5, self.publish_grid)
             self.us_z = 0.037
@@ -380,7 +338,7 @@ def main() -> None:
             self.get_logger().info('LiDAR + ultrasonic fusion grid ready')
 
         def lookup(self, frame: str, stamp):
-            """stamp 시각(없으면 최신) odom에서 frame의 (x, y, yaw, z, TF stamp). TF가 없으면 None."""
+            """odom에서 frame의 (x, y, yaw, z, stamp), TF 없으면 None."""
             for when in ((Time.from_msg(stamp),) if stamp.sec or stamp.nanosec else ()) + (Time(),):
                 try:
                     tf = self.tf.lookup_transform('odom', frame.lstrip('/'), when, timeout=Duration(seconds=0.0))
@@ -405,10 +363,9 @@ def main() -> None:
                 pose = self.lookup(msg.header.frame_id, msg.header.stamp)
                 if pose is None:
                     return
-                # 점군 높이는 TF의 센서 높이를 쓰되 0.5 cm..LOW_Z_MAX로 묶는다
                 self.us_z = min(max(pose[3], 0.005), LOW_Z_MAX)
                 pose = pose[:3]
-            else:  # frame이 없는 드라이버: robot_geometry.json의 실측 장착 위치를 쓴다
+            else:  # frame 없는 드라이버: robot_geometry.json 장착 위치
                 base = self.lookup('base_footprint', msg.header.stamp)
                 if base is None:
                     return
@@ -458,7 +415,7 @@ def main() -> None:
     node = FusionNode()
     try:
         rclpy.spin(node)
-    except (KeyboardInterrupt, ExternalShutdownException):  # Ctrl-C, 또는 관제가 SIGTERM으로 멈출 때
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()

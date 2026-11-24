@@ -1,15 +1,9 @@
 #!/usr/bin/env python3
-"""기준점(anchor) 사이를 Nav2로 주행하고, 그 사이의 촘촘한 체크포인트는 멈추지 않고 통과 위치만 기록한다.
+"""기준점(anchor) 사이를 Nav2로 주행하고, 사이 체크포인트는 멈추지 않고 통과 위치만 기록한다.
 
-실행 위치: 로봇 (주행준비 때 runtime_bundle로 올라가고, 주행 시작마다 app._route_remote_command가 다시 올려 실행)
-사용처: app.py가 SSH로 실행한다. argv[1] = 경로 점 목록 JSON(base64). 표준출력의 MISSION_STATUS·CHECKPOINT_POSE·
-        WAYPOINT_*·ROUTE_DONE/FAILED/CANCELLED 줄을 관제가 읽어 화면에 보여 준다.
-
-핵심: 이 노드는 Nav2 액션 클라이언트일 뿐 /cmd_vel을 직접 내지 않는다(발행자는 velocity_guard의 pinky_final_guard 하나).
-행동 계층(ultrasonic_safety.py)과는 ~/.cache/pinky-fleet의 JSON 파일로 주고받는다: 이 노드가 route_context.json
-(지금 구간·도킹 지시)을 계속 갱신하고, 행동 계층이 route_feedback.json(상태·회피·도킹 진행)을 쓴다. 파일이 2초 넘게
-낡으면 끊긴 것으로 본다. 관제 신호(operator_confirm.json, mission_complete.json)와 정지(stop_latch.json)도 파일로 온다.
-종료 코드: 0 완료, 130 취소, 그 밖은 RouteFailure.code(실패 종류).
+실행 위치: 로봇 (app.py가 SSH로 실행, argv[1] = 경로 점 JSON base64). MISSION_STATUS·CHECKPOINT_POSE·ROUTE_* 줄을 관제가 읽는다.
+/cmd_vel은 직접 내지 않는다(발행자는 pinky_final_guard 하나). 행동 계층과는 ~/.cache/pinky-fleet의 JSON 파일
+(route_context.json ↔ route_feedback.json, 2초 넘게 낡으면 끊김)로 주고받는다. 종료 코드: 0 완료, 130 취소, 그 밖은 RouteFailure.code.
 """
 from __future__ import annotations
 import base64
@@ -34,12 +28,11 @@ from tf2_ros import Buffer, TransformListener, TransformException
 CACHE = Path('/home/pinky/.cache/pinky-fleet')
 
 
-# 각도를 -π~π(rad)로 정규화한다.
 def angle(value):
     return math.atan2(math.sin(value), math.cos(value))
 
 
-# 임시 파일에 쓰고 rename으로 바꿔, 다른 프로세스가 반쯤 쓴 JSON을 읽지 않게 한다.
+# 임시 파일 + rename: 반쯤 쓴 JSON을 읽지 않게.
 def atomic_json(name, data):
     path = CACHE / name
     temporary = path.with_suffix('.tmp')
@@ -48,14 +41,13 @@ def atomic_json(name, data):
 
 
 class RouteFailure(Exception):
-    """경로 실패. code는 프로세스 종료 코드가 되고(130 = 취소), message는 ROUTE_FAILED 줄로 관제에 간다."""
+    """경로 실패. code는 종료 코드(130 = 취소)."""
     def __init__(self, code, message):
         self.code, self.message = code, message
 
 
 class RouteRunner(Node):
-    """Nav2 navigate_to_pose 액션 클라이언트 노드. map→base_footprint TF로 자기 위치를 읽고, 5번 도킹 후에는
-    /initialpose로 AMCL 위치를 다시 잡는다."""
+    """Nav2 navigate_to_pose 액션 클라이언트. 5번 도킹 후 /initialpose로 AMCL을 다시 잡는다."""
     def __init__(self):
         super().__init__('pinky_dashboard_route')
         self.client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
@@ -72,8 +64,7 @@ class RouteRunner(Node):
         self.amcl_sample = (time.monotonic(), msg)
 
     def anchor_dock(self, context, target, token, dock_id=None):
-        """지도 위치(AMCL)만 target(x m, y m, yaw rad)으로 재설정한다. 바퀴 오도메트리는 그대로 두어 이후 후진 거리 계산이
-        끊기지 않게 한다. AMCL과 TF가 모두 3 cm·5도 안에 들어와야 성공이며, 18초 안에 안 되면 실패한다."""
+        """AMCL 위치만 target으로 재설정한다(오도메트리는 유지). 3 cm·5도 안에 18초 내 수렴해야 성공."""
         self.cancel_active()
         last_pose = self.pose(.8)
         started, published = time.monotonic(), None
@@ -82,7 +73,7 @@ class RouteRunner(Node):
         message.pose.pose.position.x, message.pose.pose.position.y = target[:2]
         message.pose.pose.orientation.z = math.sin(target[2]/2)
         message.pose.pose.orientation.w = math.cos(target[2]/2)
-        # 분산 x·y 1e-4 m²(표준편차 1 cm), yaw 5도: 도킹 자리는 정확히 알므로 AMCL이 이 값을 강하게 믿게 한다.
+        # 표준편차 1 cm, yaw 5도: 도킹 자리는 정확하므로 AMCL이 강하게 믿게 한다.
         message.pose.covariance[0] = message.pose.covariance[7] = .0001
         message.pose.covariance[35] = math.radians(5)**2
         print('MISSION_STATUS '+json.dumps(dict(phase='docking_anchor', message='도킹완료 확인 · 5번 지도 위치 재설정 중'), ensure_ascii=False), flush=True)
@@ -94,7 +85,6 @@ class RouteRunner(Node):
                 self.initial_pose.publish(message)
                 published = now
             rclpy.spin_once(self, timeout_sec=.05)
-            # pose()는 운영자 정지 래치(stop_latch.json)도 함께 확인한다.
             try:
                 last_pose = self.pose(.1)
             except RouteFailure as exc:
@@ -120,8 +110,7 @@ class RouteRunner(Node):
         self.interrupted = True
 
     def pose(self, timeout=1.):
-        """최신 map→base_footprint TF (x m, y m, yaw rad). TF 나이가 -2~1초일 때만 믿는다(시계 차이 허용).
-        이 run_id의 정지 래치가 보이면 취소(130), timeout 초 안에 못 읽으면 실패(9)."""
+        """최신 map→base_footprint TF (x, y, yaw). 이 run_id의 정지 래치면 취소(130), 시간 초과면 실패(9)."""
         deadline = time.monotonic()+timeout
         while rclpy.ok() and time.monotonic() < deadline and not self.interrupted:
             try:
@@ -150,8 +139,7 @@ class RouteRunner(Node):
 
 
 def checkpoint(index, point, pose, passing=False, sampling=None):
-    """점 도착/통과를 CHECKPOINT_POSE로 보고한다. 멈추는 점(passing=False)은 오차 5 cm를 넘으면 실패(10)다.
-    도킹으로 처리된 점(docking_service)은 IR 도킹이 위치를 맞췄으므로 이 검사를 건너뛴다."""
+    """점 도착/통과 보고. 멈추는 점은 오차 5 cm 초과면 실패(10), IR 도킹으로 맞춘 점은 검사하지 않는다."""
     x, y, yaw = pose
     error = math.hypot(x-point['x_m'], y-point['y_m'])
     print('CHECKPOINT_POSE '+json.dumps(dict(label=point['label'], x_m=x, y_m=y, yaw_rad=yaw,
@@ -165,8 +153,7 @@ def checkpoint(index, point, pose, passing=False, sampling=None):
 
 
 def mission_feedback(token):
-    """이 회차(token)의 행동 계층 피드백. 2초보다 낡았거나 다른 회차 것이면 None. 교차로·차선 탐색·초음파 우회가
-    fault면 해당 RouteFailure를 던진다."""
+    """이 회차의 행동 계층 피드백(2초 이내, 아니면 None). fault면 RouteFailure를 던진다."""
     try:
         feedback = json.loads((CACHE/'route_feedback.json').read_text())
         if feedback.get('token') != token or not 0 <= time.monotonic()-feedback['monotonic'] < 2.:
@@ -185,8 +172,7 @@ def mission_feedback(token):
 
 
 def behaviour_feedback():
-    """행동 계층이 마지막으로 쓴 피드백(회차와 무관, 2초 안의 것만): 상태(다른 핑키를 위해 서 있으면 traffic_wait)와
-    천장 카메라 안내 dock_guide([전방, 왼쪽, yaw] m·rad, 없으면 None)."""
+    """회차와 무관한 최신 피드백(2초 이내): 상태와 천장 카메라 안내 dock_guide."""
     try:
         feedback = json.loads((CACHE/'route_feedback.json').read_text())
         return feedback if 0 <= time.monotonic()-feedback['monotonic'] < 2. else {}
@@ -195,8 +181,7 @@ def behaviour_feedback():
 
 
 def capturable(guide):
-    """카메라가 이 핑키를 자리 앞에서 보고, 선 위로 조향할 여유가 남았다: 카메라에 넘겨도 된다.
-    자리 기준 6~45 cm 뒤에 있고, 옆 오차가 3 cm + 거리의 40% (최대 20 cm) 이내일 때다."""
+    """카메라에 넘겨도 되는 위치: 자리 6~45 cm 뒤, 옆 오차 3 cm + 거리의 40%(최대 20 cm) 이내."""
     try:
         forward, left = float(guide[0]), float(guide[1])
     except (TypeError, ValueError, IndexError):
@@ -205,8 +190,7 @@ def capturable(guide):
 
 
 class Sightings:
-    """읽은 횟수가 아니라 카메라 프레임 수를 센다: 피드백 파일에서 같은 안내를 다시 읽으면(파일에 0.4초 동안 남음)
-    한 번으로 친다. 넘겨받기 어려운(capturable 아님) 안내가 오면 처음부터 다시 센다."""
+    """카메라 프레임 수를 센다(같은 안내 재읽기는 한 번). capturable 아닌 안내가 오면 다시 센다."""
 
     def __init__(self):
         self.count, self.last = 0, None
@@ -219,17 +203,15 @@ class Sightings:
         return self.count
 
 
-NAV_RETRIES = 20  # Nav2가 포기한 목표를 구간마다 다시 보내는 횟수 (교통 대기 중에는 세지 않음)
-TRAFFIC_WAIT_LIMIT_S = 900.  # 다른 핑키를 이보다 오래(15분) 기다리면 사람이 봐야 하는 정체다
-NAV_RETRY_PAUSE_S = 3.  # 다시 보내기 전 잠깐 쉰다: 길을 막던 것이 비켜날 수 있다
-# 행동 계층이 다른 핑키를 위해 서 있는 상태: 구역 허가 대기, 또는 관제 지시로 양보(조금 후진 후 정지;
-# scripts/yielding.py). 둘 다 실패한 구간이 아니다.
+NAV_RETRIES = 20  # 구간마다 Nav2 목표 재전송 횟수(교통 대기 제외)
+TRAFFIC_WAIT_LIMIT_S = 900.  # 15분 넘는 대기는 사람이 봐야 하는 정체
+NAV_RETRY_PAUSE_S = 3.
+# 다른 핑키를 위해 서 있는 상태(scripts/yielding.py). 실패가 아니다.
 WAIT_STATES = frozenset({'traffic_wait', 'yield_back', 'yield_wait'})
 
 
 def detour_wait(node,context,token):
-    # 초음파 우회 동안 기다린다. 경로 heartbeat(route_context)를 막지 않고 Nav2 목표를 취소한다. 그러지 않으면
-    # 다른 제어기가 우회하는 사이 Nav2 progress checker가 목표를 중단시킬 수 있다. 우회가 idle로 돌아오면 끝(최대 90초).
+    # 우회 중에는 Nav2 목표를 취소한다(progress checker가 중단시키지 않게). idle이면 끝, 최대 90초.
     if node.active_goal is not None:
         node.active_goal.cancel_goal_async()
         node.active_goal=None
@@ -249,8 +231,7 @@ def detour_wait(node,context,token):
 
 
 def docking_wait(node, context, token, require_marker=False):
-    """IR 도킹(행동 계층) 동안 기다린다. anchor_wait이면 5번 위치로 AMCL을 재설정하고, released(수령 완료)면 끝난다.
-    require_marker: 5번 도착 후 세 IR 센서의 흰색 패턴을 최대 20초 찾는다."""
+    """IR 도킹 동안 기다린다. anchor_wait이면 AMCL 재설정, released면 끝. require_marker: IR 마커를 최대 20초 찾는다."""
     active = {'docking','reverse','await_confirmation','stopped','fault','recovery_hold','search','search_hold','anchor_wait'}
     node.cancel_active()
     started, previous = time.monotonic(), None
@@ -292,14 +273,13 @@ def docking_wait(node, context, token, require_marker=False):
     raise RouteFailure(130, 'cancelled')
 
 
-REDOCK_BACK_M = .35  # 다시 들어오기 전 이만큼(m) 후진: 정면 맞추기가 선을 바로잡을 여유
-REDOCK_LIMIT = 30  # 관제 서버 handshake가 스스로 보내는 횟수(5)보다 훨씬 많다: 진입 반복 시험이 이를 쓴다
-REDOCK_CAPTURE_BACK_M = .25  # 천장 카메라가 이끌 때: 마커가 아직 보이는 거리까지만 후진
+REDOCK_BACK_M = .35  # 다시 들어오기 전 후진 거리(m)
+REDOCK_LIMIT = 30  # 진입 반복 시험용으로 넉넉히
+REDOCK_CAPTURE_BACK_M = .25  # 카메라 안내 시: 마커가 보이는 거리까지만
 
 
 def maneuver(node, context, token, key, kind, extra, limit_s):
-    """행동 계층 기동 하나(dock_exit 후진, dock_entry 진입)를 자기 segment 키로 실행해 래치를 새로 만들고,
-    행동 계층이 complete를 보고할 때까지 기다린다. fault나 limit_s 초과는 실패(19)."""
+    """행동 계층 기동 하나(dock_exit, dock_entry)를 실행하고 complete를 기다린다. fault·시간 초과는 실패(19)."""
     started = time.monotonic()
     while rclpy.ok() and not node.interrupted:
         context(node.pose(.8), extra={**extra, 'segment': key})
@@ -316,7 +296,7 @@ def maneuver(node, context, token, key, kind, extra, limit_s):
 
 
 def nav_goal(node, context, extra, x, y, yaw, limit_s=90.):
-    """도착 방향을 정한 Nav2 목표 하나(재도킹의 정면 맞추기에 쓴다). 그동안 route context를 계속 새로 쓴다(도킹 기동은 아님)."""
+    """방향을 정한 Nav2 목표 하나(재도킹 정면 맞추기용)."""
     goal = NavigateToPose.Goal()
     goal.pose = PoseStamped()
     goal.pose.header.frame_id = 'map'
@@ -346,8 +326,7 @@ def nav_goal(node, context, extra, x, y, yaw, limit_s=90.):
 
 
 def guided_dock(correction):
-    """관제가 천장 카메라 오프셋으로 계산한 정면 맞추기 점과 적재 자리(route_geometry.corrected_dock).
-    재도킹 신호에 없거나 각각 유한한 숫자 세 개가 아니면 None."""
+    """관제가 카메라 오프셋으로 계산한 정면 맞추기 점과 적재 자리. 없거나 잘못되면 None."""
     try:
         points = [dict(x_m=float(correction[name]['x_m']), y_m=float(correction[name]['y_m']),
                        yaw_rad=float(correction[name]['yaw_rad'])) for name in ('square', 'dock')]
@@ -359,9 +338,7 @@ def guided_dock(correction):
 
 
 def redock(node, context, token, segment, square, dock, attempt, correction=None):
-    """천장 카메라가 핑키가 적재 자리에서 어긋났다고 판단했다(2026-11-17): 똑바로 후진하고, Nav2로 5번 앞 점에서
-    다시 정면을 맞춘 뒤 한 번 더 직진해 들어간다. 카메라 오프셋이 있으면 보정된 점과 자리를 써서, 같은 실수를
-    반복하지 않고 카메라가 원하는 곳으로 들어간다."""
+    """카메라가 어긋남을 보고 다시 들이기(2026-11-17): 후진 → 정면 맞추기 → 직진 진입. 오프셋이 있으면 보정된 점을 쓴다."""
     guided = guided_dock(correction)
     how = ''
     if guided:
@@ -371,10 +348,8 @@ def redock(node, context, token, segment, square, dock, attempt, correction=None
     print('MISSION_STATUS '+json.dumps(dict(phase='redocking', token=token,
           message=f'5번 위치가 어긋나 다시 맞추는 중 ({attempt}/{REDOCK_LIMIT}){how} · {REDOCK_BACK_M*100:.0f}cm 후진'), ensure_ascii=False), flush=True)
     node.cancel_active()
-    # 카메라가 지금 이 핑키를 보고(행동 계층이 카메라를 따를 수 있으면): 마커가 보이는 만큼만 후진하고 카메라가
-    # 계속 주고받으며 다시 들인다. Nav2 정면 맞추기는 쓰지 않는다. 거기서 몇 분씩 헤맸다(2026-11-19).
-    # 프레임 하나 빠졌다고 먼 길로 돌면 안 된다(2026-11-21: 반복 시험 12번째 진입에서 그 순간 안내가 없어
-    # 35 cm 후진 후 Nav2로 갔다): 최대 1.5초 찾는다.
+    # 카메라가 보이면 짧게 후진하고 카메라가 다시 들인다(Nav2 정면 맞추기는 몇 분씩 헤맴, 2026-11-19).
+    # 프레임 하나 빠진 것으로 먼 길로 돌지 않게 최대 1.5초 찾는다(2026-11-21).
     layer, until = behaviour_feedback(), time.monotonic()+1.5
     while rclpy.ok() and not node.interrupted and layer.get('dock_guide') is None and time.monotonic() < until:
         context(node.pose(.8), mission_wait=True)
@@ -388,7 +363,7 @@ def redock(node, context, token, segment, square, dock, attempt, correction=None
     maneuver(node, context, token, f'{segment}r{attempt}b', 'dock_exit',
              dict(dock_exit=True, dock_exit_m=back_m, dock_entry=False), 40.)
     if camera_led:
-        # 후진 뒤 3초 안에 카메라 프레임 4개가 연속 capturable이면 카메라가 이끄는 진입, 아니면 Nav2 경로로 간다.
+        # 3초 안에 프레임 4개 연속 capturable이면 카메라 진입, 아니면 Nav2.
         seen, until = Sightings(), time.monotonic()+3.
         while rclpy.ok() and not node.interrupted and time.monotonic() < until and seen.count < 4:
             context(node.pose(.8), mission_wait=True)
@@ -413,12 +388,11 @@ def redock(node, context, token, segment, square, dock, attempt, correction=None
 
 
 def operator_wait(node,context,token,phase,action,message):
-    """관제가 이 관문에 `action`(또는 여럿 중 하나)을 보낼 때까지 정지해 기다린다. 받은 action을 돌려준다.
-    신호는 이 대기의 gate_id와 같고, 대기 시작 뒤에 만들어졌고, 10초 안의 것이어야 한다."""
+    """관제가 이 관문에 action을 보낼 때까지 정지해 기다린다(같은 gate_id, 대기 시작 뒤·10초 이내 신호만)."""
     actions=(action,) if isinstance(action,str) else tuple(action)
     node.cancel_active()
     gate_id=uuid.uuid4().hex
-    # 대기마다 고유 토큰을 써서, 늦게 오거나 두 번 눌린 클릭이 다음 관문을 풀지 못하게 한다.
+    # 대기마다 고유 토큰: 늦거나 중복된 클릭이 다음 관문을 풀지 못하게.
     print('MISSION_STATUS '+json.dumps(dict(phase=phase,token=gate_id,message=message),ensure_ascii=False),flush=True)
     started=time.monotonic()
     while rclpy.ok() and not node.interrupted:
@@ -427,7 +401,7 @@ def operator_wait(node,context,token,phase,action,message):
             command=json.loads((CACHE/'operator_confirm.json').read_text())
             if command.get('token')==gate_id and command.get('action') in actions and float(command.get('monotonic',0))>=started and 0<=time.monotonic()-float(command['monotonic'])<=10.:
                 print('MISSION_STATUS '+json.dumps(dict(phase='driving',token=token,message='확인 완료 · 다음 단계 진행'),ensure_ascii=False),flush=True)
-                node.confirmed=command  # 신호에 함께 온 내용 (redock이면 카메라 보정값)
+                node.confirmed=command
                 return command['action']
         except (OSError,ValueError,TypeError,KeyError):pass
         rclpy.spin_once(node,timeout_sec=.075)
@@ -435,21 +409,18 @@ def operator_wait(node,context,token,phase,action,message):
 
 
 def run(node, points):
-    """경로 전체를 실행한다. points 중 anchor 점 사이가 한 구간(segment)이고, 구간마다 Nav2 목표 하나를 보낸다.
-    특수 구간: dock_exit(행동 계층 후진), '5 정면'→'5'(행동 계층 DockEntry 직진 진입 후 관제 신호 대기), course_end."""
+    """경로 전체 실행. anchor 사이가 한 구간이고 구간마다 Nav2 목표 하나. 특수: dock_exit, '5 정면'→'5', course_end."""
     if not node.client.wait_for_server(timeout_sec=15.):
         raise RouteFailure(3, 'Nav2 navigate_to_pose 액션 서버를 찾을 수 없습니다.')
-    # 예전에 발행자 둘이 cmd_vel에서 경쟁했다. teleop을 몰래 덮어쓰지 않는다: /cmd_vel 발행자는 최종 감시기
-    # pinky_final_guard 하나뿐이어야 하고, 다른 발행자가 있으면 시작을 거부한다.
-    # 이 노드는 막 떠서, 바쁜 Pi에서는 감시기 발행자를 발견하는 데 1초 넘게 걸릴 수 있다(2026-11-16: 감시기가
-    # 돌며 발행 중인데 임무가 거부됨). 그래서 최대 8초 기다린다.
+    # /cmd_vel 발행자는 pinky_final_guard 하나여야 한다(다른 발행자가 있으면 거부). 바쁜 Pi에서 발견이
+    # 1초 넘게 걸려 임무가 거부된 적이 있어(2026-11-16) 최대 8초 기다린다.
     deadline = time.monotonic()+8.
     publishers = []
     while time.monotonic() < deadline:
         rclpy.spin_once(node, timeout_sec=.05)
         publishers = node.get_publishers_info_by_topic('/cmd_vel')
         if any(p.node_name == 'pinky_final_guard' for p in publishers):
-            for _ in range(10):  # 조금 더 돌려 경쟁 발행자도 발견되게 한다
+            for _ in range(10):
                 rclpy.spin_once(node, timeout_sec=.05)
             publishers = node.get_publishers_info_by_topic('/cmd_vel')
             break
@@ -469,13 +440,13 @@ def run(node, points):
         raise RouteFailure(10,'주차장 출발 방향 오차가 15도를 넘습니다. 실제 방향과 AMCL 추정을 맞춰주세요.')
     checkpoint(0, points[0], initial)
     token, startup_armed = uuid.uuid4().hex, False
-    # token: 이번 실행의 회차 ID. 행동 계층·관제 신호가 이 값으로 같은 임무인지 확인한다.
-    mission_phase = 'driving'  # 주행 중 상태 줄에 남길 단계 (코스를 마친 뒤에는 'returning')
-    # '5 정면'에서 DockEntry에 넘길 남은 회전(rad), 직진 거리(m), 도킹선에서 옆으로 벗어난 거리(m)
+    # token: 이번 실행의 회차 ID.
+    mission_phase = 'driving'
+    # DockEntry에 넘길 남은 회전(rad)·직진 거리(m)·옆 오차(m)
     dock_turn, dock_entry_distance, dock_side = 0., None, 0.
-    dock_captured = False  # '5 정면'에 닿기 전에 천장 카메라가 핑키를 넘겨받았다 (Nav2 루프 참고)
+    dock_captured = False
     visits = [points[i]['label'] for i in anchors]
-    # 경로에서 두 번 이상 지나는 점(출발점 제외) = 교차로. 그 앞뒤는 전환 구간으로 표시한다.
+    # 두 번 이상 지나는 점(출발점 제외) = 교차로.
     junctions = {label for label in visits if label != visits[0] and visits.count(label) > 1}
     for segment, (start_index, end_index) in enumerate(zip(anchors, anchors[1:])):
         start, end = points[start_index], points[end_index]
@@ -490,7 +461,6 @@ def run(node, points):
             previous = points[anchors[segment-1]]
             incoming = math.atan2(start['y_m']-previous['y_m'], start['x_m']-previous['x_m'])
             incoming = start.get('arrival_yaw_rad', incoming)
-            # 방향이 0.35 rad(약 20도) 넘게 꺾이면 모서리로 본다.
             start_turn = abs(angle(heading-incoming)) > .35
         course_departure = bool(segment and previous['label'] == '주차장' and start['label'] != '주차장')
         end_turn = False
@@ -499,13 +469,12 @@ def run(node, points):
             outgoing = math.atan2(following['y_m']-end['y_m'], following['x_m']-end['x_m'])
             end_turn = abs(angle(outgoing-heading)) > .35
         if end['label'] == '5':
-            end_turn = False  # 도킹은 직진 진입이다. 다음 기동은 후진 탈출이 맡는다.
+            end_turn = False
         cursor = start_index+1
         print(f"WAYPOINT_START {cursor+1} {points[cursor]['label']}", flush=True)
         dock_turn, dock_entry_distance, dock_side = 0., None, 0.
         if start['label'] == '5 정면' and end['label'] == '5':
-            # 정면 맞추기 점 근처(충분히 가깝거나 카메라가 잡음): Nav2를 놓고 핑키를 세운 뒤, 실제 선 자리에서 남은
-            # 것(도킹 방향까지 회전, 진입 거리 5~40 cm)을 DockEntry에 넘긴다.
+            # 정면 맞추기 점 근처(가깝거나 카메라가 잡음): Nav2를 멈추고 남은 회전·진입(5~40 cm)을 DockEntry에 넘긴다.
             node.cancel_active()
             settle = time.monotonic()+.8
             while rclpy.ok() and not node.interrupted and time.monotonic() < settle:
@@ -513,10 +482,9 @@ def run(node, points):
             stood, dock_yaw = node.pose(.8), end.get('yaw_rad', heading)
             dock_turn = angle(dock_yaw-stood[2])
             dock_entry_distance = max(.05, min(.40, (end['x_m']-stood[0])*math.cos(dock_yaw)+(end['y_m']-stood[1])*math.sin(dock_yaw)))
-            # 충분히 가깝다 = 도킹선 옆 5 cm까지: DockEntry가 들어가며 바로잡는다(±8 cm로 자름).
+            # 도킹선 옆 오차는 DockEntry가 바로잡는다(±8 cm로 자름).
             dock_side = max(-.08, min(.08, -(stood[0]-end['x_m'])*math.sin(dock_yaw)+(stood[1]-end['y_m'])*math.cos(dock_yaw)))
-        # 행동 계층(ultrasonic_safety)과 velocity_guard가 읽는 route_context.json을 쓴다. 루프마다 불러 heartbeat를
-        # 겸한다(1.5초 넘게 낡으면 감시기가 정지). near_*: 구간 양 끝 12 cm 안.
+        # route_context.json을 쓴다. 루프마다 불러 heartbeat를 겸한다(1.5초 넘게 낡으면 감시기가 정지).
         def context(pose, dock_search=False, mission_wait=False, extra=None):
             near_start = math.hypot(pose[0]-start['x_m'], pose[1]-start['y_m']) < .12
             near_end = math.hypot(pose[0]-end['x_m'], pose[1]-end['y_m']) < .12
@@ -527,8 +495,7 @@ def run(node, points):
                 start_xy=[start['x_m'],start['y_m']], end_xy=[end['x_m'],end['y_m']],
                 start_label=start['label'], end_label=end['label'],
                 dock_xy=[end['x_m'],end['y_m']] if end['label'] == '5' else None,
-                # 5번으로 들어가는 마지막 직선(25 cm 앞에서 정면을 맞춤): 낮은 적재대가 바로 앞이라 초음파는 보지
-                # 않는다. 라이다는 계속 본다.
+                # 5번 마지막 직선: 낮은 적재대가 바로 앞이라 초음파는 끄고 라이다만 본다.
                 dock_entry=start['label'] == '5 정면' and end['label'] == '5',
                 dock_entry_m=dock_entry_distance if dock_entry_distance is not None else math.hypot(end['x_m']-start['x_m'], end['y_m']-start['y_m']),
                 dock_turn_rad=dock_turn, dock_side_m=dock_side,
@@ -562,8 +529,7 @@ def run(node, points):
             if node.interrupted: raise RouteFailure(130, 'cancelled')
             continue
         if start['label'] == '5 정면' and end['label'] == '5':
-            # 정면 맞추기 점에서 5번으로 직진 진입(Nav2가 아니라 행동 계층의 DockEntry: 바로 앞 적재대가 Nav2에는
-            # 충돌로 보인다). 그다음 평소처럼 5번 정지와 대기.
+            # 5번 직진 진입은 행동 계층 DockEntry가 한다(적재대가 Nav2에는 충돌로 보임).
             node.cancel_active()
             print('MISSION_STATUS '+json.dumps(dict(phase='dock_entry', message='5번 진입 · 천장 캠과 주고받으며 들어감' if dock_captured else '5번 진입 · 정면 직진'), ensure_ascii=False), flush=True)
             started = time.monotonic()
@@ -583,7 +549,7 @@ def run(node, points):
                     raise RouteFailure(19, '5번 진입 제한 시간 초과 · 옆 장애물/센서를 확인하세요.')
                 rclpy.spin_once(node, timeout_sec=.05)
             if node.interrupted: raise RouteFailure(130, 'cancelled')
-            dock_captured, dock_turn, dock_entry_distance, dock_side = False, 0., None, 0.  # 재도킹은 다시 Nav2로 정면을 맞춘다
+            dock_captured, dock_turn, dock_entry_distance, dock_side = False, 0., None, 0.
             pose = node.pose(2.)
             while cursor < end_index:
                 checkpoint(cursor, points[cursor], pose, passing=True, sampling='end_pose_no_crossing_sample')
@@ -596,8 +562,7 @@ def run(node, points):
                                        '5번 도착 · 정지 · 도킹완료 확인 대기'+note)
                 if action == 'dock_complete':
                     node.anchor_dock(context, (end['x_m'],end['y_m'],end.get('yaw_rad',heading)), token)
-                    # dock_complete 뒤에도 다시 불릴 수 있다(2026-11-19): 짐을 싣기 전까지 관제 서버가 "다시 들어와"라고
-                    # 할 수 있다(자리가 옮겨졌거나 사람이 핑키를 밀었을 때).
+                    # dock_complete 뒤에도 관제가 재도킹을 요청할 수 있다(2026-11-19).
                     action = operator_wait(node, context, token, 'docked_manual', ('received', 'redock'),
                                            '도킹완료 · 정지 유지 · 물건 수령 완료 대기')
                     if action == 'received':
@@ -612,7 +577,7 @@ def run(node, points):
         goal.pose = PoseStamped()
         goal.pose.header.frame_id = 'map'
         goal.pose.pose.position.x, goal.pose.pose.position.y = end['x_m'], end['y_m']
-        # 들어오는 구간 방향을 보고 도착한다(주차 복귀면 주차 방향). 모서리 회전은 다음 구간이 맡는다.
+        # 들어오는 구간 방향으로 도착(주차 복귀면 주차 방향).
         goal.pose.pose.orientation.z, goal.pose.pose.orientation.w = math.sin((end["yaw_rad"] if end.get("parking_return") else end.get("arrival_yaw_rad",heading))/2), math.cos((end["yaw_rad"] if end.get("parking_return") else end.get("arrival_yaw_rad",heading))/2)
         future = node.client.send_goal_async(goal)
         rclpy.spin_until_future_complete(node, future, timeout_sec=10.)
@@ -622,15 +587,14 @@ def run(node, points):
         if not node.active_goal.accepted:
             node.active_goal = None
             raise RouteFailure(5, f"{end['label']} 목표가 거부됐습니다.")
-        # 남아 있는 운영자 정지 래치는 새 목표가 수락된 뒤에만 지운다. 그 시점에는 Nav2가 이전 목표를 대체했고
-        # context도 새것이다. 이 run_id의 정지면 지우지 않고 취소한다.
+        # 정지 래치는 새 목표가 수락된 뒤에만 지운다. 이 run_id의 정지면 취소한다.
         try:
             stop=json.loads((CACHE/'stop_latch.json').read_text())
             if node.run_id and stop.get('run_id')==node.run_id:raise RouteFailure(130,'cancelled')
         except (OSError,ValueError,TypeError):pass
         (CACHE/'stop_latch.json').unlink(missing_ok=True)
         result = node.active_goal.get_result_async()
-        deadline = time.monotonic()+240.  # 구간 하나 최대 240초 (교통 대기 중에는 계속 늘어남)
+        deadline = time.monotonic()+240.  # 구간당 240초(교통 대기 중에는 연장)
         previous_pose = pose
         dock_serviced = False
         passed = False
@@ -640,9 +604,8 @@ def run(node, points):
             context(pose)
             layer = behaviour_feedback()
             if layer.get('state') in WAIT_STATES:
-                # 다른 핑키를 위해 서 있는 것은 실패가 아니다: 시간 한도를 다시 시작하고, 그동안 Nav2가 진행이 없다며
-                # 포기한 목표는 아래에서 다시 보낸다. 2026-11-19: 첫 핑키가 5번에 있는 동안 기다리던 두 핑키가 임무를
-                # 끝내버렸다(status 6).
+                # 다른 핑키 대기는 실패가 아니다: 한도를 다시 시작하고 포기된 목표는 다시 보낸다
+                # (2026-11-19: 대기 중 임무가 끝나버린 사고).
                 if waited_at is None:
                     why = '다른 핑키에게 길을 비켜 주는 중' if str(layer.get('state')).startswith('yield') else '다른 핑키가 지나가길 기다리는 중'
                     print('MISSION_STATUS '+json.dumps(dict(phase=mission_phase, token=token, message=f"{end['label']}로 가는 길 · {why}"), ensure_ascii=False), flush=True)
@@ -651,20 +614,16 @@ def run(node, points):
                 if waited_at-wait_began > TRAFFIC_WAIT_LIMIT_S:
                     raise RouteFailure(6, f"{end['label']}로 가는 길에서 다른 핑키를 {TRAFFIC_WAIT_LIMIT_S/60:.0f}분 넘게 기다렸습니다 · 길을 막은 핑키와 자리 예약을 확인하세요.")
                 deadline = waited_at+240.
-            # 대기 상태가 3초 넘게 안 보이면 대기 끝으로 본다.
             elif waited_at is not None and time.monotonic()-waited_at > 3. and layer:
                 wait_began = None
                 print('MISSION_STATUS '+json.dumps(dict(phase=mission_phase, token=token, message=f"웨이포인트 {end['label']}로 이동 중"), ensure_ascii=False), flush=True)
                 waited_at = None
             if end['label'] == '5 정면':
-                # 천장 카메라가 자리 앞의 핑키를 본다(프레임 4개): 여기서부터 카메라가 들인다(dock_capture인 DockEntry).
-                # 그래서 Nav2가 정면 맞추기 점과 방향을 센티미터 단위로 맞출 필요가 없다.
+                # 카메라가 자리 앞 핑키를 본다(프레임 4개): 여기서부터 카메라가 들인다.
                 if seen.see(layer.get('dock_guide')) >= 4:
                     dock_captured = passed = True
                     break
-            # 통과 정류지(pass_radius_m: 통로 점, 대기 자리): 충분히 가까우면 도착이다. 다음 목표가 이것을 대체하므로
-            # Nav2 자체의 3 cm 허용오차를 맞추려 멈추지 않는다. '5 정면'은 행동 계층이 스스로 도킹 방향으로 돌 수 있을
-            # 때만(dock_entry 상태에 squaring이 있음) 통과로 친다. 2026-11-19 이전 것은 어떤 방향이든 그대로 들어갔다.
+            # 통과 정류지는 pass_radius_m 안이면 도착(멈추지 않음). '5 정면'은 행동 계층이 squaring을 할 때만 통과.
             squares = end['label'] != '5 정면' or 'squaring' in (layer.get('dock_entry') or {})
             if end.get('pass_radius_m') and squares and math.hypot(pose[0]-end['x_m'], pose[1]-end['y_m']) <= end['pass_radius_m']:
                 passed = True
@@ -686,8 +645,7 @@ def run(node, points):
                 waited = waited_at is not None and time.monotonic()-waited_at < 30.
                 if response.status == GoalStatus.STATUS_SUCCEEDED or node.interrupted or not (waited or retries < NAV_RETRIES):
                     break
-                # Nav2가 포기했다(진행 없음, 플래너 일시 오류): 임무는 계속한다. 교통 대기 때문이었으면 대기가 끝난 뒤
-                # 목표를 다시 보낸다. 대기 직후(30초 안)의 실패는 재시도 횟수에 넣지 않는다.
+                # Nav2가 포기해도 임무는 계속하고 목표를 다시 보낸다. 대기 직후(30초) 실패는 횟수에 넣지 않는다.
                 if not waited:
                     retries += 1
                     print('MISSION_STATUS '+json.dumps(dict(phase=mission_phase, token=token, message=f"웨이포인트 {end['label']} 구간 다시 시도 ({retries}/{NAV_RETRIES})"), ensure_ascii=False), flush=True)
@@ -715,7 +673,7 @@ def run(node, points):
                 docking_wait(node, context, token)
                 dock_serviced = True
                 break
-            # 구간 직선 위로 투영한 진행률(0=시작, 1=끝). 체크포인트의 진행률을 지나면 통과로 기록한다.
+            # 구간 직선 위 진행률(0~1). 체크포인트 진행률을 지나면 통과.
             progress = ((pose[0]-start['x_m'])*dx+(pose[1]-start['y_m'])*dy)/(length*length)
             old_progress = ((previous_pose[0]-start['x_m'])*dx+(previous_pose[1]-start['y_m'])*dy)/(length*length)
             while cursor < end_index:
@@ -723,7 +681,6 @@ def run(node, points):
                 at = ((point['x_m']-start['x_m'])*dx+(point['y_m']-start['y_m'])*dy)/(length*length)
                 if progress < at:
                     break
-                # 측정 궤적을 체크포인트 평면에서 보간해 통과 위치를 구한다.
                 t = max(0., min(1., (at-old_progress)/(progress-old_progress))) if progress > old_progress else 1.
                 crossing = (previous_pose[0]+t*(pose[0]-previous_pose[0]),
                             previous_pose[1]+t*(pose[1]-previous_pose[1]),
@@ -747,15 +704,14 @@ def run(node, points):
                 docking_wait(node, context, token, require_marker=True)
                 dock_serviced = True
         pose = node.pose(2.)
-        # 제어기가 마지막 체크포인트 평면 직전에 성공을 보고할 수 있다: 남은 점은 끝 위치로 기록한다.
+        # 마지막 체크포인트 전에 성공이 올 수 있다: 남은 점은 끝 위치로 기록.
         while cursor < end_index:
             checkpoint(cursor, points[cursor], pose, passing=True, sampling='end_pose_no_crossing_sample')
             cursor += 1
         checkpoint(end_index, end, pose, passing=passed, sampling='docking_service' if dock_serviced else None)
         if end['label']=='5' and not end.get('use_ir'):
             operator_wait(node,context,token,'docking_manual','dock_complete','5번 도착 · 정지 · IR 보정 전 수동 도킹완료 확인 대기')
-            # 들어온 구간이 아니라 도킹 자리 자체의 방향(route_geometry가 정함)으로 재설정한다: 자유 임무는 Nav2가 어디서
-            # 오든 5에 닿고, 고정 코스는 늘 4->5 방향이다(같은 값).
+            # 도킹 자리 자체의 방향으로 재설정한다.
             node.anchor_dock(context, (end['x_m'],end['y_m'],end.get('yaw_rad',heading)), token)
             operator_wait(node,context,token,'docked_manual','received','도킹완료 · 정지 유지 · 물건 수령 완료 대기')
         if end.get('course_end'):
@@ -776,7 +732,7 @@ def run(node, points):
 
 
 def main():
-    """argv[1]의 경로를 검사하고(점 1~500개, 유한한 좌표) 실행한다. 끝나면 목표를 취소하고 임시 파일을 지운다."""
+    """argv[1] 경로를 검사(점 1~500개, 유한 좌표)하고 실행한다."""
     try:
         points = json.loads(base64.b64decode(sys.argv[1], validate=True))
         if not isinstance(points, list) or not 1 <= len(points) <= 500:

@@ -1,18 +1,11 @@
 #!/usr/bin/env python3
 """Nav2와 핑키 차체 사이의 초음파 정지·회전·저속 전진 게이트이자 행동 선택 노드.
 
-실행 위치: 로봇 (주행준비 때 runtime_bundle로 ~/.cache/pinky-fleet/nav2/에 올라감)
-사용처: app.py가 주행준비 때 별도 프로세스(`ultrasonic_safety`)로 띄운다.
-
-핵심:
-- /cmd_vel_nav2(Nav2 명령)를 받아 지금 할 행동을 골라 /cmd_vel_selected로만 낸다. 바퀴로 가는 /cmd_vel은
-  독립 최종 감시기(velocity_guard.py) 한 곳만 발행한다. 명령 경로가 하나여야 마지막 안전 검사를 우회할 수 없다.
-- 20 Hz tick의 우선순위: 작업자 정지(stop_latch.json) > 초음파 신선도 > 경로 컨텍스트(route_context.json,
-  1.5 s 이내) > 양보(GiveWay) > 구역 허가(/fleet/lease) > 적재 자리 진입·후진 탈출 > 초음파 회피 >
-  임무 행동(도킹·교차로) > Nav2 명령 전달(IR 차선 보조 포함).
-- self.state는 초음파 상태다: 'idle'(정상), 'stopped'(장애물로 정지), 그 밖은 UltrasonicDetour 단계.
-  self.line_state는 화면·로그에 보이는 현재 행동 이름이다.
-- 센서·TF·컨텍스트가 오래되면 0 속도를 낸다(fail closed). 신선도 한도는 대개 0.6 s다.
+실행 위치: 로봇 (runtime_bundle로 ~/.cache/pinky-fleet/nav2/에 올라가고 app.py가 `ultrasonic_safety`로 띄움)
+/cmd_vel_nav2를 받아 고른 행동을 /cmd_vel_selected로만 낸다. /cmd_vel은 velocity_guard.py만 발행한다(최종 검사 우회 불가).
+20 Hz 우선순위: 작업자 정지 > 초음파 신선도 > 경로 컨텍스트(1.5 s) > 양보 > 구역 허가 > 적재 자리 진입·탈출 >
+초음파 회피 > 도킹·교차로 > Nav2 전달(IR 보조). self.state는 초음파 상태, self.line_state는 보이는 행동 이름.
+센서·TF·컨텍스트가 오래되면(대개 0.6 s) 0 속도를 낸다(fail closed).
 """
 
 from __future__ import annotations
@@ -49,8 +42,7 @@ else:
 class UltrasonicSafety(Node):
     def __init__(self) -> None:
         super().__init__("pinky_ultrasonic_safety")
-        # navigation.json의 ultrasonic_stop_m / ultrasonic_clear_m(2026-11-16부터 5 / 8 cm)가 기본값을 덮어쓴다.
-        # 정지 거리는 3~20 cm로 묶고, 해제 거리는 정지 거리보다 최소 2 cm 크게(최대 30 cm) 둔다(경계 떨림 방지).
+        # navigation.json ultrasonic_stop_m / ultrasonic_clear_m(2026-11-16부터 5 / 8 cm). 정지 3~20 cm, 해제는 정지+2 cm 이상.
         try:
             _nav = json.loads(Path('/home/pinky/.cache/pinky-fleet/nav2/runtime_config.json').read_text()).get('navigation') or {}
         except (OSError, ValueError):
@@ -61,7 +53,6 @@ class UltrasonicSafety(Node):
         self.declare_parameter("stop_distance_m", _stop)
         self.declare_parameter("clear_distance_m", max(_stop + 0.02, min(0.30, float(_clear))))
         self.declare_parameter("clear_hold_s", 0.75)
-        # 초음파가 0.6 s 넘게 안 오면 정지한다(최종 감시기의 센서 한도와 같은 값).
         self.declare_parameter("sensor_timeout_s", 0.60)
         self.nav_command = Twist()
         self.last_command_at = 0.0
@@ -81,7 +72,7 @@ class UltrasonicSafety(Node):
         self.scan_points = []
         self.last_scan_at = 0.0
         self.line_assist = LineAssist()
-        # 경로 시작 직진(route_start.json): 경로마다 한 번, 0.03 m/s로 1 s 곧게 나간다(forward_nav_command).
+        # route_start.json: 경로마다 한 번 0.03 m/s로 1 s 곧게 나간다.
         self.start_request_path = Path('/home/pinky/.cache/pinky-fleet/route_start.json')
         self.start_token = None
         self.start_deadline = 0.0
@@ -97,7 +88,7 @@ class UltrasonicSafety(Node):
         self.segment_key = None
         self.was_corner = False
         self.last_motion_at = 0.
-        # 관제가 주행준비 때 함께 올린 설정. 위 try와 달리 여기서는 없으면 노드가 시작하지 않는다(차체 치수 필수).
+        # 없으면 노드가 시작하지 않는다(차체 치수 필수).
         self.runtime = json.loads(Path('/home/pinky/.cache/pinky-fleet/nav2/runtime_config.json').read_text())
         self.geometry = geometry(self.runtime['geometry'])
         self.detour = UltrasonicDetour(self.geometry)
@@ -108,7 +99,7 @@ class UltrasonicSafety(Node):
         self.docking = Docking()
         self.dock_exit = DockExit()
         self.dock_entry = DockEntry()
-        # navigation.json ultrasonic_back_off_m: 초음파가 핑키를 붙잡을 때 얼마나 후진할지(m, 0이면 후진 안 함, 최대 0.25).
+        # navigation.json ultrasonic_back_off_m: 초음파가 붙잡을 때 후진 거리(m, 0이면 안 함, 최대 0.25).
         _back = _nav.get('ultrasonic_back_off_m', 0.12)
         self.back_off = BackOff(distance_m=min(0.25, max(0.0, float(_back))) if isinstance(_back, (int, float)) else 0.12)
         self.mission_token = None
@@ -119,16 +110,13 @@ class UltrasonicSafety(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.line_status_publisher = self.create_publisher(String, '/line/status', 10)
-        # 관제 메시지(lease·yield·dock_guide)는 자주(0.25 s 남짓) 다시 오므로 best-effort(sensor_data QoS)로 받는다.
-        # 하나 잃어도 다음 것이 오고, 끊기면 신선도 한도로 멈춘다.
+        # 관제 메시지는 자주 다시 오므로 best-effort. 끊기면 신선도 한도로 멈춘다.
         self.create_subscription(String,'/fleet/lease',self.on_lease,qos_profile_sensor_data)
-        # 관제의 "다른 핑키에게 양보" 지시(scripts/yielding.py, 2026-11-24): 지시가 계속 오는 동안 이 핑키는
-        # 조금 후진해 서 있어 상대가 지나가게 한다.
+        # 관제의 양보 지시(scripts/yielding.py, 2026-11-24): 오는 동안 조금 후진해 서서 상대가 지나가게 한다.
         self.give_way = GiveWay()
         self.yield_order = None
         self.create_subscription(String,'/fleet/yield',self.on_yield,qos_profile_sensor_data)
-        # 5번 적재 자리 근처에서 천장 카메라가 본 이 핑키의 위치를 관제가 전달한다(2026-11-18): 등록된 자리로부터의
-        # 어긋남. 적재 자리로 들어가는 주행만 이를 따라 조향하며, 신선할 때만 쓴다.
+        # 5번 적재 자리 근처 천장 카메라가 본 등록 자리와의 어긋남(2026-11-18). 진입 주행만, 신선할 때만 쓴다.
         self.dock_guide = None
         self.create_subscription(String,'/fleet/dock_guide',self.on_dock_guide,qos_profile_sensor_data)
         self.create_subscription(UInt16MultiArray, '/ir_sensor/range', self.on_ir, qos_profile_sensor_data)
@@ -136,7 +124,6 @@ class UltrasonicSafety(Node):
         self.create_timer(1.0, self.reload_ir_profile)
         self.create_timer(0.2, self.publish_line_status)
         self.reload_ir_profile()
-        # 고른 명령은 /cmd_vel_selected로만 낸다(depth 1: 오래된 명령이 쌓일 이유가 없다). /cmd_vel은 velocity_guard 몫.
         self.publisher = self.create_publisher(Twist, "/cmd_vel_selected", 1)
         self.create_subscription(Twist, "/cmd_vel_nav2", self.on_command, 10)
         self.create_subscription(Range, "/us_sensor/range", self.on_range, qos_profile_sensor_data)
@@ -144,7 +131,7 @@ class UltrasonicSafety(Node):
         self.get_logger().info("Ultrasonic safety gate ready; stale sensor data stops the base")
 
     def reload_ir_profile(self) -> None:
-        """ir_profile.json이 바뀌었으면(수정 시각 비교) 다시 읽는다. 1 s마다 불린다."""
+        """ir_profile.json이 바뀌었으면 다시 읽는다(1 s마다)."""
         try:
             if not self.ir_profile_path.exists():
                 return
@@ -163,17 +150,17 @@ class UltrasonicSafety(Node):
             self.profile_error = str(exc)
 
     def on_ir(self, msg: UInt16MultiArray) -> None:
-        """IR 3채널 원시값을 받는다. 세 채널 모두 정규화 0.5 이상(흰색)이면 도킹에 알린다."""
+        """IR 원시값을 받는다. 세 채널 모두 흰색(0.5 이상)이면 도킹에 알린다."""
         self.ir_raw = list(msg.data) if len(msg.data) == 3 else []
         self.last_ir_at = time.monotonic()
         strengths = normalize(self.ir_raw, self.ir_profile)
         self.docking.observe(strengths is not None and min(strengths) >= .5, self.last_ir_at)
 
     def on_scan(self, msg: LaserScan) -> None:
-        """라이다 스캔을 base_footprint 기준 (x, y) 점(m)으로 바꿔 둔다. 스윕 충돌 검사에 쓴다."""
+        """라이다 스캔을 base_footprint 기준 (x, y) 점(m)으로 바꿔 둔다."""
         try:
             age=(self.get_clock().now()-Time.from_msg(msg.header.stamp)).nanoseconds/1e9
-            # stamp가 있으면 -0.2~0.6 s 범위 밖(오래됐거나 시계가 어긋남)은 버린다. stamp 0이면 수신 시각을 믿는다.
+            # stamp가 -0.2~0.6 s 밖이면 버린다(stamp 0이면 수신 시각을 믿음).
             if (msg.header.stamp.sec or msg.header.stamp.nanosec) and not -.2<=age<=.6:return
             if not msg.header.frame_id or not msg.ranges:
                 return
@@ -190,17 +177,17 @@ class UltrasonicSafety(Node):
                     angle = msg.angle_min+i*msg.angle_increment
                     x, y = distance*math.cos(angle), distance*math.sin(angle)
                     points.append((m00*x+m01*y+t.x, m10*x+m11*y+t.y))
-            # +inf(반사 없음)도 "비어 있음"으로 쓸 수 있다. 쓸 수 있는 빔이 절반 미만이면 스캔 전체를 버린다.
+            # +inf도 빈 것으로 쓴다. 쓸 수 있는 빔이 절반 미만이면 버린다.
             if usable < len(msg.ranges)*0.5:
                 return
             self.scan_points = points
             self.last_scan_at = time.monotonic()
         except TransformException:
-            # IR 보정을 켜려면 base 프레임의 스캔 점이 있어야 한다.
+            # IR 보정을 켜려면 base 프레임 스캔 점이 있어야 한다.
             return
 
     def publish_line_status(self) -> None:
-        """5 Hz로 /line/status(관제 화면용 JSON)를 내고 route_feedback.json(navigate_route.py가 읽음)을 쓴다."""
+        """5 Hz로 /line/status를 내고 route_feedback.json(navigate_route.py용)을 쓴다."""
         now = time.monotonic()
         state = self.line_state
         if self.line_state.startswith(('docking_', 'crossing_', 'mission_', 'operator_', 'ultrasonic_', 'yield_', 'traffic_')):
@@ -233,7 +220,7 @@ class UltrasonicSafety(Node):
                         traffic_config=self.runtime['traffic_zones'], traffic_request=self.traffic_request, avoidance=self.detour.status(), crossing=self.crossing.status(), docking=self.docking.status(), dock_exit=self.dock_exit.status(), dock_entry=self.dock_entry.status(), dock_guide=self.fresh_dock_guide(now), state=self.line_state))
 
     def write_json(self, name, data):
-        """~/.cache/pinky-fleet/<name>에 임시 파일+os.replace로 원자적으로 쓴다. 실패하면 False."""
+        """~/.cache/pinky-fleet/<name>에 원자적으로 쓴다. 실패하면 False."""
         path = Path('/home/pinky/.cache/pinky-fleet')/name
         try:
             temporary = path.with_suffix('.tmp')
@@ -253,13 +240,13 @@ class UltrasonicSafety(Node):
                 if key in data:
                     setattr(self.docking, key, data[key])
             self.docking.handled = set(data.get('handled', []))
-            # 고정(anchored)까지 끝난 정지만 그대로 두고, 나머지는 운영자 확인을 기다리는 recovery_hold로 연다.
+            # 고정까지 끝난 정지만 그대로, 나머지는 운영자 확인을 기다리는 recovery_hold.
             self.docking.state = 'stopped' if data['state'] == 'stopped' and data.get('anchored') else 'recovery_hold'
         except (OSError, ValueError, TypeError):
             pass
 
     def fresh_pose(self, frame):
-        """frame('map'/'odom') 기준 base_footprint의 (x m, y m, yaw rad). TF가 0.6 s보다 오래되면 None."""
+        """frame 기준 base_footprint의 (x m, y m, yaw rad). TF가 0.6 s보다 오래되면 None."""
         try:
             tf = self.tf_buffer.lookup_transform(frame, 'base_footprint', Time())
             age = (self.get_clock().now()-Time.from_msg(tf.header.stamp)).nanoseconds/1e9
@@ -273,11 +260,7 @@ class UltrasonicSafety(Node):
         return None
 
     def mission_tick(self, now):
-        """임무 행동(적재 자리 진입·탈출, 도킹, 교차로 통과)이 이번 tick의 명령을 냈으면 True.
-
-        False면 호출한 쪽(tick)이 Nav2 명령 전달로 넘어간다. 컨텍스트는 navigate_route.py가 쓰는
-        route_context.json이며 1.5 s보다 오래되면 무효다.
-        """
+        """임무 행동(적재 자리 진입·탈출, 도킹, 교차로)이 이번 tick 명령을 냈으면 True, 아니면 Nav2 전달로 넘어간다."""
         try:
             context = json.loads(Path('/home/pinky/.cache/pinky-fleet/route_context.json').read_text())
             valid = 0 <= now-float(context['monotonic']) < 1.5 and 'start_xy' in context
@@ -294,7 +277,7 @@ class UltrasonicSafety(Node):
             self.send()
             return True
         if context.get('dock_entry'):
-            # 5번 적재 자리로 곧게 들어감(DockEntry): 초음파·회피 없음. 옆은 최종 감시기가 본다.
+            # 5번 적재 자리로 곧게 들어감(DockEntry): 초음파·회피 없음, 옆은 최종 감시기가 본다.
             self.mission_token = context['token']
             self.state = 'idle'
             self.detour = UltrasonicDetour(self.geometry)
@@ -322,7 +305,6 @@ class UltrasonicSafety(Node):
             self.line_state = motion.state
             self.send(motion.linear, motion.angular)
             return True
-        # 주차장 이송 구간이나 IR을 끈 임무는 도킹·교차로 행동 없이 Nav2에 맡긴다.
         if context.get('transit') or not context.get('use_ir', True):
             return False
         self.mission_token = context['token']
@@ -340,7 +322,7 @@ class UltrasonicSafety(Node):
             return True
         all_white = min(strengths) >= .5
         self.docking.observe(all_white, self.last_ir_at)
-        # 관제가 SSH로 쓴 도킹 명령·고정 결과 파일. 3 s 넘은 것은 무시한다(재시작 뒤 옛 명령 재실행 방지).
+        # 관제가 SSH로 쓴 도킹 명령·고정 결과. 3 s 넘은 것은 무시한다(재시작 뒤 재실행 방지).
         try:
             command = json.loads(Path('/home/pinky/.cache/pinky-fleet/dock_command.json').read_text())
             if 0 <= now-float(command.get('monotonic', -100.)) <= 3.:
@@ -361,7 +343,7 @@ class UltrasonicSafety(Node):
         if self.docking.state in Docking.ACTIVE:
             self.crossing.reset(context['token'])
             self.state, self.clear_since = 'idle', None
-        # 도킹 상태가 바뀔 때만 dock_latch.json에 저장한다. 저장에 실패하면 재시작 후 복구할 수 없으므로 fault로 멈춘다.
+        # 상태가 바뀔 때만 dock_latch.json에 저장하고, 실패하면 복구할 수 없으니 fault로 멈춘다.
         signature = (self.docking.state, self.docking.dock_id, self.docking.complete, self.docking.command_id, self.docking.anchored)
         if signature != self.dock_saved_signature:
             data = self.docking.status()
@@ -377,8 +359,7 @@ class UltrasonicSafety(Node):
             return True
         if motion is None:
             if self.state != 'idle' or front_blocked:
-                return False  # 초음파 정지·회전·저속 전진이 더 높은 우선순위다.
-            # Nav2 명령이 0.5 s보다 오래됐거나 0(1 mm/s, 1 mrad/s 이하)이면 교차로 행동도 시작하지 않는다.
+                return False  # 초음파가 더 높은 우선순위
             if now-self.last_command_at > .5 or (abs(self.nav_command.linear.x) <= .001 and abs(self.nav_command.angular.z) <= .001):
                 return False
             if self.ir_profile.get('mode') == 'template':
@@ -388,7 +369,6 @@ class UltrasonicSafety(Node):
                 estimate = self.observer_model.estimate([self.ir_raw[i] for i in self.ir_profile['channel_order']])
                 line_ok = estimate['usable'] and abs(estimate['offset_cm']) <= .5
             else:
-                # 가운데(CH2)만 선 위(0.55 이상)이고 좌우가 동시에 선 위가 아니면 선을 잡은 것으로 본다.
                 left, right = strengths[0] >= .55, strengths[2] >= .55
                 line_ok = strengths[1] >= .55 and not (left and right)
             motion = self.crossing.update(context, pose, odom, line_ok, now,
@@ -402,8 +382,7 @@ class UltrasonicSafety(Node):
             return False
         self.line_state = motion.state
         if motion.state == 'crossing_reacquire':
-            # 교차로 tick들과 직선 추종으로 넘겨줄 때(구간 변경 포함) 같은 복구 기억을 유지한다.
-            # 1.5 cm/s 전진 요청으로 LineAssist가 선을 다시 찾게 한다.
+            # 교차로 tick과 직선 추종 사이(구간 변경 포함)에 같은 복구 기억을 유지한다.
             self.segment_key = (context.get('token'), context.get('segment'))
             decision = self.line_assist.decide(.015, 0., self.ir_raw,
                 self.ir_profile, now, True, True, self.scan_points,
@@ -413,7 +392,7 @@ class UltrasonicSafety(Node):
             self.line_state = decision.state
             motion.linear, motion.angular = decision.linear, decision.angular
             if decision.state == 'nav2_avoidance':
-                # 인위로 만든 전진 요청은 장애물 회피 경로가 아니다.
+                # 인위적 전진 요청은 회피 경로가 아니다.
                 motion.linear, motion.angular = 0., 0.
                 self.line_state = 'lidar_stop'
             if decision.state == 'line_search_failed':
@@ -421,8 +400,7 @@ class UltrasonicSafety(Node):
                 self.crossing.failure_reason = 'line_search_failed'
         else:
             self.line_assist.reset()
-        # 명시적 도킹 중에는 Nav2 신선도가 필요 없다. Nav2 action은 일부러 취소되어 있고 경로 heartbeat는 살아 있다.
-        # 대신 라이다 스윕 검사(swept_clear)는 항상 한다.
+        # 도킹 중에는 Nav2 action을 일부러 취소해 Nav2 신선도가 필요 없다. 라이다 스윕 검사는 항상 한다.
         if not swept_clear(self.scan_points, motion.linear, motion.angular):
             self.line_state = 'lidar_stop'
             self.send()
@@ -431,7 +409,7 @@ class UltrasonicSafety(Node):
         return True
 
     def on_command(self, msg: Twist) -> None:
-        """Nav2 명령(/cmd_vel_nav2)을 기억한다. NaN/inf면 명령이 없는 것으로 지운다."""
+        """Nav2 명령을 기억한다. NaN/inf면 지운다."""
         if not math.isfinite(msg.linear.x) or not math.isfinite(msg.angular.z):
             self.nav_command, self.last_command_at = Twist(), 0.
             return
@@ -439,9 +417,9 @@ class UltrasonicSafety(Node):
         self.last_command_at = time.monotonic()
 
     def on_range(self, msg: Range) -> None:
-        """초음파 거리(m)를 받아 유효·해제 여부를 갱신하고, 주행 중 정지 거리 안이면 'stopped'로 바꾼다.
+        """초음파 거리(m)로 유효·해제를 갱신하고, 주행 중 정지 거리 안이면 'stopped'로 바꾼다.
 
-        장착 위치를 실측하지 않았으면(sensor_pose_measured=false) Range 프레임의 TF로 장착 좌표·시야각을 채운다.
+        sensor_pose_measured=false면 Range 프레임 TF로 장착 좌표·시야각을 채운다.
         """
         age=(self.get_clock().now()-Time.from_msg(msg.header.stamp)).nanoseconds/1e9
         self.range_timestamped=bool(msg.header.stamp.sec or msg.header.stamp.nanosec)
@@ -464,12 +442,12 @@ class UltrasonicSafety(Node):
         if not self.sensor_valid:
             self.clear_since = None
             return
-        # Range 드라이버는 흔히 +inf로 "반사 없음"을 뜻한다. 이를 해제로 받아들이고, NaN은 무효로 두어 정지 쪽으로 실패한다.
+        # +inf(반사 없음)는 해제, NaN은 무효라 정지 쪽으로 실패한다.
         self.sensor_clear = (math.isinf(value) and value > 0.0) or (
             math.isfinite(value) and value >= float(self.get_parameter("clear_distance_m").value)
         )
         stop_distance = float(self.get_parameter("stop_distance_m").value)
-        # Nav2가 움직이라고 할 때만 정지 상태로 들어간다. 도킹·적재 자리 진입/탈출 중에는 앞의 자리 자체가 보이므로 제외한다.
+        # Nav2가 움직일 때만 정지로 들어간다. 도킹·적재 자리 진입/탈출 중에는 자리 자체가 보여 제외한다.
         nav_active = time.monotonic()-self.last_command_at <= .5 and (abs(self.nav_command.linear.x) > .001 or abs(self.nav_command.angular.z) > .001)
         if math.isfinite(value) and value <= stop_distance and self.state == "idle" and nav_active and self.docking.state not in Docking.ACTIVE and not getattr(self, "dock_exiting", False) and not getattr(self, "dock_entering", False):
             self.state = "stopped"
@@ -482,7 +460,7 @@ class UltrasonicSafety(Node):
         return self.last_sensor_at > 0.0 and now - self.last_sensor_at <= timeout
 
     def send(self, linear: float = 0.0, angular: float = 0.0) -> None:
-        """고른 명령(m/s, rad/s)을 /cmd_vel_selected로 내고 behavior.jsonl에 기록한다. 인자 없이 부르면 정지."""
+        """고른 명령을 /cmd_vel_selected로 내고 behavior.jsonl에 기록한다. 인자 없으면 정지."""
         cmd = Twist()
         cmd.linear.x = linear
         cmd.angular.z = angular
@@ -493,10 +471,7 @@ class UltrasonicSafety(Node):
                             avoidance=self.detour.status(),traffic=self.traffic_request)
 
     def forward_nav_command(self) -> Twist:
-        """Nav2 명령을 ±0.12 m/s, ±0.30 rad/s로 자르고, 상황에 맞게 바꿔 돌려준다.
-
-        이송·IR 끔: 라이다 스윕 검사만 하고 그대로 전달. 경로 시작: 1 s 직진. 그 밖: LineAssist가 IR로 보정.
-        """
+        """Nav2 명령을 ±0.12 m/s, ±0.30 rad/s로 자르고 상황에 맞게 바꾼다(이송·IR 끔: 그대로, 경로 시작: 1 s 직진, 그 밖: LineAssist)."""
         safe = Twist()
         safe.linear.x = max(-0.12, min(0.12, self.nav_command.linear.x))
         safe.angular.z = max(-0.30, min(0.30, self.nav_command.angular.z))
@@ -518,7 +493,7 @@ class UltrasonicSafety(Node):
                     return Twist()
                 self.line_state='parking_transit' if context.get('transit') else 'nav2_only'
                 return safe
-            route_corner = False  # 이제 래치된 모서리 전환은 Crossing이 맡는다(그래서 여기서는 항상 False).
+            route_corner = False  # 래치된 모서리 전환은 Crossing이 맡는다.
             key = (context.get('token'), context.get('segment'))
             if key != self.segment_key or (self.was_corner and not route_corner):
                 self.line_assist.reset()
@@ -527,8 +502,7 @@ class UltrasonicSafety(Node):
         except (OSError, ValueError, TypeError, KeyError):
             self.line_state = 'route_context_stale'
             return Twist()
-        # 경로마다 한 번 명시적으로 켜지며 IR 사용·감지와 무관하다. 바깥 tick은 여전히 신선한 0이 아닌 Nav2 명령과
-        # 초음파를 요구한다. 요청 후 10 s 안에, 실제로 움직인 시간(tick당 최대 0.05 s)으로 1 s를 센다.
+        # 경로마다 한 번 켜지며 IR과 무관하다. 요청 후 10 s 안에 실제로 움직인 시간으로 1 s를 센다.
         try:
             request = json.loads(self.start_request_path.read_text())
             token = request['token']
@@ -603,7 +577,7 @@ class UltrasonicSafety(Node):
         if valid:
             self.traffic_request = dict(token=context.get('token'),zones=required_zones(context,self.fresh_pose('map'),self.runtime['traffic_zones'])) if self.fresh_pose('map') else {}
         else:self.traffic_request = {}
-        # 컨텍스트가 끊겼는데 회피 도중이었으면 이어갈 수 없으므로 fault로 둔다(재개는 새 경로로).
+        # 회피 도중 컨텍스트가 끊기면 fault(재개는 새 경로로).
         if not valid or context.get('mission_wait'):
             if self.detour.phase not in {'idle','fault'}:
                 self.detour.phase,self.detour.failure='fault','route_context_expired'
@@ -612,8 +586,7 @@ class UltrasonicSafety(Node):
             self.line_state = 'route_context_stale' if not valid else 'mission_wait'
             self.send()
             return
-        # 양보 지시를 받으면 주행 중이든 구역 허가를 기다리는 중이든 후진해 선다(통로 입구에서 기다리는 쪽이 바로
-        # 길을 막는 쪽이다). 5번 적재 자리에 들어가거나 나오는 중에는 하지 않는다. 후진은 라이다로 뒤가 빌 때만.
+        # 양보 지시면 주행·대기 중 모두 후진해 선다(통로 입구에서 기다리는 쪽이 길을 막는다). 적재 자리 진입·탈출 중엔 안 함.
         if context.get('dock_exit') or context.get('dock_entry'):
             self.give_way.update(None, None, now, False)
         else:
@@ -629,15 +602,14 @@ class UltrasonicSafety(Node):
             self.send()
             return
         self.dock_exiting = bool(context.get('dock_exit'))
-        # 5번 적재 자리로 곧게 들어가는 중: 초음파에 보이는 것이 적재 자리 자체이므로 초음파로 붙잡지 않는다.
+        # 적재 자리 진입 중: 초음파에 보이는 것이 자리 자체라 붙잡지 않는다.
         self.dock_entering = bool(context.get('dock_entry'))
         if self.dock_entering and self.state == 'stopped':
             self.state = 'idle'
         if self.dock_exiting or self.dock_entering:
             self.mission_tick(now)
             return
-        # 명시적 취소·컨텍스트 만료가 항상 이긴다(위에서 처리). 진행 중인 회피는 Nav2가 재계획하느라 잠시 0을 내도
-        # 움직임을 계속 맡는다.
+        # 취소·만료가 항상 이긴다(위에서 처리). 진행 중인 회피는 Nav2가 잠시 0을 내도 계속 맡는다.
         if self.state != 'idle':
             self.avoidance_tick(now, context)
             return
@@ -656,16 +628,15 @@ class UltrasonicSafety(Node):
         self.send(command.linear.x,command.angular.z)
 
     def on_dock_guide(self,msg):
-        """관제가 보낸 {"forward_mm","left_mm","dyaw_deg"}. 여기 도착한 시각과 함께 (m, m, rad)로 보관한다."""
+        """관제가 보낸 {"forward_mm","left_mm","dyaw_deg"}를 도착 시각과 함께 (m, m, rad)로 보관한다."""
         try:
             data=json.loads(msg.data)
             guide=(float(data['forward_mm'])/1000.,float(data['left_mm'])/1000.,math.radians(float(data['dyaw_deg'])))
         except (ValueError,TypeError,KeyError):return
-        # 적재 자리 근처에서 카메라가 볼 수 있는 범위(앞뒤 0.60 m, 좌우 0.30 m)보다 멀거나 숫자가 아니면 안내가 아니다.
+        # 카메라 범위(앞뒤 0.60 m, 좌우 0.30 m) 밖이거나 숫자가 아니면 버린다.
         if all(math.isfinite(v) for v in guide) and abs(guide[0])<=.60 and abs(guide[1])<=.30 and abs(guide[2])<=math.pi+.01:
             self.dock_guide=(guide,time.monotonic())
 
-    # 0.4 s 이내에 받은 카메라 안내만 쓴다. 없거나 오래되면 None.
     def fresh_dock_guide(self,now,max_age_s=.4):
         guide=getattr(self,'dock_guide',None)
         return guide[0] if guide is not None and 0<=now-guide[1]<=max_age_s else None
@@ -675,37 +646,33 @@ class UltrasonicSafety(Node):
         except (ValueError,TypeError):pass
 
     def on_yield(self,msg):
-        """관제가 이 핑키에게 양보를 원하는 동안 오는 {"id","to","back_m"}. 도착 시각과 함께 보관한다."""
+        """양보 지시 {"id","to","back_m"}를 도착 시각과 함께 보관한다."""
         try:data=json.loads(msg.data)
         except (ValueError,TypeError):return
         if isinstance(data,dict) and isinstance(data.get('id'),str) and isinstance(data.get('back_m'),(int,float)) and not isinstance(data.get('back_m'),bool):
             self.yield_order=(dict(id=data['id'],to=data.get('to'),back_m=float(data['back_m'])),time.monotonic())
 
-    # 양보 지시는 1 s 안에 다시 와야 유효하다. 관제가 멈추면 양보도 풀린다.
+    # 1 s 안에 다시 와야 유효하다. 관제가 멈추면 양보도 풀린다.
     def fresh_yield(self,now,max_age_s=1.0):
         order=getattr(self,'yield_order',None)
         return order[0] if order is not None and 0<=now-order[1]<=max_age_s else None
 
     def traffic_ready(self,context,now):
-        """지금 위치에서 필요한 공유 구역을 계산하고, 관제의 lease가 그 구역을 이 경로(token)에 허가하는지 본다."""
+        """필요한 공유 구역을 lease가 이 경로(token)에 허가하는지 본다."""
         pose=self.fresh_pose('map')
         if pose is None:return False
         self.traffic_request=dict(token=context['token'],zones=required_zones(context,pose,self.runtime['traffic_zones']))
         return lease_allows(self.lease_receiver.lease,context['token'],self.traffic_request['zones'],now)
 
     def avoidance_tick(self, now, context):
-        """초음파가 막혔을 때(self.state != 'idle')의 동작.
-
-        ultrasonic_detour가 꺼져 있으면 Nav2 costmap 회피에 맡기고 전진만 막는다(필요하면 BackOff로 조금 후진).
-        켜져 있으면 UltrasonicDetour가 정지 → 옆으로 비켜 통과 → 선 복귀를 직접 몬다.
-        """
+        """초음파가 막혔을 때의 동작. ultrasonic_detour가 꺼져 있으면 전진만 막고 Nav2 회피에 맡긴다(필요하면 BackOff),
+        켜져 있으면 UltrasonicDetour가 직접 비켜 통과한다."""
         self.mission_token = context.get('token')
         if not (getattr(self, 'runtime', {}).get('navigation') or {}).get('ultrasonic_detour', True):
-            # Nav2가 라이다+초음파 costmap으로 피한다(navigation.json). 장애물 가까이에서는 전진만 막고, Nav2의 회전과
-            # 후진은 그대로 통과시켜 새 경로로 빠져나가게 한다.
+            # Nav2가 라이다+초음파 costmap으로 피한다. 전진만 막고 회전·후진은 통과시킨다.
             command = self.forward_nav_command()
             linear = command.linear.x
-            # 너무 가까이 서 있으면 조금 후진한다(라이다로 뒤가 비어 있어야 함). 그다음 Nav2가 돌아간다.
+            # 너무 가까우면 조금 후진한다(라이다로 뒤가 비어야 함).
             scan_fresh = now-self.last_scan_at <= .6
             motion = self.back_off.update(
                 blocked=self.sensor_valid and not self.sensor_clear, range_m=self.range_m if self.sensor_valid else None,
@@ -746,7 +713,7 @@ class UltrasonicSafety(Node):
         self.state, self.line_state = self.detour.phase, motion.state
         self.send(motion.linear, motion.angular)
         if self.state == 'idle':
-            # 멈춰 둔 교차로 통과에서 회피 이동·회전·시간을 뺀다. IR/Nav2가 다시 시작되면 교차로 자체 한도가 다시 적용된다.
+            # 멈춘 교차로 통과에서 회피 이동·회전·시간을 뺀다.
             if self.crossing.state not in {'idle', 'fault'}:
                 elapsed = now-self.detour.started
                 self.crossing.entered += elapsed

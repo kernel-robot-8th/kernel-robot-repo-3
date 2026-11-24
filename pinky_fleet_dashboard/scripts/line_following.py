@@ -1,12 +1,8 @@
 """보정된 IR로 선 위 직진을 돕는 조향 보조. LiDAR로 차체 경로를 검사하며 ROS import는 없다.
 
-실행 위치: PC·로봇 양쪽 (로봇: runtime_bundle로 올라가 ultrasonic_safety.py가 import,
-PC: app.py가 IR 보정 API에서 default_profile·capture_profile·normalize·validate_profile을 import)
-사용처: ultrasonic_safety.py(LineAssist로 Nav2 전진 명령에 조향을 얹음), app.py, ir_profiles.py
-
-핵심: IR 3채널은 12비트 ADC(0~4095)이고 흰 선은 바닥보다 낮게, 검은 테두리는 높게 읽힌다.
-mode 'calibrated'는 바닥·선 실측값으로 0~1 흰색 강도를, 'template'는 가로 오프셋별 측정 곡선과 맞춰
-선에서 벗어난 cm를 구한다. 조향은 작게 제한하고 후보 궤적이 막히면 정지한다.
+실행 위치: PC·로봇 양쪽 (로봇: ultrasonic_safety.py의 LineAssist, PC: app.py IR 보정 API·ir_profiles.py)
+IR 3채널은 12비트 ADC(0~4095), 흰 선은 바닥보다 낮고 검은 테두리는 높다. 'calibrated'는 0~1 흰색 강도,
+'template'는 오프셋별 측정 곡선으로 선에서 벗어난 cm를 구한다. 조향은 작게 제한하고 궤적이 막히면 정지한다.
 """
 from __future__ import annotations
 
@@ -15,11 +11,10 @@ import statistics
 from dataclasses import dataclass
 from typing import Any
 
-# 속도 단위 m/s, rad/s. 흰색 강도 문턱은 0~1이며 ON/OFF 두 값은 깜빡임을 막는 히스테리시스다.
-# MAX_ANGULAR·SIDE_ON·SIDE_OFF는 지금 코드에서 쓰이지 않는다.
+# m/s, rad/s. 흰색 문턱(0~1)의 ON/OFF는 히스테리시스. MAX_ANGULAR·SIDE_ON·SIDE_OFF는 쓰이지 않는다.
 MAX_LINEAR = 0.1152
 MAX_ANGULAR = 0.30
-MIN_CONTRAST = 100.0  # 바닥과 선의 ADC 값 차이가 이보다 작으면 구분할 수 없다고 본다
+MIN_CONTRAST = 100.0  # 바닥·선 ADC 차이가 이보다 작으면 구분 불가
 CENTER_ON = 0.55
 CENTER_OFF = 0.35
 SIDE_ON = 0.25
@@ -27,7 +22,7 @@ SIDE_OFF = 0.18
 
 
 def validate_template(model):
-    """template 모델(오프셋 cm별 채널 평균)을 쓸 수 없는 이유를 한국어로, 쓸 수 있으면 None을 돌려준다."""
+    """template 모델을 쓸 수 없는 이유, 쓸 수 있으면 None."""
     try:
         rows = model['rows']
         if not 3 <= len(rows) <= 1000:
@@ -58,7 +53,6 @@ class TemplateEstimator:
             raise ValueError(reason)
         rows = model['rows']
         self.scale = [max(r['mean'][i] for r in rows)-min(r['mean'][i] for r in rows) for i in range(3)]
-        # 보정 지점 사이를 0.1 cm 간격으로 선형 보간한 (오프셋, 채널 3개 예상값) 표
         self.grid = []
         lo, hi = rows[0]['offset_cm'], rows[-1]['offset_cm']
         count = int(round((hi-lo)/.1))
@@ -73,14 +67,14 @@ class TemplateEstimator:
         self.zero = next(r['mean'] for r in rows if r['offset_cm'] == 0)
 
     def estimate(self, raw):
-        """정규화 RMS 오차가 가장 작은 오프셋을 고르고, 비슷한 후보가 넓게 퍼지면 모호로 본다."""
+        """RMS 오차가 가장 작은 오프셋. 비슷한 후보가 넓게 퍼지면 모호."""
         rms = lambda template: math.sqrt(sum(((template[i]-raw[i])/self.scale[i])**2 for i in range(3))/3)
         fits = [(rms(template), offset) for offset, template in self.grid]
         best, offset = min(fits)
         candidates = sorted(off for error, off in fits if error <= best+.025)
         lower, upper = candidates[0], candidates[-1]
         reason = 'matched'
-        # 중앙 띠에서는 양옆 채널이 포화돼 mm 이하 위치를 알 수 없으므로 0 ± 0.5 cm로 둔다.
+        # 중앙 띠에서는 양옆 채널이 포화돼 mm 이하 위치를 알 수 없다.
         if rms(self.zero) <= .035:
             offset, lower, upper, reason = 0., -.5, .5, 'center_band'
         elif best > .12:
@@ -94,7 +88,6 @@ class TemplateEstimator:
                     confidence=max(0., 1-best/.12) if usable else 0., usable=usable, reason=reason)
 
 
-# 보정 전 기본값: 꺼져 있고(enabled=False) 바닥·선 값이 없어 validate_profile을 통과하지 못한다.
 def default_profile() -> dict[str, Any]:
     return dict(enabled=False, floor=[None]*3, line=[None]*3,
                 floor_noise=[0.0]*3, line_noise=[0.0]*3,
@@ -104,7 +97,7 @@ def default_profile() -> dict[str, Any]:
 
 
 def validate_profile(profile: dict[str, Any]) -> str | None:
-    """보정값을 쓸 수 없는 이유(한국어)를, 유효하면 None을 돌려준다."""
+    """보정값을 쓸 수 없는 이유, 유효하면 None."""
     try:
         if sorted(profile['channel_order']) != [0, 1, 2] or not profile.get('mapping_confirmed'):
             return '채널 배치를 확인하세요.'
@@ -121,7 +114,6 @@ def validate_profile(profile: dict[str, Any]) -> str | None:
             noise = max(float(profile['floor_noise'][i]), float(profile['line_noise'][i]))
             if not math.isfinite(noise) or noise < 0:
                 return '유효하지 않은 보정 잡음값입니다.'
-            # 대비가 100 미만이거나 잡음의 6배보다 작으면 선을 안정적으로 가릴 수 없다.
             if abs(floor-line) < max(MIN_CONTRAST, 6*noise):
                 return f'CH{i+1} 바닥·선 대비가 작거나 신호가 불안정합니다.'
     except (KeyError, TypeError, ValueError):
@@ -130,7 +122,7 @@ def validate_profile(profile: dict[str, Any]) -> str | None:
 
 
 def capture_profile(profile: dict[str, Any], samples: list[list[int]], surface: str, channel: int | None = None) -> dict[str, Any]:
-    """중앙값과 강건한 잡음 추정(MAD)으로 바닥 또는 선 값을 저장한다. 실시간 샘플이 여러 개(6개 이상) 필요하다."""
+    """중앙값과 강건한 잡음(MAD×1.4826)으로 바닥 또는 선 값을 저장한다. 샘플 6개 이상 필요."""
     if profile.get('enabled'):
         raise ValueError('IR 보조를 끈 뒤 보정하세요.')
     if len(samples) < 6 or any(len(row) != 3 for row in samples):
@@ -143,7 +135,6 @@ def capture_profile(profile: dict[str, Any], samples: list[list[int]], surface: 
         if not all(math.isfinite(v) and 0 <= v <= 4095 for v in values):
             raise ValueError('IR 원시값이 ADC 범위를 벗어났습니다.')
         middle = statistics.median(values)
-        # MAD×1.4826은 정규분포에서 표준편차와 같아지는 강건한 잡음 추정이다.
         noise = 1.4826*statistics.median(abs(v-middle) for v in values)
         if noise > 100:
             raise ValueError(f'CH{i+1} 값이 불안정합니다. 센서를 고정한 뒤 다시 보정하세요.')
@@ -154,9 +145,8 @@ def capture_profile(profile: dict[str, Any], samples: list[list[int]], surface: 
 def surface_observation(raw, profile):
     """실측 바닥값과 극성을 고려한 끝값으로 채널마다 흰색·검정·바닥 소속도를 구한다.
 
-    예전 바깥 채널의 `line` 값이 바닥보다 크면 흰색이 아니라 검정(테두리)이다.
-    채널마다 흰색 기준이 생기기 전까지는 다른 채널에서 잰 낮은 끝값을 쓰고,
-    그 공유 기준을 쓴다는 사실을 결과(white_reference_shared)에 밝힌다.
+    예전 바깥 채널의 `line` 값이 바닥보다 크면 검정(테두리)이다. 채널별 흰색 기준이 없으면 다른 채널의
+    낮은 끝값을 쓰고 white_reference_shared로 밝힌다.
     """
     if len(raw)!=3 or validate_profile(profile): return None
     if any(not isinstance(v,(int,float)) or not math.isfinite(v) or not 0<=v<=4095 for v in raw): return None
@@ -173,7 +163,6 @@ def surface_observation(raw, profile):
         white_ref.append(white);black_ref.append(black);shared.append(line[i]>=f-MIN_CONTRAST and explicit is None)
     white=[max(0.,min(1.,(f-v)/max(1.,f-w))) for v,f,w in zip(raw,floor,white_ref)]
     black=[max(0.,min(1.,(v-f)/max(1.,b-f))) for v,f,b in zip(raw,floor,black_ref)]
-    # 흰색 0.55 이상 → white, 검정 0.6 이상 → black, 둘 다 0.25 이하 → floor, 그 밖은 uncertain
     surfaces=['white' if w>=.55 else 'black' if b>=.6 else 'floor' if max(w,b)<=.25 else 'uncertain' for w,b in zip(white,black)]
     order=profile['channel_order']
     return dict(white=[white[i] for i in order],black=[black[i] for i in order],
@@ -182,7 +171,7 @@ def surface_observation(raw, profile):
 
 
 def normalize(raw: list[int], profile: dict[str, Any]) -> list[float] | None:
-    """채널별 흰색 강도(0~1). 검은 테두리는 흰 선으로 세지 않는다. channel_order로 물리 순서(좌·중·우)에 맞춘다."""
+    """채널별 흰색 강도(0~1, 검은 테두리 제외). channel_order로 좌·중·우 순서를 맞춘다."""
     if profile.get('mode')!='template':
         observation=surface_observation(raw,profile)
         return observation['white'] if observation else None
@@ -196,7 +185,7 @@ def normalize(raw: list[int], profile: dict[str, Any]) -> list[float] | None:
 
 
 def swept_clear(points: list[tuple[float, float]], linear: float, angular: float) -> bool:
-    """14 cm 정사각 차체가 1초 후보 궤적(0.1초 간격)을 지나며 LiDAR 점(로봇 기준 x, y m)과 겹치지 않는지 본다."""
+    """14 cm 정사각 차체가 1초 후보 궤적을 지나며 LiDAR 점(로봇 기준 m)과 겹치지 않는지 본다."""
     for step in range(11):
         t = step / 10
         yaw = angular*t
@@ -215,7 +204,7 @@ def swept_clear(points: list[tuple[float, float]], linear: float, angular: float
 
 @dataclass
 class LineDecision:
-    """한 주기의 판단: 내보낼 선속도(m/s)·각속도(rad/s), 상태 이름, 진단용 정규화값·오차·추정."""
+    """한 주기 판단: 선속도·각속도, 상태 이름, 진단값."""
     linear: float
     angular: float
     state: str
@@ -227,9 +216,8 @@ class LineDecision:
 class LineAssist:
     """선이 보이고 앞이 막히지 않은 전진 명령에만 크기를 제한한 PD 조향을 적용한다.
 
-    state: disabled(Nav2 명령 그대로), *_unavailable(정지), nav2_turn(후진·제자리 회전은 Nav2에 맡김),
-    nav2_avoidance·route_corner_gap(Nav2 명령을 저속 제한), centered·tracking·template_*(선 추종),
-    *_reacquire·line_search(선 다시 찾기), line_search_failed·lidar_stop(정지).
+    state: disabled(Nav2 그대로), *_unavailable·line_search_failed·lidar_stop(정지), nav2_turn(Nav2에 맡김),
+    nav2_avoidance·route_corner_gap(저속 제한), centered·tracking·template_*(추종), *_reacquire·line_search.
     """
     def __init__(self) -> None:
         self.last_error = 0.0
@@ -305,7 +293,7 @@ class LineAssist:
         return self._calibrated_decide(linear, angular, raw, profile, d, now, scan_points, route_corner, heading_yaw)
 
     def _template_decide(self, linear, angular, raw, profile, d, now, points, corner, yaw):
-        """template 모드: 오프셋(cm) 추정을 저역 필터·미분하고 yaw 각속도로 감쇠해 조향한다."""
+        """template 모드: 오프셋 추정을 저역 필터·미분하고 yaw 각속도로 감쇠해 조향한다."""
         if self.model_revision != profile.get('revision') or self.model is None:
             self.model = TemplateEstimator(profile['template'])
             self.model_revision = profile.get('revision')
@@ -317,7 +305,7 @@ class LineAssist:
         if linear < -.001 or (abs(linear) <= .001 and abs(angular) <= .001):
             self.reset()
             return result(linear, angular, 'nav2_turn')
-        # 앞쪽 ±45° 안 25 cm 이내에 LiDAR 점이 있으면 선 추종 대신 Nav2 회피에 맡긴다(0.024 m/s, 0.2 rad/s 제한).
+        # 앞 ±45°·25 cm 안에 점이 있으면 Nav2 회피에 맡긴다.
         blocked = any(px > 0 and abs(math.atan2(py, px)) <= math.pi/4 and math.hypot(px, py) < .25 for px, py in points)
         if corner or blocked:
             self.reset()
@@ -333,7 +321,6 @@ class LineAssist:
                 self.search_start, self.search_yaw, self.search_phase = now, yaw, 0
             delta = math.atan2(math.sin(yaw-self.search_yaw), math.cos(yaw-self.search_yaw))
             direction = self.side_direction or 1.
-            # 기억한 쪽으로 0.2 rad, 반대쪽 0.2 rad, 원래 방향 순으로 0.16 rad/s 회전하며 찾는다.
             targets = [.20*direction, -.20*direction, 0.]
             if now-self.search_start > 6 or abs(delta) > .24 or self.search_phase >= 3:
                 return result(0., 0., 'line_search_failed')
@@ -346,10 +333,9 @@ class LineAssist:
         self.search_start, self.search_phase = None, 0
         error = estimate['offset_cm']
         if abs(error) > .5:
-            self.side_direction = -math.copysign(1., error)  # +offset이면 선이 오른쪽에 있다.
+            self.side_direction = -math.copysign(1., error)  # +offset이면 선이 오른쪽
         dt = .05 if self.offset_at is None else max(.02, min(.2, now-self.offset_at))
         previous = error if self.offset_filtered is None else self.offset_filtered
-        # 시상수 0.15초 1차 저역 필터, 미분은 ±4 cm/s로 자른다.
         filtered = previous+(error-previous)*dt/(.15+dt)
         derivative = max(-4., min(4., (filtered-previous)/dt))
         self.offset_filtered, self.offset_at = filtered, now
@@ -368,12 +354,10 @@ class LineAssist:
                 self.hold_yaw += min(1., dt/5.)*difference
         else:
             self.center_since = None
-        # 기준 yaw는 1초 넘게 안정적으로 중앙에 있을 때만 배운다. 가로 오차 피드백과 경쟁하지 않으며,
-        # 각속도 감쇠 항이 좌우 흔들림을 줄인다. 목표 각속도는 ±0.22 rad/s로 제한한다.
+        # 기준 yaw는 1초 넘게 안정적으로 중앙일 때만 배운다. 각속도 감쇠 항이 좌우 흔들림을 줄인다.
         target = max(-.22, min(.22, -.10*filtered-.025*derivative-.20*self.yaw_rate))
         if neutral and abs(filtered) < .25 and abs(self.yaw_rate) < .02:
             target = 0.
-        # 조향 변화율 제한: 초당 0.6 rad/s까지만 바꾼다.
         step = .6*dt
         w = max(self.last_steering-step, min(self.last_steering+step, target))
         self.last_steering = w
@@ -384,7 +368,7 @@ class LineAssist:
         return result(v, w, 'template_centered' if neutral else 'template_tracking', filtered)
 
     def _calibrated_decide(self, linear, angular, raw, profile, d, now, points, corner, heading_yaw):
-        """calibrated 모드: d는 [좌, 중, 우] 흰색 강도. 가운데 채널이 흰색이면 추종, 아니면 선을 다시 찾는다."""
+        """calibrated 모드: d는 [좌, 중, 우] 흰색 강도. 가운데가 흰색이면 추종, 아니면 다시 찾는다."""
         observation=surface_observation(raw,profile)
         def result(v,w,state,error=None):
             if not swept_clear(points,v,w):v,w,state=0.,0.,'lidar_stop'
@@ -397,7 +381,6 @@ class LineAssist:
         if heading_yaw is None:return result(0.,0.,'heading_unavailable')
         if observation is None:return result(0.,0.,'ir_unavailable')
         surfaces=observation['surfaces'];black=observation['black']
-        # 가운데 채널 히스테리시스: 잡혀 있으면 0.35까지 유지, 새로 잡으려면 0.55 이상
         center=d[1]>=(CENTER_OFF if self.center_locked else CENTER_ON)
         self.center_locked=center
         left,right=d[0]>=.55,d[2]>=.55
@@ -405,8 +388,7 @@ class LineAssist:
         if center:
             self.line_was_seen=True
             if self.center_since is None:self.center_since=now
-            # 0.25초 연속 중앙일 때만 복구 예산을 풀어 준다. 잡음 섞인 흰색 샘플 하나로
-            # 무제한 탐색이 다시 시작되면 안 된다.
+            # 0.25초 연속 중앙일 때만 복구 예산을 푼다. 잡음 샘플 하나로 무제한 탐색이 다시 시작되면 안 된다.
             if now-self.center_since>=.25:
                 if recovering:self.hold_yaw=heading_yaw
                 self.recovery_start,self.recovery_yaw=None,None
@@ -416,7 +398,7 @@ class LineAssist:
             drift=0. if recovering else math.atan2(math.sin(heading_yaw-self.hold_yaw),math.cos(heading_yaw-self.hold_yaw))
             if not left and not right and now-self.center_since>=.25:
                 self.hold_yaw+=min(1.,dt/3.)*drift
-            # 오차 > 0: 왼쪽 채널이 더 희다. 목표 = P 0.18 + D 0.015 - 기준 yaw에서 벗어난 만큼(drift) 보정, ±0.12 rad/s
+            # 오차 > 0: 왼쪽 채널이 더 희다.
             error=(d[0]-d[2])/max(.1,sum(d))
             derivative=(error-self.last_error)/dt if self.last_time is not None else 0.
             target=max(-.12,min(.12,.18*error+.015*max(-2.,min(2.,derivative))-.6*drift))
@@ -428,7 +410,7 @@ class LineAssist:
             state='centered' if abs(error)<.05 else 'tracking'
         else:
             self.center_since=None
-            # 한쪽 채널의 흰색이 가장 강한 방향 단서이고, 다음은 한쪽 검은 테두리 + 나머지 두 채널 회색 바닥이다.
+            # 방향 단서: 한쪽 흰색, 다음은 한쪽 검은 테두리 + 나머지 회색.
             direction=1. if left and not right else -1. if right and not left else 0.
             edge=(surfaces[0]=='black' and surfaces[1]=='floor' and surfaces[2]=='floor') or (surfaces[2]=='black' and surfaces[1]=='floor' and surfaces[0]=='floor')
             if not direction and edge:direction=1. if surfaces[0]=='black' else -1.
@@ -437,7 +419,7 @@ class LineAssist:
                 self.recovery_direction=direction or self.side_direction or 1.
                 self.search_phase=0
             delta=math.atan2(math.sin(heading_yaw-self.recovery_yaw),math.cos(heading_yaw-self.recovery_yaw))
-            # 복구 예산: 6초, 시작 방향에서 0.40 rad 이상 돌면 포기하고 정지한다.
+            # 복구 예산 6초·0.40 rad를 넘으면 정지한다.
             if now-self.recovery_start>6. or abs(delta)>.40:
                 return result(0.,0.,'line_search_failed')
             if direction:
@@ -446,8 +428,7 @@ class LineAssist:
                 v=.012;state='black_edge_reacquire' if edge and not (left or right) else 'white_side_reacquire'
                 error=direction
             else:
-                # 방향 단서 없음: 기억한 쪽으로 돌고 반대쪽을 훑는다. 세 채널이 모두 회색이면 눈감고 전진하지 않는다.
-                # 6초 복구 예산 안에 양쪽을 다 봐야 한다: 예전 ±0.35 rad 탐색은 0.16 rad/s로 8초 넘게 걸렸다.
+                # 단서 없음: 기억한 쪽, 반대쪽 순으로 훑고 눈감고 전진하지 않는다. 예전 ±0.35 rad는 6초 예산을 넘겼다.
                 targets=[.20*self.recovery_direction,-.20*self.recovery_direction,0.]
                 if self.search_phase>=len(targets):return result(0.,0.,'line_search_failed')
                 if abs(targets[self.search_phase]-delta)<.025:self.search_phase+=1
