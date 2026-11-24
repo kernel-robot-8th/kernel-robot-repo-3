@@ -80,8 +80,6 @@
 .plan-table tr.excluded td { color: var(--text-3); }
 .plan-table .good { color: var(--blue-strong); }
 .plan-table .bad { color: var(--red-ink); }
-.plan-table.mini { margin-top: 6px; font-size: 12px; }
-.plan-table.mini th, .plan-table.mini td { padding: 4px 8px; }
 .check-dots { display: inline-flex; gap: 4px; }
 .check-dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--green); }
 .check-dots i.no { background: var(--red); }

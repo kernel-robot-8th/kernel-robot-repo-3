@@ -397,7 +397,7 @@ def pinky_arrivals(repository_root: Path) -> list[dict[str, Any]]:
         try:
             corners = json.loads(spot_path.read_text(encoding="utf-8"))["reference_corners_px"]
             center = [sum(point[0] for point in corners) / 4, sum(point[1] for point in corners) / 4]
-        except (OSError, ValueError, KeyError, TypeError, IndexError, ZeroDivisionError):
+        except (OSError, ValueError, KeyError, TypeError, IndexError):
             continue
         arrivals.append({"pinky_id": pinky_id, "name": PINKY_NAMES.get(pinky_id, pinky_id), "marker_id": marker.marker_id,
                          "spot_id": marker.spot_id, "spot_center_px": [round(center[0], 1), round(center[1], 1)]})

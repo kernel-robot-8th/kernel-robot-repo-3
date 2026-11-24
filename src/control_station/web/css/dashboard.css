@@ -170,8 +170,7 @@ body[data-view="dashboard"] footer { display: none; }
 }
 .dash-stock-item:hover:not(:disabled) { background: var(--fill); }
 .dash-stock-name { color: var(--text-2); font-size: 14px; font-weight: 600; white-space: nowrap; }
-/* .dash-stock-sub와 .dash-stock-item의 sold_out·unknown·closed는 지금 dashboard.js가 붙이지 않는 클래스다. */
-.dash-stock-sub { overflow: hidden; grid-row: 1; grid-column: 2; min-width: 0; color: var(--text-3); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+/* .dash-stock-item의 sold_out·unknown·closed 꾸밈은 지금 dashboard.js가 붙이지 않는다(상태 문자열과 이름이 같아 남겨 둠). */
 .dash-stock-item strong { grid-row: 1; grid-column: 3; font-size: 20px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
 .dash-stock-item strong small { margin-left: 1px; color: var(--text-3); font-size: 13px; font-weight: 600; }
 .dash-stock-item.sold_out { background: var(--red-soft); }

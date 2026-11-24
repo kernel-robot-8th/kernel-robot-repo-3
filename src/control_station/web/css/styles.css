@@ -238,14 +238,7 @@ body:not(.dev) .sim-tag, body:not(.dev) .simulated { display: none; }
 .intake-items { flex-basis: 100%; order: -1; font-size: 18px; font-weight: 700; letter-spacing: -.02em; }
 .intake-actions { display: flex; gap: 8px; margin-left: auto; }
 .intake-actions button { min-width: 72px; min-height: 42px; font-size: 15px; }
-/* .intake-preview·.preview-block·.preview-summary·.preview-code·.pick-list는 지금 JS가 만들지 않는 예전 미리보기용이다.
- * 배정 미리보기는 intake-plan.css가 꾸민다. */
-.intake-preview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
-.preview-block { min-width: 0; padding: 12px 14px; border-radius: var(--radius-inner); background: var(--card-muted); }
-.preview-block h4 { margin: 0 0 4px; color: var(--text-3); font-size: 13px; font-weight: 500; }
-.preview-summary { margin: 0 0 8px; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
-.preview-summary.blocked, .preview-state.blocked { color: var(--red-ink); }
-.preview-code { color: var(--text-3); font-size: 12px; }
+.preview-state.blocked { color: var(--red-ink); }
 .preview-state { margin: 12px 0 0; color: var(--text-3); font-size: 13px; }
 .verdict-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .verdict { display: grid; grid-template-columns: auto 5.5em minmax(0, 1fr); align-items: center; gap: 8px; color: var(--text-2); font-size: 13px; }
@@ -255,8 +248,6 @@ body:not(.dev) .sim-tag, body:not(.dev) .simulated { display: none; }
 .verdict.excluded { color: var(--text-3); }
 .verdict.excluded b { color: var(--red-ink); }
 .verdict.excluded .pinky-badge { background: var(--fill); color: var(--text-3); }
-.pick-list { display: grid; gap: 4px; margin: 0; padding-left: 20px; font-size: 13px; }
-.pick-list small { margin-left: 6px; color: var(--text-3); font-size: 12px; }
 /* 자동 출발 막대와 카드별 안내(켜지면 파랑, 건너뜀은 노랑). .intake-note는 시작·거절 실패 안내(빨강). */
 .dispatch-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: 0 0 12px; padding: 12px 16px; border-radius: var(--radius-card); background: var(--card); box-shadow: var(--shadow); font-size: 14px; }
 .dispatch-switch { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer; }
@@ -390,7 +381,6 @@ dl.pinky-facts { display: grid; margin: 0; padding: 0; }
 .pinky-facts dd.good { color: var(--green-ink); }
 .pinky-facts dd.bad { color: var(--red-ink); }
 .pinky-facts dd.muted { color: var(--text-3); font-weight: 400; }
-.pinky-message { margin: 0; padding: 10px 12px; border-radius: var(--radius-inner); background: var(--card-muted); color: var(--text-2); font-size: 13px; }
 .pinky-card-actions { display: flex; align-items: center; gap: 12px; margin-top: auto; }
 .pinky-stop { flex-shrink: 0; min-width: 104px; min-height: 54px; padding: 0 22px; border: 2px solid #a3101f; background: #e5182b; color: #fff; font-size: 18px; font-weight: 800; box-shadow: 0 4px 12px rgba(229, 24, 43, .3); }
 .pinky-stop:hover:not(:disabled) { background: #c90f21; }
@@ -784,9 +774,6 @@ td:nth-child(2) { width: 23%; white-space: nowrap; }
 .arm-detail { margin: 0; font-size: 15px; font-weight: 500; }
 .arm-actions { display: flex; flex-shrink: 0; gap: 8px; }
 section > .section-heading:not(:first-child) { margin-top: 24px; }
-/* .policy-pick은 지금 JS·HTML에서 쓰지 않는 예전 클래스다. */
-.policy-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 4px; }
-.policy-pick h3 { font-size: 15px; }
 .policy-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
 .policy-buttons button { min-width: 7.5rem; min-height: 48px; padding: 10px 18px; font-size: 16px; }
 .camera-command-form { display: grid; grid-template-columns: minmax(0, 20rem) auto; align-items: end; gap: 8px; margin: 14px 0 4px; }
@@ -873,7 +860,6 @@ footer { margin-top: 40px; padding: 16px 4px 0; color: var(--text-3); font-size:
   td { font-size: 13px; }
   td:first-child, td:nth-child(2) { width: auto; }
   .intake-card, .order-card { padding: 16px; }
-  .intake-preview { grid-template-columns: 1fr; }
   .intake-actions { width: 100%; margin-left: 0; }
   .intake-actions button { flex: 1; }
   .order-meta { width: 100%; margin-left: 0; }
