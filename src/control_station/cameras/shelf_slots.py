@@ -332,7 +332,7 @@ class ShelfSlotZones:
         if not isinstance(box, list) or len(box) != 4:
             return {"status": "NO_BBOX", "used_for_selection": False}
         # 기준점 = 박스 아래쪽 가운데(x 가운데, y 아래 끝), 곧 물체가 선반 바닥에 닿는 곳.
-        anchor =((float(box[0]) + float(box[2])) / 2, float(box[3]))
+        anchor = ((float(box[0]) + float(box[2])) / 2, float(box[3]))
         inside, edge = [], []
         for slot in slots:
             position = _point_in_polygon(anchor, [tuple(point) for point in slot["polygon_px"]])

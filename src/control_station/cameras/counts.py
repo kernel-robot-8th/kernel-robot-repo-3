@@ -159,7 +159,7 @@ def camera_inventory(snapshots: Callable[[], list[Any]], shelf_region: list[floa
     최신 프레임 한 장만 보고(중앙값 아님) 신뢰도 0.5 이상, 박스 중심이 영역 안인 검출만 센다. 카메라가
     ready/STREAMING/FRESH가 아니면 그 시점은 빼고, 남은 시점이 없으면 count는 None(모름)이다.
     """
-    frames ={camera.id: camera.to_dict() for camera in snapshots()}
+    frames = {camera.id: camera.to_dict() for camera in snapshots()}
     views = []
     for camera_id, region in (("head_camera", shelf_region), ("front_camera", front_region)):
         frame = frames.get(camera_id)

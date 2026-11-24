@@ -216,7 +216,7 @@ class RosParkingSource:
             ) from exc
         self.spot_id = spot_id
         # 자리 -> 상태 토픽. dict.fromkeys로 순서를 지키며 중복을 없앤다(주 자리가 맨 앞).
-        self.topics ={spot: state_topic(spot, spot_id) for spot in dict.fromkeys((spot_id, *extra_spot_ids))}
+        self.topics = {spot: state_topic(spot, spot_id) for spot in dict.fromkeys((spot_id, *extra_spot_ids))}
         self.feed_camera_id = feed_camera_id
         self._clock = clock
         self._request_type = CheckParking.Request
