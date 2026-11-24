@@ -74,7 +74,7 @@ class ReadRouteTests(ApiTestCase):
         status, body, headers = self.request("GET", "/")
         self.assertEqual(status, 200)
         self.assertIn("text/html", headers["content-type"])
-        status, body, headers = self.request("GET", "/app.js")
+        status, body, headers = self.request("GET", "/js/app.js")
         self.assertEqual(status, 200)
         connection = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=10)
         connection.request("GET", "/streams/head_camera.mjpg")

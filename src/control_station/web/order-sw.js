@@ -2,9 +2,9 @@
 // network blips, always asking the server first. Orders, stock and tracking (/api/...) are never cached: a stale
 // answer there would show stock or progress that is no longer true.
 
-const CACHE = 'robot-order-v1';
+const CACHE = 'robot-order-v2';  // v2: css/, js/ 폴더로 옮김 (옛 캐시는 activate에서 지움)
 const SHELL = [
-  '/order', '/order.css', '/order.js', '/order-manifest.json', '/icons/order-192.png',
+  '/order', '/css/order.css', '/js/order.js', '/order-manifest.json', '/icons/order-192.png',
   '/fonts/Pretendard-Regular.subset.woff2', '/fonts/Pretendard-Medium.subset.woff2',
   '/fonts/Pretendard-SemiBold.subset.woff2', '/fonts/Pretendard-Bold.subset.woff2',
 ];
