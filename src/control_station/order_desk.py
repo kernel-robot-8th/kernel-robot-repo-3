@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import threading
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from control_station.api.common import validate_order_items
@@ -106,6 +108,27 @@ def _start_of_today() -> str:
     return midnight.astimezone(timezone.utc).isoformat(timespec="microseconds")
 
 
+def _load_order_catalog() -> dict[str, dict[str, Any]]:
+    """Load customer-facing category and price details separately from robot pick policies."""
+    path = Path(os.environ.get("CONTROL_STATION_ORDER_CATALOG") or
+                Path(__file__).resolve().parents[2] / "config" / "order-catalog.json")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict) or not isinstance(data.get("products"), list):
+        return {}
+    return {
+        product["object_class"]: {
+            "category": product.get("category", "other"),
+            "unit": product.get("unit", "개"),
+            "price_krw": product.get("price_krw"),
+        }
+        for product in data["products"]
+        if isinstance(product, dict) and isinstance(product.get("object_class"), str)
+    }
+
+
 @dataclass
 class OrderDesk:
     store: TaskStore
@@ -116,6 +139,7 @@ class OrderDesk:
     zones: Mapping[str, ReceivingZone]
     pick_stats: Callable[[], PickStats]
     planning: FleetPlanning = field(default_factory=load_fleet_planning)
+    product_catalog: Mapping[str, Mapping[str, Any]] = field(default_factory=_load_order_catalog, repr=False)
     today: Callable[[], str] = _start_of_today
     # The shelf inventory (inventory.InventoryMonitor.snapshot). With it the window sells what is available
     # (shelves minus open orders) and refuses more; without it the desk reads the shelves directly.
@@ -135,9 +159,9 @@ class OrderDesk:
         zones = [zone.as_dict() for zone in self.zones.values()]
         if self.inventory is not None:
             view = self.inventory()
-            products = [{"object_class": row["object_class"], "label": row["label"], "available": row["available"],
-                         "status": row["status"], "notice": _PRODUCT_NOTICE.get(row["status"])}
-                        for row in view["products"]]
+            products = [self._catalog_product({"object_class": row["object_class"], "label": row["label"],
+                         "available": row["available"], "status": row["status"],
+                         "notice": _PRODUCT_NOTICE.get(row["status"])}) for row in view["products"]]
             notice = None
             if view["state"] == "unknown" and any(row["status"] == "unknown" for row in view["products"]):
                 notice = f"재고를 확인하지 못해 해당 물건의 주문을 잠시 닫았습니다 ({view['reason']})"
@@ -153,11 +177,15 @@ class OrderDesk:
                 "label": policy["label"],
                 "available": on_shelves[policy["object_class"]] if stock_error is None else None,
             })
+        products = {key: self._catalog_product(product) for key, product in products.items()}
         return {
             "products": list(products.values()),
             "stock_error": stock_error,
             "zones": [zone.as_dict() for zone in self.zones.values()],
         }
+
+    def _catalog_product(self, product: dict[str, Any]) -> dict[str, Any]:
+        return {**product, **self.product_catalog.get(product["object_class"], {})}
 
     def receive(self, items: object, zone_id: object = None) -> dict[str, Any]:
         """Store a new order in the intake (status PENDING, no Pinky yet).

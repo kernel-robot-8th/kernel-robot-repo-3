@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "products": [
+    { "object_class": "carrot", "category": "vegetable", "unit": "개", "price_krw": 1000 },
+    { "object_class": "tissue", "category": "other", "unit": "팩", "price_krw": 2000 },
+    { "object_class": "apple", "category": "fruit", "unit": "개", "price_krw": 1500 },
+    { "object_class": "watermelon", "category": "fruit", "unit": "통", "price_krw": 20000 }
+  ]
+}

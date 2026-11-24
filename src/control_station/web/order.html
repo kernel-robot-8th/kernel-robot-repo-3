@@ -17,22 +17,26 @@
 <body>
   <main class="order-page">
     <header class="order-header">
-      <h1 id="pageTitle">무엇을 가져다 드릴까요?</h1>
+      <h1 id="pageTitle">오늘 필요한 걸 골라 담아 보세요</h1>
       <button id="myOrderLink" type="button" class="my-order-link" hidden>내 주문 보기</button>
-      <p id="pageLead">물건과 수량을 고르면 로봇이 수령 구역까지 가져다 드려요.</p>
+      <p id="pageLead">상품을 담으면 핑키가 수령 구역까지 가져다 드려요.</p>
     </header>
 
     <form id="orderForm" class="order-form" novalidate>
       <section aria-labelledby="products-title">
-        <div class="section-title"><h2 id="products-title">물건</h2><span class="hint">물건마다 5개까지 고를 수 있어요</span></div>
+        <div class="section-title"><h2 id="products-title">상품</h2><span class="hint">상품별 최대 5개</span></div>
         <p id="stockNotice" class="notice" hidden></p>
+        <nav id="categoryNav" class="category-nav" aria-label="상품 분류"></nav>
         <div id="products" class="product-list"><p class="placeholder">물건 목록을 불러오는 중…</p></div>
       </section>
 
       <div class="cart-bar">
         <p id="formError" class="form-error" role="alert" hidden></p>
         <div class="cart-row">
-          <p id="cartSummary" class="cart-summary" aria-live="polite">담은 물건이 없어요</p>
+          <div class="cart-summary-block">
+            <p id="cartSummary" class="cart-summary" aria-live="polite">장바구니가 비어 있어요</p>
+            <p id="cartTotal" class="cart-total" aria-live="polite">상품을 골라 주세요</p>
+          </div>
           <button id="submitOrder" type="submit" class="primary" disabled>주문하기</button>
         </div>
         <p id="cartNote" class="cart-note">받을 곳은 로봇이 출발할 때 알려 드려요</p>

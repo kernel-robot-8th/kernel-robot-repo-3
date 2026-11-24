@@ -2,9 +2,12 @@
 // network blips, always asking the server first. Orders, stock and tracking (/api/...) are never cached: a stale
 // answer there would show stock or progress that is no longer true.
 
-const CACHE = 'robot-order-v1';
+const CACHE = 'robot-order-v3';
 const SHELL = [
   '/order', '/order.css', '/order.js', '/order-manifest.json', '/icons/order-192.png',
+  '/images/products/carrot.png', '/images/products/tissue.png',
+  '/images/products/apple.png', '/images/products/watermelon.png',
+  '/images/products/kiwi.png',
   '/fonts/Pretendard-Regular.subset.woff2', '/fonts/Pretendard-Medium.subset.woff2',
   '/fonts/Pretendard-SemiBold.subset.woff2', '/fonts/Pretendard-Bold.subset.woff2',
 ];
