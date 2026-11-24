@@ -11,13 +11,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from control_station.arms.policies import load_act_policies
-from control_station.arms.pick import HOME_REACHED_UNVERIFIED, ArmQueuePick
 from control_station.arms.config import load_arms
+from control_station.arms.pick import HOME_REACHED_UNVERIFIED, ArmQueuePick
+from control_station.arms.policies import load_act_policies
 from control_station.mock_world import MockWorld
 from control_station.orders.flow import OrderDevices, OrderFlow, OrderFlowError
-from control_station.storage.store import TaskStore
 from control_station.orders.task_runner import MockTaskOrchestrator
+from control_station.storage.store import TaskStore
 
 HOME_UNVERIFIED = {"state": "UNKNOWN", "reason_code": "PLACE_NOT_VERIFIED", "result": {"pose_reached": True}}
 

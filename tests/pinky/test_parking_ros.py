@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 from control_station.pinky.parking_ros import (
     NODE_UNAVAILABLE,
-    ParkingObservationError,
     STALE_STATE_S,
+    ParkingObservationError,
     RosParkingSource,
     live_payload,
     observation_payload,

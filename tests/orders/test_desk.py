@@ -9,46 +9,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from control_station.arms.policies import load_act_policies
-from control_station.arms.config import load_arms
-from control_station.mock_world import MockWorld
-from control_station.orders.desk import OrderDesk, OrderDeskError
-from control_station.orders.flow import OrderFlow
+from control_station.orders.desk import OrderDeskError
 from control_station.orders.receiving_zones import ReceivingZone
+from control_station.orders.task_runner import TaskExecutionConflict
 from control_station.storage.store import TaskStore
-from control_station.orders.task_runner import MockTaskOrchestrator, TaskExecutionConflict
-from test_api_routes import ApiTestCase
-from test_order_flow import CARROT_APPLE, TERMINAL, devices
 
-ZONES = {"zone_a": ReceivingZone("zone_a", "수령 구역 A", ("1", "5", "9"))}
+from support import CARROT_APPLE, TERMINAL, ZONES, ApiTestCase, finish, make_desk
+
 TWO_ZONES = {**ZONES, "zone_b": ReceivingZone("zone_b", "수령 구역 B", ("1", "5", "7", "10"))}
-
-
-def finish(desk: OrderDesk, store: TaskStore, order_id: str, *, pickup: bool = True) -> dict:
-    """Run an order to its end, confirming pickup when its Pinky waits at the receiving zone."""
-    deadline = time.monotonic() + 20
-    while time.monotonic() < deadline:
-        order = store.get_task(order_id)
-        if order["status"] in TERMINAL:
-            return order
-        active = next((step for step in order["steps"] if step["id"] == order.get("active_step_id")), None)
-        if pickup and active is not None and active["step_type"] == "CONFIRM_PICKUP" and desk.flow_waiting(order_id):
-            desk.confirm_pickup(order_id)
-        time.sleep(0.02)
-    raise AssertionError(f"order did not finish: {store.get_task(order_id)['status']}")
-
-
-def make_desk(store: TaskStore, *, zones=ZONES) -> tuple[OrderDesk, MockWorld, MockTaskOrchestrator]:
-    world = MockWorld(drive_s=0.2, pick_s=0.05)
-    flow = OrderFlow(load_arms(), load_act_policies(), devices(world), dwell_s=0.0, poll_s=0.02,
-                     arrival_timeout_s=10.0, signal_timeout_s=2.0,
-                     route_for=lambda zone_id: list(zones[zone_id].route_labels) if zone_id in zones else None)
-    orchestrator = MockTaskOrchestrator(store, order_flow=flow)
-    desk = OrderDesk(store, orchestrator, devices(world), load_arms(), load_act_policies(), zones,
-                     pick_stats=lambda: store.pick_success_stats(simulated=True), pickup=flow.confirm_pickup)
-    flow.choose_shipment_pinky = desk.assign_next_shipment  # as app.py wires it
-    desk.flow_waiting = lambda order_id: order_id in flow._pickups  # test helper: is the step waiting yet
-    return desk, world, orchestrator
 
 
 class OrderDeskTest(unittest.TestCase):

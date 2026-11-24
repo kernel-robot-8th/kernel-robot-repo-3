@@ -5,10 +5,10 @@ import sys
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPOSITORY_ROOT / "scripts"))
+from control_station import REPO_ROOT
+
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from omx_slot_motion import ARM_JOINTS, Rejected, SlotMotion, add_motion_arguments  # noqa: E402
 

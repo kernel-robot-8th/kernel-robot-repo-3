@@ -4,19 +4,17 @@ import hashlib
 import json
 import sys
 import unittest
-from pathlib import Path
 
 import cv2
 import numpy as np
 
+from control_station import REPO_ROOT
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPOSITORY_ROOT / "scripts"))
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from calibrate_shelf_pose import build_artifact  # noqa: E402
 
-
-SLOT_MAP_PATH = REPOSITORY_ROOT / "config" / "shelf-slots.json"
+SLOT_MAP_PATH = REPO_ROOT / "config" / "shelf-slots.json"
 # Pinhole intrinsics in the range of the 640x480 shelf camera; the real draft is not in the repository.
 INTRINSICS = {
     "camera_id": "shelf_camera",

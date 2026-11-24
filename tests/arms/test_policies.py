@@ -6,10 +6,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from control_station import REPO_ROOT
 from control_station.arms.policies import ActPolicyError, load_act_policies
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPOSITORY_ROOT / "scripts"))
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from omx_act_policy_run import DEFAULT_POLICIES, RestWatcher, load_policies, policy_cameras  # noqa: E402
 

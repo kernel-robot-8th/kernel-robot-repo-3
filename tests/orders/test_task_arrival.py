@@ -7,9 +7,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from control_station.orders.task_runner import MockTaskOrchestrator
 from control_station.pinky.parking_ros import ParkingObservationError
 from control_station.storage.store import TaskStore
-from control_station.orders.task_runner import MockTaskOrchestrator
 
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELED", "NEEDS_INTERVENTION"}
 

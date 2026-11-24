@@ -6,7 +6,8 @@ import unittest
 
 from control_station.mock_world import MockWorld
 from control_station.pinky.gateway import PinkyGateway, sensor_details, shape_pinky
-from test_api_routes import ApiTestCase
+
+from support import ApiTestCase
 
 FRESH = {"fresh": True, "value": {}}
 

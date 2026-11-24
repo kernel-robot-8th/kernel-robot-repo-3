@@ -10,17 +10,24 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from control_station.arms.policies import load_act_policies
 from control_station.arms.config import load_arms
+from control_station.arms.policies import load_act_policies
 from control_station.cameras.counts import (
-    CountUnavailable, PinkyLoadCounter, ShelfStockCounter, camera_inventory, head_middle_view_from_env, head_shelf_view_from_env, sample_frames, tray_region_from_spot,
+    CountUnavailable,
+    PinkyLoadCounter,
+    ShelfStockCounter,
+    camera_inventory,
+    head_middle_view_from_env,
+    head_shelf_view_from_env,
+    sample_frames,
+    tray_region_from_spot,
 )
-from control_station.mock_world import MockWorld
-from control_station.storage.models import CameraConnectionState, CameraSnapshot, CameraStreamState, FrameFreshness
-from control_station.orders.flow import OrderDevices, OrderFlow
 from control_station.cameras.shelf_slots import load_shelf_slot_map
-from control_station.storage.store import TaskStore
+from control_station.mock_world import MockWorld
+from control_station.orders.flow import OrderDevices, OrderFlow
 from control_station.orders.task_runner import MockTaskOrchestrator
+from control_station.storage.models import CameraConnectionState, CameraSnapshot, CameraStreamState, FrameFreshness
+from control_station.storage.store import TaskStore
 
 
 def detection(name: str, box: list[float], slot: str | None = None) -> dict:

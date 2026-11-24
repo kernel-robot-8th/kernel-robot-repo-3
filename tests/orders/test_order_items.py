@@ -7,14 +7,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from control_station.arms.policies import ActPolicyError, load_act_policies
 from control_station.api.common import validate_order_items
 from control_station.arms.commands import ArmCommandError, ArmCommandStore
 from control_station.arms.config import ArmConfigError, load_arms
+from control_station.arms.policies import ActPolicyError, load_act_policies
 from control_station.orders.command_parser import parse_order_text
 from control_station.storage.models import TaskStatus
 from control_station.storage.store import PinkyUnavailable, TaskStore
-from test_api_routes import ApiTestCase
+
+from support import ApiTestCase
 
 POLICY = {
     "policy_type": "act", "task": "Pick up Doll", "cameras": {"front": "OVERHEAD", "wrist": "GRIPPER"},

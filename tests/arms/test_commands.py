@@ -11,11 +11,11 @@ from unittest import mock
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from control_station.arms import commands as arm_commands
-from control_station.arms.policies import DEFAULT_POLICIES_PATH, load_act_policies
 from control_station.api import arm as arm_api
-from control_station.app import ControlStationHandler, ControlStationServer, WEB_DIR
+from control_station.app import WEB_DIR, ControlStationHandler, ControlStationServer
+from control_station.arms import commands as arm_commands
 from control_station.arms.commands import ArmCommandConflict, ArmCommandError, ArmCommandStore
+from control_station.arms.policies import DEFAULT_POLICIES_PATH, load_act_policies
 from control_station.cameras.adapters import UnconfiguredArmCameraStreamManager
 from control_station.cameras.shelf_slots import ShelfSlotMapError, load_shelf_slot_map
 from control_station.storage.store import TaskStore

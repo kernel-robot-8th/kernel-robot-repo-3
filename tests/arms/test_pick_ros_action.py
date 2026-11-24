@@ -11,12 +11,12 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from control_station.arms.policies import load_act_policies
-from control_station.arms.ros_action import PickActionUnavailable, action_name
 from control_station.arms.commands import ArmCommandStore
 from control_station.arms.pick import HOME_REACHED_UNVERIFIED, ArmActionPick
-from control_station.orders.flow import OrderFlowError
+from control_station.arms.policies import load_act_policies
+from control_station.arms.ros_action import PickActionUnavailable, action_name
 from control_station.cameras.shelf_slots import load_shelf_slot_map
+from control_station.orders.flow import OrderFlowError
 from control_station.storage.store import TaskStore
 
 MOVING = ["CHECKING", "STARTING_POLICY", "RUNNING_POLICY", "RETURNING_HOME"]

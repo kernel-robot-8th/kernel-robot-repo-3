@@ -5,8 +5,19 @@ from __future__ import annotations
 import unittest
 
 from control_station.orders.assignment import (
-    ArmPick, ArmPlanError, PickTiming, PinkyCandidate, ShipmentError, ZoneCandidate, assign_fleet, choose_pinky,
-    choose_zone, plan_arms, schedule_loading, split_into_shipments, success_rate,
+    ArmPick,
+    ArmPlanError,
+    PickTiming,
+    PinkyCandidate,
+    ShipmentError,
+    ZoneCandidate,
+    assign_fleet,
+    choose_pinky,
+    choose_zone,
+    plan_arms,
+    schedule_loading,
+    split_into_shipments,
+    success_rate,
 )
 
 ARMS = [

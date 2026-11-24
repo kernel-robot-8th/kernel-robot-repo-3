@@ -6,17 +6,16 @@ import sys
 import threading
 import time
 import unittest
-from pathlib import Path
 
+from control_station import REPO_ROOT
 from control_station.pinky.fleet_client import PinkyFleetClient, PinkyFleetError
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-FLEET_DIR = REPOSITORY_ROOT / "simulation" / "virtual_pinky_fleet"
+FLEET_DIR = REPO_ROOT / "simulation" / "virtual_pinky_fleet"
 sys.path.insert(0, str(FLEET_DIR))
 
 from virtual_pinky_fleet import VirtualFleet, read_map, serve  # noqa: E402
 
-ZONE_A = json.loads((REPOSITORY_ROOT / "config" / "receiving-zones.json").read_text(encoding="utf-8"))["zones"][0]["route_labels"]
+ZONE_A = json.loads((REPO_ROOT / "config" / "receiving-zones.json").read_text(encoding="utf-8"))["zones"][0]["route_labels"]
 
 
 class VirtualFleetTests(unittest.TestCase):
@@ -91,8 +90,9 @@ class VirtualFleetTests(unittest.TestCase):
 
         # A third and a fourth request: with the limit at three the fourth is one too many, as on the real Pinky
         # (whose limit is 30 since 2026-11-19, far above the five the control station sends by itself).
-        import virtual_pinky_fleet
         from unittest import mock
+
+        import virtual_pinky_fleet
         with mock.patch.object(virtual_pinky_fleet, "REDOCK_LIMIT", 3):
             client.fleet_confirm("11", "redock", fixed["mission_token"])
             last = self.wait_phase(client, "11", "docking_manual")

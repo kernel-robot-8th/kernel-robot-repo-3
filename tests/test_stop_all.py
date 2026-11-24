@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from control_station.api.routes import POST_ROUTES
 from control_station.api import status as stop_api
+from control_station.api.routes import POST_ROUTES
 from control_station.arms.commands import ArmCommandStore
 from control_station.cameras.shelf_slots import load_shelf_slot_map
 from control_station.stop_all import stop_everything

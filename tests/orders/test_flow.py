@@ -11,22 +11,15 @@ from collections import Counter
 from pathlib import Path
 from unittest import mock
 
-from control_station.arms.policies import load_act_policies
 from control_station.arms.config import load_arms
-from control_station.orders.progress_view import build_flow_view, summarize_order
+from control_station.arms.policies import load_act_policies
 from control_station.mock_world import MockWorld, parse_faults, parse_stock
-from control_station.orders.flow import OrderDevices, OrderFlow
-from control_station.storage.store import TaskStore
+from control_station.orders.flow import OrderFlow
+from control_station.orders.progress_view import build_flow_view, summarize_order
 from control_station.orders.task_runner import MockTaskOrchestrator
-from test_api_routes import ApiTestCase
+from control_station.storage.store import TaskStore
 
-TERMINAL = {"SUCCEEDED", "FAILED", "CANCELED"}
-CARROT_APPLE = [{"object_class": "carrot", "quantity": 1}, {"object_class": "apple", "quantity": 2}]
-
-
-def devices(world: MockWorld) -> OrderDevices:
-    return OrderDevices(world.shelf_stock, world.pinky_load, world.fleet_status, world.fleet_confirm, world.parking,
-                        world.pick, world.dispatch, world.mission_complete)
+from support import CARROT_APPLE, TERMINAL, ApiTestCase, devices
 
 
 class OrderFlowTests(unittest.TestCase):

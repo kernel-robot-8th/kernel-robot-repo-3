@@ -13,13 +13,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from control_station.arms.policies import load_act_policies
 from control_station.arms.config import load_arms
+from control_station.arms.policies import load_act_policies
 from control_station.mock_world import MockWorld
 from control_station.orders.flow import OrderDevices, OrderFlow
-from control_station.pinky.fleet_client import BatteryHistory, _fresh_battery, PinkyFleetClient, PinkyFleetError
-from control_station.storage.store import TaskStore
 from control_station.orders.task_runner import MockTaskOrchestrator
+from control_station.pinky.fleet_client import BatteryHistory, PinkyFleetClient, PinkyFleetError, _fresh_battery
+from control_station.storage.store import TaskStore
 
 
 class FakeFleet:

@@ -47,7 +47,7 @@ PYTHONPATH=src .venv/bin/python -m control_station.app
 핑키 화면의 [다시 맞추기] 버튼도 카메라 확정 판정을 받아 같이 보냅니다.
 
 가상 확인: `--dock-bias 30,-45,6`으로 54 mm 어긋나게 세운 뒤 주문하면, 다시 맞추기 한 번에 약 6 mm로 들어옵니다.
-오프셋 없이 다시 맞추면 같은 어긋남이 반복됩니다 (`tests/test_virtual_pinky_fleet.py`).
+오프셋 없이 다시 맞추면 같은 어긋남이 반복됩니다 (`tests/pinky/test_virtual_fleet.py`).
 실물에서는 아직 확인하지 않았습니다.
 
 ## 가상으로 하지 않는 것
