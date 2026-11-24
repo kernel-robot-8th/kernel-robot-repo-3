@@ -31,6 +31,16 @@ class InventoryBookTest(unittest.TestCase):
         read(book, 3, shelf_b={"apple": 3})
         self.assertEqual((book.state(3)[0], book.on_shelves()), ("live", {"shelf_b": {"apple": 3}}))
 
+    def test_one_flicker_before_the_first_picture_does_not_keep_the_stock_unknown(self) -> None:
+        # 첫 확정 전에 한 물체가 한 번 흔들리면, 예전에는 물체마다 대기 순서가 어긋나 계속 'unknown'이었다.
+        book = InventoryBook()
+        read(book, 1, shelf_a={"carrot": 2}, shelf_b={"apple": 3})
+        read(book, 2, shelf_a={"carrot": 2}, shelf_b={"apple": 2})  # 사과 한 번 놓침
+        for at in range(3, 9):
+            read(book, at, shelf_a={"carrot": 2}, shelf_b={"apple": 3})
+        self.assertEqual(book.state(8)[0], "live")
+        self.assertEqual(book.on_shelves(), {"shelf_a": {"carrot": 2}, "shelf_b": {"apple": 3}})
+
     def test_flicker_is_ignored_and_a_real_drop_is_logged(self) -> None:
         book = InventoryBook()
         for at in (1, 2, 3):

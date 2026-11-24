@@ -82,7 +82,11 @@ class InventoryBook:
         changes = []
         for key in sorted(set(seen) | set(self._confirmed) | set(self._pending)):
             value = seen.get(key, 0)
-            if self._has_confirmed and value == self._confirmed.get(key, 0):
+            # 첫 전체 그림 전에도, 이미 확정된 키가 같은 값으로 읽히면 확정된 채로 둔다. 예전에는 첫 그림 전이면
+            # 확정된 키도 다시 대기로 돌아가, 한 번 흔들린 키와 차례가 어긋나 모든 키가 한꺼번에 확정되는
+            # 읽기가 오지 않았다(재고가 계속 'unknown', 2026-11-25 수정).
+            confirmed = self._confirmed.get(key, 0) if self._has_confirmed else self._confirmed.get(key)
+            if value == confirmed:
                 self._pending.pop(key, None)
                 continue
             previous, streak = self._pending.get(key, (None, 0))
