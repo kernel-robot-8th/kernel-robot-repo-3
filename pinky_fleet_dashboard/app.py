@@ -1113,53 +1113,6 @@ def _nav_ready_with_retry(robot_id: str, map_path: str, map_name: str) -> tuple[
     return ready, detail
 
 
-def _stop_tracked_navigation(robot_id: str) -> tuple[bool, str]:
-    """관제가 기록한 navigation.pid만 멈춘다(SIGINT, 12초 뒤에도 살아 있으면 SIGTERM).
-    지금은 이 파일 안에서 부르는 곳이 없다(_stop_existing_navigation이 대신한다)."""
-    # 앞서 실패한 시도가 살아 있는 launch 프로세스를 남겼을 수 있다. 이 관제가 기록한 PID에만 신호를 보내고,
-    # 다시 시도하기 전에 ROS launch가 자식 프로세스를 정리하게 둔다.
-    stop_command = (
-        "pidfile=/home/pinky/.cache/pinky-fleet/navigation.pid; "
-        "if [ -s \"$pidfile\" ]; then "
-        "pid=$(cat \"$pidfile\"); "
-        "if kill -0 \"$pid\" 2>/dev/null; then "
-        "kill -INT \"$pid\" 2>/dev/null || true; "
-        "for n in $(seq 1 12); do kill -0 \"$pid\" 2>/dev/null || break; sleep 1; done; "
-        "if kill -0 \"$pid\" 2>/dev/null; then kill -TERM \"$pid\" 2>/dev/null || true; fi; "
-        "fi; rm -f \"$pidfile\"; fi; echo NAV_STOPPED"
-    )
-    return _ssh_run(robot_id, stop_command)
-
-
-NAV2_FILES = ("nav2_params.yaml", "bringup_launch.xml", "navigation_launch.xml", "localization_launch.xml",
-              "keepout_mask.pgm", "keepout_mask.yaml")  # keepout 마스크가 바뀌어도 Nav2를 새로 띄워야 한다
-NAV2_KEEP_PROBE_S = 20.0  # 떠 있는 Nav2가 정상인지 볼 때 기다리는 시간(초)
-
-
-def _nav2_files_hash_command() -> str:
-    """로봇에 설치된 Nav2 설정 파일(NAV2_FILES)을 이어 붙인 sha256 앞 16자를 출력하는 명령. 설정이 바뀌었는지 본다."""
-    files = " ".join(shlex.quote(f"/home/pinky/.cache/pinky-fleet/nav2/{name}") for name in NAV2_FILES)
-    return f"cat {files} 2>/dev/null | sha256sum | cut -c1-16"
-
-
-def _running_nav2_keepable(robot_id: str, map_path: str) -> tuple[bool, str]:
-    """이 관제가 로봇에 띄운 Nav2를 그대로 둬도 되는지: 이 지도로 돌고 있고 active로 답하는가.
-
-    핑키에서 Nav2를 띄우는 일은 주행준비에서 느리고 잘 실패하는 부분이라(2026-11-16), ROSY가 Pinky Pro에서
-    Nav2를 오래 도는 서비스로 두듯 건강한 Nav2는 살려 둔다. 설정이 바뀌었는지는 실행 묶음을 다시 설치한 뒤
-    확인한다(_start_navigation_with_safety).
-    지금은 부르는 곳이 없다: _prepare_robot이 Nav2를 매번 새로 띄우기로 바꿨다(2026-11-16 주석 참고)."""
-    check = ("pidfile=/home/pinky/.cache/pinky-fleet/navigation.pid; "
-             "if [ -s \"$pidfile\" ] && kill -0 \"$(cat \"$pidfile\")\" 2>/dev/null && "
-             "tr '\\0' ' ' < \"/proc/$(cat \"$pidfile\")/cmdline\" | grep -qF -- " + shlex.quote(f"map:={map_path}") + "; "
-             "then echo NAV2_RUNNING_SAME_MAP; else echo NAV2_NOT_RUNNING; fi")
-    ok, output = _ssh_run(robot_id, check)
-    if not ok or "NAV2_RUNNING_SAME_MAP" not in output:
-        return False, "같은 지도로 떠 있는 Nav2가 없습니다."
-    ready, detail = _nav_action_ready(robot_id, NAV2_KEEP_PROBE_S)
-    return (True, "Nav2가 이미 정상입니다.") if ready and "NAV_ACTION_READY" in detail else (False, "떠 있는 Nav2가 정상으로 답하지 않습니다.")
-
-
 def _stop_existing_navigation(robot_id: str) -> tuple[bool, str]:
     """깨끗한 Nav2 하나를 띄우기 전에, 기록된 Nav2와 기록 밖에 남은 Nav2 프로세스를 모두 멈춘다.
 
@@ -1434,15 +1387,13 @@ def _stop_script_command(name: str) -> str:
             f"rm -f \"$pidfile\"; fi; echo SCRIPT_STOPPED")
 
 
-def _start_navigation_with_safety(robot_id: str, map_path: str, map_name: str,
-                                  keep_nav2: bool = False) -> tuple[bool, str]:
-    """실행 묶음을 설치하고 안전·램프 노드를 띄운 뒤 Nav2를 띄운다. `keep_nav2`면 다시 설치해도 설정이 그대로일 때
-    떠 있는 Nav2를 둔다. (ok, 출력)을 돌려주고, 그대로 뒀으면 출력이 'NAV2_KEPT'다.
+def _start_navigation_with_safety(robot_id: str, map_path: str, map_name: str) -> tuple[bool, str]:
+    """실행 묶음을 설치하고 안전·램프 노드를 띄운 뒤 Nav2를 띄운다. (ok, 출력)을 돌려준다.
+    Nav2는 매번 새로 띄운다(2026-11-16 결정, _prepare_robot의 주석 참고).
 
     순서: 이전 안전 노드 정지 → 묶음 설치 → 최종 감시기(velocity_guard) → 초음파 안전 노드 → (퓨전 노드) →
     램프·LED·화면 → Nav2. 감시기를 Nav2보다 먼저 띄워야 Nav2의 속도 명령이 감시기를 거치지 않고 나갈 틈이 없다."""
     _reload_navigation()
-    before = _ssh_run(robot_id, _nav2_files_hash_command())[1].strip() if keep_nav2 else ""
     stopped, stop_output = _stop_ultrasonic_safety(robot_id)
     if not stopped or "SAFETY_PID_MISMATCH" in stop_output:
         return False, stop_output or "이전 초음파 안전 감시기를 정리하지 못했습니다."
@@ -1486,15 +1437,6 @@ def _start_navigation_with_safety(robot_id: str, map_path: str, map_name: str,
         # pinky_emotion의 LCD 드라이버를 찾고, 그릴 수 있는 화면이 없으면 스스로 끝난다. 결과는 확인하지 않는다.
         _ssh_run(robot_id, _remote_start_command(robot_id, stage, lamp_command))
 
-    if keep_nav2:
-        after = _ssh_run(robot_id, _nav2_files_hash_command())[1].strip()
-        if before and before == after:
-            # 설정이 같다: 그대로 둔다. 위치는 주행준비 끝의 라이다 위치 잡기가 여전히 다시 확인한다.
-            STATE.update(robot_id, nav_started_at=time.time())
-            return True, "NAV2_KEPT"
-        stopped, stop_output = _stop_existing_navigation(robot_id)  # 설정이 바뀌었다: 깨끗하게 다시 띄운다
-        if not stopped or "NAV_PROCESSES_CLEARED" not in stop_output:
-            return False, "Nav2 설정이 바뀌었지만 이전 Nav2를 정리하지 못했습니다: " + stop_output.strip()
     # 여기서부터 AMCL이 다시 시작한다: 위치 잡기가 새로 넣기 전까지 AMCL이 알려 오는 map 위치는 믿지 않는다
     # (_last_confirmed_pose가 nav_started_at > localized_at을 보고 판단한다).
     STATE.update(robot_id, nav_started_at=time.time())
@@ -2215,7 +2157,7 @@ def _prepare_robot(robot_id: str, map_name: str, release_busy: bool = True) -> N
         if not cleared or "BASE_PROCESSES_CLEARED" not in clear_output:
             raise RuntimeError("이전 기본 구동·LiDAR 프로세스를 정리하지 못했습니다: " + clear_output.strip())
         # ROS 노드를 띄우기 전에: 로봇 시계를 이 PC에 맞춘다(바꿔야 하면 돌고 있는 Nav2를 멈춘다).
-        clock_changed, clock_note = _sync_robot_clock(robot_id)
+        _, clock_note = _sync_robot_clock(robot_id)
         STATE.update(robot_id, clock=clock_note)
         # (단계 이름, 로봇에서 띄울 명령, PC에 들어와야 할 토픽, 오류에 쓸 이름)
         stages = [
@@ -2256,19 +2198,17 @@ def _prepare_robot(robot_id: str, map_name: str, release_busy: bool = True) -> N
                                    + MAP_INSTALL_ERRORS.get(robot_id, "이유 모름"))
             raise RuntimeError(f"로봇에서 {map_name} 파일을 /home/pinky 아래에서 찾지 못했습니다.")
 
-        STATE.update(robot_id, stage="nav_starting", message="떠 있는 Nav2가 쓸 만한지 확인합니다.")
+        STATE.update(robot_id, stage="nav_starting", message="이전 Nav2를 정리합니다.")
         # Nav2를 더는 살려 두지 않는다(2026-11-16): 위에서 기본 구동을 방금 다시 띄웠고, 그러면 돌던 AMCL은 모든
         # 스캔을 버리며(그 밑의 오도메트리와 TF가 처음부터 다시 시작한다) 위치도 받지 않는다. 합친 프로세스 하나는
-        # 약 30초면 뜨므로 매번 깨끗한 Nav2가 더 안전한 선택이다. (그래서 keep은 늘 False이고 아래 keep 분기는 쓰이지 않는다.)
-        keep, keep_note = False, clock_note
-        if not keep:
-            stopped, stop_output = _stop_existing_navigation(robot_id)
-            if not stopped or "NAV_PROCESSES_CLEARED" not in stop_output:
-                raise RuntimeError(f"이전 Nav2 실행을 정리하지 못했습니다: {stop_output.strip()}")
+        # 약 30초면 뜨므로 매번 깨끗한 Nav2가 더 안전한 선택이다. 떠 있는 Nav2를 살려 두던 기능은 2026-11-25에 지웠다
+        # (쓰이지 않았음, git 기록에 남아 있음).
+        stopped, stop_output = _stop_existing_navigation(robot_id)
+        if not stopped or "NAV_PROCESSES_CLEARED" not in stop_output:
+            raise RuntimeError(f"이전 Nav2 실행을 정리하지 못했습니다: {stop_output.strip()}")
 
-        STATE.update(robot_id, stage="nav_starting",
-                     message=(f"{keep_note} 다시 켜지 않고 씁니다 ({map_name})." if keep else f"Nav2와 {map_name} 지도를 시작합니다."))
-        ok, output = _start_navigation_with_safety(robot_id, map_path, map_name, keep_nav2=keep)
+        STATE.update(robot_id, stage="nav_starting", message=f"Nav2와 {map_name} 지도를 시작합니다.")
+        ok, output = _start_navigation_with_safety(robot_id, map_path, map_name)
         if not ok:
             raise RuntimeError(f"Nav2 시작 실패: {output.strip() or 'SSH 오류'}")
         map_ready, missing = _topic_ready(robot_id, ("map",), timeout=25.0)

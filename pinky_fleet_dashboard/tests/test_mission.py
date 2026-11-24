@@ -81,34 +81,6 @@ if __name__ == '__main__':
     unittest.main()
 
 
-class KeepNav2Tests(unittest.TestCase):
-    def run_start(self, hashes):
-        sent = []
-        answers = iter(hashes)
-
-        def ssh(robot_id, command, *args, **kwargs):
-            sent.append(command)
-            if 'sha256sum' in command:
-                return True, next(answers)
-            if 'install_nav2_runtime.py' in command:
-                return True, 'NAV2_RUNTIME_READY'
-            if 'NAV_PROCESSES_CLEARED' in command or 'pinky_navigation bringup_launch.xml' in command and 'kill' in command:
-                return True, 'NAV_PROCESSES_CLEARED'
-            return True, 'STARTED SAFETY_STOPPED NAV_PROCESSES_CLEARED'
-        with patch.multiple(app, _ssh_run=ssh, STATE=app.FleetState(), NAVIGATION={'ultrasonic_fusion': False}):
-            result = app._start_navigation_with_safety('12', '/m.yaml', 'map-proto.yaml', keep_nav2=True)
-        return result, sent
-
-    def test_unchanged_settings_keep_the_running_nav2(self):
-        (ok, output), sent = self.run_start(['abc', 'abc'])
-        self.assertEqual((ok, output), (True, 'NAV2_KEPT'))
-        self.assertFalse(any('bringup_launch.xml map:=' in c for c in sent))  # no new launch
-
-    def test_changed_settings_restart_nav2(self):
-        (ok, output), sent = self.run_start(['abc', 'def'])
-        self.assertTrue(any('bringup_launch.xml map:=' in c for c in sent))
-
-
 class ClockSyncTests(unittest.TestCase):
     def test_a_wrong_clock_is_set_with_the_password_on_stdin_only(self):
         import time as _time
