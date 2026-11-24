@@ -1,3 +1,15 @@
+"""사전학습 가중치(YOLO26 nano)에서 딸기·자동차·공 3클래스 검출 모델을 학습한다. 첫 모델의 최종 학습 방식이다.
+
+사진을 미리 변형해 두지 않고, 학습마다 회전·뒤집기·원근·크기·색·흐림·노이즈·압축 증강을 무작위로 걸어 같은
+사진도 매번 다르게 보게 한다. 증강이 강한 만큼 기본 학습 횟수를 150회로 늘렸다. 증강은 방향과 화질만 바꾸므로,
+위에서 내려다본 3D 시점이나 실제로 가려진 모습은 실제 카메라 사진을 따로 모아야 한다.
+
+    python yolo/train.py
+    python yolo/train.py --epochs 200 --pretrained 경로/yolo26n.pt
+
+입력은 `prepare_data.py`가 만든 `yolo/dataset_strawberry_car_ball/data.yaml`, 결과는
+`yolo/runs/strawberry_car_ball*/weights/best.pt`다. `device=0`(첫 번째 NVIDIA GPU)을 쓴다.
+"""
 import argparse  # 학습 횟수를 지정한다.
 from pathlib import Path  # 실행 위치와 관계없이 파일 경로를 찾는 도구를 가져온다.
 

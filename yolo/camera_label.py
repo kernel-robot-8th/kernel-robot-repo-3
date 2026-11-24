@@ -1,3 +1,16 @@
+"""카메라 실시간 화면을 멈추고 물체마다 박스를 그려 YOLO 학습용 사진과 라벨을 만든다.
+
+첫 모델(딸기·자동차·공) 데이터 수집에 쓴 도구다. 여러 물체가 함께 나온 카메라 사진이 실제 사용 화면과 가장
+비슷하므로 주 학습 데이터로 삼는다. 저장한 사진은 `yolo/camera_frames/`에 모이고, `prepare_data.py`가
+원본 3종류 사진과 합쳐 train/val로 나눈다.
+
+    python yolo/camera_label.py             # 외장 USB 카메라 (/dev/video0)
+    python yolo/camera_label.py --camera 2  # 다른 카메라 번호
+
+조작: Space 멈추기, 마우스 드래그 박스, 0/1/2 종류, Z 되돌리기, S 저장, C 취소, Q/Esc 종료.
+라벨은 YOLO 형식(`클래스 중심x 중심y 너비 높이`, 0~1 비율)으로 사진과 같은 이름의 txt에 저장한다.
+카메라만 읽으며 로봇이나 관제 서버와는 통신하지 않는다.
+"""
 import argparse  # 카메라 번호를 지정한다.
 from pathlib import Path  # 사진과 라벨을 저장할 경로를 다룬다.
 

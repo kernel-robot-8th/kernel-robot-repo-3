@@ -1,3 +1,14 @@
+"""(이전 방식) 가장 최근 `train.py` 결과에서 이어, `prepare_augmented.py`가 만든 변형 사진으로 추가 학습한다.
+
+변형 사진이 이미 밝기·크기·회전을 바꾼 것이므로 YOLO의 학습 중 증강은 모두 끈다. 결과는
+`yolo/runs/strawberry_car_ball_expanded*`에 저장한다. 2026-10-28 기록의 `strawberry_car_ball_expanded-6`이
+이 방식의 결과다(변형 val mAP50 0.969, 같은 장면에서 나온 검증이라 일반 성능으로 보지 않는다).
+
+    python yolo/train_expanded.py --epochs 20 --batch 16
+
+지금은 쓰지 않는다. 고정된 135가지 변형만 반복해서 보아 기울거나 거꾸로 된 물체와 흐린 장면을 잘 못 잡았고,
+`train.py` 하나로 학습하는 방식으로 바꿨다. `device=0`(첫 번째 NVIDIA GPU)을 쓴다.
+"""
 import argparse  # 학습 횟수와 배치 크기를 지정한다.
 from pathlib import Path  # 모델과 데이터 경로를 찾는다.
 

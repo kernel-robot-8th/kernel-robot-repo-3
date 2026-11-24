@@ -1,3 +1,13 @@
+"""학습한 모델로 사진 한 장이나 폴더의 사진을 검출하고, 박스를 그린 결과 사진을 `yolo/test_results/`에 저장한다.
+
+물체마다 종류·신뢰도·중심 좌표(픽셀)를 출력한다. `--weights`를 생략하면 `yolo/runs/strawberry_car_ball*`
+중 가장 최근 `best.pt`를 고르고, `--source`를 생략하면 확장 데이터셋의 val 사진을 쓴다.
+
+    python yolo/test.py
+    python yolo/test.py --source 사진_또는_폴더 --weights 경로/best.pt --no-show   # 창 없이 저장만
+
+`device=0`(첫 번째 NVIDIA GPU)을 쓴다. 사진 파일만 다루며 카메라나 로봇과는 통신하지 않는다.
+"""
 from pathlib import Path  # 사진과 모델의 파일 경로를 다루는 도구를 가져온다.
 import argparse  # 화면 없이 테스트할 실행 옵션을 읽는다.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """학습한 LeRobot ACT 정책을 녹화 데이터셋 에피소드에 오프라인으로 돌려 보고 결과를 그래프·영상으로 저장한다.
 
-실물 팔과 카메라에는 연결하지 않는다. 녹화된 front/wrist 영상과 관절 상태를 정책에 넣고, 정책이 낸 action과
+실물 팔과 카메라에는 연결하지 않는다(모터를 움직이지 않는다). 녹화된 front/wrist 영상과 관절 상태를 정책에 넣고, 정책이 낸 action과
 녹화 때 사람이 조작한 action을 나란히 놓는다. 정책 출력이 다음 관측에 반영되지 않는 열린 루프(open-loop) 비교라서,
 여기서 잘 맞아도 실물에서 성공한다는 뜻은 아니다. 실물 시험은 scripts/omx_act_policy_test.sh로 따로 한다.
 
@@ -24,6 +24,7 @@ from pathlib import Path
 import cv2
 import matplotlib
 
+# 화면 없는 환경(SSH 등)에서도 그림 파일로만 저장하도록 Agg 백엔드를 쓴다. pyplot을 import하기 전에 정해야 한다.
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -35,11 +36,13 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.factory import make_pre_post_processors
 
+# LeRobot 데이터셋 키: 사람이 조작한 목표 관절값(action)과 그때 측정한 관절값(observation.state).
 ACTION = "action"
 STATE = "observation.state"
 
 
 def parse_args() -> argparse.Namespace:
+    """명령줄 인자를 읽는다. 모듈 docstring이 --help 설명이 된다."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--policy", required=True, help="허브 모델 id 또는 pretrained_model 폴더 경로")
     parser.add_argument("--dataset", default="JJinJJin2/pick_and_place_v2", help="데이터셋 repo id")
@@ -55,6 +58,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def model_dir(policy: str) -> Path:
+    """로컬 폴더면 그대로, 아니면 Hugging Face 허브에서 모델을 받아(캐시) 그 폴더를 돌려준다."""
     path = Path(policy).expanduser()
     if path.is_dir():
         return path
@@ -71,6 +75,11 @@ def to_bgr(image: torch.Tensor) -> np.ndarray:
 
 def draw_overlay(frames: list[np.ndarray], names: list[str], recorded: np.ndarray, predicted: np.ndarray,
                  frame_index: int, new_chunk: bool) -> np.ndarray:
+    """카메라 화면들을 옆으로 붙이고, 아래에 관절별 녹화값·예측값·오차를 적은 패널을 붙인다.
+
+    오차 색: 5 미만 초록, 15 미만 주황, 그 이상 빨강. 단위는 LeRobot 정규화 값(팔 관절 -100..100)이다.
+    새 action chunk를 추론한 프레임에는 NEW CHUNK를 표시한다.
+    """
     canvas = np.hstack(frames)
     panel = np.full((28 + 24 * len(names), canvas.shape[1], 3), 32, np.uint8)
     cv2.putText(panel, f"frame {frame_index}" + ("  NEW CHUNK" if new_chunk else ""), (10, 20),
@@ -85,6 +94,8 @@ def draw_overlay(frames: list[np.ndarray], names: list[str], recorded: np.ndarra
 
 def save_plot(path: Path, episode: int, names: list[str], recorded: np.ndarray, predicted: np.ndarray,
               state: np.ndarray, chunk_starts: list[int], fps: int) -> None:
+    """관절마다 녹화 action, 정책 action, 측정 상태를 시간축 그래프로 그리고 평균 절대 오차(MAE)를 제목에 적는다.
+    세로선은 새 action chunk가 시작된 시각이다."""
     t = np.arange(len(recorded)) / fps
     fig, axes = plt.subplots(len(names), 1, figsize=(12, 2.2 * len(names)), sharex=True)
     for i, (ax, name) in enumerate(zip(axes, names)):
@@ -105,6 +116,7 @@ def save_plot(path: Path, episode: int, names: list[str], recorded: np.ndarray, 
 
 
 def main() -> int:
+    """정책과 데이터셋을 불러 에피소드마다 열린 루프로 돌리고 그래프·CSV·(선택) 영상·요약을 저장한다."""
     args = parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
 
@@ -118,6 +130,7 @@ def main() -> int:
         pretrained_path=str(pretrained),
         preprocessor_overrides={"device_processor": {"device": args.device}},
     )
+    # 정규화 통계 파일의 action.count = 학습 통계에 쓰인 프레임 수. 어떤 데이터로 학습한 모델인지 가늠하려고 출력한다.
     stats = load_file(str(pretrained / "policy_preprocessor_step_3_normalizer_processor.safetensors"))
     trained_frames = int(stats["action.count"].item()) if "action.count" in stats else None
 
@@ -131,6 +144,7 @@ def main() -> int:
           f"{dataset.meta.total_frames}프레임 / 돌려 볼 에피소드 {args.episodes}")
     print(f"chunk {config.chunk_size}, n_action_steps {config.n_action_steps}, 카메라 {camera_keys}")
 
+    # 에피소드 번호 → 데이터셋 안의 프레임 인덱스 목록(프레임 순서대로).
     by_episode: dict[int, list[int]] = {}
     for index, episode in enumerate(dataset.hf_dataset["episode_index"]):
         by_episode.setdefault(int(episode), []).append(index)
@@ -142,14 +156,17 @@ def main() -> int:
         if not indices:
             print(f"에피소드 {episode}가 데이터셋에 없습니다", file=sys.stderr)
             continue
-        policy.reset()
+        policy.reset()  # 에피소드마다 남은 action 대기열을 비운다
         writer = None
         recorded, predicted, state, chunk_starts = [], [], [], []
         for step, index in enumerate(indices):
             item = dataset[index]
+            # ACT는 chunk 단위로 action을 내고 대기열에서 하나씩 꺼낸다. 대기열이 비어 있으면 이번 프레임에서 새 chunk를
+            # 추론한다(LeRobot 내부 속성 _action_queue를 직접 본다).
             new_chunk = len(policy._action_queue) == 0
             if new_chunk:
                 chunk_starts.append(step)
+            # 정책 입력은 녹화된 관절 상태·카메라 이미지·task 문장이다. 정책 출력이 다음 입력에 반영되지 않는다(열린 루프).
             batch = {key: item[key] for key in (STATE, *camera_keys)}
             batch["task"] = item["task"]
             with torch.inference_mode():

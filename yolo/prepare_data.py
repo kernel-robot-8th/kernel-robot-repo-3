@@ -1,3 +1,15 @@
+"""원본 사진 폴더와 카메라 라벨 사진을 검사한 뒤 train/val로 나눠 YOLO 데이터셋과 data.yaml을 만든다.
+
+첫 모델(딸기 0·자동차 1·공 2)의 데이터 준비 단계다. 원본 폴더마다 이름순 마지막 약 20%를 검증용으로 두어,
+같은 영상에서 나온 비슷한 프레임이 한쪽에 몰리지 않고 폴더별 비율이 유지되게 한다. 라벨 파일 누락, 빈 라벨,
+허용하지 않은 클래스 번호, 0~1 범위를 벗어난 좌표가 있으면 복사 전에 멈춘다.
+
+    python yolo/prepare_data.py
+
+결과는 `yolo/dataset_strawberry_car_ball/{images,labels}/{train,val}`과 `data.yaml`이고, `train.py`가 읽는다.
+원본은 그대로 두고 복사만 한다. 클래스를 늘릴 때는 `class_ids`와 아래 `data.yaml`의 `names`,
+`camera_label.py`의 `classes`를 같이 고치고 기존 번호는 바꾸지 않는다.
+"""
 from pathlib import Path  # 파일과 폴더 경로를 다루는 도구를 가져온다.
 import shutil  # 원본을 유지하면서 파일을 복사하는 도구를 가져온다.
 

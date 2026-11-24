@@ -12,6 +12,9 @@
     mock_world.py 로봇 없이 돌리는 모의 세계
     stop_all.py   팔과 핑키에 한 번에 정지 요청
     web/          관제 화면과 손님 주문 창 (정적 파일)
+
+이 파일 자체는 패키지 전체가 함께 쓰는 작은 도구 세 가지만 둔다: 저장소 루트 경로(REPO_ROOT),
+UTC 시각 문자열(utc_now_iso), 켜기/끄기 환경 변수 읽기(env_flag).
 """
 
 import os
@@ -19,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # 저장소 루트. config/, data/, .control-station/ 같은 파일 경로는 모두 여기서 시작한다.
+# 이 파일은 <루트>/src/control_station/__init__.py이므로 parents[2]가 루트다(실행 위치와 무관하게 같은 경로).
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -31,5 +35,9 @@ def utc_now_iso(timespec: str = "seconds") -> str:
 
 
 def env_flag(name: str) -> bool:
-    """환경 변수가 정확히 "1"일 때만 켜짐. 비어 있거나 다른 값이면 꺼짐."""
+    """환경 변수가 정확히 "1"일 때만 켜짐으로 본다. 비어 있거나 다른 값("true", "yes" 포함)이면 꺼짐이다.
+
+    실제 팔을 움직이는 기능처럼 일부러 켜야 하는 설정(CONTROL_STATION_ORDER_REAL_ARM 등)에 쓴다.
+    오타나 애매한 값으로 켜지는 일이 없도록 "1"만 받는다.
+    """
     return os.environ.get(name, "").strip() == "1"

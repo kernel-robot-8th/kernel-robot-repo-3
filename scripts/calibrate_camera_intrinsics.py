@@ -1,5 +1,19 @@
 #!/usr/bin/env python3
-"""Estimate camera intrinsics from saved chessboard images; never connects to a robot."""
+"""저장된 체커보드 사진으로 카메라 내부 파라미터를 추정한다. 로봇에는 절대 연결하지 않는다.
+
+사용법:
+    python scripts/calibrate_camera_intrinsics.py <사진 폴더> --camera-id head_camera
+        --pixel-transform-id opencv-v4l2-capture-no-app-geometry-v1
+        --columns 8 --rows 6 --square-size 25 --unit mm [--output 경로]
+
+카메라 한 대에서 같은 해상도로 찍은 체커보드 사진 폴더를 읽어 OpenCV로 camera matrix와 왜곡 계수를 계산하고,
+.control-station/camera-calibrations/{camera_id}.json에 검토용 초안(DRAFT_ONLY, schema v2)으로 저장한다.
+--columns/--rows는 칸 수가 아니라 내부 교차점 수다(팀 보드 9×7칸 25 mm → 8×6).
+
+파일만 읽고 JSON 하나를 쓸 뿐, 카메라 장치를 열거나 로봇·관제 API와 통신하지 않는다. 결과는 렌즈 내부 값뿐이며
+카메라 장착 위치(extrinsic)나 팔 좌표 변환은 담지 않는다. 결과 파일은 천장 카메라 주차 판정(cpp/parking_vision)과
+정면 카메라 선반 위치 보정(scripts/calibrate_shelf_pose.py)이 읽는다.
+"""
 
 from __future__ import annotations
 
@@ -26,8 +40,11 @@ from calibration_artifacts import (
 )
 
 
+# camera_id는 기본 출력 파일 이름이 되므로 경로 구분자 없이 영문자·숫자·_·.·-만 허용한다.
 _CAMERA_ID = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
 _IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+# 계산을 시작할 최소 사진 수. 품질 보증이 아니라 하한일 뿐이며, 실제로는 각도·거리·화면 위치를 바꿔
+# 더 많이 찍는다(2026-10-31 천장 카메라 35장, 정면 카메라 23장).
 _MINIMUM_VIEWS = 6
 
 
@@ -53,6 +70,10 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
+    """같은 폴더의 임시 파일에 다 쓴 뒤 install_file_exclusive로 옮긴다.
+
+    출력 파일이 이미 있으면 덮어쓰지 않고 실패하며, 중간에 실패해도 반쯤 쓴 JSON이 남지 않는다.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path: Path | None = None
     try:
@@ -74,6 +95,7 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
 
 
 def main() -> int:
+    """입력을 검사하고 사진마다 코너를 찾아 보정한 뒤 초안 JSON을 저장한다. 성공 0, 입력·계산 오류 2."""
     args = _parse_args()
     if not _CAMERA_ID.fullmatch(args.camera_id):
         print("camera-id는 영문자, 숫자, _, ., -만 포함할 수 있습니다.", file=sys.stderr)
@@ -91,6 +113,8 @@ def main() -> int:
         print(f"이미지 폴더가 없습니다: {args.image_dir}", file=sys.stderr)
         return 2
 
+    # symlink도 목록에 넣는다. 보정에 쓰지는 않지만 read_regular_file_bounded가 거부한 이유를
+    # rejected_images에 남기도록 하기 위해서다.
     image_paths = sorted(
         path
         for path in args.image_dir.iterdir()
@@ -100,6 +124,8 @@ def main() -> int:
         print("지원하는 이미지 파일을 찾지 못했습니다.", file=sys.stderr)
         return 2
 
+    # 체커보드 내부 코너의 실제 3D 좌표. 보드 평면을 z=0으로 두고 (열, 행) 격자에 한 칸 길이를 곱한다.
+    # 단위는 --unit 그대로(mm 또는 m)이며 내부 파라미터 결과에는 영향이 없다.
     board_size = (args.columns, args.rows)
     board_points = np.zeros((args.rows * args.columns, 3), dtype=np.float32)
     board_points[:, :2] = np.mgrid[0:args.columns, 0:args.rows].T.reshape(-1, 2)
@@ -112,6 +138,8 @@ def main() -> int:
     image_size: tuple[int, int] | None = None
 
     for image_path in image_paths:
+        # 파일당 최대 64 MiB, 일반 파일만 읽는다. 해시와 decode를 같은 bytes로 해서 기록한 SHA-256이
+        # 실제로 계산에 쓴 내용과 일치하게 한다.
         try:
             image_bytes = read_regular_file_bounded(
                 image_path, MAX_CALIBRATION_IMAGE_BYTES, "checkerboard image"
@@ -120,6 +148,7 @@ def main() -> int:
             rejected_files.append({"file": image_path.name, "reason": str(exc)})
             continue
         image_digest = hashlib.sha256(image_bytes).hexdigest()
+        # 바이트가 같은 복제 사진은 새 시점이 아니므로 view 수에 넣지 않는다.
         if image_digest in accepted_sha256:
             rejected_files.append({"file": image_path.name, "reason": "이미지 내용이 다른 승인 이미지와 동일함"})
             continue
@@ -130,10 +159,12 @@ def main() -> int:
         if image is None:
             rejected_files.append({"file": image_path.name, "reason": "이미지를 읽을 수 없음"})
             continue
+        # 내부 파라미터는 해상도마다 다르므로, 처음 승인된 사진의 해상도와 다른 사진은 버린다.
         current_size = (int(image.shape[1]), int(image.shape[0]))
         if image_size is not None and current_size != image_size:
             rejected_files.append({"file": image_path.name, "reason": "이미지 해상도가 서로 다름"})
             continue
+        # SB(sector-based) 검출기는 기본 검출기보다 잡음에 강하고 서브픽셀 정확도의 코너를 바로 돌려준다.
         found, corners = cv2.findChessboardCornersSB(image, board_size)
         if not found or corners is None:
             rejected_files.append({"file": image_path.name, "reason": "체커보드 코너를 찾지 못함"})
@@ -159,6 +190,8 @@ def main() -> int:
     except cv2.error as exc:
         print(f"OpenCV 내부 파라미터 계산 실패: {exc}", file=sys.stderr)
         return 2
+    # 사진별 재투영 오차(px): 추정한 내부 값과 그 사진의 보드 자세로 3D 코너를 다시 투영해 검출 코너와의
+    # L2 거리를 RMS로 낸다. 특정 사진만 크면 그 사진의 코너 검출이 잘못됐을 가능성이 있어 검토에 쓴다.
     per_image_errors: list[dict[str, object]] = []
     for image_name, image_digest, object_view, image_view, rotation, translation in zip(
         accepted_files, accepted_sha256, object_points, image_points, rotations, translations
@@ -175,6 +208,9 @@ def main() -> int:
             }
         )
 
+    # 기본 출력 경로는 현재 작업 디렉터리 기준이므로 저장소 루트에서 실행한다.
+    # status DRAFT_ONLY, usable_for_robot_control false, review_required true: 사람이 검토하기 전의 초안이며
+    # 로봇 제어 경로가 읽는 값이 아니라는 표시다.
     output_path = args.output or Path(".control-station/camera-calibrations") / f"{args.camera_id}.json"
     payload: dict[str, object] = {
         "schema_version": 2,
@@ -204,9 +240,10 @@ def main() -> int:
         "review_required": True,
     }
     try:
+        # 출력 경로가 입력 사진 중 하나(경로 alias·hard link 포함)와 같으면 거부한다.
         ensure_distinct_output_path(output_path, image_paths)
-        # Keep the producer contract aligned with the validators used by downstream
-        # calibration consumers before writing a review artifact.
+        # 검토용 산출물을 쓰기 전에, 이 결과를 읽는 쪽이 쓰는 검증기로 먼저 확인해
+        # 만드는 쪽과 읽는 쪽의 형식 약속이 어긋나지 않게 한다.
         validate_intrinsic_draft(payload)
         _write_json(output_path, payload)
     except (OSError, TypeError, ValueError, OverflowError) as exc:

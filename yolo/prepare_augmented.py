@@ -1,3 +1,19 @@
+"""(이전 방식) 분할된 데이터셋의 사진마다 변형 사진을 미리 만들어 확장 데이터셋을 만든다.
+
+`prepare_data.py`가 만든 `yolo/dataset_strawberry_car_ball`을 읽어 `yolo/dataset_strawberry_car_ball_expanded`에
+저장하고, `train_expanded.py`가 이것으로 추가 학습한다.
+
+- 밝기 5 × 크기 9 × 회전 3 = 135가지 변형. 크기 0.05·0.1·0.2·0.3은 아주 먼 거리로, 640 화면에서 물체가 약
+  10~60px로 보인다. 빈 공간은 원본의 바닥 부분을 반복해 채운다.
+- 물체마다 상·하·좌·우 중 한쪽을 잘라 40% 또는 70%만 보이게 한 크롭 8가지
+  (`crop_<방향><남은 비율>_b<물체 번호>_원본이름.jpg`).
+- 원본과 그 변형이 train과 val에 섞이지 않도록 분할한 뒤에 변형하고, 끝에 출처를 비교해 겹치면 멈춘다.
+
+    python yolo/prepare_augmented.py
+
+지금은 쓰지 않는다. 회전 ±20°의 고정된 135가지 변형만 반복해서 보기 때문에, 기울거나 거꾸로 된 물체와 흐린
+장면을 잘 못 잡았다. 지금은 `train.py`가 학습 중에 무작위 증강을 건다.
+"""
 import itertools  # 밝기·크기·회전의 모든 조합을 만든다.
 import json  # 각 사진의 원본과 변형 조건을 기록한다.
 from pathlib import Path  # 데이터 경로를 다룬다.
@@ -52,7 +68,7 @@ def generate(source, output, split):  # 한 분할(train 또는 val)의 변형 �
             matrix = cv2.getRotationMatrix2D((320, 320), angle, scale)  # 기하 변환이다.
             transformed = cv2.warpAffine(image, matrix @ shift, (640, 640), dst=background,
                                          borderMode=cv2.BORDER_TRANSPARENT)  # 배경 위에 사진을 얹는다.
-            transformed = np.clip(transformed.astype(np.float32) * brightness, 0, 255)
+            transformed = np.clip(transformed.astype(np.float32) * brightness, 0, 255)  # 밝기 배율, 0~255로 자른다.
             labels, dropped = [], 0  # 변환한 박스와 잘린 박스 개수를 기록한다.
             for row in label_path.read_text().splitlines():  # 정답 박스를 처리한다.
                 cls, x, y, bw, bh = map(float, row.split())  # 정규화 좌표를 읽는다.
@@ -64,7 +80,7 @@ def generate(source, output, split):  # 한 분할(train 또는 val)의 변형 �
                 low, high = warped.min(axis=0), warped.max(axis=0)  # 외접 박스를 계산한다.
                 clipped_low, clipped_high = np.clip(low, 0, 640), np.clip(high, 0, 640)
                 size = np.maximum(0, clipped_high - clipped_low)  # 화면에 남은 박스다.
-                visibility = np.prod(size) / max(np.prod(high - low), 1e-9)
+                visibility = np.prod(size) / max(np.prod(high - low), 1e-9)  # 화면에 남은 넓이 비율이다.
                 if visibility < 0.5 or min(size) < 2:  # 절반 이상 잘린 물체는 제외한다.
                     dropped += 1  # 잘린 박스를 센다.
                     continue  # 남은 박스만 정답으로 저장한다.

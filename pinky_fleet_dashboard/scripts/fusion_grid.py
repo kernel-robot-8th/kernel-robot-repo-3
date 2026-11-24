@@ -1,34 +1,39 @@
 #!/usr/bin/env python3
-"""LiDAR + ultrasonic sensor fusion: a probabilistic occupancy grid around the robot, two heights per column.
+"""라이다 + 초음파 센서 퓨전: 로봇 둘레의 확률 점유 격자, 칸(기둥)마다 높이 두 층.
 
-Why: the LiDAR sees one plane about 12.5 cm above the floor, so a box lower than that is invisible to it. The front
-ultrasonic looks about 3.7 cm above the floor and does see it, but only as "something in this ~15 degree cone at
-this distance". Neither sensor alone gives a usable low obstacle; together they do.
+실행 위치: PC·로봇 양쪽. 로봇에서는 주행준비 때 runtime_bundle로 ~/.cache/pinky-fleet/nav2/에 올라가고,
+  navigation.ultrasonic_fusion이 켜져 있을 때만 app.py가 SSH로 이 노드(main)를 띄운다.
+  PC에서는 app.py가 validated()만 import해 로봇에 올리기 전에 navigation.json의 fusion_grid 설정을 검사한다.
+사용처: app.py, scripts/fusion_eval.py(오프라인 재생), tests/test_fusion_grid.py, tests/ros_fusion_smoke.py.
+  Nav2 쪽 연결(costmap VoxelLayer 소스)은 scripts/install_nav2_runtime.py의 ULTRASONIC_SOURCES에 있다.
 
-How (occupancy grid mapping with inverse sensor models in log-odds form, Probabilistic Robotics ch. 9):
-  * Two log-odds layers over the same cells: `high` (the LiDAR plane) and `low` (the ultrasonic plane). Each
-    sensor updates only the layer of its own height, so a LiDAR ray passing over a low box never erases it.
-  * LiDAR inverse model: cells the beam passes through become more likely free, cells within +-sigma of the
-    measured range more likely occupied. A thin beam gives sharp, strong evidence.
-  * Ultrasonic inverse model: inside the cone short of the echo -> free; on the arc at the echo distance ->
-    occupied, weighted by a Gaussian of the measured range noise. The arc is wide, so the evidence per cell is weak:
-    one stray echo never makes an obstacle, consistent echoes accumulate.
-  * Cross-sensor association: the LiDAR resolves the cone's angular ambiguity. If the arc meets cells the LiDAR
-    already holds as occupied, the echo is that obstacle and the evidence goes to those cells only. If the LiDAR has
-    seen the arc as free at its height, the echo must come from below the LiDAR plane: a low obstacle, spread over
-    the arc. If the LiDAR has not looked there, the echo is spread too but reported as unresolved.
-  * Column rule: a cell blocks the robot when either height is occupied (as Nav2's VoxelLayer with
-    mark_threshold 0). Evidence decays toward unknown with a time constant per layer, so a moved box or a stray
-    mark fades out.
+왜: 라이다는 바닥에서 약 12.5 cm 높이의 평면 하나만 보므로 그보다 낮은 상자는 보이지 않는다. 전면 초음파는
+바닥에서 약 3.7 cm 높이를 보고 그 상자를 보지만, "약 15도 원뿔 안 어딘가, 이 거리에 무언가 있다"로만 본다.
+어느 센서도 혼자서는 쓸 만한 낮은 장애물을 주지 못하고, 둘을 합치면 준다.
 
-FusionGrid has no ROS in it, so it is unit tested and replayed offline on recorded runs (scripts/fusion_eval.py).
-On the robot, main() reads /scan, /us_sensor/range and TF and publishes:
-  /fusion/low_marks  PointCloud2 (base_footprint): occupied low-layer cells, a marking source for Nav2
-  /fusion/low_clear  PointCloud2 (base_footprint): a ring at the window edge at sensor height, a clearing source;
-                     its rays stay below the LiDAR plane, so Nav2's low cells follow this grid and the LiDAR's do not
-  /fusion/grid       OccupancyGrid (odom): fused column probability, for RViz and the dashboard
-  /fusion/status     String JSON: cell counts, the last echo's class, the nearest low obstacle, update times
-Settings: /home/pinky/.cache/pinky-fleet/nav2/runtime_config.json -> navigation.fusion_grid.
+방법 (log-odds 형태의 역센서 모델로 하는 점유 격자 지도 작성, Probabilistic Robotics 9장):
+  * 같은 칸들 위에 log-odds 층 두 개: `high`(라이다 평면)와 `low`(초음파 평면). 각 센서는 자기 높이 층만
+    고치므로, 낮은 상자 위를 지나가는 라이다 빔이 그 상자를 지우는 일이 없다.
+  * 라이다 역모델: 빔이 지나간 칸은 비어 있을 가능성이, 측정 거리 +-sigma 안의 칸은 점유일 가능성이 커진다.
+    가는 빔이라 근거가 날카롭고 강하다.
+  * 초음파 역모델: 원뿔 안에서 반사 거리보다 가까운 곳 -> 비어 있음, 반사 거리의 호 위 -> 점유(측정 거리
+    노이즈의 가우시안으로 가중). 호가 넓어 칸 하나에 주는 근거는 약하다: 엉뚱한 반사 한 번으로는 장애물이
+    생기지 않고, 일관된 반사가 쌓여야 생긴다.
+  * 센서 간 연관: 원뿔의 각도 모호성을 라이다로 푼다. 호가 라이다가 이미 점유로 보는 칸과 만나면 반사는 그
+    장애물이고 근거는 그 칸에만 간다. 라이다가 자기 높이에서 그 호를 비었다고 봤으면 반사는 라이다 평면 아래에서
+    온 것이다: 낮은 장애물로 보고 호 전체에 퍼뜨린다. 라이다가 본 적 없는 곳이면 역시 퍼뜨리되 unresolved로 보고한다.
+  * 기둥 규칙: 어느 높이든 점유면 그 칸은 로봇을 막는다(Nav2 VoxelLayer의 mark_threshold 0과 같다). 근거는
+    층마다 다른 시간 상수로 "모름" 쪽으로 감쇠하므로, 옮긴 상자나 잘못 찍힌 표시는 사라진다.
+
+FusionGrid에는 ROS가 없어 단위 테스트하고, 녹화한 주행에 오프라인으로 재생한다(scripts/fusion_eval.py).
+로봇에서는 main()이 /scan, /us_sensor/range, TF를 읽어 다음을 발행한다:
+  /fusion/low_marks  PointCloud2 (base_footprint): 점유된 low 층 칸, Nav2의 marking 소스
+  /fusion/low_clear  PointCloud2 (base_footprint): 센서 높이에서 창 가장자리에 둔 링, clearing 소스.
+                     이 광선은 라이다 평면 아래에 머무르므로 Nav2의 낮은 칸은 이 격자를 따르고 라이다 칸은 그대로다
+  /fusion/grid       OccupancyGrid (odom): 합친 기둥 확률, RViz와 관제용
+  /fusion/status     String JSON: 칸 수, 마지막 반사의 분류, 가장 가까운 낮은 장애물, 갱신 시간
+설정: /home/pinky/.cache/pinky-fleet/nav2/runtime_config.json -> navigation.fusion_grid.
+최종 정지(velocity_guard.py)는 이 노드를 쓰지 않고 센서를 직접 본다: 퓨전이 죽거나 틀려도 마지막 정지는 따로 돈다.
 """
 from __future__ import annotations
 
@@ -39,35 +44,42 @@ from pathlib import Path
 
 import numpy as np
 
+# 기본 설정. navigation.json의 fusion_grid에 적은 값이 이를 덮는다(validated). 단위: m, rad, s, 확률 p는 0..1.
 DEFAULTS = dict(
-    size_m=2.0,                 # square window centred on the robot
-    resolution_m=0.02,
-    # LiDAR (about 12.5 cm high): sigma from the noise measurement, probabilities of the inverse model
+    size_m=2.0,                 # 로봇 중심의 정사각형 창 (한 변 m)
+    resolution_m=0.02,          # 칸 한 변 2 cm -> 100 x 100 칸
+    # 라이다(약 12.5 cm 높이): sigma는 노이즈 측정값, 나머지는 역모델 확률. beam_stride 2는 빔을 하나 걸러 쓴다
     lidar_sigma_m=0.01, lidar_hit_p=0.85, lidar_free_p=0.35, lidar_beam_stride=2,
-    # Ultrasonic (about 3.7 cm high)
+    # 초음파(약 3.7 cm 높이). 시야 0.26 rad(약 15도), 3 cm보다 가까운 값은 믿지 않는다
     us_sigma_m=0.015, us_fov_rad=0.26, us_min_range_m=0.03,
-    us_mark_max_range_m=0.6,    # farther echoes only clear: from 3.7 cm high the cone meets the floor
-    us_clear_max_range_m=0.8,
-    us_hit_p=0.62,              # per arc cell: weak, the object is somewhere on the arc
-    us_explained_p=0.80,        # the arc cell the LiDAR also holds as occupied
+    us_mark_max_range_m=0.6,    # 더 먼 반사는 비우기만 한다: 3.7 cm 높이에서는 원뿔이 바닥에 닿는다
+    us_clear_max_range_m=0.8,   # 반사가 없을 때 비었다고 보는 거리
+    us_hit_p=0.62,              # 호 위 칸마다: 약하게, 물체는 호 어딘가에 있다
+    us_explained_p=0.80,        # 라이다도 점유로 보는 호 위 칸
     us_free_p=0.40,
-    # Association: LiDAR cells this sure explain an echo; an arc this share LiDAR-free means "below the LiDAR"
+    # 연관: 라이다 칸이 이만큼 확실하면 반사를 설명한다. 호의 이 비율 이상이 라이다로 비었으면 "라이다 아래"
     explain_p=0.7, lidar_free_known_p=0.35, known_free_share=0.5,
-    # Fading toward unknown. The LiDAR re-observes all around ten times a second; the ultrasonic sees one narrow
-    # cone, so a low obstacle is remembered while the robot turns to go around it.
+    # "모름" 쪽 감쇠(시간 상수 s). 라이다는 1초에 10번 둘레 전체를 다시 보지만 초음파는 좁은 원뿔 하나만 보므로,
+    # 로봇이 낮은 장애물을 돌아 피하는 동안 그것을 기억하게 low 층은 오래 둔다.
     decay_high_s=4.0, decay_low_s=30.0,
-    # Clamping as in OctoMap (0.12 / 0.97): a cell seen free many times still turns occupied after a few echoes
-    # when a box is put there, and an occupied one clears again in reasonable time.
+    # OctoMap과 같은 clamping(0.12 / 0.97): 여러 번 비었다고 본 칸도 상자를 놓으면 반사 몇 번 만에 점유가 되고,
+    # 점유 칸도 적당한 시간 안에 다시 비워진다. occupied_p 이상이면 점유로 판단한다.
     clamp_free_p=0.12, clamp_occupied_p=0.97, occupied_p=0.7,
-    # Switches for the comparison runs (scripts/fusion_eval.py)
+    # 비교 실험용 스위치 (scripts/fusion_eval.py)
     use_ultrasonic=True, associate=True,
-    us_accumulate=True,         # False: each reading overwrites its cells (binary marking/clearing, no memory)
+    us_accumulate=True,         # False: 읽을 때마다 칸을 덮어쓴다 (이진 표시/비우기, 기억 없음)
 )
 
+# 초음파 한 번의 분류(/fusion/status의 last_echo, echo_counts). lidar_obstacle: 라이다가 본 장애물의 반사,
+# low_obstacle: 라이다는 비었다고 본 호(라이다 아래 물체), unresolved: 라이다가 본 적 없는 호,
+# echo: associate=False일 때의 반사, far: mark_max..clear_max 사이 반사(비우기만), free: 반사 없음,
+# unsure: NaN·최소 거리 미만·호가 창 밖, off: use_ultrasonic=False.
 ECHO_CLASSES = ('lidar_obstacle', 'low_obstacle', 'unresolved', 'echo', 'far', 'free', 'unsure', 'off')
 
 
 def logit(p: float) -> float:
+    """확률 p를 log-odds log(p / (1 - p))로 바꾼다. 0.5 -> 0(모름), 점유 쪽은 양수, 비어 있음 쪽은 음수다.
+    log-odds에서는 독립 측정을 합치는 베이즈 갱신이 덧셈이 된다."""
     return math.log(p / (1.0 - p))
 
 
@@ -76,7 +88,7 @@ def _wrap(angle):
 
 
 def _shifted(a: np.ndarray, di: int, dj: int) -> np.ndarray:
-    """new[i, j] = a[i + di, j + dj], zero (unknown) where that falls outside."""
+    """new[i, j] = a[i + di, j + dj]. 그 자리가 배열 밖이면 0(모름)이다."""
     n_i, n_j = a.shape
     out = np.zeros_like(a)
     if abs(di) >= n_i or abs(dj) >= n_j:

@@ -6,6 +6,9 @@
     .venv/bin/python yolo/capture_frames.py --out yolo/dataset_carrot_20261107/raw \
         --camera shelf=/dev/v4l/by-path/...usb-0:10:1.0-video-index0 \
         --camera head=/dev/v4l/by-path/...usb-0:4.4:1.0-video-index0 --every-s 1.5 --minutes 3
+
+파일 이름은 `<카메라 이름>_<시분초><0.1초 자리>.jpg`이다. 같은 순간에 찍은 카메라별 사진이 같은 시각 문자열을
+갖는다. 장치 사용 여부는 Linux의 `/proc/<pid>/fd`를 보고 판단하므로 Linux 전용이다. 카메라만 읽는다.
 """
 
 from __future__ import annotations
@@ -19,12 +22,16 @@ import cv2
 
 
 def in_use(device: str) -> bool:
+    """다른 프로세스가 이 카메라 장치를 열고 있으면 True를 돌려준다.
+
+    by-id/by-path 링크를 실제 `/dev/videoN`으로 풀고, 모든 프로세스의 열린 파일(`/proc/<pid>/fd`)과 비교한다.
+    """
     target = os.path.realpath(device)
     me = str(os.getpid())
     for entry in os.scandir("/proc"):
         if not entry.name.isdigit() or entry.name == me:
             continue
-        try:
+        try:  # 권한이 없거나 그사이 끝난 프로세스는 OSError가 나므로 건너뛴다.
             if any(os.readlink(fd.path) == target for fd in os.scandir(f"/proc/{entry.name}/fd")):
                 return True
         except OSError:
@@ -33,6 +40,7 @@ def in_use(device: str) -> bool:
 
 
 def open_camera(device: str) -> cv2.VideoCapture:
+    """장치 경로를 `/dev/video` 번호로 바꿔 V4L2로 열고, 관제와 같은 MJPG 640x480 30fps로 설정한다."""
     index = int(os.path.realpath(device).removeprefix("/dev/video"))
     capture = cv2.VideoCapture(index, cv2.CAP_V4L2)
     capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
@@ -54,6 +62,7 @@ def main() -> int:
     cameras = dict(item.split("=", 1) for item in args.camera)
     args.out.mkdir(parents=True, exist_ok=True)
 
+    # 관제가 같은 카메라를 열고 있으면 여기서 2초마다 다시 확인하며 기다린다.
     while busy := [name for name, device in cameras.items() if in_use(device)]:
         print(f"다른 프로그램이 카메라를 쓰는 중 {busy}: 관제를 끄면 시작합니다", flush=True)
         time.sleep(2)
@@ -64,9 +73,11 @@ def main() -> int:
     try:
         while time.monotonic() < end:
             next_shot = time.monotonic() + args.every_s
-            while time.monotonic() < next_shot:  # keep reading so the saved frame is the newest one
+            # 저장할 프레임이 가장 최근 것이 되도록 계속 읽는다. 읽지 않으면 버퍼에 쌓인 옛 프레임이 저장된다.
+            while time.monotonic() < next_shot:
                 for capture in captures.values():
                     capture.grab()
+            # 시분초 뒤에 0.1초 자리를 붙여, 1초 안에 두 번 찍어도 이름이 겹치지 않게 한다.
             stamp = time.strftime("%H%M%S") + f"{int(time.time() * 10) % 10}"
             for name, capture in captures.items():
                 ok, image = capture.retrieve()

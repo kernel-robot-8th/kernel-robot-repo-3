@@ -1,10 +1,20 @@
 #!/usr/bin/env bash
 # 작업 시작 전 개발 환경 확인. 기본은 읽기만 하고, --install / --vision을 줄 때만 설치한다.
+#
+# 사용법: scripts/check_setup.sh [--install] [--vision] [--dry-run]
+# 새 PC에서 처음 작업할 때 실행한다(docs/implementation/runbook.md의 "새 PC 환경 확인").
+# 확인 영역: 관제 서버(필수), 카메라, 핑키 주차 판정, YOLO/GPU, ROS 2 Jazzy, C++ 빌드.
+# 필수 항목이 하나라도 없으면 종료 코드 1로 끝난다.
+#
+# 로봇·카메라를 움직이거나 열지 않는다. 카메라는 /dev/v4l/by-path 목록과 권한만 본다.
+# ROS 2 Jazzy 설치, 카메라 내부 보정, 주차 위치 등록은 하지 않는다.
 set -u
 
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_PY="${REPO_DIR}/.venv/bin/python"
 ROS_SETUP="/opt/ros/jazzy/setup.bash"
+# 관제 카메라 기본 검출에 쓰는 팀 YOLO 모델 best25(12클래스). 용량 때문에 작업 브랜치에 두지 않고,
+# feat/yolo-object-detection 브랜치의 이 커밋에서 꺼내 .control-station/models/에 둔다.
 TEAM_MODEL_COMMIT="74b40c0"
 TEAM_MODEL_PATH="yolo/models/best25.pt"
 TEAM_MODEL_LOCAL="${REPO_DIR}/.control-station/models/best25_${TEAM_MODEL_COMMIT}.pt"
@@ -37,12 +47,14 @@ for arg in "$@"; do
   esac
 done
 
+# 터미널에 출력할 때만 색을 쓴다. 파일·파이프로 보내면 ANSI 코드가 섞이지 않게 비운다.
 if [[ -t 1 ]]; then GREEN=$'\e[32m'; RED=$'\e[31m'; YELLOW=$'\e[33m'; BOLD=$'\e[1m'; RESET=$'\e[0m'
 else GREEN=""; RED=""; YELLOW=""; BOLD=""; RESET=""; fi
 
-MISSING_REQUIRED=0
-MISSING_APT=()
+MISSING_REQUIRED=0  # 없는 필수 항목 수. 0이 아니면 종료 코드 1
+MISSING_APT=()      # 확인 중 빠진 apt 패키지. --install이 한 번에 설치한다
 
+# 출력 도우미: ok = 준비됨, fail = 필수 항목 없음(개수를 셈), warn = 선택 항목 없음. 두 번째 인수는 해결 명령.
 section() { printf '\n%s[%s]%s\n' "$BOLD" "$1" "$RESET"; }
 ok() { printf '  %s✓%s %s\n' "$GREEN" "$RESET" "$1"; }
 fail() { printf '  %s✗%s %s\n' "$RED" "$RESET" "$1"; [[ -n "${2:-}" ]] && printf '      → %s\n' "$2"; MISSING_REQUIRED=$((MISSING_REQUIRED + 1)); }
@@ -57,8 +69,10 @@ check_apt() {
   if [[ "$3" == required ]]; then fail "$2 ($1)" "sudo apt install $1"; else warn "$2 ($1)" "sudo apt install $1"; fi
 }
 
+# 저장소 .venv의 Python으로 실행한다. .venv가 없으면 실패로 돌려준다.
 venv_py() { [[ -x "$VENV_PY" ]] && "$VENV_PY" "$@"; }
 
+# 실행할 명령을 먼저 보여 주고, --dry-run이면 실행하지 않는다.
 run() {
   printf '  $ %s\n' "$*"
   [[ $DRY_RUN -eq 1 ]] && return 0
@@ -72,6 +86,7 @@ if command -v python3 >/dev/null && python3 -c 'import sys; sys.exit(sys.version
 else
   fail "Python 3.10 이상" "Ubuntu 24.04 기본 python3 사용"
 fi
+# 가상환경 도구는 uv 또는 python3-venv(ensurepip) 중 하나만 있으면 된다.
 if command -v uv >/dev/null || [[ -x "$HOME/.local/bin/uv" ]]; then
   ok "uv (가상환경·패키지 설치)"
 elif python3 -c 'import ensurepip' 2>/dev/null; then
@@ -82,6 +97,7 @@ fi
 if [[ -x "$VENV_PY" ]]; then
   ok ".venv ($($VENV_PY -c 'import platform; print(platform.python_version())'))"
   if venv_py -c 'import sqlalchemy, alembic' 2>/dev/null; then ok "SQLAlchemy, Alembic"; else fail "SQLAlchemy, Alembic" "scripts/check_setup.sh --install"; fi
+  # 저장소는 opencv-python-headless 4.x를 쓴다. 5.x가 보이면 ultralytics가 opencv-python을 끌고 온 경우다.
   cv_version="$(venv_py -c 'import cv2; print(cv2.__version__)' 2>/dev/null)"
   if [[ -z "$cv_version" ]]; then
     fail "OpenCV (opencv-python-headless)" "scripts/check_setup.sh --install"
@@ -96,6 +112,8 @@ fi
 
 section "카메라"
 check_apt v4l-utils "카메라 목록 확인 도구(v4l2-ctl)" optional
+# 같은 모델 카메라가 여러 대여도 USB 포트 위치로 구분되는 by-path 이름을 보여 준다.
+# video-index0만 보는 이유: 카메라 하나가 /dev/video를 둘 이상 만들고, 영상은 index0 쪽에서 나온다.
 if compgen -G "/dev/v4l/by-path/*-video-index0" >/dev/null; then
   declare -A seen_devices=()
   no_access=0
@@ -119,6 +137,8 @@ if [[ -f "${REPO_DIR}/.control-station/camera-calibrations/ceiling_camera.json" 
 else warn "천장 카메라 내부 보정 파일 없음" "docs/implementation/camera-intrinsic-calibration.md"; fi
 spots="$(ls "${REPO_DIR}"/.control-station/parking-spots/*.json 2>/dev/null | xargs -r -n1 basename | tr '\n' ' ')"
 if [[ -n "$spots" ]]; then ok "등록된 주차 위치: ${spots}"; else warn "등록된 주차 위치 없음" "ros2 run parking_vision pinky_parking register (런북 참고)"; fi
+# 주차 위치 등록 창은 시스템 python3로 띄운다. .venv의 headless OpenCV는 창을 띄울 수 없으므로
+# 시스템 cv2가 GTK나 QT GUI 백엔드로 빌드됐는지 본다.
 if /usr/bin/python3 -c 'import cv2, sys; sys.exit("GTK" not in cv2.getBuildInformation() and "QT" not in cv2.getBuildInformation())' 2>/dev/null; then
   ok "창을 띄우는 OpenCV (시스템 python3, 주차 위치 등록 창)"
 else
@@ -153,6 +173,7 @@ for pkg in build-essential cmake pkg-config libopencv-dev nlohmann-json3-dev lib
 done
 
 # ---------------------------------------------------------------- 설치
+# uv 실행 파일 경로를 출력한다. PATH에 없으면 기본 설치 위치(~/.local/bin/uv)를 본다.
 uv_bin() { command -v uv 2>/dev/null || { [[ -x "$HOME/.local/bin/uv" ]] && echo "$HOME/.local/bin/uv"; }; }
 
 pip_install() {  # .venv에 패키지 설치 (uv가 있으면 uv)
@@ -177,7 +198,7 @@ if [[ $VISION -eq 1 ]]; then
   pip_install -r "${REPO_DIR}/requirements-vision.txt"
   # ultralytics가 opencv-python(5.x)을 끌고 와 cv2를 덮어쓰므로, 저장소가 쓰는 headless 4.x로 되돌린다.
   if [[ $DRY_RUN -eq 1 ]] || venv_py -c 'import importlib.metadata as m; m.version("opencv-python")' 2>/dev/null; then
-    # Both wheels unpack into the same cv2/ folder, so the headless one is reinstalled after the removal.
+    # 두 wheel이 같은 cv2/ 폴더에 풀리므로, opencv-python을 지운 뒤 headless를 다시 설치한다.
     uv="$(uv_bin)"
     if [[ -n "$uv" ]]; then
       run "$uv" pip uninstall --python "$VENV_PY" opencv-python
@@ -188,11 +209,12 @@ if [[ $VISION -eq 1 ]]; then
     fi
   fi
   if [[ ! -s "$TEAM_MODEL_LOCAL" ]]; then
+    # 모델 커밋을 로컬 Git 기록에 받아 온 뒤 git show로 파일 내용만 꺼낸다(브랜치를 바꾸지 않는다).
     run git -C "$REPO_DIR" fetch origin feat/yolo-object-detection
     run mkdir -p "$(dirname "$TEAM_MODEL_LOCAL")"
     printf '  $ git show %s:%s > %s\n' "$TEAM_MODEL_COMMIT" "$TEAM_MODEL_PATH" "${TEAM_MODEL_LOCAL#"${REPO_DIR}/"}"
     if [[ $DRY_RUN -eq 0 ]]; then
-      # Write to a temporary file first so a failed git show never leaves an empty model that later checks accept.
+      # 임시 파일에 먼저 쓴다. git show가 실패해도 이후 확인이 통과시킬 빈 모델 파일이 남지 않게 한다.
       if git -C "$REPO_DIR" show "${TEAM_MODEL_COMMIT}:${TEAM_MODEL_PATH}" > "${TEAM_MODEL_LOCAL}.tmp" && [[ -s "${TEAM_MODEL_LOCAL}.tmp" ]]; then
         mv "${TEAM_MODEL_LOCAL}.tmp" "$TEAM_MODEL_LOCAL"
       else
@@ -204,7 +226,7 @@ if [[ $VISION -eq 1 ]]; then
 fi
 
 if [[ $INSTALL -eq 1 || $VISION -eq 1 ]] && [[ $DRY_RUN -eq 0 ]]; then
-  # The checks above ran before installing; check again so the summary and exit code describe the result.
+  # 위 확인은 설치 전에 실행됐다. 요약과 종료 코드가 설치 결과를 나타내도록 옵션 없이 다시 확인한다.
   printf '\n설치를 마쳤습니다. 다시 확인합니다.\n'
   exec "$0"
 fi

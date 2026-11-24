@@ -1,3 +1,15 @@
+"""카메라 화면에서 매 프레임 YOLO 검출을 돌려 박스·종류·신뢰도·중심 좌표를 실시간으로 표시한다.
+
+학습한 모델이 새로 배치한 물체를 실제로 잡는지 확인하는 도구다. 검증 점수(mAP)는 학습 사진과 같은 장면에서
+나오므로 일반 성능으로 보지 않고, 이 화면으로 실제 성능을 본다.
+
+    python yolo/camera_test.py                                  # 팔로워 카메라, 가장 최근 학습 모델
+    python yolo/camera_test.py --camera 2 --weights 경로/best.pt --conf 0.4
+
+`--weights`를 생략하면 `yolo/runs/strawberry_car_ball*/weights/best.pt` 중 가장 최근 파일을 고른다.
+S로 박스가 그려진 화면을 `yolo/test_results/camera_NNN.jpg`에 저장한다. `device=0`(첫 번째 NVIDIA GPU)을
+쓰므로 GPU가 없는 PC에서는 그대로 돌지 않는다. 카메라만 읽으며 로봇은 움직이지 않는다.
+"""
 import argparse  # 카메라 번호와 모델을 지정한다.
 from pathlib import Path  # 모델 경로를 찾는다.
 import time  # 터미널 출력 간격을 잰다.

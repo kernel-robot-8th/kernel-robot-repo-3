@@ -1,19 +1,23 @@
-"""Run a LeRobot ACT policy on the real OMX follower for one PICK_WITH_POLICY command, and stop it when the arm
-has come back to rest. Used by omx_lerobot_worker.py.
+"""관제의 PICK_WITH_POLICY 명령 1건에 대해 실물 OMX 팔로워에서 LeRobot ACT 정책을 돌리고, 팔이 쉬는 자세로 돌아오면
+정책을 멈춘다. omx_lerobot_worker.py가 쓴다(omx_policy_pick.py를 거치며, ROS 2 집기 action 서버도 같은 경로를 쓴다).
 
-The policy runs through LeRobot async inference: a policy server (`python -m lerobot.async_inference.policy_server`,
-started separately on this PC) and LeRobot's RobotClient, which this module runs in the worker process.
-An ACT policy has no "done" signal and never stops by itself, so this module decides when to stop:
+정책은 LeRobot 비동기 추론(async inference)으로 돈다. 정책 서버(`python -m lerobot.async_inference.policy_server`,
+이 PC에서 따로 띄운다)와 LeRobot의 RobotClient로 이루어지며, RobotClient는 이 모듈이 워커 프로세스 안에서 실행한다.
+ACT 정책에는 "끝났다" 신호가 없고 스스로 멈추지도 않으므로, 언제 멈출지는 이 모듈이 정한다.
 
-- RETURNED_TO_REST: measured joint positions first left the recorded home pose (more than `depart_ticks` on some
-  joint), then three distinct consecutive measurements were within `rest_ticks` of it. The training episodes
-  start and end at rest.
-- CANCELED: the operator canceled the command.
+- RETURNED_TO_REST: 측정한 관절값이 먼저 기록된 home 자세를 벗어났고(어느 한 관절이든 `depart_ticks` 초과),
+  그 뒤 서로 다른 측정값 3개가 연속으로 home에서 `rest_ticks` 이내였다. 학습 에피소드는 쉬는 자세에서 시작해
+  쉬는 자세에서 끝난다.
+- CANCELED: 운영자가 명령을 취소했다.
+- (그 밖에 제어 루프가 죽거나 취소 여부를 읽지 못하면 ERROR로 멈춘다.)
 
-Arriving back at rest says nothing about whether the object was grasped or placed.
+쉬는 자세로 돌아왔다는 것은 물체를 잡았는지, 놓았는지에 대해 아무것도 말해 주지 않는다.
 
-Stopping keeps torque on (`disable_torque_on_disconnect=False`): LeRobot's default turns torque off and the arm
-falls. LeRobot is imported only when a policy actually runs, so the tests need neither LeRobot nor an arm.
+멈출 때 토크는 켜 둔다(`disable_torque_on_disconnect=False`). LeRobot 기본값은 토크를 꺼서 팔이 떨어진다.
+LeRobot은 정책을 실제로 돌릴 때만 import하므로, 테스트에는 LeRobot도 팔도 필요 없다.
+
+실물 하드웨어: run_policy()만 팔을 움직인다(정책이 팔로워 모터에 목표 위치를 쓴다). 나머지 함수(정책 파일 읽기,
+카메라 점유 확인, 정책 서버 Ready 확인)는 모터에 아무것도 쓰지 않는다.
 """
 
 from __future__ import annotations
@@ -27,19 +31,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+# 그리퍼를 뺀 다섯 관절. 쉬는 자세 판정과 home 오차는 이 다섯 관절로만 계산한다.
 ARM_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll")
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICIES = REPOSITORY_ROOT / "config" / "omx-act-policies.json"
+# 정책 파일의 cameras가 가리키는 카메라 역할: 선반을 위에서 보는 카메라, 그리퍼 카메라.
 ROLES = ("OVERHEAD", "GRIPPER")
 
 
 def max_home_error_ticks(home: dict[str, int], current: dict[str, int]) -> int:
-    """Largest absolute error over the five arm joints shared by start and return-to-home checks."""
+    """다섯 팔 관절 중 home과 가장 많이 차이 나는 관절의 절대 오차(틱). 시작 검사와 home 복귀 검사가 함께 쓴다."""
     return max(abs(int(current[name]) - int(home[name])) for name in ARM_JOINTS)
 
 
 def load_policies(path: Path) -> tuple[str, dict[str, dict[str, Any]]]:
-    """(SHA-256 of the file, policies by id). The control station freezes the same SHA-256 into each command."""
+    """(파일의 SHA-256, policy_id별 정책)을 돌려준다. 관제는 같은 SHA-256을 명령마다 고정해 넣는다.
+
+    워커는 명령의 SHA-256과 이 값을 비교해, 관제와 워커가 서로 다른 정책 파일을 보고 있으면 실행을 거부한다.
+    """
     raw = path.read_bytes()
     document = json.loads(raw)
     if document.get("schema_version") != 1:
@@ -48,27 +57,35 @@ def load_policies(path: Path) -> tuple[str, dict[str, dict[str, Any]]]:
 
 
 def policy_cameras(policy: dict[str, Any], devices: dict[str, str]) -> dict[str, str]:
-    """Policy input name (front/wrist) -> device path, following the camera roles the policy was trained with."""
+    """정책 입력 이름(front/wrist) → 장치 경로. 정책을 학습할 때 쓴 카메라 역할을 그대로 따른다."""
     return {name: devices[role] for name, role in policy["cameras"].items()}
 
 
 @dataclass
 class RestWatcher:
-    """Recognize a return to the recorded home pose from measured joint ticks."""
+    """측정한 관절 틱으로 팔이 기록된 home 자세로 돌아왔는지 알아낸다.
+
+    처음부터 home 근처에 있는 팔을 곧바로 "돌아왔다"고 보지 않도록, 먼저 `depart_ticks`보다 멀리 벗어난 적이
+    있어야(departed) 한다. 벗어났다가 `rest_ticks` 이내로 3번 연속 들어오면 쉬는 자세로 돌아온 것으로 본다.
+    """
 
     home: dict[str, int]
-    depart_ticks: int = 300
-    rest_ticks: int = 150
+    depart_ticks: int = 300  # 약 26°. 이만큼 벗어나면 정책이 움직이기 시작한 것으로 본다
+    rest_ticks: int = 150  # 약 13°. 다섯 관절 모두 이 안이면 쉬는 자세 근처
     departed: bool = False
     rest_samples: int = 0
     last_sample_id: int = 0
     farthest: int = 0
 
     def distance(self, ticks: dict[str, int]) -> int:
+        """home까지의 최대 관절 오차(틱)."""
         return max_home_error_ticks(self.home, ticks)
 
     def update(self, sample_id: int, ticks: dict[str, int]) -> bool:
-        """True after departure and three distinct measured positions return within home tolerance."""
+        """출발한 뒤, 서로 다른 측정값 3개가 연속으로 home 허용 오차 안에 들어오면 True.
+
+        같은 측정값을 두 번 세지 않도록 `sample_id`가 늘어난 경우에만 센다.
+        """
         if sample_id <= self.last_sample_id or any(name not in ticks for name in ARM_JOINTS):
             return False
         self.last_sample_id = sample_id
@@ -85,6 +102,8 @@ class RestWatcher:
 
 @dataclass
 class PolicyRunResult:
+    """정책 실행 한 번의 결과. 워커가 관제에 보고하는 details에 그대로 들어간다."""
+
     stop_reason: str  # RETURNED_TO_REST, CANCELED, ERROR
     farthest_from_home_ticks: int
     last_commanded_ticks: dict[str, int] = field(default_factory=dict)
@@ -96,8 +115,12 @@ class PolicyRunResult:
 
 
 def devices_in_use(paths: list[str]) -> list[str]:
-    """Devices among `paths` that another process of this user has open (V4L2 lets only one program stream).
-    Processes of other users are not visible without root and are not reported."""
+    """`paths` 가운데 이 사용자의 다른 프로세스가 열고 있는 장치(V4L2는 한 프로그램만 스트리밍할 수 있다).
+    다른 사용자의 프로세스는 root가 아니면 보이지 않으므로 보고되지 않는다.
+
+    /proc/<pid>/fd의 심볼릭 링크를 모두 훑어 장치 실제 경로와 비교한다(Linux 전용).
+    """
+    # by-id 경로는 /dev/videoN을 가리키는 링크이므로, fd 링크와 비교하려면 실제 경로로 바꿔야 한다.
     wanted = {os.path.realpath(path) for path in paths}
     busy: set[str] = set()
     me = str(os.getpid())
@@ -118,7 +141,10 @@ def devices_in_use(paths: list[str]) -> list[str]:
 
 
 def wait_devices_free(paths: list[str], timeout_s: float = 5.0) -> list[str]:
-    """Wait for the control station to close the policy's cameras; returns those still open after `timeout_s`."""
+    """관제가 정책 카메라를 닫기를 기다린다. `timeout_s` 뒤에도 열려 있는 장치를 돌려준다.
+
+    관제는 워커가 정책 명령을 가져가는 순간(DISPATCHED) 화면에 띄우던 같은 카메라를 닫는다(카메라 넘겨주기).
+    """
     deadline = time.monotonic() + timeout_s
     while True:
         busy = devices_in_use(paths)
@@ -128,10 +154,10 @@ def wait_devices_free(paths: list[str], timeout_s: float = 5.0) -> list[str]:
 
 
 def check_policy_server(address: str, timeout_s: float = 2.0, ready_timeout_s: float = 5.0) -> str | None:
-    """None when the policy server answers its Ready call, else a short error. Nothing is sent to the arm.
+    """정책 서버가 Ready 호출에 답하면 None, 아니면 짧은 오류 문구. 팔에는 아무것도 보내지 않는다.
 
-    An open port is not enough: a server left with streams of an earlier client accepted connections but never
-    answered Ready (2026-11-11), and RobotClient.start() waits for Ready without a time limit."""
+    포트가 열려 있는 것만으로는 부족하다. 이전 클라이언트의 스트림이 남은 서버가 연결은 받으면서 Ready에는
+    끝내 답하지 않은 적이 있고(2026-11-11), RobotClient.start()는 시간 제한 없이 Ready를 기다린다."""
     import grpc
     from lerobot.transport import services_pb2, services_pb2_grpc
 
@@ -160,11 +186,11 @@ def run_policy(
     max_step_ticks: int | None = None,
     policy_device: str = "cuda",
 ) -> PolicyRunResult:
-    """Run until measured departure followed by return-to-home, operator cancel, or an execution error.
-    Torque stays on afterwards.
+    """측정으로 확인한 출발 뒤 home 복귀, 운영자 취소, 실행 오류 중 하나가 일어날 때까지 정책을 돌린다.
+    끝난 뒤에도 토크는 켜져 있다. 실물 팔이 움직인다.
 
-    `max_step_ticks` limits how far any joint goal may be from the present position at each step (1/30 s); used
-    when the policy starts from a pose it was not trained from and its first actions may jump."""
+    `max_step_ticks`는 각 단계(1/30초)마다 관절 목표가 현재 위치에서 벗어날 수 있는 거리를 제한한다. 정책이
+    학습하지 않은 자세에서 시작해 첫 action이 튈 수 있을 때 쓴다."""
     run_started_at = time.monotonic()
 
     from lerobot.async_inference.configs import RobotClientConfig
@@ -173,7 +199,7 @@ def run_policy(
     from lerobot.robots.omx_follower.config_omx_follower import OmxFollowerConfig
 
     class WatchedClient(RobotClient):
-        """RobotClient that tracks commanded and measured arm positions in raw ticks."""
+        """명령한 팔 위치와 측정한 팔 위치를 raw 틱으로 기록하는 RobotClient."""
 
         last_commanded_ticks: dict[str, int] = {}
         last_observed_ticks: dict[str, int] = {}
@@ -185,9 +211,11 @@ def run_policy(
             calibration = self.robot.bus.calibration
             ticks = {}
             for name in ARM_JOINTS:
+                # LeRobot action은 보정 범위(range_min..range_max)를 -100..100으로 정규화한 값이라 raw 틱으로 되돌린다.
                 low, high = calibration[name].range_min, calibration[name].range_max
                 ticks[name] = round((float(action[f"{name}.pos"]) + 100) / 200 * (high - low) + low)
             self.last_commanded_ticks = ticks
+            # 정지 판정은 명령값이 아니라 같은 팔로워 버스에서 읽은 실제 Present_Position으로 한다.
             measured = self.robot.bus.sync_read("Present_Position", normalize=False)
             self.last_observed_ticks = {name: int(measured[name]) for name in ARM_JOINTS}
             self.observation_sequence += 1
@@ -198,13 +226,15 @@ def run_policy(
         port=port,
         id="omx_follower_arm",
         disable_torque_on_disconnect=False,
-        # LeRobot clamps each goal to present ± this, in its normalized units (range 0..4095 ticks -> -100..100).
+        # LeRobot은 각 목표를 현재 위치 ± 이 값으로 자른다. 단위는 LeRobot 정규화 단위다(0..4095 틱 범위 → -100..100).
         max_relative_target=None if max_step_ticks is None else max_step_ticks * 200 / 4095,
         cameras={
             name: OpenCVCameraConfig(index_or_path=Path(path), width=640, height=480, fps=30, fourcc="MJPG")
             for name, path in cameras.items()
         },
     )
+    # 아래 값은 scripts/omx_act_policy_test.sh client와 같다: chunk 100개, 대기열이 70% 이하로 줄면 다음 chunk 요청,
+    # 겹치는 구간은 가중 평균, 30 Hz 제어.
     config = RobotClientConfig(
         policy_type=policy["policy_type"],
         pretrained_name_or_path=policy["model"],
@@ -218,11 +248,12 @@ def run_policy(
         aggregate_fn_name="weighted_average",
         debug_visualize_queue_size=False,
     )
-    client = WatchedClient(config)  # connects the arm: LeRobot briefly turns torque off while it configures
+    client = WatchedClient(config)  # 팔을 연결한다: LeRobot이 모터 설정을 쓰는 동안 토크가 잠깐 꺼진다
     receiver = control = None
     try:
         if not client.start():
             return PolicyRunResult("ERROR", 0, message="policy server refused the client")
+        # 하나는 정책 서버에서 action chunk를 받고, 하나는 30 Hz로 관측을 보내며 action을 모터에 쓴다.
         receiver = threading.Thread(target=client.receive_actions, daemon=True)
         control = threading.Thread(target=client.control_loop, args=(policy["task"],), daemon=True)
         receiver.start()
@@ -231,6 +262,7 @@ def run_policy(
             started()
         next_cancel_check = 0.0
         reason, message = "", ""
+        # 정지 감시 루프: 50 ms마다 정지 조건을 보고, 취소 여부(관제 HTTP 호출일 수 있음)는 1초에 한 번만 묻는다.
         while not reason:
             time.sleep(0.05)
             now = time.monotonic()
@@ -243,7 +275,7 @@ def run_policy(
                 try:
                     if cancel_requested():
                         reason = "CANCELED"
-                except Exception as error:  # cannot read the cancel flag: stop the policy rather than run blind
+                except Exception as error:  # 취소 플래그를 읽을 수 없으면 눈먼 채로 돌리지 않고 정책을 멈춘다
                     reason, message = "ERROR", f"cancel check failed: {error}"[:300]
         final_observed = dict(client.last_observed_ticks)
         final_errors = {
@@ -264,7 +296,7 @@ def run_policy(
     finally:
         client.shutdown_event.set()
         if control is not None:
-            control.join(timeout=5)  # the loop owns the bus; let it finish its step before disconnecting
-        client.stop()  # robot.disconnect keeps torque (config above), cameras and the gRPC channel close
+            control.join(timeout=5)  # 제어 루프가 버스를 쥐고 있으므로, 연결을 끊기 전에 그 단계를 마치게 한다
+        client.stop()  # robot.disconnect는 (위 설정대로) 토크를 유지하고, 카메라와 gRPC 채널은 닫힌다
         if receiver is not None:
             receiver.join(timeout=3)
