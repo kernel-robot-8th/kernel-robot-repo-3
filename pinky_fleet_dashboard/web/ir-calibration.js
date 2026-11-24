@@ -1,3 +1,9 @@
+/*
+ * IR 캘리브레이션 수집 페이지(ir-calibration.html)의 동작. 1초마다 /api/status로 고른 기체의 IR 세 채널과
+ * 오도메트리를 읽어, IR이 들어오고 바퀴가 멈춰 있고(선속도 ≤ 0.002 m/s, 각속도 ≤ 0.02 rad/s) 다른 주행·준비
+ * 작업이 없을 때만 [수집]을 켠다. 수집은 POST /api/ir-calibration/<id>/capture가 새 샘플 20개를 모아 저장한다.
+ * 기체·세션·내보내기 제외 목록은 브라우저 localStorage에 기억한다. 로봇을 움직이는 요청은 보내지 않는다.
+ */
 'use strict';
 const $=id=>document.getElementById(id);
 const robot=$('robot'),session=$('session'),offset=$('offset');
@@ -8,12 +14,14 @@ const sessionKey=()=>`ir-capture-session-${robot.value}`;
 const newSession=()=>`s${new Date().toISOString().replace(/[^0-9]/g,'')}_${crypto.randomUUID().slice(0,8)}`;
 function say(text,error=false){$('message').textContent=text;$('message').className=error?'error':'success';}
 function validSession(){return /^[A-Za-z0-9_-]{1,80}$/.test(session.value);}
+// 지금 세션에서 내보내기에 포함된(체크된) 기록.
 function selected(){return records.filter(r=>r.session===session.value&&!excluded.has(r.id));}
 function updateButtons(){
  $('capture').disabled=capturing||loading||!eligible||statusBusy||!validSession();
  for(const id of ['robot','session','offset','minus','plus','new-session','advance'])$(id).disabled=capturing;
  for(const id of ['export-means','export-raw','export-stats'])$(id).disabled=capturing||!selected().length;
 }
+// 기록 표를 오프셋·시각 순으로 다시 그린다. 체크를 풀면 내보내기에서만 빠지고 기록은 지우지 않는다.
 function render(){
  const rows=records.filter(r=>r.session===session.value).sort((a,b)=>a.offset_cm-b.offset_cm||a.captured_at-b.captured_at);
  const body=$('records');body.replaceChildren();
@@ -34,6 +42,7 @@ async function loadRecords(){
  try{const response=await fetch(`/api/ir-calibration/${id}`);const result=await response.json();if(!response.ok)throw Error(result.error||'기록 읽기 실패');if(robot.value===id){records=result.records;render();}}
  catch(e){say(e.message,true);}finally{loading=false;updateButtons();}
 }
+// 1초마다 IR·오도메트리·작업 상태를 읽어 수집 가능 여부를 정한다.
 async function poll(){
  try{
   const response=await fetch('/api/status');if(!response.ok)throw Error('관제 서버 응답 오류');const s=await response.json(),r=s.robots.find(r=>r.id===robot.value),ir=r?.topics?.ir,odom=r?.topics?.odom;
@@ -57,6 +66,7 @@ $('capture').addEventListener('click',async()=>{
   if($('advance').checked)offset.value=Math.min(10,Math.round((value+.5)*10)/10);
  }catch(e){say(e.message,true);}finally{capturing=false;render();poll();}
 });
+// CSV 내보내기. means: 같은 오프셋의 모든 샘플 평균(추정기용), raw: 원시 샘플, stats: 기록별 통계.
 function csvDownload(kind){
  const chosen=selected().sort((a,b)=>a.offset_cm-b.offset_cm||a.captured_at-b.captured_at);if(!chosen.length)return;
  let rows=[];
@@ -72,7 +82,7 @@ function csvDownload(kind){
   for(const r of chosen)rows.push([r.offset_cm,...r.mean,...r.std,...r.minimum,...r.maximum,r.samples.length,r.samples.at(-1).received_at-r.samples[0].received_at,r.id,r.session,r.robot]);
  }
  const escape=v=>`"${String(v).replaceAll('"','""')}"`;
- // Numeric estimator files deliberately have no quotes or BOM (np.loadtxt compatible).
+ // 추정기용 숫자 파일은 일부러 따옴표와 BOM을 넣지 않는다(np.loadtxt로 바로 읽히도록).
  const content=rows.map(row=>kind==='means'?row.join(','):row.map(escape).join(',')).join('\r\n')+'\r\n';
  const url=URL.createObjectURL(new Blob([content],{type:'text/csv;charset=utf-8'})),a=document.createElement('a');a.href=url;a.download=`pinky_${robot.value}_${session.value}_${kind}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }

@@ -1,4 +1,7 @@
 <!doctype html>
+<!-- IR 캘리브레이션 수집 페이지(/ir-calibration). 로봇을 움직이지 않고, 선에서 옆으로 옮긴 위치(오프셋 cm)마다
+     바닥 IR 세 채널의 새 원시 샘플 20개를 PC에 저장한다. 동작은 ir-calibration.js, 저장은
+     POST /api/ir-calibration/<id>/capture가 맡는다. 기존 주행 보정값은 바꾸지 않는다. -->
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pinky · IR 캘리브레이션 수집</title><link rel="stylesheet" href="/ir-calibration.css"><script src="/ir-calibration.js" defer></script></head>
 <body><main>
 <header><div><p class="eyebrow">TEMPORARY TOOL · RAW IR CAPTURE</p><h1>IR 캘리브레이션 수집</h1><p>모터를 움직이지 않고, 현재 위치의 새 원시 샘플 20개를 저장합니다.</p></div><a href="/">← 관제 화면</a></header>

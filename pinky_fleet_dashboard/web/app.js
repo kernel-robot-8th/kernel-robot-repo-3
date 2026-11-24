@@ -1,4 +1,11 @@
-let latestKeepout = null;
+/*
+ * 핑키 관제 자체 화면(index.html)의 동작. 1초마다 GET /api/status를 읽어 세 대의 카드, 공용 지도(canvas),
+ * 공유 구역 예약 패널을 다시 그리고, 버튼은 /api/robots/<id>/... POST로 app.py에 보낸다.
+ * 2026-11-12 무렵의 초기 화면이다: 웨이포인트 경로 주행(/route), IR 보정, 수동 도킹 확인 같은 초기 기능만 있고,
+ * 이후의 임무(/mission)·라이다 위치 잡기 등은 관제 서버(src/control_station)의 화면이 쓴다.
+ * 로봇 id "10"·"11"·"12"를 화면에서는 P0·P1·P2로 부른다(fleetIdentity).
+ */
+let latestKeepout = null;  // 마지막으로 받은 keepout 마스크(지도에 보라색으로 겹쳐 그린다)
 const grid = document.querySelector("#robot-grid");
 const alerts = document.querySelector("#alerts");
 const bridgePill = document.querySelector("#bridge-status");
@@ -9,11 +16,12 @@ let latestFleet=[];
 let fleetPending=false;
 const waypointLabels = new Map();
 const selectedMaps = new Map();
-const pendingDockCommands = new Set();
+const pendingDockCommands = new Set();  // 도킹 명령 응답을 기다리는 로봇 id(중복 클릭 방지)
 const fleetIdentity={"10":{label:"P0",color:"#ff3686"},"11":{label:"P1",color:"#27b86d"},"12":{label:"P2",color:"#3988ff"}};
 const routeActive=r=>["starting","running","cancel_requested"].includes(r.route?.status);
-const waypointRoute = ["1","2","3","7","4","5","6","7","9","8","1"];
+const waypointRoute = ["1","2","3","7","4","5","6","7","9","8","1"];  // 초기 라인 코스의 웨이포인트 순서
 
+// HTML에 넣을 문자열을 이스케이프한다. 화면은 innerHTML 템플릿으로 그리므로 로봇이 보낸 값은 모두 이것을 거친다.
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]));
 }
@@ -21,6 +29,7 @@ function topic(robot, key) { return robot.topics?.[key] || {value:null,fresh:fal
 function value(robot, key) { return topic(robot,key).value; }
 function number(v, digits=2) { return typeof v === "number" && Number.isFinite(v) ? v.toFixed(digits) : "—"; }
 function ageText(t) { return t.age_s == null ? "데이터 대기" : `${number(t.age_s,1)}s 전`; }
+// 센서 카드 하나. topicKey가 문자열이면 지금 그리는 로봇(currentRobot)의 토픽에서 신선도를 읽는다.
 function sensor(title, topicKey, main, sub="") {
   const t = typeof topicKey === "string" ? currentRobot.topics?.[topicKey] : topicKey;
   const fresh = !!t?.fresh;
@@ -92,6 +101,7 @@ function liveMapPanel(robot) {
     <div class="live-map-legend"><span><i style="background:#9b5de566;border:1px solid #8143bc"></i>keepout · 진입 금지</span><span><i style="background:#008b9a"></i>도킹 후진 20cm</span><span><i class="legend-robot"></i>핑키 위치·방향</span><span><i class="legend-amcl"></i>AMCL 95% 오차 반경</span><span><i class="legend-waypoint"></i>웨이포인트·계획 경로(10cm)</span><span><i class="legend-free"></i>통행 가능</span><span><i class="legend-occupied"></i>점유</span><span><i class="legend-unknown"></i>미확인</span></div>
   </section>`;
 }
+// map 좌표(m)를 지도 격자 칸 좌표로 바꾼다. 지도 원점의 회전(origin_yaw_rad)도 반영한다.
 function mapCell(map, x, y) {
   const resolution=map?.resolution_m, ox=map?.origin_x_m, oy=map?.origin_y_m, yaw=map?.origin_yaw_rad||0;
   if (!(resolution>0) || !Number.isFinite(ox) || !Number.isFinite(oy)) return null;
@@ -106,6 +116,7 @@ function poseBounds(map, pose) {
   const side=dx>=dy?(p.x<0?"왼쪽":"오른쪽"):(p.y>height?"위쪽":"아래쪽");
   return {inside:false,cell:p,side,distance_m:Math.hypot(dx*res,dy*res)};
 }
+// AMCL 위치 공분산(xx, xy, yy)의 가장 큰 고유값으로 95% 오차 반경(m)을 구한다. 2.448 = sqrt(카이제곱 2자유도 95%).
 function amclUncertainty(amcl) {
   const c=amcl?.covariance_xy;
   if(!c || !Number.isFinite(c.xx) || !Number.isFinite(c.xy) || !Number.isFinite(c.yy)) return null;
@@ -126,6 +137,7 @@ function poseReadout(robot,map) {
   const boundsLine=bounds&&!bounds.inside?`<br><strong class="pose-warning">위치가 지도 ${bounds.side} 경계 밖 · ${number(bounds.distance_m,2)} m</strong>`:"";
   return `TF map→base_footprint  x ${number(pose.x_m,3)} m · y ${number(pose.y_m,3)} m · yaw ${number(yaw,1)}° · ${ageText(tf)}<br>${amclLine}${boundsLine}`;
 }
+// 지도를 받은 첫 로봇의 지도를 공용 지도로 그리고, 같은 지도를 쓰는 세 대의 위치·AMCL 오차·주차 칸·웨이포인트를 겹친다.
 function drawLiveMaps(robots) {
   const reference=robots.find(r=>value(r,"map")?.cells?.length);
   if(!reference) return;
@@ -153,17 +165,17 @@ function drawLiveMaps(robots) {
       const raster=document.createElement("canvas");raster.width=width;raster.height=height;
       const rasterContext=raster.getContext("2d"), image=rasterContext.createImageData(width,height);
       for(let row=0;row<height;row++) for(let col=0;col<width;col++) {
-        // ROS OccupancyGrid starts at its lower-left corner; flip rows for canvas.
+        // ROS OccupancyGrid는 왼쪽 아래 모서리에서 시작한다. canvas에 맞게 행을 뒤집는다.
         const occupancy=cells[row*width+col], out=((height-1-row)*width+col)*4;
         let rgb;
-        // Match the PGM trinary values: unknown gray, free white, occupied black.
+        // PGM trinary 값에 맞춘다: 모름은 회색, 빈 곳은 흰색, 점유는 검은색(65 이상).
         if(occupancy<0) rgb=[205,205,205];
         else if(occupancy>=65) rgb=[0,0,0];
         else { const shade=Math.round(254-(Math.max(0,occupancy)/100)*254); rgb=[shade,shade,shade]; }
         image.data[out]=rgb[0]; image.data[out+1]=rgb[1]; image.data[out+2]=rgb[2]; image.data[out+3]=255;
       }
       rasterContext.putImageData(image,0,0);
-      // Keep source occupancy cells exact; draw symbols separately at display resolution.
+      // 원래 점유 칸은 흐리지 않고 그대로 키운다. 기호는 화면 해상도에서 따로 그린다.
       ctx.imageSmoothingEnabled=false;
       ctx.drawImage(raster,0,0,canvas.width,canvas.height);
       ctx.setTransform(canvas.width/width,0,0,canvas.height/height,0,0);
@@ -275,6 +287,7 @@ function waypointPanel(robot) {
     ${points.length?`<ol class="waypoint-list">${points.map((point,index)=>`<li><span class="waypoint-index">${String(index+1).padStart(2,"0")}</span><span class="waypoint-data"><strong>${esc(point.label)}</strong><small>x ${number(point.x_m,3)} · y ${number(point.y_m,3)} m · yaw ${number((point.yaw_rad||0)*180/Math.PI,1)}°</small></span><button class="waypoint-delete" data-waypoint-delete="${esc(robot.id)}" data-id="${esc(point.id)}" title="삭제" aria-label="${esc(point.label)} 삭제">×</button></li>`).join("")}</ol>`:`<div class="waypoint-empty">아직 기록한 지점이 없습니다.</div>`}
   </section>`;
 }
+// 경로 주행 패널. 출발 버튼은 주행준비 완료, 필수 토픽 수신, 새 감시기 버전, 웨이포인트가 모두 갖춰져야 켜진다.
 function routePanel(robot, busyRobot) {
   const route=robot.route;
   const active=["starting","running","cancel_requested"].includes(route?.status);
@@ -298,6 +311,7 @@ function routePanel(robot, busyRobot) {
     <div class="route-actions"><button class="button" data-mission-complete="${esc(robot.id)}" data-token="${esc(route?.mission_token)}" ${route?.status==="running"&&route?.phase==="course_complete"?"":"disabled"}>주행완료 · 주차장 복귀</button><button class="button" data-route-start="${esc(robot.id)}" ${ready&&!active?"":"disabled"}>${route?.status==="complete"?"경로 다시 주행":"경로 주행 시작"}</button><button class="button button-reset" data-route-cancel="${esc(robot.id)}">정지 · 경로 취소</button>${(route?.status==="failed"||(!active&&robot.stage==="prepared"&&(value(robot,"line_control")?.recovery_policy!=="parking_mission_v2"||value(robot,"line_control")?.line_algorithm!=="fleet_control_v4"||value(robot,"line_control")?.dock_protocol!=="sponge_v1")))?`<button class="button button-quiet" data-nav-recover="${esc(robot.id)}" ${busyRobot?"disabled":""}>Nav2 복구</button>`:""}</div>
   </section>`;
 }
+// 5번 도킹·수령 패널. route.phase(docking_anchor, dock_exit, docking_manual, docked_manual)에 따라 다른 안내를 보인다.
 function dockingPanel(robot,busyRobot) {
   if(robot.route?.phase==="docking_anchor") return `<section class="docking-panel"><strong>도킹완료 확인 · 5번 위치 재설정 중</strong><p>AMCL과 지도 TF가 5번 좌표에 반영될 때까지 정지합니다. 수령 완료 버튼은 반영 후 활성화됩니다.</p></section>`;
   if(robot.route?.phase==="dock_exit") {
@@ -371,6 +385,7 @@ function renderCard(robot, busyRobot) {
   </article>`;
 }
 
+// 1초마다 부른다. 상태를 받아 구역 패널·카드·지도·상단 표시를 다시 그린다.
 async function refresh() {
   try {
     const response = await fetch("/api/status", {cache:"no-store"});
@@ -387,8 +402,8 @@ async function refresh() {
     }
     document.querySelector("#fleet-start").disabled=fleetPending||!!data.busy_robot||data.robots.length!==3||new Set(data.robots.map(r=>r.map)).size!==1||data.robots.some(r=>routeActive(r)||r.stage!=="prepared"||(r.ir_profile?.enabled&&r.ir_profile?.calibration_error)||["map","tf_pose","scan","odom","ultrasonic","ir","line_control"].some(k=>!topic(r,k).fresh)||value(r,"line_control")?.recovery_policy!=="parking_mission_v2"||value(r,"line_control")?.dock_protocol!=="sponge_v1");
     document.querySelector("#fleet-stop").disabled=fleetPending||!data.robots.some(r=>r.ssh_reachable);
-    // Replacing the entire robot grid every second steals focus from the
-    // waypoint name field. Leave the cards in place while a name is edited.
+    // 로봇 카드 전체를 1초마다 바꾸면 웨이포인트 이름 입력칸의 포커스를 빼앗는다.
+    // 이름을 입력하는 동안(또는 지도 선택 중)에는 카드를 그대로 둔다.
     if (!(grid.contains(document.activeElement) && document.activeElement.matches("[data-waypoint-label], [data-map]"))) {
     grid.innerHTML = data.robots.map(robot=>renderCard(robot,data.busy_robot)).join("");
     }
@@ -441,6 +456,7 @@ grid.addEventListener("change", event=>{
   if(select) selectedMaps.set(select.dataset.map,select.value);
 });
 
+// 카드 안 버튼은 매초 다시 그려지므로 grid 하나에 클릭을 위임하고 data-* 속성으로 어떤 버튼인지 가린다.
 grid.addEventListener("click", async event=>{
   const operator=event.target.closest("[data-operator]");
   if(operator){
@@ -568,6 +584,7 @@ grid.addEventListener("click", async event=>{
 refresh();
 setInterval(refresh,1000);
 
+// 세 대 동시 시작(route) 또는 전체 정지(route/cancel). 로봇마다 따로 요청하고 결과를 한 줄로 모아 보인다.
 async function fleetCommand(action) {
   if(fleetPending)return;
   const targets=action==="route"?latestFleet:latestFleet.filter(r=>r.ssh_reachable);
