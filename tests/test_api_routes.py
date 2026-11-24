@@ -212,7 +212,7 @@ class ReadRouteTests(ApiTestCase):
     def test_health_without_parking(self) -> None:
         self.assertEqual(self.get("/api/health"), (200, {
             "status": "ok", "mode": "mock",
-            "parking": {"camera_id": None, "spot_id": None, "live_tracking": False},
+            "parking": {"camera_id": None, "spot_id": None, "live_tracking": False, "live_spots": []},
         }))
 
     def test_robots(self) -> None:
@@ -254,7 +254,8 @@ class ReadRouteTests(ApiTestCase):
 
     def test_parking_routes_without_parking(self) -> None:
         self.assertEqual(self.get("/api/parking-spots/pinky_dock_1/live"), (404, error(
-            "이 주차 위치는 실시간 추적 중이 아닙니다 (CONTROL_STATION_PARKING_SPOT)", "PARKING_TRACKING_NOT_CONFIGURED")))
+            "이 주차 위치는 실시간 추적 중이 아닙니다 (CONTROL_STATION_PARKING_SPOT, config/pinky-markers.json)",
+            "PARKING_TRACKING_NOT_CONFIGURED")))
         self.assertEqual(self.get("/api/parking-spots/pinky_dock_1/check"), (503, error(
             "주차 판정 노드가 설정되지 않았습니다 (CONTROL_STATION_PARKING_SPOT)", "PARKING_NODE_UNAVAILABLE", retryable=True)))
 
@@ -280,7 +281,8 @@ class ParkingRouteTests(ApiTestCase):
 
     def test_health_with_parking(self) -> None:
         self.assertEqual(self.get("/api/health")[1]["parking"], {  # type: ignore[index]
-            "camera_id": "head_camera", "spot_id": "pinky_dock_1", "live_tracking": True})
+            "camera_id": "head_camera", "spot_id": "pinky_dock_1", "live_tracking": True,
+            "live_spots": ["pinky_dock_1"]})
 
     def test_live_and_check(self) -> None:
         self.assertEqual(self.get("/api/parking-spots/pinky_dock_1/live"), (200, {"live": self.fake_parking.snapshot()}))

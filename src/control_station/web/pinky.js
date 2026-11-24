@@ -21,6 +21,7 @@ const pinkyLinkDetail = document.querySelector('#pinkyLinkDetail');
 const pinkyLog = document.querySelector('#pinkyLog');
 const pinkyLogCount = document.querySelector('#pinkyLogCount');
 const pinkyStopAll = document.querySelector('#pinkyStopAll');
+const stopAllLabel = document.querySelector('#stopAllLabel');
 const pinkyPrepareAll = document.querySelector('#pinkyPrepareAll');
 const pinkyPrepareHint = document.querySelector('#pinkyPrepareHint');
 const pinkyPasswordOpen = document.querySelector('#pinkyPasswordOpen');
@@ -359,13 +360,14 @@ function stopPinky(pinkyId) {
   return sendPinkyCommand(pinkyId, 'stop', { path: 'stop', body: null, label: '정지' });
 }
 
-function stopAllSummary(commands) {
+function stopAllSummary(commands, failed) {
   const accepted = commands.filter((entry) => entry.ok).length;
-  if (commands.length && accepted === commands.length) return { title: '핑키 전체 정지 요청 접수', kind: 'info' };
+  if (failed) return { title: '전체 정지, 일부 요청 실패', kind: 'error' };
+  if (commands.length && accepted === commands.length) return { title: '전체 정지 요청 접수', kind: 'info' };
   if (commands.length && commands.every((entry) => entry.simulated)) {
-    return { title: `핑키 전체 정지 요청 보내지 않음${devWord(' (모의)')}`, kind: 'warning' };
+    return { title: `핑키 정지 요청은 보내지 않음${devWord(' (모의)')}`, kind: 'warning' };
   }
-  return { title: `핑키 전체 정지, ${commands.length}대 중 ${accepted}대 접수`, kind: 'error' };
+  return { title: `전체 정지, 핑키 ${commands.length}대 중 ${accepted}대 접수`, kind: 'error' };
 }
 
 function stopAllLine(entry) {
@@ -374,27 +376,53 @@ function stopAllLine(entry) {
   return `${pinkyName(entry.pinky_id)} ${phrase}${showMessage ? `: ${commandMessage(entry)}` : ''}`;
 }
 
-async function stopAllPinkies() {
+const STOP_PART_NAMES = { arm_sequence: '팔 연속 동작', arm_commands: '팔 명령', policy_run: '정책 실행', pinkies: '핑키' };
+
+// What the stop-everything answer says about the arms (POST /api/stop-all). A cancel is a request: the arm worker
+// ends the command itself, so the lines say "요청", never "멈춤".
+function armStopLines(result) {
+  const lines = [];
+  const commands = result.arm_commands || [];
+  if (commands.length) lines.push(`팔 명령 ${commands.length}개 취소 요청`);
+  if (result.arm_sequence) lines.push('팔 연속 동작 취소 요청');
+  if (result.policy_run) lines.push('정책 실행 중단 신호 보냄');
+  if (!lines.length) lines.push('팔: 진행 중인 동작 없음');
+  for (const error of result.errors || []) lines.push(`${STOP_PART_NAMES[error.part] || error.part} 요청 실패: ${error.message}`);
+  return lines;
+}
+
+// The big red button: the arms and every Pinky in one request. A server from before /api/stop-all (404) still gets
+// the Pinky stop, so the button never does less than it did.
+async function requestStopAll() {
+  const all = await postPinky('/api/stop-all');
+  if (all.status !== 404) return { result: all.result, commands: all.result.pinkies || [], withArms: true };
+  const pinkyOnly = await postPinky('/api/pinky/stop-all');
+  return { result: pinkyOnly.result, commands: pinkyOnly.result.commands || [], withArms: false };
+}
+
+async function stopEverything() {
   pinkyScreen.stopAllSending += 1;
   pinkyStopAll.setAttribute('aria-busy', 'true');
-  pinkyStopAll.textContent = '정지 요청 보내는 중…';
+  stopAllLabel.textContent = '정지 보내는 중…';
   try {
-    const { result } = await postPinky('/api/pinky/stop-all');
-    const commands = result.commands || [];
-    const { title, kind } = stopAllSummary(commands);
+    const { result, commands, withArms } = await requestStopAll();
+    const failed = withArms && (result.errors || []).length > 0;
+    const { title, kind } = stopAllSummary(commands, failed);
     const mockOnly = commands.length && commands.every((entry) => entry.simulated);
-    const detail = mockOnly ? commandMessage(commands[0]) : commands.map(stopAllLine).join('\n');
-    showToast(title, detail || apiErrorMessage(result, '관제 서버가 요청을 받지 않았습니다'), kind, PINKY_COMMAND_TOAST_MS);
+    const pinkyLines = mockOnly ? [commandMessage(commands[0])] : commands.map(stopAllLine);
+    const armLines = withArms ? armStopLines(result) : ['팔에는 보내지 못했어요 (이 관제 서버는 핑키 정지만 받아요)'];
+    const detail = [...pinkyLines, ...armLines].filter(Boolean).join('\n');
+    showToast(title, detail || apiErrorMessage(result, '관제 서버가 요청을 받지 않았습니다'), withArms ? kind : 'error', PINKY_COMMAND_TOAST_MS);
     if (commands.some((entry) => entry.http_status === 401)) {
-      openPasswordPrompt({ reason: '정지 요청 일부가 거절됐어요.', retryLabel: '핑키 전체 정지', retry: stopAllPinkies });
+      openPasswordPrompt({ reason: '정지 요청 일부가 거절됐어요.', retryLabel: '전체 정지', retry: stopEverything });
     }
   } catch {
-    showToast('핑키 전체 정지 요청 결과 모름', '관제 서버의 답을 받지 못했습니다. 핑키를 현장에서 확인하세요.', 'error', PINKY_COMMAND_TOAST_MS);
+    showToast('전체 정지 요청 결과 모름', '관제 서버의 답을 받지 못했습니다. 핑키와 팔을 현장에서 확인하세요.', 'error', PINKY_COMMAND_TOAST_MS);
   } finally {
     pinkyScreen.stopAllSending -= 1;
     if (!pinkyScreen.stopAllSending) {
       pinkyStopAll.removeAttribute('aria-busy');
-      pinkyStopAll.textContent = '핑키 전체 정지';
+      stopAllLabel.textContent = '전체 정지';
     }
     refreshPinky({ force: true });
   }
@@ -490,7 +518,7 @@ passwordPrompt.addEventListener('overlayclose', () => { pinkyPassword.value = ''
 
 // ---- wiring ----
 
-pinkyStopAll.addEventListener('click', stopAllPinkies);
+pinkyStopAll.addEventListener('click', stopEverything);
 pinkyPrepareAll.addEventListener('click', () => prepareAllPinkies());
 pinkyCards.addEventListener('click', (event) => {
   const stop = event.target.closest('[data-pinky-stop]');

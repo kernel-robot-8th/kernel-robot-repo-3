@@ -570,6 +570,23 @@ class ArmCommandStore:
                 )
             return self._present(command)
 
+    def cancel_active(self) -> list[dict[str, Any]]:
+        """Cancel every command that is queued or in flight, for the stop-everything request (stop_all.py): a queued
+        one ends at once, an in-flight one gets the cancel flag its worker checks about once a second while moving.
+        Returns the commands as they are after the request; one that finished in the meantime is left out."""
+        active = [state.value for state in (ArmCommandState.QUEUED, *IN_FLIGHT)]
+        with self._lock, self._sessions.begin() as session:
+            command_ids = list(session.scalars(
+                select(ArmCommandRecord.id).where(ArmCommandRecord.state.in_(active)).order_by(ArmCommandRecord.created_at)
+            ))
+        canceled: list[dict[str, Any]] = []
+        for command_id in command_ids:
+            try:
+                canceled.append(self.cancel(command_id))
+            except (ArmCommandConflict, ArmCommandNotFound):
+                continue  # it finished or expired between the two reads: nothing is left to cancel
+        return canceled
+
     def clear_unknown(self, command_id: str, note: object) -> dict[str, Any]:
         """Record that an operator checked the arm after UNKNOWN; the outcome itself stays unknown."""
         note_text = _text(note, "note", 300)

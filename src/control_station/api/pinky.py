@@ -39,7 +39,7 @@ def _answer(h: ControlStationHandler, entry: dict[str, Any]) -> None:
 
 def get_pinky(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
     """핑키 화면: 핑키 3대 상태와 최근 명령"""
-    h._json(200, h.app.pinky_gateway.view())
+    h._json(200, {**h.app.pinky_gateway.view(), "dock_auto": bool(getattr(h.app, "dock_auto", False))})
 
 
 def get_locate(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
@@ -135,11 +135,21 @@ def post_dock_handshake(h: ControlStationHandler, route: str, parts: list[str], 
     try:
         repeat = body.get("repeat")
         repeat = repeat if isinstance(repeat, int) and not isinstance(repeat, bool) else 0
-        result = h.app.dock_supervisor.step(pinky_id, body.get("auto") is True, repeat)
+        # With the station's own automatic handling on, this call acts too, whatever the screen's box says.
+        result = h.app.dock_supervisor.step(pinky_id, body.get("auto") is True or bool(getattr(h.app, "dock_auto", False)), repeat)
     except Exception as exc:  # the fleet dashboard did not answer
         h._json_error(502, "PINKY_FLEET_UNREACHABLE", f"핑키 상태를 읽지 못했습니다: {exc}")
         return
     h._json(200, result)
+
+
+def post_dock_auto(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:
+    """적재 자리 도착 자동 처리 켜기·끄기: {auto: true|false}. 끄면 카메라는 판정만 하고 사람이 누름"""
+    if set(body) != {"auto"} or not isinstance(body["auto"], bool):
+        h._json_error(400, "PINKY_ACTION_INVALID", "auto(true 또는 false)만 보내 주세요")
+        return
+    h.app.dock_auto = body["auto"]
+    h._json(200, {"dock_auto": h.app.dock_auto})
 
 
 def post_prepare_all(h: ControlStationHandler, route: str, parts: list[str], body: dict[str, Any]) -> None:

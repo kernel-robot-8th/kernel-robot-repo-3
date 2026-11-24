@@ -189,9 +189,11 @@ class DockSupervisor:
             except Exception:  # the record is evidence, not a condition for the Pinky
                 pass
 
-    def step(self, pinky_id: str, auto: bool, repeat: int = 0) -> dict[str, Any]:
+    def step(self, pinky_id: str, auto: bool, repeat: int | None = 0) -> dict[str, Any]:
         """Judge once and, with `auto`, act on it. Returns the decision, what was sent, and this stop's log.
-        repeat: how many confirmed entries to collect at this stop before dock_complete (0: the first one ends it)."""
+        repeat: how many confirmed entries to collect at this stop before dock_complete (0: the first one ends it);
+        None keeps what this stop already has (the server's own loop, which must not end a repeat test the test
+        screen asked for)."""
         with self._lock:
             status = self.status(pinky_id)
             phase = status.get("phase")
@@ -205,8 +207,9 @@ class DockSupervisor:
             run = self._runs.get(pinky_id)
             if run is None:
                 run = self._runs[pinky_id] = {"handshake": DockHandshake(**self.limits), "log": [], "done": False,
-                                              "trials": [], "judged": False}
-            run["repeat"] = max(0, min(REPEAT_MAX, int(repeat or 0)))
+                                              "trials": [], "judged": False, "repeat": 0}
+            if repeat is not None:
+                run["repeat"] = max(0, min(REPEAT_MAX, int(repeat or 0)))
             handshake: DockHandshake = run["handshake"]
             observation = None
             if phase == DOCKING_PHASE and not run["done"]:
@@ -284,6 +287,54 @@ class DockSupervisor:
     def _note(self, run: dict[str, Any], event: str, message: str, detail: dict[str, Any] | None) -> None:
         run["log"].append({"at": time.time(), "event": event, "message": message, "detail": detail})
         del run["log"][:-self.history]
+
+
+class DockAutoLoop:
+    """The handshake run by the control station itself (2026-11-24): a Pinky that stops at the loading spot is judged
+    by the camera and told the result (dock_complete, or a redock when it stands off the spot) without a test screen
+    open in a browser and without anybody pressing 도킹완료. Before, the steps came only from the test screen's poll,
+    and only with its box ticked.
+
+    step(pinky_id) is DockSupervisor.step with auto and repeat=None; phase(pinky_id) is the Pinky's mission phase,
+    read first so a Pinky elsewhere costs one cached status and no camera check; enabled() is the switch (the
+    operator's box, CONTROL_STATION_DOCK_AUTO=0 starts with it off). An order's own flow still does its own handshake
+    (the supervisor leaves a Pinky in an order alone)."""
+
+    PHASES = frozenset({DOCKING_PHASE, "redocking"})
+
+    def __init__(self, pinky_ids: Any, phase: Callable[[str], str | None], step: Callable[[str], dict[str, Any]],
+                 enabled: Callable[[], bool] = lambda: True, period_s: float = 1.0) -> None:
+        self.pinky_ids, self.phase, self.step, self.enabled, self.period_s = tuple(pinky_ids), phase, step, enabled, period_s
+        self.last: dict[str, dict[str, Any]] = {}  # pinky id -> the last answer of step, or {"error"}
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def tick(self) -> list[str]:
+        """One round; returns the Pinkys stepped."""
+        if not self.enabled():
+            return []
+        stepped = []
+        for pinky_id in self.pinky_ids:
+            try:
+                if self.phase(pinky_id) not in self.PHASES:
+                    self.last.pop(pinky_id, None)
+                    continue
+                self.last[pinky_id] = self.step(pinky_id)
+                stepped.append(pinky_id)
+            except Exception as exc:  # the fleet dashboard is away: the next round tries again
+                self.last[pinky_id] = {"error": str(exc)}
+        return stepped
+
+    def start(self) -> "DockAutoLoop":
+        def loop() -> None:
+            while not self._stop.wait(self.period_s):
+                self.tick()
+        self._thread = threading.Thread(target=loop, name="dock-auto", daemon=True)
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
 
 
 def _result_text(result: dict[str, Any]) -> str:

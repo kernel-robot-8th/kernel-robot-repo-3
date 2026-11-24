@@ -37,6 +37,7 @@ const parkingAdvice = document.querySelector('#parkingAdvice');
 const parkingStream = document.querySelector('#parkingStream');
 const parkingStreamEmpty = document.querySelector('#parkingStreamEmpty');
 const parkingOverlay = document.querySelector('#parkingOverlay');
+const parkingPinky = document.querySelector('#parkingPinky');
 const navItems = [...document.querySelectorAll('.nav-item[data-view]')];
 const views = [...document.querySelectorAll('.view[id^="view-"]')];
 let selectedTaskId = null;
@@ -114,7 +115,7 @@ function keepInNavView(item) {
 navItems.forEach((item) => item.addEventListener('click', () => showView(item.dataset.view)));
 
 // ---- panels over the page (Pinky detail, enlarged map, password prompt) ----
-// They open below the sticky header, so 핑키 전체 정지 stays visible and usable while one is open. The dim area
+// They open below the sticky header, so 전체 정지 stays visible and usable while one is open. The dim area
 // or Esc closes the top one; focus goes back to what opened it.
 const overlayScrim = document.querySelector('#overlayScrim');
 const pageHeader = document.querySelector('.header');
@@ -1507,6 +1508,49 @@ function renderParkingFields(data, level, overlayLabel, extraRows = []) {
   showParkingStream(data.feed_camera_id);
   drawParkingMap(data, level);
   drawParkingOverlay(data, level, overlayLabel);
+  renderParkingPinky(data);
+}
+
+// Which Pinky carries the marker of each registered spot (/api/pinky: marker.spot_id), for the line under the camera.
+let parkingPinkies = new Map();  // spot_id -> { name, markerId }
+let parkingPinkiesAt = 0;
+const PARKING_PINKIES_REFRESH_MS = 30000;
+
+async function loadParkingPinkies() {
+  if (Date.now() - parkingPinkiesAt < PARKING_PINKIES_REFRESH_MS) return;
+  parkingPinkiesAt = Date.now();
+  try {
+    const response = await fetch('/api/pinky', { cache: 'no-store' });
+    const result = await response.json();
+    if (!response.ok) throw new Error('pinky markers unavailable');
+    parkingPinkies = new Map((result.pinkies || []).filter((pinky) => pinky.marker?.spot_id)
+      .map((pinky) => [pinky.marker.spot_id, { name: pinky.name, markerId: pinky.marker.marker_id }]));
+  } catch {
+    parkingPinkiesAt = Date.now() - PARKING_PINKIES_REFRESH_MS + 5000;  // keep what was known, ask again in 5 s
+  }
+}
+
+// The line under the camera: the Pinky whose marker the judged spot was registered with. A spot is one Pinky's own
+// registration, so a marker seen at that spot is that Pinky; when it is not seen, the line says whose spot is shown.
+function renderParkingPinky(data) {
+  if (!data?.spot_id) {
+    parkingPinky.className = 'parking-pinky absent';
+    parkingPinky.innerHTML = '<span>핑키 확인 전</span>';
+    return;
+  }
+  const pinky = parkingPinkies.get(data.spot_id);
+  const seen = ['MOVING', 'IN_POSITION', 'OFF_POSITION'].includes(data.state) || ['ARRIVED', 'MISALIGNED'].includes(data.status);
+  const marker = pinky ? `마커 ${pinky.markerId}번` : '';
+  parkingPinky.className = `parking-pinky${seen && pinky ? '' : ' absent'}`;
+  if (seen) {
+    parkingPinky.innerHTML = pinky
+      ? `<span>지금 보이는 핑키</span><strong>${escapeHtml(pinky.name)}</strong><small>${escapeHtml(marker)} · ${escapeHtml(data.spot_id)}</small>`
+      : `<span>지금 보이는 핑키</span><strong>이름을 알 수 없어요</strong><small>${escapeHtml(data.spot_id)} 자리를 쓰는 핑키가 정해져 있지 않아요</small>`;
+  } else {
+    parkingPinky.innerHTML = pinky
+      ? `<span>지금 보이는 핑키</span><strong>없음</strong><small>${escapeHtml(pinky.name)} 자리(${escapeHtml(marker)})를 보고 있어요</small>`
+      : `<span>지금 보이는 핑키</span><strong>없음</strong><small>${escapeHtml(data.spot_id)}</small>`;
+  }
 }
 
 function setParkingAdvice(text) {
@@ -1582,6 +1626,7 @@ function clearParkingPanel(title, message) {
   parkingDetails.innerHTML = '';
   drawParkingMap(null, 'unknown');
   drawParkingOverlay(null);
+  renderParkingPinky(null);
 }
 
 function renderParkingError(message) {
@@ -1602,6 +1647,7 @@ async function checkParking() {
   parkingCheckButton.disabled = true;
   parkingCheckButton.textContent = '판정 중…';
   try {
+    await loadParkingPinkies();
     const response = await fetch(`/api/parking-spots/${encodeURIComponent(spotId)}/check`, { cache: 'no-store' });
     const result = await response.json();
     if (!response.ok) {
@@ -1630,10 +1676,28 @@ async function pollParkingLive() {
   if (!parkingLive || parkingLiveBusy || !spotId) return;
   parkingLiveBusy = true;
   try {
-    const response = await fetch(`/api/parking-spots/${encodeURIComponent(spotId)}/live`, { cache: 'no-store' });
-    const result = await response.json();
-    parkingLiveOk = response.ok;
-    if (response.ok) renderParkingLive(result.live);
+    if (parkingPinkies.size) loadParkingPinkies();  // refreshes in the background every 30 s
+    else await loadParkingPinkies();  // the first line under the camera waits for the names
+    const liveOf = async (id) => {
+      const response = await fetch(`/api/parking-spots/${encodeURIComponent(id)}/live`, { cache: 'no-store' });
+      return { ok: response.ok, body: await response.json() };
+    };
+    let { ok, body: result } = await liveOf(spotId);
+    // Each Pinky has its own registration of the loading spot. When the marker of the spot shown is not in view,
+    // show the spot whose marker is: the panel follows whichever Pinky stands there (unless the id is being typed).
+    if (document.activeElement !== parkingSpotInput && !(ok && PARKING_TRACKED_STATES.has(result.live?.state))) {
+      for (const other of parkingLiveSpots) {
+        if (other === spotId) continue;
+        const seen = await liveOf(other);
+        if (seen.ok && PARKING_TRACKED_STATES.has(seen.body.live?.state)) {
+          parkingSpotInput.value = other;
+          ({ ok, body: result } = seen);
+          break;
+        }
+      }
+    }
+    parkingLiveOk = ok;
+    if (ok) renderParkingLive(result.live);
     else clearParkingPanel('실시간 추적 없음', apiErrorMessage(result, '이 주차 위치는 실시간 추적 중이 아닙니다.'));
   } catch {
     parkingLiveOk = false;
@@ -1643,9 +1707,13 @@ async function pollParkingLive() {
   }
 }
 
+const PARKING_TRACKED_STATES = new Set(['MOVING', 'IN_POSITION', 'OFF_POSITION']);
+let parkingLiveSpots = [];  // every spot followed live (health.parking.live_spots): one per registered Pinky
+
 function updateParkingConfig(parking) {
   parkingCameraId = parking?.camera_id || null;
   parkingLive = Boolean(parking?.live_tracking);
+  parkingLiveSpots = Array.isArray(parking?.live_spots) ? parking.live_spots : [];
   if (parking?.spot_id && !parkingSpotInput.value) parkingSpotInput.value = parking.spot_id;
   if (parkingCameraId) showParkingStream(parkingCameraId);
   parkingLiveMode.classList.toggle('on', parkingLive);

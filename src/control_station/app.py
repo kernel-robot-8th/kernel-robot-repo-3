@@ -39,7 +39,7 @@ from control_station.receiving_zones import ReceivingZoneError, load_receiving_z
 from control_station.pinky_fleet import PinkyFleetClient
 from control_station.pinky_gateway import PinkyGateway
 from control_station.dock_guide import DockGuideRelay
-from control_station.dock_handshake import DockSupervisor
+from control_station.dock_handshake import DockAutoLoop, DockSupervisor
 from control_station.pinky_markers import PinkyMarkerError, arrival_for, load_pinky_markers
 from control_station.parking_ros import RosParkingSource
 from control_station.robot_adapters import make_status_provider
@@ -317,6 +317,13 @@ def main() -> None:
     server.policy_camera_lock = threading.Lock()
     server.policy_cameras_lent = False
     server.shelf_slot_zones = ShelfSlotZones(slot_map)
+    # Each Pinky carries its own marker and has its own registration of the loading spot (config/pinky-markers.json).
+    try:
+        pinky_markers = load_pinky_markers()
+    except PinkyMarkerError as exc:
+        pinky_markers = {}
+        print(f"핑키 마커 파일을 읽지 못했습니다: {exc}", flush=True)
+    server.pinky_markers = pinky_markers
     server.parking_check = None
     server.parking_tracker = None
     if parking_spot_id:
@@ -326,7 +333,11 @@ def main() -> None:
                 "CONTROL_STATION_PARKING_SPOT에는 주차 판정 노드의 ROS domain ID"
                 "(CONTROL_STATION_MOBILE_DOMAIN 또는 ROS_DOMAIN_ID)를 지정해야 합니다."
             )
-        parking_node = RosParkingSource(int(raw_domain), parking_spot_id, server.parking_camera_id)
+        # Followed live: the primary spot and every Pinky's registered spot, each by its own parking node
+        # (ceiling_parking.launch.py starts them by the same list), so each Pinky is guided in on its own marker.
+        parking_node = RosParkingSource(
+            int(raw_domain), parking_spot_id, server.parking_camera_id,
+            extra_spot_ids=[marker.spot_id for marker in pinky_markers.values() if marker.registered])
         server.parking_node = parking_node
         server.parking_check = parking_node.check
         # Display-only live state of the same spot; VERIFY_ARRIVAL still decides only from a fresh check.
@@ -341,14 +352,8 @@ def main() -> None:
     server.mock_world = MockWorld.from_env()
     world = server.mock_world
     # Pinky arrival for orders: the real ceiling-camera judgment when the parking node is configured, else the mock
-    # (CONTROL_STATION_ORDER_PARKING=mock forces it). Each Pinky carries its own marker and has its own
-    # registration of the loading spot (config/pinky-markers.json), and the check uses the assigned Pinky's.
-    try:
-        pinky_markers = load_pinky_markers()
-    except PinkyMarkerError as exc:
-        pinky_markers = {}
-        print(f"핑키 마커 파일을 읽지 못했습니다: {exc}", flush=True)
-    server.pinky_markers = pinky_markers
+    # (CONTROL_STATION_ORDER_PARKING=mock forces it). The check uses the assigned Pinky's own registration
+    # (pinky_markers, loaded above).
     order_parking = world.parking
     if server.parking_check is not None and os.environ.get("CONTROL_STATION_ORDER_PARKING", "").strip() != "mock":
         order_parking = partial(arrival_for, pinky_markers, server.parking_check)
@@ -383,22 +388,30 @@ def main() -> None:
         return (fleet_confirm(pinky_id, action, token, offset) if offset is not None
                 else fleet_confirm(pinky_id, action, token))
 
-    # While the Pinky that carries the tracked marker drives in, the camera's live offset goes to it through the fleet
-    # dashboard, and its drive into the station steers on it (dock_guide.py). Only with a real dashboard and the
-    # parking node; CONTROL_STATION_DOCK_GUIDE=0 turns it off.
-    server.dock_guide = None
-    guided_pinky = next((pid for pid, marker in pinky_markers.items()
-                         if marker.registered and marker.spot_id == getattr(getattr(server, "parking_node", None), "spot_id", None)), None)
-    if (fleet is not None and guided_pinky is not None
-            and os.environ.get("CONTROL_STATION_DOCK_GUIDE", "1").strip() != "0"):
+    # While a Pinky drives in, the camera's live offset from its own registered spot goes to it through the fleet
+    # dashboard, and its drive into the station steers on it (dock_guide.py). One relay per Pinky whose spot is
+    # registered and followed live, each reading its own marker's node, so a Pinky is never steered on another
+    # one's registration. Only with a real dashboard and the parking node; CONTROL_STATION_DOCK_GUIDE=0 turns it off.
+    server.dock_guides = {}
+    parking_live = getattr(server, "parking_node", None)
+    if fleet is not None and parking_live is not None and os.environ.get("CONTROL_STATION_DOCK_GUIDE", "1").strip() != "0":
         def send_guide(pinky_id: str, guide: dict[str, float]) -> bool:
             status, _answer = fleet._request("POST", f"/api/robots/{pinky_id}/dock-guide", guide, timeout_s=0.5)
             return status == 200
 
-        server.dock_guide = DockGuideRelay(server.parking_node.snapshot, guided_pinky,
-                                           lambda pinky_id: fleet.fleet_status(pinky_id).get("phase"), send_guide)
-        server.dock_guide.start()
-        print(f"적재 자리 진입 안내: 천장 캠 실시간 값 → 핑키 {PINKY_NAMES[guided_pinky]} (핑키 관제 경유)", flush=True)
+        for pinky_id, marker in pinky_markers.items():
+            if marker.registered and marker.spot_id in parking_live.live_spots:
+                relay = DockGuideRelay(partial(parking_live.snapshot, marker.spot_id), pinky_id,
+                                       lambda pinky_id: fleet.fleet_status(pinky_id).get("phase"), send_guide)
+                relay.start()
+                server.dock_guides[pinky_id] = relay
+        if server.dock_guides:
+            print("적재 자리 진입 안내: 천장 캠 실시간 값 → " + ", ".join(
+                f"{PINKY_NAMES[pid]}({pinky_markers[pid].spot_id})" for pid in server.dock_guides)
+                + " (핑키마다 자기 등록 자리, 핑키 관제 경유)", flush=True)
+        unguided = [PINKY_NAMES[pid] for pid in pinky_markers if pid not in server.dock_guides]
+        if unguided:
+            print("적재 자리 진입 안내 없음(등록 안 됨): " + ", ".join(unguided), flush=True)
 
     dock_trials = Path(__file__).resolve().parents[2] / ".control-station" / "logs" / "dock-repeat.jsonl"
     dock_trials_lock = threading.Lock()
@@ -413,6 +426,18 @@ def main() -> None:
     server.dock_supervisor = DockSupervisor(
         fleet_status, lambda pinky_id: order_parking(pinky_id), dock_signal, record=record_dock_trial,
         in_order=lambda pinky_id: getattr(server, "order_flow", None) is not None and server.order_flow.holds_pinky(pinky_id))
+    # The control station steps that exchange itself, so a Pinky arriving at the loading spot gets its dock_complete
+    # (or a redock) without the test screen open: on unless CONTROL_STATION_DOCK_AUTO=0, and the test screen's box
+    # switches it (POST /api/pinky/dock-auto). Only with a real fleet dashboard: the mock world confirms by itself.
+    server.dock_auto = os.environ.get("CONTROL_STATION_DOCK_AUTO", "1").strip() != "0"
+    server.dock_auto_loop = None
+    if fleet is not None:
+        server.dock_auto_loop = DockAutoLoop(
+            PINKY_NAMES, lambda pinky_id: fleet_status(pinky_id).get("phase"),
+            lambda pinky_id: server.dock_supervisor.step(pinky_id, True, None),
+            enabled=lambda: server.dock_auto).start()
+        print("적재 자리 도착 자동 처리: " + ("켜짐 (카메라가 자리에 있다고 두 번 보면 도킹완료, 어긋나면 다시 맞추기)"
+                                    if server.dock_auto else "꺼짐 (CONTROL_STATION_DOCK_AUTO=0)"), flush=True)
     # Counting for the stock check and the per-object transfer check: the cameras' YOLO detections when
     # CONTROL_STATION_ORDER_COUNTS=camera (shelf cams with slot zones, the top cam inside the Pinky tray), else the
     # mock world. With camera counts but mock picks, a person has to move each object during the pick step.
