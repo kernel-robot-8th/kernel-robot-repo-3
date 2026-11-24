@@ -1,5 +1,8 @@
-// Spot registration: build_registration() against the former Python CLI on the same frames, and the pinky_parking
-// CLI end to end with a video file standing in for the ceiling camera.
+// 주차 위치 등록 테스트: 같은 프레임에서 build_registration()이 예전 Python CLI와 같은 기록을 만드는지,
+// 그리고 비디오 파일을 천장 카메라 대신 써서 pinky_parking CLI를 처음부터 끝까지 돌려 보는지 확인한다.
+//
+// 위치: parking_vision_tests(gtest). PINKY_PARKING_CLI는 CMake가 넘겨주는 빌드된 CLI 경로다.
+// 기대값(parity.json의 registration_cases)은 커밋 8ea4c84의 Python CLI를 시스템 OpenCV 4.6으로 돌려 만든 것이다.
 #include <sys/wait.h>
 
 #include <array>
@@ -25,11 +28,14 @@ using nlohmann::json;
 
 const fs::path kFixtures = PARKING_VISION_FIXTURE_DIR;
 
+// 예전 Python 구현을 실제로 돌려 만든 기대값 전체.
 json parity() {
   std::ifstream stream(kFixtures / "parity.json");
   return json::parse(stream);
 }
 
+// 정상 등록, 고정 마커 지정, 시야 확인 끔, 단일 마커 신뢰, 움직임 거부, 흔들린 고정 마커 경우마다
+// 키 순서, 값, 거부 문구가 Python CLI와 같은지 본다. 시각(created_at)과 OpenCV 버전은 비교하지 않는다.
 TEST(RegistrationParity, SameRecordAsThePythonCli) {
   const Intrinsics intrinsics = load_intrinsics(kFixtures / "spot" / "ceiling_camera.json", "ceiling_camera");
   for (const json& c : parity().at("registration_cases")) {
@@ -38,7 +44,7 @@ TEST(RegistrationParity, SameRecordAsThePythonCli) {
     for (const json& frame : c.at("frames")) {
       const cv::Mat image = cv::imread((kFixtures / frame.get<std::string>()).string(), cv::IMREAD_UNCHANGED);
       const MarkerDetections found = detect_markers(image, "DICT_4X4_50");
-      collected.emplace_back(found.at(21).front(), found);
+      collected.emplace_back(found.at(21).front(), found);  // 21번이 기대값 프레임의 Pinky 마커다
     }
     const json& o = c.at("options");
     RegistrationOptions options;
@@ -57,6 +63,7 @@ TEST(RegistrationParity, SameRecordAsThePythonCli) {
     try {
       const json record = build_registration(collected, options, intrinsics, kFixtures);
       ASSERT_FALSE(expected.contains("rejected")) << where;
+      // JSON 키 순서까지 Python과 같아야 한다(ordered_json).
       std::vector<std::string> keys;
       for (const auto& item : record.items()) keys.push_back(item.key());
       EXPECT_EQ(keys, expected.at("keys").get<std::vector<std::string>>()) << where;
@@ -68,6 +75,7 @@ TEST(RegistrationParity, SameRecordAsThePythonCli) {
                               "status", "review_required", "usable_for_robot_control"}) {
         EXPECT_EQ(record.at(key), expected.at(key)) << where << " " << key;
       }
+      // 자세는 solvePnP 수치 오차를 감안해 회전 1e-6, 이동 1e-4 mm로, 중앙값 꼭짓점은 1e-9 px로 비교한다.
       for (int r = 0; r < 3; ++r) {
         for (int k = 0; k < 3; ++k) {
           EXPECT_NEAR(record["reference_pose_in_camera"]["rotation"][r][k].get<double>(),
@@ -97,6 +105,7 @@ struct CliRun {
   std::string output;
 };
 
+// 빌드된 CLI를 셸로 실행하고 stdout과 stderr를 합쳐 받는다. 정상 종료가 아니면 종료 코드를 -1로 둔다.
 CliRun run(const std::string& arguments) {
   const std::string command = std::string(PINKY_PARKING_CLI) + " " + arguments + " 2>&1";
   std::unique_ptr<FILE, int (*)(FILE*)> pipe(popen(command.c_str(), "r"), pclose);
@@ -107,7 +116,7 @@ CliRun run(const std::string& arguments) {
   return {WIFEXITED(status) ? WEXITSTATUS(status) : -1, output};
 }
 
-// An MJPEG AVI cycling through fixture frames, the format the camera delivers.
+// 기대값 프레임을 돌아가며 넣은 MJPEG AVI(카메라가 보내는 형식과 같다). 640x480, 30 fps, 기본 60프레임.
 void write_video(const fs::path& path, const std::vector<std::string>& frame_names, int frames = 60) {
   cv::VideoWriter writer(path.string(), cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), 30.0, cv::Size(640, 480));
   ASSERT_TRUE(writer.isOpened());
@@ -120,6 +129,7 @@ void write_video(const fs::path& path, const std::vector<std::string>& frame_nam
   }
 }
 
+// 테스트마다 임시 저장소 루트를 만들고 내부 보정 파일을 복사해 둔다. 끝나면 지운다.
 class PinkyParkingCli : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -138,6 +148,7 @@ class PinkyParkingCli : public ::testing::Test {
   fs::path root;
 };
 
+// register -> check 흐름과 종료 코드(0 도착, 1 어긋남), 덮어쓰기 거부를 확인한다.
 TEST_F(PinkyParkingCli, RegisterThenCheck) {
   write_video(root / "parked.avi", {"reg_0", "reg_1", "reg_2", "reg_3", "reg_4"});
   const CliRun registered = run("register " + common() + " --camera " + (root / "parked.avi").string() +
@@ -146,7 +157,7 @@ TEST_F(PinkyParkingCli, RegisterThenCheck) {
   const fs::path spot_file = root / ".control-station" / "parking-spots" / "dock.json";
   ASSERT_TRUE(fs::exists(spot_file));
   const ParkingSpot spot = load_spot(spot_file, root);
-  EXPECT_EQ(spot.anchors.size(), 2u);
+  EXPECT_EQ(spot.anchors.size(), 2u);  // 기대값 프레임에는 고정 마커가 두 개 있다
   EXPECT_EQ(spot.marker_forward_axis, "-x");
   EXPECT_EQ(spot.tolerance.position_mm, 30.0);
 
@@ -159,19 +170,21 @@ TEST_F(PinkyParkingCli, RegisterThenCheck) {
   EXPECT_EQ(line.at("view_check"), "ON");
   EXPECT_TRUE(line.contains("forward_mm"));
 
+  // 26 mm 옮긴 프레임. 기본 허용 오차 30 mm로는 안이라 --tolerance-mm 20으로 좁혀 어긋남(종료 코드 1)을 만든다.
   write_video(root / "moved.avi", {"moved"});
   const CliRun misaligned =
       run("check " + common() + " --camera " + (root / "moved.avi").string() + " --once --tolerance-mm 20");
   EXPECT_EQ(misaligned.exit_code, 1) << misaligned.output;
   EXPECT_NE(misaligned.output.find("\"MISALIGNED\""), std::string::npos);
 
-  // Never overwrites a registered spot.
+  // 등록된 주차 위치는 절대 덮어쓰지 않는다.
   const CliRun again = run("register " + common() + " --camera " + (root / "parked.avi").string() +
                         " --marker-id 21 --marker-side-mm 70 --headless");
   EXPECT_EQ(again.exit_code, 1);
   EXPECT_NE(again.output.find("이미 등록된 주차 위치"), std::string::npos);
 }
 
+// 등록 중 Pinky가 움직이면(등록 위치와 이동 프레임이 섞임) 거부하고 파일을 남기지 않는다.
 TEST_F(PinkyParkingCli, RegistrationRejectedWhenPinkyMoves) {
   write_video(root / "moving.avi", {"reg_0", "moved"});
   const CliRun result = run("register " + common() + " --camera " + (root / "moving.avi").string() +
@@ -181,6 +194,7 @@ TEST_F(PinkyParkingCli, RegistrationRejectedWhenPinkyMoves) {
   EXPECT_FALSE(fs::exists(root / ".control-station" / "parking-spots" / "dock.json"));
 }
 
+// 주차 위치 파일도 카메라도 없으면 판정 불가(종료 코드 2)로 끝난다. 1(어긋남)로 오해되면 안 된다.
 TEST_F(PinkyParkingCli, CheckWithoutSpotOrCameraIsNotJudged) {
   EXPECT_EQ(run("check " + common() + " --camera " + (root / "none.avi").string() + " --once").exit_code, 2);
 }
