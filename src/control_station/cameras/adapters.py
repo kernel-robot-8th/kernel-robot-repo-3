@@ -1,14 +1,36 @@
-"""Camera capture ownership and MJPEG frame access for the dashboard.
+"""카메라 장치를 잡고(capture 소유) 대시보드에 MJPEG 프레임과 YOLO 검출을 내준다.
 
-With two arms there are six cameras (docs/implementation/runbook.md, 카메라 6대):
-- head_camera: the ceiling camera that checks Pinky's parking; the parking launch opens it, this reads its topic
-- shelf_camera: the shelf camera that counts stock
-- arm01_gripper / arm02_gripper: each arm's gripper (joint) camera
-- arm01_overhead / arm02_overhead: each arm's overhead camera, an input of the ACT policies recorded on that arm
-The arm cameras come from arms/config.py (CONTROL_STATION_ARM01_*_CAMERA, ARM02_*). A gripper camera is streamed
-like the older joint camera; an overhead camera belongs to the policy and is only checked for presence unless
-CONTROL_STATION_OVERHEAD_CAMERA_PREVIEW=1. While a policy runs, the feeds on its devices are closed (V4L2 lets only
-one program stream a device). All six share one USB controller, so every device is opened as MJPG.
+팔이 두 대라 카메라는 여섯 대다(docs/implementation/runbook.md, 카메라 6대):
+- head_camera: 핑키 주차를 확인하는 천장 카메라. 주차 launch가 장치를 열고, 여기서는 그 토픽을 읽는다
+- shelf_camera: 재고를 세는 선반 카메라
+- arm01_gripper / arm02_gripper: 팔마다 그리퍼(관절) 카메라
+- arm01_overhead / arm02_overhead: 팔마다 위 카메라. 그 팔에서 녹화한 ACT 정책의 입력이다
+팔 카메라는 arms/config.py(CONTROL_STATION_ARM01_*_CAMERA, ARM02_*)에서 온다. 그리퍼 카메라는 예전 관절 카메라처럼
+스트리밍한다. 위 카메라는 정책 몫이라 CONTROL_STATION_OVERHEAD_CAMERA_PREVIEW=1이 아니면 꽂혀 있는지만 확인한다.
+정책이 도는 동안에는 그 정책이 쓰는 장치의 피드를 닫는다(V4L2는 한 장치를 한 프로그램만 스트리밍하게 한다).
+여섯 대가 USB 컨트롤러 하나를 같이 쓰므로 모든 장치를 MJPG로 연다.
+
+파일 구성(위에서 아래로):
+1) 공통 도구와 탑재 검출 합치기: `_sha256_file`, `_merge_load_detections`
+2) 피드 하나의 상태: `_CameraFeed`
+3) YOLO 검출기: `_YoloDetector`
+4) 장치를 열지 않는 관리자와 팔 카메라 이름: `UnconfiguredArmCameraStreamManager`, `_arm_camera_id`
+5) ROS 영상 토픽 소스(`ros:` 장치): `_RosImageSource`
+6) 카메라 관리자 `OpenCVArmCameraStreamManager`
+   6a) 피드 구성: 환경 변수 → 피드, 같은 장치 겹침 검사, 캡처 스레드 시작
+   6b) 정책 실행에 장치 빌려주기·되찾기
+   6c) V4L2 캡처 루프
+   6d) 프레임 처리: ArUco 마커, YOLO, JPEG
+   6e) ROS 토픽 캡처 루프
+   6f) 스냅샷과 프레임 내주기, 종료
+
+스레드: 피드마다 캡처 스레드("camera-<id>", 데몬)가 하나씩 돌며 장치(또는 ROS 토픽)에서 프레임을 읽고 YOLO를 돌려,
+결과를 `feed.lock` 아래에서 피드에 쓴다. HTTP 스레드는 같은 잠금 아래에서 snapshots()/frame_for()로 읽는다. ROS
+소스는 자기 rclpy executor를 따로 데몬 스레드에서 돌리고, 최신 프레임 하나만 Condition으로 캡처 스레드에 넘긴다.
+
+위치: app.py가 만들어 server.camera_manager로 둔다. 스냅샷은 api/cameras.py(카드, MJPEG 스트림), cameras/counts.py
+(개수 세기), cameras/shelf_slots.py(칸 영역)가 쓰고, api/arm.py가 정책 실행 전후로 hold_for_policy / lend_devices를
+부른다.
 """
 
 from __future__ import annotations
@@ -27,10 +49,16 @@ from typing import Callable, Mapping
 from control_station.arms.config import ROLE_LABELS, ArmConfigError, ArmDevices, arm_devices, env_prefix, load_arms
 from control_station.storage.models import CameraConnectionState, CameraSnapshot, CameraStreamState, FrameFreshness
 
+# 검출 좌표가 어떤 픽셀 변환을 거쳤는지 나타내는 ID: OpenCV V4L2로 받은 그대로이고 앱에서 자르거나 뒤집지 않는다.
+# 칸 영역(shelf_slots.py)은 보정 때와 이 값이 같을 때만 쓴다.
 PIXEL_TRANSFORM_ID = "opencv-v4l2-capture-no-app-geometry-v1"
 
 
+# ──── 1) 공통 도구와 탑재 검출 합치기 ────────────────────────────────────────────────────────────
+
+
 def _sha256_file(path: str) -> str:
+    """파일의 SHA-256(1 MiB씩 읽음). 어떤 가중치 파일을 올렸는지 기록하는 데 쓴다."""
     digest = hashlib.sha256()
     with open(path, "rb") as source:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
@@ -39,6 +67,8 @@ def _sha256_file(path: str) -> str:
 
 
 def _same_load_object(first: dict[str, object], second: dict[str, object]) -> bool:
+    """두 모델의 검출이 같은 물건인지 박스 IoU로 본다. 같은 클래스면 0.35, 클래스가 다르면(두 모델이 이름을 다르게
+    붙임) 더 많이 겹쳐야 하므로 0.55 이상. 한쪽이 pinky/car(핑키 몸체)인데 클래스가 다르면 같은 물건이 아니다."""
     first_name, second_name = first["class_name"], second["class_name"]
     if first_name != second_name and ({first_name, second_name} & {"pinky", "car"}):
         return False
@@ -53,7 +83,9 @@ def _same_load_object(first: dict[str, object], second: dict[str, object]) -> bo
 def _merge_load_detections(
     dedicated: list[dict[str, object]], general: list[dict[str, object]]
 ) -> list[dict[str, object]]:
-    # Keep the specialist's class and box when both models see the same item.
+    """탑재 전용 YOLO(dedicated)와 피드의 일반 YOLO(general) 검출을 합친다. 둘 다 신뢰도 0.5 이상만 쓰고, 일반
+    모델 검출은 전용 모델 검출과 겹치지 않는 것만 덧붙인다."""
+    # 두 모델이 같은 물건을 보면 전문 모델(탑재 전용)의 클래스와 박스를 쓴다.
     primary = [item for item in dedicated if float(item["confidence"]) >= 0.5]
     additional = [
         item.copy() for item in general if float(item["confidence"]) >= 0.5
@@ -62,51 +94,68 @@ def _merge_load_detections(
     return primary + additional
 
 
+# ──── 2) 피드 하나의 상태 ────────────────────────────────────────────────────────────────────────
+
+
 @dataclass
 class _CameraFeed:
+    """카메라 하나의 설정과 최신 상태.
+
+    캡처 스레드가 쓰고 HTTP 스레드가 읽으므로, 프레임·검출·상태 필드는 `lock` 아래에서 다룬다. Event 필드(lent,
+    handed_over, released)는 그 자체로 스레드 안전하며 캡처 스레드와 정책 쪽 호출이 주고받는 신호다.
+    """
+
     camera_id: str
-    position: str
-    device: str | None
-    frame: bytes | None = None
+    position: str  # HEAD, SHELF, FRONT, GRIPPER, OVERHEAD 등. 해상도 환경 변수 이름에도 쓴다
+    device: str | None  # V4L2 경로, `ros:<토픽>`, 또는 None(미설정이거나 열지 않기로 함)
+    frame: bytes | None = None  # 최신 JPEG
     frame_width: int | None = None
     frame_height: int | None = None
-    frame_sha256: str | None = None
+    frame_sha256: str | None = None  # 그리기 전 원본 BGR 프레임의 SHA-256
     connection_state: CameraConnectionState = CameraConnectionState.UNKNOWN
     stream_state: CameraStreamState = CameraStreamState.UNKNOWN
-    last_frame_at: str | None = None
-    last_frame_monotonic: float | None = None
-    frame_times: list[float] = field(default_factory=list)
+    last_frame_at: str | None = None  # 캡처 시각(UTC ISO)
+    last_frame_monotonic: float | None = None  # 신선도 계산용 monotonic 시각(초)
+    frame_times: list[float] = field(default_factory=list)  # 최근 2초의 프레임 시각(fps 계산용)
     error_message: str | None = None
-    sequence: int = 0
+    sequence: int = 0  # 내보낸 프레임 수 = 최신 프레임 번호
     detector: "_YoloDetector | None" = None
+    # 핑키 탑재 전용 YOLO(CONTROL_STATION_LOAD_YOLO_WEIGHTS). 적재 카메라 피드에만 붙는다.
     load_detector: "_YoloDetector | None" = None
     load_detections: list[dict[str, object]] = field(default_factory=list)
-    robot_id: str | None = "arm-01"
+    robot_id: str | None = "arm-01"  # 이 카메라가 딸린 팔(예전 단일 팔 설정이 기본). 고정 카메라는 None
     detections: list[dict[str, object]] = field(default_factory=list)
-    markers: list[dict[str, object]] = field(default_factory=list)
+    markers: list[dict[str, object]] = field(default_factory=list)  # ArUco 마커(표시용, _find_markers)
     lock: threading.Lock = field(default_factory=threading.Lock)
     thread: threading.Thread | None = None
-    # Set while another program (the arm worker running a LeRobot policy) needs this V4L2 device: the capture
-    # loop closes the device, sets `handed_over`, and reopens it once `lent` is cleared.
+    # 다른 프로그램(LeRobot 정책을 돌리는 팔 워커)이 이 V4L2 장치를 써야 하는 동안 세워진다. 캡처 루프가 장치를
+    # 닫고 `handed_over`를 세우며, `lent`가 지워지면 다시 연다.
     lent: threading.Event = field(default_factory=threading.Event)
     handed_over: threading.Event = field(default_factory=threading.Event)
     lent_reason: str = ""
-    # Set while this process holds no open capture, so another process may open the device.
+    # 이 프로세스가 열린 캡처를 갖고 있지 않은 동안 세워진다. 그동안 다른 프로세스가 장치를 열어도 된다.
     released: threading.Event = field(default_factory=threading.Event)
-    # Requested capture size. Some sensors crop the field of view at 4:3, so a wider mode may show more.
+    # 요청하는 캡처 크기(px). 어떤 센서는 4:3에서 화각을 잘라 내므로 더 넓은 모드가 더 많이 보일 수 있다.
     capture_size: tuple[int, int] = (640, 480)
-    role: str | None = None
-    opened_by: str = "control_station"
-    setting: str | None = None
-    # Only check that the device exists; the policy opens it (an overhead camera without preview).
+    role: str | None = None  # 화면에 보일 역할 이름
+    opened_by: str = "control_station"  # 장치를 여는 쪽: control_station, policy, ros_node
+    setting: str | None = None  # 장치 경로를 정하는 환경 변수 이름(오류 안내용)
+    # 장치가 있는지만 확인한다. 장치는 정책이 연다(미리보기를 켜지 않은 위 카메라).
     watch_only: bool = False
 
 
-class _YoloDetector:
-    """Run YOLO on camera frames and draw the detections.
+# ──── 3) YOLO 검출기 ─────────────────────────────────────────────────────────────────────────────
 
-    The detections are shown on the dashboard, placed into shelf slots (cameras/shelf_slots.py) and counted for the
-    order flow's stock and load checks. They are camera evidence only; they never move a robot by themselves.
+
+class _YoloDetector:
+    """카메라 프레임에 YOLO를 돌리고 검출을 그린다.
+
+    검출은 대시보드에 보이고, 선반 칸에 배정되며(cameras/shelf_slots.py), 주문 흐름의 재고·탑재 확인에서 세어진다.
+    검출은 카메라 근거일 뿐이고, 스스로 로봇을 움직이는 일은 없다.
+
+    설정(env_prefix 예: CONTROL_STATION_HEAD_YOLO): {PREFIX}_CONF(기본 0.25), {PREFIX}_WORLD_PROMPTS(있으면 YOLO-World
+    열린 어휘 모델), {PREFIX}_DEVICE(추론 장치), {PREFIX}_CLASS_CONF(클래스별 기준). 설정이 틀리면 state를 "error"로
+    두고 load()가 아무것도 하지 않는다. 상태: loading → ready 또는 error.
     """
 
     def __init__(self, weights: str, env_prefix: str) -> None:
@@ -120,12 +169,13 @@ class _YoloDetector:
         self.state = "loading"
         self.error_message: str | None = None
         self._model = None
-        self._inference_lock = threading.RLock()
+        self._inference_lock = threading.RLock()  # 추론은 한 번에 하나씩
         self.class_names: list[str] = []
         self.weights_sha256: str | None = None
         self.confidence_threshold: float | None = None
-        self.inference_image_size = 640
+        self.inference_image_size = 640  # 추론 입력 크기(px, 긴 변)
         self.ultralytics_version: str | None = None
+        # 프롬프트는 1~100개, 각 1~80자, 대소문자를 무시하고 중복 없이.
         if raw_prompts is not None and raw_prompts.strip():
             self.detector_model_type = "YOLO_WORLD_OPEN_VOCAB"
             prompts = [prompt.strip() for prompt in raw_prompts.split(",")]
@@ -153,8 +203,8 @@ class _YoloDetector:
         else:
             self.confidence = confidence
             self.confidence_threshold = confidence
-        # Per-class thresholds, e.g. {PREFIX}_CLASS_CONF=tissue=0.15 (the white wet-tissue pack scores low on the
-        # white Pinky tray). Classes not named keep {PREFIX}_CONF.
+        # 클래스별 기준값. 예: {PREFIX}_CLASS_CONF=tissue=0.15 (흰 물티슈 팩은 흰 핑키 쟁반 위에서 점수가 낮게 나온다).
+        # 이름을 대지 않은 클래스는 {PREFIX}_CONF를 쓴다.
         self.class_confidence: dict[str, float] = {}
         for part in os.environ.get(f"{env_prefix}_CLASS_CONF", "").split(","):
             name, _, value = part.partition("=")
@@ -171,6 +221,10 @@ class _YoloDetector:
             self.class_confidence[name.strip()] = threshold
 
     def load(self) -> bool:
+        """가중치를 읽어 모델을 준비한다. 성공하면 state="ready"이고 True.
+
+        피드의 캡처 스레드가 시작할 때 부른다. 그래서 무거운 ultralytics import와 모델 로드가 서버 시작을 막지 않는다.
+        """
         if self.state == "error":
             return False
         if not os.path.isfile(self.weights):
@@ -192,6 +246,8 @@ class _YoloDetector:
             self.error_message = f"ultralytics 초기화 실패: {exc}"
             return False
         try:
+            # 로드 앞뒤의 해시를 비교해, 읽는 도중 파일이 바뀌지 않았음을 확인한다. 그래야 기록하는 weights_sha256이
+            # 실제로 올린 모델과 같다.
             initial_hash = _sha256_file(self.weights)
             model = YOLOWorld(self.weights) if self.prompts else YOLO(self.weights)
             if self.prompts:
@@ -221,6 +277,10 @@ class _YoloDetector:
         return True
 
     def _predict(self, image, *, render: bool):  # type: ignore[no-untyped-def]
+        """모델을 한 번 돌려 (그린 이미지 또는 원본, 검출 목록)을 준다. 좌표는 원본 프레임의 px.
+
+        모든 기준값 가운데 가장 낮은 값으로 돌린 뒤, 클래스별 기준으로 다시 거른다.
+        """
         floor = min([self.confidence, *self.class_confidence.values()])
         result = self._model.predict(
             source=image,
@@ -229,7 +289,7 @@ class _YoloDetector:
             device=self.device,
             verbose=False,
         )[0]
-        if self.class_confidence:  # keep each box only above its own class threshold (drawn boxes too)
+        if self.class_confidence:  # 박스마다 자기 클래스 기준 이상일 때만 남긴다(그리는 박스도 같이)
             keep = [index for index, box in enumerate(result.boxes)
                     if float(box.conf.item()) >= self.class_confidence.get(result.names[int(box.cls.item())], self.confidence)]
             result = result[keep]
@@ -248,16 +308,24 @@ class _YoloDetector:
         return (result.plot() if render else image), detections
 
     def annotate(self, image, *, render: bool = True):  # type: ignore[no-untyped-def]
+        """잠금 아래에서 추론한다. render=False면 그리지 않고 원본을 돌려준다(탑재 검출용). 준비 전이면 RuntimeError."""
         with self._inference_lock:
             if self.state != "ready" or self._model is None:
                 raise RuntimeError("YOLO detector is no longer ready")
             return self._predict(image, render=render)
 
 
+# ──── 4) 장치를 열지 않는 관리자와 팔 카메라 이름 ──────────────────────────────────────────────────
+
+
 class UnconfiguredArmCameraStreamManager:
-    """Report the camera slots without opening any physical device."""
+    """물리 장치를 하나도 열지 않고 카메라 자리만 알린다.
+
+    app.py가 카메라 설정이 하나도 없을 때 쓴다. sequence_for가 없으므로 스트림은 404다(api/cameras.py).
+    """
 
     def snapshots(self) -> list[CameraSnapshot]:
+        """여섯 카메라 자리를 모두 '장치 경로 미설정'으로 알린다."""
         slots = [("head_camera", None, "HEAD", "핑키 정차 확인 (천장)", "CONTROL_STATION_HEAD_CAMERA"),
                  ("shelf_camera", None, "SHELF", "선반 재고", "CONTROL_STATION_SHELF_CAMERA")]
         for arm_id, label in (("arm-01", "왼쪽 팔"), ("arm-02", "오른쪽 팔")):
@@ -282,27 +350,35 @@ class UnconfiguredArmCameraStreamManager:
 
 
 def _arm_camera_id(arm_id: str, role: str) -> str:
-    """arm-01, GRIPPER -> arm01_gripper"""
+    """팔 id와 역할로 카메라 id를 만든다. 예: arm-01, GRIPPER -> arm01_gripper"""
     return f"{arm_id.replace('-', '')}_{role.lower()}"
 
 
 def _arm_role(label: str, role: str) -> str:
+    """화면 역할 이름(예: "왼쪽 팔 그리퍼 캠"). 위 카메라에는 "(ACT 정책)"을 붙인다."""
     return f"{label} {ROLE_LABELS[role]}" + (" (ACT 정책)" if role == "OVERHEAD" else "")
 
 
 def _load_arm_devices() -> dict[str, ArmDevices]:
+    """config/arms.json의 팔별 카메라 장치. 팔 설정이 없거나 틀리면 빈 dict(팔 카메라 없이 시작)."""
     try:
         return arm_devices(load_arms().arms)
     except ArmConfigError:
         return {}
 
 
-# CONTROL_STATION_*_CAMERA=ros:<image topic> reads that camera from a ROS camera driver node instead of V4L2.
+# ──── 5) ROS 영상 토픽 소스 ───────────────────────────────────────────────────────────────────────
+
+# CONTROL_STATION_*_CAMERA=ros:<영상 토픽>이면 그 카메라를 V4L2 대신 ROS 카메라 드라이버 노드에서 읽는다.
 ROS_SOURCE_PREFIX = "ros:"
 
 
 class _RosImageSource:
-    """Latest frame of one sensor_msgs Image or CompressedImage topic, as BGR with its capture time."""
+    """sensor_msgs Image 또는 CompressedImage 토픽 하나의 최신 프레임을, 캡처 시각과 함께 BGR로 준다.
+
+    자체 rclpy Context와 executor를 데몬 스레드("ros-camera-<토픽>")에서 돌린다. 콜백은 최신 프레임 하나만 덮어
+    두고(쌓지 않음) Condition으로 기다리는 캡처 스레드를 깨운다. 도메인: CONTROL_STATION_MOBILE_DOMAIN → ROS_DOMAIN_ID.
+    """
 
     def __init__(self, topic: str) -> None:
         import numpy as np
@@ -317,13 +393,15 @@ class _RosImageSource:
             raise RuntimeError("ROS domain ID(CONTROL_STATION_MOBILE_DOMAIN 또는 ROS_DOMAIN_ID)가 필요합니다")
         self._np = np
         self._compressed = topic.endswith("/compressed")
-        self._latest: tuple[object, str, float] | None = None
+        self._latest: tuple[object, str, float] | None = None  # (BGR 이미지, captured_at ISO, captured monotonic)
         self._ready = threading.Condition()
         self._context = Context()
         self._context.init(domain_id=int(raw_domain))
+        # 노드 이름은 토픽에서 만든다(ROS 이름에 쓸 수 없는 글자는 _로, 길이는 200자까지).
         name = "control_station_camera_" + re.sub(r"[^A-Za-z0-9_]", "_", topic.strip("/"))
         self._node = Node(name[:200], context=self._context)
-        # Best effort subscribes to both reliable and best-effort drivers and never queues stale frames.
+        # best effort(qos_profile_sensor_data)로 구독하면 reliable·best-effort 드라이버 모두에 붙고, 오래된 프레임을
+        # 쌓아 두지 않는다.
         self._node.create_subscription(
             CompressedImage if self._compressed else Image, topic, self._on_image, qos_profile_sensor_data
         )
@@ -333,6 +411,8 @@ class _RosImageSource:
         self._thread.start()
 
     def _to_bgr(self, message):  # type: ignore[no-untyped-def]
+        """ROS 영상 메시지를 BGR numpy 배열로. compressed는 cv2로 디코드하고(실패하면 None), raw는 bgr8·rgb8·mono8만
+        받는다. raw는 한 줄 바이트 수(step)에 붙은 패딩을 잘라 낸다."""
         import cv2
 
         np = self._np
@@ -350,13 +430,15 @@ class _RosImageSource:
         raise ValueError(f"지원하지 않는 영상 encoding: {message.encoding}")
 
     def _on_image(self, message) -> None:  # type: ignore[no-untyped-def]
+        """executor 스레드에서 불리는 구독 콜백. 최신 프레임 하나를 덮어 두고 기다리는 쪽을 깨운다."""
         received_monotonic = time.monotonic()
         received_wall = time.time()
         image = self._to_bgr(message)
         if image is None:
             return
         stamp = message.header.stamp.sec + message.header.stamp.nanosec / 1e9
-        # A frame counts as captured at its stamp but never later than it arrived, like the C++ parking node.
+        # 프레임의 캡처 시각은 메시지 stamp로 하되 도착 시각보다 늦을 수는 없다(C++ 주차 노드와 같은 규칙).
+        # stamp가 0이면 도착 시각을 쓴다. 신선도용 monotonic 시각도 같은 나이(age, 초)만큼 앞당긴다.
         age = max(0.0, received_wall - stamp) if stamp > 0 else 0.0
         captured_wall = received_wall - age
         captured_at = datetime.fromtimestamp(captured_wall, tz=timezone.utc).isoformat(timespec="milliseconds")
@@ -365,6 +447,8 @@ class _RosImageSource:
             self._ready.notify_all()
 
     def next_frame(self, timeout_s: float) -> tuple[object, str, float] | None:
+        """새 프레임을 최대 timeout_s(초) 기다려 꺼낸다. 꺼낸 프레임은 비우므로 같은 프레임을 두 번 주지 않는다.
+        없으면 None."""
         with self._ready:
             if self._latest is None:
                 self._ready.wait(timeout_s)
@@ -372,6 +456,7 @@ class _RosImageSource:
         return frame
 
     def close(self) -> None:
+        """기다리는 캡처 스레드를 깨우고, executor·노드·Context를 정리한 뒤 스레드를 최대 2초 기다린다."""
         with self._ready:
             self._ready.notify_all()
         self._executor.shutdown()
@@ -380,8 +465,15 @@ class _RosImageSource:
         self._thread.join(timeout=2)
 
 
+# ──── 6) 카메라 관리자 ───────────────────────────────────────────────────────────────────────────
+
+
 class OpenCVArmCameraStreamManager:
-    """Own configured V4L2 devices once and expose their latest JPEG frames."""
+    """설정된 V4L2 장치를 하나씩 한 번만 열어 소유하고, 최신 JPEG 프레임과 검출을 내준다.
+
+    피드마다 캡처 스레드 하나. 정책 실행이 장치를 써야 하면 그 피드를 닫았다가(hold_for_policy, lend_devices) 끝나면
+    다시 연다. `ros:` 장치는 V4L2 대신 ROS 토픽에서 받으므로 정책과 다투지 않는다.
+    """
 
     def __init__(
         self,
@@ -392,15 +484,17 @@ class OpenCVArmCameraStreamManager:
         policy_devices: Callable[[], list[str]] | None = None,
         arm_cameras: Mapping[str, ArmDevices] | None = None,
     ) -> None:
-        # The learned-policy client opens the Front Camera itself, and V4L2 lets only one
-        # process stream it, so the dashboard gives it up while a policy run is requested or alive.
+        # ── 6a) 피드 구성 ──
+        # 학습 정책 클라이언트가 Front Camera를 직접 열고 V4L2는 한 프로세스만 스트리밍하게 하므로, 정책 실행이
+        # 요청됐거나 살아 있는 동안 대시보드가 그 카메라를 내놓는다.
         self._policy_active = policy_active
         self._front_policy_hold = False
-        self._policy_active_cache = (0.0, False)
-        # Devices of the live policy run (any arm) and devices held for a run about to start: closed meanwhile.
+        self._policy_active_cache = (0.0, False)  # (확인한 monotonic 시각, 결과): 0.2초 캐시
+        # 살아 있는 정책 실행(어느 팔이든)의 장치와, 곧 시작할 실행을 위해 잡아 둔 장치: 그동안 닫는다.
         self._policy_devices = policy_devices
         self._policy_devices_cache: tuple[float, frozenset[str]] = (0.0, frozenset())
         self._held_devices: frozenset[str] = frozenset()
+        # 예전 단일 팔 설정의 관절(그리퍼) 카메라. CONTROL_STATION_ARM_CAMERA는 그보다 더 오래된 이름이다.
         joint_device = os.environ.get(
             "CONTROL_STATION_JOINT_CAMERA",
             os.environ.get(
@@ -412,6 +506,7 @@ class OpenCVArmCameraStreamManager:
             "CONTROL_STATION_HEAD_CAMERA",
             "/dev/v4l/by-id/usb-Jieli_Technology_USB_Composite_Device-video-index0",
         ).strip() if head_enabled else ""
+        # 예전 팔별 미리보기 피드(LEFT/RIGHT_CEILING, LEFT/RIGHT_JOINT). 지금은 팔 설정의 카메라가 우선한다.
         left_ceiling_device = os.environ.get("CONTROL_STATION_LEFT_CEILING_CAMERA", "").strip()
         right_ceiling_device = os.environ.get("CONTROL_STATION_RIGHT_CEILING_CAMERA", "").strip()
         left_joint_device = os.environ.get("CONTROL_STATION_LEFT_JOINT_CAMERA", "").strip()
@@ -420,6 +515,7 @@ class OpenCVArmCameraStreamManager:
             "CONTROL_STATION_FRONT_CAMERA",
             os.environ.get("CONTROL_STATION_POLICY_FRONT_CAMERA", ""),
         ).strip()
+        # 카메라별 YOLO: 가중치나 YOLO-World 프롬프트가 있을 때만 검출기를 붙인다.
         front_weights = os.environ.get("CONTROL_STATION_FRONT_YOLO_WEIGHTS", "").strip()
         front_prompts = os.environ.get("CONTROL_STATION_FRONT_YOLO_WORLD_PROMPTS", "").strip()
         head_weights = os.environ.get("CONTROL_STATION_HEAD_YOLO_WEIGHTS", "").strip()
@@ -478,9 +574,8 @@ class OpenCVArmCameraStreamManager:
                 ),
             ),
         }
-        # Optional shelf camera looking at the shelf and arms from the front; its id matches the
-        # shelf_camera intrinsic calibration. Its YOLO detections are shown like the other feeds, but it has
-        # no Pick & Place task observation step.
+        # 선택: 정면에서 선반과 팔을 보는 선반 카메라. id가 shelf_camera 내부 보정(intrinsic calibration)과 맞는다.
+        # YOLO 검출은 다른 피드처럼 보이지만, Pick & Place 작업 관측 단계는 없다.
         shelf_device = os.environ.get("CONTROL_STATION_SHELF_CAMERA", "").strip()
         if shelf_device:
             shelf_weights = os.environ.get("CONTROL_STATION_SHELF_YOLO_WEIGHTS", "").strip()
@@ -494,7 +589,7 @@ class OpenCVArmCameraStreamManager:
                     if shelf_weights or shelf_prompts
                     else None
                 ),
-                robot_id=None,  # a fixed view of the shelf, not a camera on the arm
+                robot_id=None,  # 팔에 달린 카메라가 아니라 선반을 고정해서 보는 카메라
                 role="선반 재고",
                 opened_by="ros_node" if shelf_device.startswith(ROS_SOURCE_PREFIX) else "control_station",
                 setting="CONTROL_STATION_SHELF_CAMERA",
@@ -504,14 +599,18 @@ class OpenCVArmCameraStreamManager:
         if not front_feed.device:
             front_feed.error_message = "Front Camera 장치 경로 미설정 (CONTROL_STATION_FRONT_CAMERA)"
         self._add_arm_feeds(_load_arm_devices() if arm_cameras is None else arm_cameras, joint_enabled)
+        # 핑키 탑재 전용 YOLO(선택): 적재 카메라(CONTROL_STATION_LOAD_CAMERA, 기본 head_camera) 피드에만 붙인다.
+        # load_snapshots()가 이 검출을 준다.
         load_weights = os.environ.get("CONTROL_STATION_LOAD_YOLO_WEIGHTS", "").strip()
         load_camera_id = os.environ.get("CONTROL_STATION_LOAD_CAMERA", "").strip() or "head_camera"
         if load_weights and load_camera_id in self._feeds:
             self._feeds[load_camera_id].load_detector = _YoloDetector(load_weights, "CONTROL_STATION_LOAD_YOLO")
+        # 같은 실제 장치(realpath)를 두 피드가 열려고 하면 둘 다 열지 않고 오류로 알린다. 어느 쪽이 맞는 설정인지
+        # 관제는 알 수 없기 때문이다.
         by_device: dict[str, list[_CameraFeed]] = {}
         for feed in self._feeds.values():
-            # Policy-owned feeds are presence-only and do not open the camera. They may share the preview feed's
-            # path without competing for the V4L2 device.
+            # 정책 몫 피드는 꽂혔는지만 보고 카메라를 열지 않는다. 그래서 미리보기 피드와 같은 경로를 써도 V4L2 장치를
+            # 두고 다투지 않는다.
             if feed.device and not feed.watch_only:
                 by_device.setdefault(os.path.realpath(feed.device), []).append(feed)
         for shared in by_device.values():
@@ -529,6 +628,8 @@ class OpenCVArmCameraStreamManager:
                 feed.connection_state = CameraConnectionState.DISCONNECTED
                 feed.stream_state = CameraStreamState.ERROR
                 feed.error_message = message
+        # 피드마다 CONTROL_STATION_<POSITION>_CAMERA_RESOLUTION=WxH(예: 1280x720)로 캡처 크기를 바꿀 수 있다.
+        # 형식이 틀리면 그 피드를 열지 않는다. 아직 아무 장치도 열지 않았으므로 released로 시작한다.
         for feed in self._feeds.values():
             feed.released.set()
             env_name = f"CONTROL_STATION_{feed.position}_CAMERA_RESOLUTION"
@@ -541,15 +642,16 @@ class OpenCVArmCameraStreamManager:
                 feed.connection_state = CameraConnectionState.DISCONNECTED
                 feed.stream_state = CameraStreamState.ERROR
                 feed.error_message = f"{env_name} 형식이 잘못되었습니다: {raw_size} (예: 1280x720)"
-        self._closed = threading.Event()
+        self._closed = threading.Event()  # 서버 종료: 모든 캡처 루프가 이것을 보고 끝난다
         self._ros_sources: list[_RosImageSource] = []
         if any(feed.device and feed.device.startswith(ROS_SOURCE_PREFIX) for feed in self._feeds.values()):
             try:
-                # Import here, before the capture threads: rclpy's first import is not safe from two threads
-                # (another thread may be importing it for the parking node at the same time).
+                # 캡처 스레드보다 먼저 여기서 import한다. rclpy의 첫 import는 두 스레드에서 동시에 하면 안전하지
+                # 않다(다른 스레드가 같은 때 주차 노드용으로 import하고 있을 수 있다).
                 import rclpy.node  # noqa: F401
             except ImportError:
-                pass  # each ros: feed reports the missing ROS environment itself
+                pass  # ros: 피드마다 ROS 환경이 없다고 스스로 알린다
+        # 설정된(watch_only가 아닌) 피드마다 캡처 스레드 하나. 데몬이라 서버 종료를 막지 않는다.
         for feed in self._feeds.values():
             if feed.device and not feed.watch_only:
                 feed.thread = threading.Thread(
@@ -568,7 +670,11 @@ class OpenCVArmCameraStreamManager:
                     feed.thread = None
 
     def _add_arm_feeds(self, arm_cameras: Mapping[str, ArmDevices], joint_enabled: bool) -> None:
-        """One feed per arm camera. An older single-arm feed on the same device (joint/front) gives way to it."""
+        """팔 카메라마다 피드 하나. 같은 장치를 쓰는 예전 단일 팔 피드(joint/front)는 자리를 내준다.
+
+        그리퍼 캠은 관절 카메라를 켰으면(joint_enabled), 위 캠은 미리보기(CONTROL_STATION_OVERHEAD_CAMERA_PREVIEW)를
+        켰을 때만 관제가 연다. 아니면 정책 몫(watch_only)으로 꽂혔는지만 본다.
+        """
         preview = os.environ.get("CONTROL_STATION_OVERHEAD_CAMERA_PREVIEW", "").strip().lower() in {"1", "true", "yes"}
         added: list[_CameraFeed] = []
         for devices in arm_cameras.values():
@@ -584,13 +690,15 @@ class OpenCVArmCameraStreamManager:
                     feed.error_message = f"장치 경로 미설정 ({feed.setting})"
                 added.append(feed)
                 if device and streamed:
+                    # 예전 팔별 미리보기 피드(left_joint_camera 등)가 같은 장치를 가리키는지 본다.
                     side = "left" if devices.arm_id == "arm-01" else "right"
                     preview_id = f"{side}_{'joint' if role == 'GRIPPER' else 'ceiling'}_camera"
                     preview_feed = self._feeds.get(preview_id)
                     if (preview_feed and preview_feed.device
                             and os.path.realpath(preview_feed.device) == os.path.realpath(device)):
-                        # Keep a single V4L2 capture owner, while preserving the policy camera's presence status.
+                        # V4L2 캡처 주인은 하나로 두면서, 정책 카메라의 연결(꽂힘) 표시는 남긴다.
                         preview_feed.watch_only = True
+        # 팔 피드가 쓰는 장치를 예전 joint/front 피드도 가리키면 예전 피드를 지운다.
         taken = {os.path.realpath(feed.device) for feed in added if feed.device}
         for legacy_id in ("joint_camera", "front_camera"):
             legacy = self._feeds.get(legacy_id)
@@ -598,12 +706,15 @@ class OpenCVArmCameraStreamManager:
                 del self._feeds[legacy_id]
         legacy_joint = self._feeds.get("joint_camera")
         if taken and legacy_joint is not None and not legacy_joint.device:
-            del self._feeds["joint_camera"]  # an empty older slot next to the arms' own gripper cameras
+            del self._feeds["joint_camera"]  # 팔마다 그리퍼 카메라가 있는데 장치도 없는 예전 자리는 지운다
         self._feeds.update((feed.camera_id, feed) for feed in added)
 
+    # ── 6b) 정책 실행에 장치 빌려주기·되찾기 ──
+
     def lend_devices(self, devices: list[str], reason: str, timeout_s: float = 3.0) -> list[str]:
-        """Close the V4L2 feeds that open any of `devices` so another program can open them. Returns the ids of
-        the feeds that were closed in time; a feed still open after `timeout_s` is left lent and not listed."""
+        """`devices` 중 하나라도 여는 V4L2 피드를 닫아 다른 프로그램(정책을 돌리는 팔 워커)이 열 수 있게 한다.
+        제때 닫힌 피드의 id를 돌려준다. `timeout_s`(초) 뒤에도 열려 있는 피드는 빌려준 상태로 두고 목록에서 뺀다.
+        api/arm.py의 sync_policy_cameras가 정책 집기 명령이 도는 동안 부른다. 피드는 캡처 스레드가 닫는다."""
         wanted = {os.path.realpath(device) for device in devices if device and not device.startswith(ROS_SOURCE_PREFIX)}
         feeds = [
             feed for feed in self._feeds.values()
@@ -617,7 +728,7 @@ class OpenCVArmCameraStreamManager:
         return [feed.camera_id for feed in feeds if feed.handed_over.wait(max(0.0, deadline - time.monotonic()))]
 
     def take_back_devices(self) -> list[str]:
-        """Reopen every lent feed."""
+        """빌려준 피드를 모두 다시 연다(lent를 지우면 캡처 루프가 다시 연다). 다시 열 피드 id를 돌려준다."""
         lent = [feed for feed in self._feeds.values() if feed.lent.is_set()]
         for feed in lent:
             feed.lent.clear()
@@ -625,6 +736,7 @@ class OpenCVArmCameraStreamManager:
 
     @staticmethod
     def _release_capture(capture) -> str | None:  # type: ignore[no-untyped-def]
+        """capture.release()를 하고, 실패하면 예외 대신 오류 문장을 돌려준다."""
         try:
             capture.release()
         except Exception as exc:
@@ -632,7 +744,11 @@ class OpenCVArmCameraStreamManager:
         return None
 
     def _held_for_policy(self, feed: _CameraFeed) -> bool:
-        """Return whether the learned-policy client should own this camera instead."""
+        """이 카메라를 관제 대신 학습 정책 클라이언트가 가져야 하는지 돌려준다.
+
+        캡처 루프가 프레임마다 부르므로 콜백 결과는 0.2초 캐시한다. 여러 캡처 스레드가 잠금 없이 캐시를 쓰지만,
+        엇갈려도 한 번 더 묻는 것뿐이다.
+        """
         if not feed.device or feed.device.startswith(ROS_SOURCE_PREFIX):
             return False
         path = os.path.realpath(feed.device)
@@ -640,7 +756,7 @@ class OpenCVArmCameraStreamManager:
             return True
         now = time.monotonic()
         if feed.camera_id == "front_camera":
-            # The older setting: the Front Camera is given up whenever any policy run is alive.
+            # 예전 설정: 어떤 정책 실행이든 살아 있으면 Front Camera를 내놓는다.
             if self._front_policy_hold:
                 return True
             if self._policy_active is not None:
@@ -665,9 +781,11 @@ class OpenCVArmCameraStreamManager:
         return path in devices
 
     def hold_for_policy(self, devices: list[str], hold: bool, timeout: float = 5.0) -> bool:
-        """Close the feeds on `devices` (and the older Front Camera) before a policy run opens them.
+        """정책 실행이 `devices`(와 예전 Front Camera)를 열기 전에 그 피드들을 닫는다.
 
-        Returns False when a capture was not confirmed closed within ``timeout``."""
+        ``timeout``(초) 안에 캡처가 닫힌 것을 확인하지 못하면 False. hold=False면 잡아 둔 것을 풀고 바로 True를
+        돌려준다(캡처 루프가 다음 확인에서 다시 연다)."""
+        # 캐시를 비워 캡처 루프가 다음 확인에서 바로 새 상태를 보게 한다.
         self._front_policy_hold = hold
         self._policy_active_cache = (0.0, False)
         self._policy_devices_cache = (0.0, frozenset())
@@ -685,10 +803,18 @@ class OpenCVArmCameraStreamManager:
         return all(feed.released.wait(max(0.0, deadline - time.monotonic())) for feed in feeds)
 
     def hold_front_for_policy(self, hold: bool, timeout: float = 5.0) -> bool:
-        """Close the dashboard Front Camera capture before a policy run opens the device (older single-arm path)."""
+        """정책 실행이 장치를 열기 전에 대시보드의 Front Camera 캡처를 닫는다(예전 단일 팔 경로)."""
         return self.hold_for_policy([], hold, timeout)
 
+    # ── 6c) V4L2 캡처 루프 ──
+
     def _capture_loop(self, feed: _CameraFeed) -> None:
+        """피드 하나의 캡처 스레드 본문. 서버가 닫힐 때(_closed)까지 돈다.
+
+        장치를 MJPG로 열어 프레임을 읽고 _publish_frame에 넘긴다. 열기·읽기가 실패하면 장치를 닫고 2초 쉰 뒤 다시
+        연다. 빌려줌(lent)이나 정책 잡기(hold) 동안은 장치를 닫고 기다린다. 장치를 닫을 때마다 released를 세워
+        hold_for_policy가 기다릴 수 있게 한다. `ros:` 장치는 _ros_capture_loop로 넘긴다.
+        """
         try:
             import cv2
         except ImportError:
@@ -698,6 +824,7 @@ class OpenCVArmCameraStreamManager:
                 feed.error_message = "OpenCV 미설치: 관제 서버 가상환경에서 requirements.txt를 설치하세요"
             return
 
+        # 검출기는 이 스레드에서 올린다(무거운 모델 로드가 서버 시작을 막지 않게).
         for detector in (feed.detector, feed.load_detector):
             if detector is not None:
                 detector.load()
@@ -711,7 +838,7 @@ class OpenCVArmCameraStreamManager:
             if not device:
                 return
             if feed.lent.is_set():
-                # The device is closed here; wait until it is given back.
+                # 여기서는 장치가 닫혀 있다. 돌려받을 때까지 기다린다.
                 with feed.lock:
                     feed.connection_state = CameraConnectionState.DISCONNECTED
                     feed.stream_state = CameraStreamState.STOPPED
@@ -722,12 +849,12 @@ class OpenCVArmCameraStreamManager:
                     self._closed.wait(0.2)
                 feed.handed_over.clear()
                 continue
-            # Clear before checking the hold so a concurrent hold request waits for this capture.
+            # hold 확인 전에 released를 먼저 지운다. 그래야 동시에 들어온 hold 요청이 이 캡처가 닫힐 때까지 기다린다.
             feed.released.clear()
             if self._held_for_policy(feed):
                 feed.released.set()
                 with feed.lock:
-                    feed.detections = []  # no live frame backs the last detections while held
+                    feed.detections = []  # 잡혀 있는 동안에는 마지막 검출을 뒷받침하는 실시간 프레임이 없다
                     feed.connection_state = CameraConnectionState.DISCONNECTED
                     feed.stream_state = CameraStreamState.STOPPED
                     feed.error_message = (
@@ -746,7 +873,7 @@ class OpenCVArmCameraStreamManager:
                 self._closed.wait(2)
                 continue
 
-            # OpenCV's V4L2 backend expects a camera index, not a device-name string.
+            # OpenCV의 V4L2 백엔드는 장치 이름 문자열이 아니라 카메라 번호를 기대한다. /dev/videoN이면 N을 쓴다.
             source: int | str = int(video_match.group(1)) if video_match else device
             capture = None
             try:
@@ -776,9 +903,8 @@ class OpenCVArmCameraStreamManager:
                 continue
 
             try:
-                # Both physical cameras share a USB 2.0 hub. Request compressed
-                # MJPEG explicitly so simultaneous streams do not reserve the
-                # bus bandwidth required by uncompressed YUYV.
+                # 실제 카메라들이 USB 2.0 허브 하나를 같이 쓴다. 압축된 MJPEG를 명시적으로 요청해, 여러 스트림을 동시에
+                # 열어도 압축하지 않은 YUYV에 필요한 버스 대역폭을 잡아 두지 않게 한다. 30 fps를 요청한다.
                 capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
                 capture.set(cv2.CAP_PROP_FRAME_WIDTH, feed.capture_size[0])
                 capture.set(cv2.CAP_PROP_FRAME_HEIGHT, feed.capture_size[1])
@@ -806,6 +932,7 @@ class OpenCVArmCameraStreamManager:
                     if self._held_for_policy(feed):
                         break
                     ok, image = capture.read()
+                    # 읽기가 10번 연속 실패하면(USB가 빠짐 등) 장치를 닫고 다시 연다.
                     if not ok:
                         failed_reads += 1
                         if failed_reads >= 10:
@@ -832,9 +959,9 @@ class OpenCVArmCameraStreamManager:
                 capture_failure = capture_failure or release_error
                 feed.released.set()
             if self._held_for_policy(feed) and not capture_failure:
-                continue  # the next pass reports the hold and waits without an error state
+                continue  # 다음 차례가 잡힘을 알리고 오류 상태 없이 기다린다
             if feed.lent.is_set():
-                continue  # closed on purpose; the top of the loop reports it and waits
+                continue  # 일부러 닫았다. 루프 맨 위가 그것을 알리고 기다린다
             if not self._closed.is_set():
                 with feed.lock:
                     feed.connection_state = CameraConnectionState.DISCONNECTED
@@ -844,10 +971,13 @@ class OpenCVArmCameraStreamManager:
                     )
                 self._closed.wait(2)
 
-    def _find_markers(self, feed: _CameraFeed, image, cv2) -> list[dict[str, object]]:  # type: ignore[no-untyped-def]
-        """ArUco markers (DICT_4X4_50) in the cameras named by CONTROL_STATION_MARKER_CAMERAS (default head_camera).
+    # ── 6d) 프레임 처리: ArUco 마커, YOLO, JPEG ──
 
-        Display only: the "핑키 도착" line on the load camera card. The parking judgment stays with the C++ node.
+    def _find_markers(self, feed: _CameraFeed, image, cv2) -> list[dict[str, object]]:  # type: ignore[no-untyped-def]
+        """CONTROL_STATION_MARKER_CAMERAS(기본 head_camera)에 든 카메라에서 ArUco 마커(DICT_4X4_50)를 찾는다.
+
+        표시 전용: 적재 카메라 카드의 "핑키 도착" 줄. 주차 판정은 여전히 C++ 노드가 맡는다. 마커마다 id, 중심과
+        네 꼭짓점(px)을 돌려준다. 검출기는 처음 쓸 때 한 번 만들어 둔다.
         """
         cameras = {name.strip() for name in os.environ.get("CONTROL_STATION_MARKER_CAMERAS", "head_camera").split(",")}
         if feed.camera_id not in cameras or not hasattr(cv2, "aruco"):
@@ -859,7 +989,7 @@ class OpenCVArmCameraStreamManager:
             self._aruco_detector = detector
         try:
             corners, ids, _ = detector.detectMarkers(image)
-        except Exception:  # a marker failure must not stop the stream
+        except Exception:  # 마커 찾기가 실패해도 스트림은 멈추지 않는다
             return []
         if ids is None:
             return []
@@ -871,10 +1001,14 @@ class OpenCVArmCameraStreamManager:
         return found
 
     def _publish_frame(self, feed: _CameraFeed, image, captured_at: str, captured_monotonic: float, cv2) -> None:  # type: ignore[no-untyped-def]
-        """Run YOLO on one BGR frame and make it the feed's latest JPEG."""
+        """BGR 프레임 하나에 YOLO를 돌리고 피드의 최신 JPEG로 만든다.
+
+        무거운 처리(마커, YOLO, JPEG 인코딩)는 잠금 밖에서 하고, 결과를 피드에 쓰는 것만 feed.lock 아래에서 한다.
+        그래서 HTTP 스레드가 추론 시간만큼 막히지 않는다.
+        """
         frame_sha256 = hashlib.sha256(image.tobytes(order="C")).hexdigest()
         detections: list[dict[str, object]] = []
-        markers = self._find_markers(feed, image, cv2)  # on the raw frame, before YOLO draws on it
+        markers = self._find_markers(feed, image, cv2)  # YOLO가 그리기 전의 원본 프레임에서
         load_detections: list[dict[str, object]] = []
         load_detector = feed.load_detector
         if load_detector is not None and load_detector.state == "ready":
@@ -886,13 +1020,14 @@ class OpenCVArmCameraStreamManager:
         if detector is not None and detector.state == "ready":
             try:
                 image, detections = detector.annotate(image)
-            except Exception as exc:  # keep streaming raw frames if inference fails
+            except Exception as exc:  # 추론이 실패해도 원본 프레임은 계속 내보낸다
                 detector.state, detector.error_message = "error", f"YOLO 추론 실패: {exc}"
+        # 탑재 검출에, 일반 검출 가운데 겹치지 않는 것을 덧붙인다.
         if load_detector is not None and load_detector.state == "ready":
             load_detections = _merge_load_detections(load_detections, detections)
         encoded, jpeg = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 80])
         if not encoded:
-            return
+            return  # 인코딩에 실패한 프레임은 버린다(프레임 번호도 올리지 않음)
         frame_height, frame_width = image.shape[:2]
         with feed.lock:
             feed.sequence += 1
@@ -900,6 +1035,7 @@ class OpenCVArmCameraStreamManager:
             feed.frame_width = int(frame_width)
             feed.frame_height = int(frame_height)
             feed.frame_sha256 = frame_sha256
+            # 검출마다 어느 프레임에서 나왔는지(카메라, 시각, 번호, 해시, 픽셀 변환)를 붙인다. 팔 명령의 카메라 근거가 된다.
             for detection in (*detections, *load_detections):
                 detection.update(
                     {
@@ -917,6 +1053,7 @@ class OpenCVArmCameraStreamManager:
             feed.last_frame_at = captured_at
             feed.last_frame_monotonic = captured_monotonic
             feed.frame_times.append(captured_monotonic)
+            # 최근 2초만 남겨 fps를 계산한다.
             feed.frame_times = [
                 stamp for stamp in feed.frame_times if captured_monotonic - stamp <= 2
             ]
@@ -924,13 +1061,16 @@ class OpenCVArmCameraStreamManager:
             feed.stream_state = CameraStreamState.STREAMING
             feed.error_message = None
 
-    def _ros_capture_loop(self, feed: _CameraFeed, topic: str, cv2) -> None:  # type: ignore[no-untyped-def]
-        """Take the feed's frames from a ROS image topic that a camera driver node publishes.
+    # ── 6e) ROS 토픽 캡처 루프 ──
 
-        The driver owns the device, so the control station and the C++ parking node can share one camera
-        (docs/plans/pinky-parking-ros2-node.md). The geometry is the same 640x480 MJPEG capture with no crop or
-        flip, so detections keep PIXEL_TRANSFORM_ID. A topic ending in /compressed is decoded here; it is the one
-        to use across processes, since raw 640x480 images were mostly dropped between processes on 2026-11-02.
+    def _ros_capture_loop(self, feed: _CameraFeed, topic: str, cv2) -> None:  # type: ignore[no-untyped-def]
+        """카메라 드라이버 노드가 발행하는 ROS 영상 토픽에서 피드의 프레임을 받는다.
+
+        드라이버가 장치를 소유하므로 관제와 C++ 주차 노드가 카메라 하나를 같이 쓸 수 있다
+        (docs/plans/pinky-parking-ros2-node.md). 기하는 같은 640x480 MJPEG 캡처에 자르기·뒤집기가 없으므로 검출은
+        PIXEL_TRANSFORM_ID를 그대로 쓴다. /compressed로 끝나는 토픽은 여기서 디코드한다. 프로세스 사이에서는 이
+        토픽을 써야 한다. 2026-11-02에 640x480 raw 영상은 프로세스 사이에서 대부분 버려졌다.
+        2초 동안 프레임이 없으면 NO_FRAMES로 알리고 계속 기다린다(드라이버가 살아나면 이어서 받는다).
         """
         try:
             source = _RosImageSource(topic)
@@ -962,9 +1102,9 @@ class OpenCVArmCameraStreamManager:
 
     @staticmethod
     def _watch(feed: _CameraFeed) -> None:
-        """A policy-owned camera: only whether the device is plugged in."""
+        """정책 몫 카메라: 장치가 꽂혀 있는지만 본다. _snapshots가 feed.lock 아래에서 부른다."""
         if not feed.device:
-            return  # refused at start (e.g. the same device as another camera); the error says why
+            return  # 시작할 때 거부됨(예: 다른 카메라와 같은 장치). 오류 문장이 이유를 말한다
         present = os.path.exists(os.path.realpath(feed.device))
         feed.connection_state = CameraConnectionState.CONNECTED if present else CameraConnectionState.DISCONNECTED
         feed.stream_state = CameraStreamState.STOPPED if present else CameraStreamState.ERROR
@@ -975,17 +1115,23 @@ class OpenCVArmCameraStreamManager:
             if present else f"카메라 장치 경로가 없습니다: {feed.device}"
         )
 
+    # ── 6f) 스냅샷과 프레임 내주기, 종료 ──
+
     def snapshots(self) -> list[CameraSnapshot]:
+        """화면·개수 세기·칸 판정용 카메라 스냅샷(피드의 일반 YOLO 검출)."""
         return self._snapshots(for_load=False)
 
     def load_snapshots(self) -> list[CameraSnapshot]:
+        """적재 카메라에 탑재 전용 YOLO가 있으면 그 검출(일반 검출과 합친 것)을 싣는 스냅샷. 핑키 탑재 세기
+        (cameras/counts.py PinkyLoadCounter)가 쓴다. 탑재 YOLO가 없는 피드는 snapshots()와 같다."""
         return self._snapshots(for_load=True)
 
     def _snapshots(self, *, for_load: bool) -> list[CameraSnapshot]:
+        """피드마다 CameraSnapshot 하나를 feed.lock 아래에서 만든다."""
         result = []
         for feed in self._feeds.values():
             if feed.camera_id == "front_camera" and not feed.device:
-                continue  # not configured on this PC: not shown (set CONTROL_STATION_FRONT_CAMERA to use it)
+                continue  # 이 PC에 설정되지 않음: 보이지 않는다(쓰려면 CONTROL_STATION_FRONT_CAMERA를 설정)
             with feed.lock:
                 if feed.watch_only:
                     self._watch(feed)
@@ -993,11 +1139,12 @@ class OpenCVArmCameraStreamManager:
                 detector = feed.load_detector if use_load_detector else feed.detector
                 detections = feed.load_detections if use_load_detector else feed.detections
                 configured = feed.device is not None
-                # Closed for a policy run still counts as plugged in.
+                # 정책 실행 때문에 닫혀 있어도 꽂혀 있는 것으로 친다.
                 linked = configured and (
                     feed.connection_state == CameraConnectionState.CONNECTED
                     or (feed.stream_state == CameraStreamState.STOPPED and os.path.exists(os.path.realpath(feed.device)))
                 )
+                # 마지막 프레임이 2초 안이면 FRESH. 개수 세기와 칸 선택은 FRESH 프레임만 쓴다.
                 freshness = FrameFreshness.UNKNOWN
                 if feed.last_frame_monotonic is not None:
                     freshness = (
@@ -1073,6 +1220,7 @@ class OpenCVArmCameraStreamManager:
         return result
 
     def frame_for(self, camera_id: str) -> bytes | None:
+        """카메라의 최신 JPEG(없으면 None). MJPEG 스트림이 부른다."""
         feed = self._feeds.get(camera_id)
         if feed is None:
             return None
@@ -1080,6 +1228,7 @@ class OpenCVArmCameraStreamManager:
             return feed.frame
 
     def sequence_for(self, camera_id: str) -> int:
+        """카메라의 최신 프레임 번호(모르는 카메라는 -1). 스트림이 새 프레임이 왔는지 볼 때 쓴다."""
         feed = self._feeds.get(camera_id)
         if feed is None:
             return -1
@@ -1087,6 +1236,7 @@ class OpenCVArmCameraStreamManager:
             return feed.sequence
 
     def close(self) -> None:
+        """서버 종료: 캡처 루프와 ROS 소스를 멈춘다. 2초 안에 끝나지 않은 (데몬) 스레드는 두고 상태도 건드리지 않는다."""
         self._closed.set()
         for source in self._ros_sources:
             source.close()
