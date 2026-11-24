@@ -11,14 +11,11 @@ import statistics
 from dataclasses import dataclass
 from typing import Any
 
-# m/s, rad/s. 흰색 문턱(0~1)의 ON/OFF는 히스테리시스. MAX_ANGULAR·SIDE_ON·SIDE_OFF는 쓰이지 않는다.
+# m/s, rad/s. 흰색 문턱(0~1)의 ON/OFF는 히스테리시스.
 MAX_LINEAR = 0.1152
-MAX_ANGULAR = 0.30
 MIN_CONTRAST = 100.0  # 바닥·선 ADC 차이가 이보다 작으면 구분 불가
 CENTER_ON = 0.55
 CENTER_OFF = 0.35
-SIDE_ON = 0.25
-SIDE_OFF = 0.18
 
 
 def validate_template(model):
@@ -223,9 +220,7 @@ class LineAssist:
         self.last_error = 0.0
         self.last_time: float | None = None
         self.center_locked = False
-        self.side_locked = [False, False]
         self.started_at = None
-        self.side_seen_at = None
         self.side_direction = 0.0
         self.last_steering = 0.0
         self.steering_at = None
@@ -248,7 +243,6 @@ class LineAssist:
 
     def reset(self) -> None:
         self.started_at = None
-        self.side_seen_at = None
         self.side_direction = 0.0
         self.last_steering = 0.0
         self.steering_at = None
@@ -272,7 +266,6 @@ class LineAssist:
         self.last_time = None
         self.last_error = 0.0
         self.center_locked = False
-        self.side_locked = [False, False]
 
     def decide(self, linear: float, angular: float, raw: list[int], profile: dict[str, Any],
                now: float, ir_fresh: bool, scan_fresh: bool,
@@ -423,7 +416,7 @@ class LineAssist:
             if now-self.recovery_start>6. or abs(delta)>.40:
                 return result(0.,0.,'line_search_failed')
             if direction:
-                self.side_direction=direction;self.side_seen_at=now
+                self.side_direction=direction
                 target=.16*direction
                 v=.012;state='black_edge_reacquire' if edge and not (left or right) else 'white_side_reacquire'
                 error=direction

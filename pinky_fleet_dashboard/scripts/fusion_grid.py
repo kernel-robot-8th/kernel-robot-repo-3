@@ -248,9 +248,6 @@ class FusionGrid:
         """low는 점유, 라이다는 아닌 칸: 라이다 아래 장애물."""
         return self.low_occupied() & (self.high < self.l['explain'])
 
-    def column_occupied(self) -> np.ndarray:
-        return (self.high >= self.l['occupied']) | self.low_occupied()
-
     def points(self, mask: np.ndarray) -> np.ndarray:
         i, j = np.nonzero(mask)
         return np.column_stack([self.origin[0] + (j + 0.5) * self.res, self.origin[1] + (i + 0.5) * self.res])

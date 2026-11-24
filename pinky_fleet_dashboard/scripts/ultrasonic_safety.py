@@ -61,7 +61,6 @@ class UltrasonicSafety(Node):
         self.sensor_valid = False
         self.last_sensor_at = 0.0
         self.state = "idle"
-        self.state_since = time.monotonic()
         self.clear_since: float | None = None
         self.ir_profile_path = Path('/home/pinky/.cache/pinky-fleet/nav2/ir_profile.json')
         self.ir_profile = default_profile()
@@ -84,7 +83,6 @@ class UltrasonicSafety(Node):
         self.line_estimate = None
         self.observer_model = None
         self.observer_revision = None
-        self.route_context_seen = False
         self.segment_key = None
         self.was_corner = False
         self.last_motion_at = 0.
@@ -451,7 +449,6 @@ class UltrasonicSafety(Node):
         nav_active = time.monotonic()-self.last_command_at <= .5 and (abs(self.nav_command.linear.x) > .001 or abs(self.nav_command.angular.z) > .001)
         if math.isfinite(value) and value <= stop_distance and self.state == "idle" and nav_active and self.docking.state not in Docking.ACTIVE and not getattr(self, "dock_exiting", False) and not getattr(self, "dock_entering", False):
             self.state = "stopped"
-            self.state_since = time.monotonic()
             self.clear_since = None
             self.get_logger().warn(f"Obstacle at {value:.2f} m: stopping before turn/creep sequence")
 
@@ -479,7 +476,6 @@ class UltrasonicSafety(Node):
         route_corner = False
         try:
             context = json.loads(Path('/home/pinky/.cache/pinky-fleet/route_context.json').read_text())
-            self.route_context_seen = True
             if not 0 <= now-float(context['monotonic']) < 1.5:
                 self.line_state = 'route_context_stale'
                 return Twist()
