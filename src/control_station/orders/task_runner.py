@@ -27,19 +27,18 @@ import time
 import uuid
 from typing import Any, Callable
 
-from control_station.arms.commands import ArmCommandConflict, ArmCommandError, ArmCommandStore, IN_FLIGHT
-from control_station.storage.models import StepStatus, TaskStatus
-from control_station.orders.flow import ORDER_STEP_TYPES, OrderFlow, OrderFlowError, StepContext
+from control_station.arms.commands import IN_FLIGHT, ArmCommandConflict, ArmCommandError, ArmCommandStore
 from control_station.cameras.shelf_slots import SlotSelectionError
+from control_station.orders.flow import ORDER_STEP_TYPES, OrderFlow, OrderFlowError, StepContext
+from control_station.storage.models import StepStatus, TaskStatus
 from control_station.storage.store import (
     DEFAULT_TASK_STEPS,
-    InvalidStateTransition,
     ROBOT_ID_BY_KIND,
+    InvalidStateTransition,
     StateTransitionConflict,
     TaskNotFoundError,
     TaskStore,
 )
-
 
 # ──── 적재 확인 (VERIFY_LOAD) ─────────────────────────────────────────────────────────────────────────────────
 

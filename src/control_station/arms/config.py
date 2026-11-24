@@ -40,7 +40,6 @@ from typing import Any
 from control_station import REPO_ROOT
 from control_station.storage.json_files import load_json_file
 
-
 # ──── 1) 팔과 담당 선반 (config/arms.json) ──────────────────────────────────────────────────────────────────────
 
 DEFAULT_ARMS_PATH = REPO_ROOT / "config" / "arms.json"

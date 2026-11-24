@@ -20,15 +20,31 @@ from typing import Any
 
 from control_station.api.common import validate_order_items
 from control_station.orders.assignment import (
-    ArmPlanError, PickStats, PinkyCandidate, ShipmentError, ZoneAssignment, ZoneCandidate, assign_fleet, choose_pinky,
-    choose_zone, plan_arms, schedule_loading, split_into_shipments,
+    ArmPlanError,
+    PickStats,
+    PinkyCandidate,
+    ShipmentError,
+    ZoneAssignment,
+    ZoneCandidate,
+    assign_fleet,
+    choose_pinky,
+    choose_zone,
+    plan_arms,
+    schedule_loading,
+    split_into_shipments,
 )
-from control_station.orders.planning import FleetPlanning, load_fleet_planning
 from control_station.orders.flow import OrderDevices
-from control_station.pinky.fleet_client import PinkyFleetError
+from control_station.orders.planning import FleetPlanning, load_fleet_planning
 from control_station.orders.receiving_zones import ReceivingZone
+from control_station.pinky.fleet_client import PinkyFleetError
 from control_station.storage.store import (
-    PINKY_IDS, PINKY_NAMES, InvalidStateTransition, PinkyUnavailable, TaskStore, ZoneUnavailable, shipment_of,
+    PINKY_IDS,
+    PINKY_NAMES,
+    InvalidStateTransition,
+    PinkyUnavailable,
+    TaskStore,
+    ZoneUnavailable,
+    shipment_of,
 )
 
 

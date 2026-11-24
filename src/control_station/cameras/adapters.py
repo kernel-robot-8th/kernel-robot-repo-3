@@ -14,7 +14,6 @@ one program stream a device). All six share one USB controller, so every device 
 from __future__ import annotations
 
 import hashlib
-from importlib.metadata import version as package_version
 import math
 import os
 import re
@@ -22,17 +21,11 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from importlib.metadata import version as package_version
 from typing import Callable, Mapping
 
-from control_station.arms.config import ROLE_LABELS, ArmDevices, arm_devices, env_prefix
-from control_station.arms.config import ArmConfigError, load_arms
-from control_station.storage.models import (
-    CameraConnectionState,
-    CameraSnapshot,
-    CameraStreamState,
-    FrameFreshness,
-)
-
+from control_station.arms.config import ROLE_LABELS, ArmConfigError, ArmDevices, arm_devices, env_prefix, load_arms
+from control_station.storage.models import CameraConnectionState, CameraSnapshot, CameraStreamState, FrameFreshness
 
 PIXEL_TRANSFORM_ID = "opencv-v4l2-capture-no-app-geometry-v1"
 

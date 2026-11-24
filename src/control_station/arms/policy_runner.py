@@ -16,10 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from control_station.arms.config import ArmConfigError, ArmRegistry, arm_devices, load_arms
 from control_station.arms.policies import ActPolicyError, load_act_policies
-from control_station.arms.config import arm_devices
-from control_station.arms.config import ArmConfigError, ArmRegistry, load_arms
-
 
 ACTION_LIMIT_EXIT_CODE = 75
 

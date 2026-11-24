@@ -31,7 +31,6 @@ from typing import Any
 from control_station import REPO_ROOT
 from control_station.storage.json_files import load_json_file, unique_keys
 
-
 # ──── 1) 칸 정의 (config/shelf-slots.json) ───────────────────────────────────────────────────────────────────
 
 DEFAULT_SLOT_MAP_PATH = REPO_ROOT / "config" / "shelf-slots.json"

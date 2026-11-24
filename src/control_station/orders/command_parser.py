@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
 MAX_SHELF_LEVEL = 999_999_999
 
 

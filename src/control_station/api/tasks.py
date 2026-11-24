@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING, Any
 
 from control_station.api.common import validate_order_items, validate_pick_request
 from control_station.orders.command_parser import parse_order_text, parse_pick_command
-from control_station.storage.store import PINKY_IDS, PinkyUnavailable
 from control_station.orders.task_runner import TaskExecutionConflict
+from control_station.storage.store import PINKY_IDS, PinkyUnavailable
 
 if TYPE_CHECKING:
     from control_station.app import ControlStationHandler

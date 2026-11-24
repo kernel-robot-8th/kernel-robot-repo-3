@@ -17,7 +17,6 @@ from datetime import datetime, timezone
 from functools import partial
 from typing import Any, Callable, Iterable
 
-
 OBSERVATION_SCHEMA_VERSION = 1
 PRIMARY_NODE = "pinky_parking"
 STATE_TOPIC = f"/{PRIMARY_NODE}/state"

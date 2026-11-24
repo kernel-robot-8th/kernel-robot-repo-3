@@ -15,40 +15,43 @@ from urllib.parse import urlsplit
 from control_station import REPO_ROOT
 from control_station.api import routes
 from control_station.api.common import is_cross_origin, is_retryable, read_json_object
-from control_station.arms.policies import ActPolicyError, load_act_policies
 from control_station.arms.commands import ARM_ROBOT_IDS, ArmCommandStore
-from control_station.arms.sequences import ArmSequenceSupervisor
-from control_station.arms.ros_action import RosPickTransport
-from control_station.arms.pick import ArmActionPick, ArmQueuePick
 from control_station.arms.config import ArmConfigError, load_arms
+from control_station.arms.pick import ArmActionPick, ArmQueuePick
+from control_station.arms.policies import ActPolicyError, load_act_policies
 from control_station.arms.policy_runner import PolicyRunSupervisor
+from control_station.arms.ros_action import RosPickTransport
+from control_station.arms.sequences import ArmSequenceSupervisor
+from control_station.cameras.adapters import OpenCVArmCameraStreamManager, UnconfiguredArmCameraStreamManager
 from control_station.cameras.counts import (
-    ShelfStockCounter, camera_inventory, head_middle_view_from_env, head_shelf_view_from_env,
-    load_counter_from_env, parse_region,
+    ShelfStockCounter,
+    camera_inventory,
+    head_middle_view_from_env,
+    head_shelf_view_from_env,
+    load_counter_from_env,
+    parse_region,
 )
-from control_station.cameras.adapters import (
-    OpenCVArmCameraStreamManager,
-    UnconfiguredArmCameraStreamManager,
+from control_station.cameras.shelf_slots import (
+    ShelfSlotMapError,
+    ShelfSlotZones,
+    SlotSelectionError,
+    load_shelf_slot_map,
+    select_slot_for_class,
 )
-from control_station.orders.task_runner import mock_load_observer_from_env
 from control_station.mock_world import MockWorld
-from control_station.orders.inventory import InventoryMonitor, InventoryOverrides
-from control_station.orders.dispatcher import OrderDispatcher
 from control_station.orders.desk import OrderDesk
+from control_station.orders.dispatcher import OrderDispatcher
 from control_station.orders.flow import OrderDevices, OrderFlow
+from control_station.orders.inventory import InventoryMonitor, InventoryOverrides
 from control_station.orders.receiving_zones import ReceivingZoneError, load_receiving_zones
+from control_station.orders.task_runner import MockTaskOrchestrator, mock_load_observer_from_env
+from control_station.pinky.docking import DockAutoLoop, DockGuideRelay, DockSupervisor
 from control_station.pinky.fleet_client import PinkyFleetClient
 from control_station.pinky.gateway import PinkyGateway
-from control_station.pinky.docking import DockGuideRelay
-from control_station.pinky.docking import DockAutoLoop, DockSupervisor
 from control_station.pinky.markers import PinkyMarkerError, arrival_for, load_pinky_markers
 from control_station.pinky.parking_ros import RosParkingSource
 from control_station.pinky.robot_status import make_status_provider
-from control_station.cameras.shelf_slots import ShelfSlotMapError, load_shelf_slot_map
-from control_station.cameras.shelf_slots import ShelfSlotZones, SlotSelectionError, select_slot_for_class
 from control_station.storage.store import PINKY_NAMES, TaskStore
-from control_station.orders.task_runner import MockTaskOrchestrator
-
 
 WEB_DIR = Path(__file__).with_name("web")
 

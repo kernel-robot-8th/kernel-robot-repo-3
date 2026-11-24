@@ -29,8 +29,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from control_station.orders.desk import OrderDeskError
-from control_station.storage.store import InvalidStateTransition, TaskNotFoundError, shipment_of
 from control_station.orders.task_runner import TaskExecutionConflict
+from control_station.storage.store import InvalidStateTransition, TaskNotFoundError, shipment_of
 
 # The line waits on these: they clear by themselves when a Pinky comes home or a zone is picked up.
 WAIT_CODES = {"PINKY_UNAVAILABLE", "ZONE_BUSY", "SHELF_STOCK_UNAVAILABLE"}

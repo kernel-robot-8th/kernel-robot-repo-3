@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 from sqlalchemy import ForeignKey, Index, String, UniqueConstraint, create_engine, event
-from sqlalchemy.engine import Engine, URL
+from sqlalchemy.engine import URL, Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 from sqlalchemy.types import JSON
 

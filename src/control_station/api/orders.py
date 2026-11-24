@@ -22,8 +22,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from control_station.orders.desk import OrderDeskError
-from control_station.storage.store import InvalidStateTransition, TaskNotFoundError
 from control_station.orders.task_runner import TaskExecutionConflict
+from control_station.storage.store import InvalidStateTransition, TaskNotFoundError
 
 if TYPE_CHECKING:
     from control_station.app import ControlStationHandler

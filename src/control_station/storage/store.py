@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from collections import Counter
-
 import uuid
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
@@ -27,7 +26,6 @@ from control_station.storage.database import (
     make_session_factory,
 )
 from control_station.storage.models import StepStatus, TaskStatus
-
 
 ROBOT_ID_BY_KIND = {"MOBILE": "mobile-01", "ARM": "arm-01"}
 # The three Pinky robots by their ROS domain, as the Pinky fleet dashboard names them (P0=10, P1=11, P2=12).

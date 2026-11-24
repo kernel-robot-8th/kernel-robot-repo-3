@@ -39,7 +39,6 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
-
 # ──── 1) 적재 자리 도착 판정 ──────────────────────────────────────────────────────────────────────────────────────
 
 WAIT, REDOCK, COMPLETE, OPERATOR = "WAIT", "REDOCK", "COMPLETE", "OPERATOR"
