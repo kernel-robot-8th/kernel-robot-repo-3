@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from control_station import REPO_ROOT
+from control_station import REPO_ROOT, env_flag
 from control_station.api import routes
 from control_station.api.common import is_cross_origin, is_retryable, read_json_object
 from control_station.arms.commands import ARM_ROBOT_IDS, ArmCommandStore
@@ -70,12 +70,6 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
     def app(self) -> ControlStationServer:
         return self.server  # type: ignore[return-value]
 
-    def end_headers(self) -> None:
-        # The screens change while the station runs: a browser must ask again instead of keeping an old page or script
-        # (an old index.html had no ROS 모니터 menu, 2026-11-16).
-        self.send_header("Cache-Control", "no-cache")
-        super().end_headers()
-
     @property
     def request_id(self) -> str:
         """이 요청의 ID: 응답 머리글 X-Request-Id와 오류 본문 request_id로 돌려줘 서버 기록과 맞춰 볼 수 있게"""
@@ -85,7 +79,8 @@ class ControlStationHandler(SimpleHTTPRequestHandler):
 
     def end_headers(self) -> None:
         # The control UI is served as plain static files. Avoid browsers keeping an old app.js/index.html
-        # after the operator refreshes while iterating on the local console.
+        # after the operator refreshes while iterating on the local console (an old index.html had no ROS 모니터
+        # menu, 2026-11-16). An earlier "no-cache" version of this method was shadowed by this one and is gone.
         route = urlsplit(self.path).path
         if not route.startswith(("/api/", "/streams/")):
             self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
@@ -350,7 +345,7 @@ def main() -> None:
     # Mock mode only: VERIFY_LOAD then records a simulated count instead of a plain mock success.
     load_check = mock_load_observer_from_env() if mode == "mock" else None
     # Opt-in: EXECUTE_ARM_TASK queues a real PICK_WITH_POLICY arm command (CONTROL_STATION_TASK_REAL_ARM=1).
-    real_arm = os.environ.get("CONTROL_STATION_TASK_REAL_ARM", "").strip() == "1"
+    real_arm = env_flag("CONTROL_STATION_TASK_REAL_ARM")
     # Orders run against the simulated station until the camera counters and the Pinky fleet client are connected;
     # every observation it makes says simulated.
     server.mock_world = MockWorld.from_env()
@@ -482,7 +477,7 @@ def main() -> None:
     # one PickObject action server per arm (/arm_01/pick_object; domain CONTROL_STATION_ARM_ACTION_DOMAIN, else
     # ROS_DOMAIN_ID). Each transfer is then judged by camera counts; with mock counts the order stops before the
     # arm moves (TRANSFER_EVIDENCE_REQUIRED).
-    order_real_arm = os.environ.get("CONTROL_STATION_ORDER_REAL_ARM", "").strip() == "1"
+    order_real_arm = env_flag("CONTROL_STATION_ORDER_REAL_ARM")
     arm_transport = os.environ.get("CONTROL_STATION_ORDER_ARM_TRANSPORT", "http").strip().lower() or "http"
     if arm_transport not in {"http", "ros2"}:
         raise RuntimeError("CONTROL_STATION_ORDER_ARM_TRANSPORT는 http 또는 ros2여야 합니다.")
@@ -560,10 +555,10 @@ def main() -> None:
     # Automatic dispatch (orders/dispatcher.py): waiting orders start oldest first, each as soon as the Pinky before it
     # has been sent off. Off unless CONTROL_STATION_AUTO_DISPATCH=1 or the switch on the order screen.
     # CONTROL_STATION_DISPATCH_WAIT_FOR_SPOT=1: the next order waits until that Pinky stands at the loading spot.
-    auto_dispatch = os.environ.get("CONTROL_STATION_AUTO_DISPATCH", "").strip() == "1"
+    auto_dispatch = env_flag("CONTROL_STATION_AUTO_DISPATCH")
     server.order_dispatcher = OrderDispatcher(
         server.order_desk, task_store, enabled=auto_dispatch,
-        wait_for_spot=os.environ.get("CONTROL_STATION_DISPATCH_WAIT_FOR_SPOT", "").strip() == "1",
+        wait_for_spot=env_flag("CONTROL_STATION_DISPATCH_WAIT_FOR_SPOT"),
     ).start()
     if auto_dispatch:
         print("자동 출발이 켜져 있습니다: 기다리는 주문을 접수 순서대로 출발시킵니다", flush=True)

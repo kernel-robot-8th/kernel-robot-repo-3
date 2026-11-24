@@ -22,9 +22,9 @@ import threading
 import time
 import uuid
 from collections import Counter
-from datetime import datetime, timezone
 from typing import Any, Callable
 
+from control_station import utc_now_iso
 from control_station.pinky.fleet_client import PinkyFleetError
 
 FAULT_KINDS = frozenset({"STOCK_SHORT", "PICK_FAILED", "ITEM_LOST", "EXTRA_ON_PINKY", "PINKY_MISALIGNED", "FLEET_REJECT"})
@@ -34,10 +34,6 @@ DEFAULT_STOCK = "shelf_a:carrot=3,tissue=1;shelf_b:apple=4,carrot=1,tissue=2"
 PINKY_HOMES = {"10": "주차장 P0", "11": "주차장 P1", "12": "주차장 P2"}
 # Simulated battery levels, different on purpose so the Pinky assignment has something to rank.
 MOCK_BATTERY = {"10": 92.0, "11": 78.0, "12": 64.0}
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
 def parse_stock(text: str) -> dict[str, Counter]:
@@ -138,12 +134,12 @@ class MockWorld:
             if short:
                 for counts in shelves.values():
                     counts.pop(short, None)
-            return {"source": "mock_world", "simulated": True, "captured_at": _now(), "shelves": shelves}
+            return {"source": "mock_world", "simulated": True, "captured_at": utc_now_iso("milliseconds"), "shelves": shelves}
 
     def pinky_load(self, pinky_id: str) -> dict[str, Any]:
         with self._lock:
             return {
-                "source": "mock_world", "simulated": True, "captured_at": _now(),
+                "source": "mock_world", "simulated": True, "captured_at": utc_now_iso("milliseconds"),
                 "pinky_id": pinky_id, "counts": dict(self.loads[pinky_id]),
             }
 
@@ -235,14 +231,14 @@ class MockWorld:
                     self.faults.insert(0, ("PINKY_MISALIGNED", str(count)))
                 return {
                     "status": "MISALIGNED", "spot_id": "mock_station", "simulated": True, "pinky_id": pinky_id,
-                    "reason": "모의: 정차 위치에서 벗어남", "captured_at": _now(),
+                    "reason": "모의: 정차 위치에서 벗어남", "captured_at": utc_now_iso("milliseconds"),
                     "offset": {"dx_mm": 48.0, "dy_mm": -21.0, "distance_mm": 52.4, "dyaw_deg": 6.5,
                                "forward_mm": 48.0, "left_mm": -21.0},
                     "tolerance": {"position_mm": 30.0, "yaw_deg": 5.0},
                 }
             return {
                 "status": "ARRIVED", "spot_id": "mock_station", "simulated": True, "pinky_id": pinky_id,
-                "reason": "모의: 정차 위치 안", "captured_at": _now(),
+                "reason": "모의: 정차 위치 안", "captured_at": utc_now_iso("milliseconds"),
                 "offset": {"dx_mm": 4.0, "dy_mm": 2.0, "distance_mm": 4.5, "dyaw_deg": 0.8},
                 "tolerance": {"position_mm": 30.0, "yaw_deg": 5.0},
             }

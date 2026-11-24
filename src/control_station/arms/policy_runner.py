@@ -12,18 +12,14 @@ import signal
 import subprocess
 import threading
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from control_station import utc_now_iso
 from control_station.arms.config import ArmConfigError, ArmRegistry, arm_devices, load_arms
 from control_station.arms.policies import ActPolicyError, load_act_policies
 
 ACTION_LIMIT_EXIT_CODE = 75
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _env_int(name: str, default: int | None = None) -> int | None:
@@ -131,7 +127,7 @@ class PolicyRunSupervisor:
             if not self.enabled
             else "학습 정책 실행을 시작하지 않았습니다."
         )
-        self._updated_at = _now()
+        self._updated_at = utc_now_iso()
         self._exit_code: int | None = None
 
     def run_config(self, profile: dict[str, Any]) -> dict[str, Any]:
@@ -246,7 +242,7 @@ class PolicyRunSupervisor:
         if self._log_file is not None:
             self._log_file.close()
             self._log_file = None
-        self._updated_at = _now()
+        self._updated_at = utc_now_iso()
 
     def snapshot(self) -> dict[str, object]:
         with self._lock:
@@ -320,7 +316,7 @@ class PolicyRunSupervisor:
                 self._log_file = None
                 self._state = "ERROR"
                 self._detail = f"정책 클라이언트를 시작하지 못했습니다: {exc}"
-                self._updated_at = _now()
+                self._updated_at = utc_now_iso()
                 raise RuntimeError(self._detail) from exc
             self._state = "STARTING"
             on_arm = f"{config['arm_label']}({config['arm_id']})에서 " if config["arm_id"] else ""
@@ -329,7 +325,7 @@ class PolicyRunSupervisor:
                 "집기/배치 완료 여부는 별도 확인이 필요합니다."
             )
             self._exit_code = None
-            self._updated_at = _now()
+            self._updated_at = utc_now_iso()
             return self.snapshot()
 
     def stop(self) -> dict[str, object]:
@@ -339,7 +335,7 @@ class PolicyRunSupervisor:
                 return self.snapshot()
             self._state = "STOPPING"
             self._detail = "중단 신호를 보냈습니다. 실제 로봇 동작 결과는 확인 전까지 미확정입니다."
-            self._updated_at = _now()
+            self._updated_at = utc_now_iso()
             try:
                 os.killpg(self._process.pid, signal.SIGINT)
             except ProcessLookupError:

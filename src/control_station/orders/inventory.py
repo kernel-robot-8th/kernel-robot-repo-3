@@ -28,18 +28,15 @@ import time
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from control_station import utc_now_iso
 
 CONFIRM_READINGS = 3
 STALE_AFTER_S = 10.0
 READ_PERIOD_S = 2.0
 EVENT_LOG_SIZE = 40
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 @dataclass(frozen=True)
@@ -187,7 +184,7 @@ class InventoryOverrides:
             if value is None:
                 self._values.pop(object_class, None)
             else:
-                self._values[object_class] = {**value, "set_at": _now_iso()}
+                self._values[object_class] = {**value, "set_at": utc_now_iso()}
             self.path.parent.mkdir(parents=True, exist_ok=True)
             temporary = self.path.with_suffix(".tmp")
             temporary.write_text(json.dumps(self._values, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -234,7 +231,7 @@ class InventoryMonitor:
             self.book.book_moves((shelf, name) for _, shelf, name in moves)
             self._booked.update(step_id for step_id, _, _ in moves)
             for change in self.book.observe(reading):
-                self._events.append({"at": _now_iso(), **change})
+                self._events.append({"at": utc_now_iso(), **change})
 
     def snapshot(self) -> dict[str, Any]:
         reserved = self.reserved()
@@ -248,7 +245,7 @@ class InventoryMonitor:
             for row in view["products"]:
                 if row["source"] == "camera":
                     row["source"] = "mock_world"
-        view["checked_at"] = _now_iso()
+        view["checked_at"] = utc_now_iso()
         return view
 
     def set_override(self, object_class: str, mode: str, count: object = None) -> dict[str, Any] | None:
@@ -259,7 +256,7 @@ class InventoryMonitor:
             raise ValueError(f"주문할 수 있는 물건이 아닙니다: {object_class}")
         stored = self.overrides.set(object_class, mode, count)
         with self._lock:
-            self._events.append({"at": _now_iso(), "kind": "OVERRIDE", "object_class": object_class, "mode": mode,
+            self._events.append({"at": utc_now_iso(), "kind": "OVERRIDE", "object_class": object_class, "mode": mode,
                                  "count": count if mode == "manual" else None})
         return stored
 

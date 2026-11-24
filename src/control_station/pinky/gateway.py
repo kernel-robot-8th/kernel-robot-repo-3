@@ -15,9 +15,9 @@ import math
 import threading
 from collections import deque
 from collections.abc import Callable
-from datetime import datetime, timezone
 from typing import Any
 
+from control_station import utc_now_iso
 from control_station.orders.progress_view import PHASE_LABELS
 from control_station.pinky.fleet_client import PinkyFleetClient, PinkyFleetError
 from control_station.storage.store import PINKY_IDS, PINKY_NAMES
@@ -34,10 +34,6 @@ SAFETY_LABELS = {
     "invalid_command": "잘못된 명령, 정지",
 }
 LOG_SIZE = 30
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _number(value: object) -> float | None:
@@ -238,7 +234,7 @@ class PinkyGateway:
         return {"source": self.source, "reachable": error is None, "error": error, "pinkies": pinkies,
                 # None when unknown (mock, no answer, or a dashboard that does not say)
                 "password_set": password_set if isinstance(password_set, bool) else None,
-                "busy": fleet.get("busy_robot"), "log": log[::-1], "checked_at": _now()}
+                "busy": fleet.get("busy_robot"), "log": log[::-1], "checked_at": utc_now_iso()}
 
     def map_view(self, zones: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         """Everything to draw the cell from above, in map metres: the Nav2 occupancy grid and keepout mask, the
@@ -339,7 +335,7 @@ class PinkyGateway:
                 "operational": robot.get("operational"), "localization": robot.get("localization"),
                 "route": {k: route.get(k) for k in ("status", "phase", "current_label", "completed", "message",
                                                     "detail", "execution", "dropoff")} if route else None,
-                "topics": topics, "checked_at": _now()}
+                "topics": topics, "checked_at": utc_now_iso()}
 
     def nav_log(self, pinky_id: str) -> dict[str, Any]:
         self._known(pinky_id)
@@ -508,7 +504,7 @@ class PinkyGateway:
                           "message": message}
             except OSError as exc:
                 result = {"ok": False, "http_status": None, "simulated": False, "message": str(exc)}
-        entry = {"at": _now(), "action": action, "pinky_id": pinky_id, **result}
+        entry = {"at": utc_now_iso(), "action": action, "pinky_id": pinky_id, **result}
         with self._lock:
             self._log.append(entry)
         return entry

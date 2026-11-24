@@ -15,7 +15,7 @@ from sqlalchemy import exists, or_, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
-from control_station import REPO_ROOT
+from control_station import REPO_ROOT, utc_now_iso
 from control_station.storage.database import (
     OrderRequestRecord,
     TaskEventRecord,
@@ -548,7 +548,7 @@ class TaskStore:
 
     def acknowledge_alert(self, task_id: str, note: str) -> dict[str, Any]:
         """Record that the operator saw a stopped order's alert; the task state does not change."""
-        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        now = utc_now_iso("microseconds")
         with self._sessions.begin() as session:
             task = session.get(TaskRecord, task_id)
             if task is None:
@@ -589,7 +589,7 @@ class TaskStore:
         expected_step_status: StepStatus = StepStatus.RUNNING,
     ) -> dict[str, Any]:
         """Append evidence only while the same task step and command remain active."""
-        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        now = utc_now_iso("microseconds")
         with self._sessions.begin() as session:
             result = session.execute(
                 update(TaskRecord)
@@ -660,7 +660,7 @@ class TaskStore:
         payload: dict[str, object] | None = None,
         resume_confirmed: bool = False,
     ) -> dict[str, Any]:
-        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        now = utc_now_iso("microseconds")
         with self._sessions.begin() as session:
             task = session.get(TaskRecord, task_id)
             if task is None:
@@ -734,7 +734,7 @@ class TaskStore:
         error_message: str | None = None,
         event_payload: dict[str, object] | None = None,
     ) -> dict[str, Any]:
-        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        now = utc_now_iso("microseconds")
         with self._sessions.begin() as session:
             step = session.get(TaskStepRecord, step_id)
             if step is None or step.task_id != task_id:
@@ -835,7 +835,7 @@ class TaskStore:
 
         `idempotency` is (Idempotency-Key, request hash): it is stored with the task in the same transaction, so
         a key is never left pointing at nothing and two requests with one key cannot both make a task."""
-        created_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        created_at = utc_now_iso("microseconds")
         task = TaskRecord(
             id=f"TASK-{uuid.uuid4().hex[:8].upper()}",
             destination=destination,
@@ -917,7 +917,7 @@ class TaskStore:
         """Give a waiting order its Pinky, tag the Pinky steps with it and record why it was chosen."""
         if pinky_id not in PINKY_IDS:
             raise ValueError(f"unknown Pinky {pinky_id}")
-        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        now = utc_now_iso("microseconds")
         with self._claim_lock, self._sessions.begin() as session:
             task = session.get(TaskRecord, task_id)
             if task is None:
@@ -951,7 +951,7 @@ class TaskStore:
         one, which is parked again), its steps of that shipment are tagged with it, and the choice is recorded."""
         if pinky_id not in PINKY_IDS:
             raise ValueError(f"unknown Pinky {pinky_id}")
-        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        now = utc_now_iso("microseconds")
         with self._claim_lock, self._sessions.begin() as session:
             task = session.get(TaskRecord, task_id)
             if task is None:
@@ -998,7 +998,7 @@ class TaskStore:
 
     def assign_zone(self, task_id: str, zone_id: str, label: str, assignment: dict[str, object]) -> dict[str, Any]:
         """Give a waiting order its receiving zone (and the zone's name as its destination), recording why."""
-        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        now = utc_now_iso("microseconds")
         with self._claim_lock, self._sessions.begin() as session:
             task = session.get(TaskRecord, task_id)
             if task is None:

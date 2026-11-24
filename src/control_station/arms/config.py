@@ -201,7 +201,6 @@ def arm_devices(arms: list[dict[str, Any]] | tuple[dict[str, Any], ...],
     legacy_arm = legacy_arm_id(arms, env)
     result: dict[str, ArmDevices] = {}
     for arm in arms:
-        prefix = env_prefix(arm["arm_id"])
         own = {field: _first(env, *env_names(arm["arm_id"], field)) for field in _FIELDS}
         if any(own.values()) or arm["arm_id"] != legacy_arm:
             port, cameras = own["FOLLOWER_PORT"], {role: own[f"{role}_CAMERA"] for role in CAMERA_ROLES}

@@ -25,9 +25,9 @@ from __future__ import annotations
 
 import threading
 from collections import deque
-from datetime import datetime, timezone
 from typing import Any
 
+from control_station import utc_now_iso
 from control_station.orders.desk import OrderDeskError
 from control_station.orders.task_runner import TaskExecutionConflict
 from control_station.storage.store import InvalidStateTransition, TaskNotFoundError, shipment_of
@@ -42,10 +42,6 @@ BEFORE_SPOT = frozenset({"VALIDATE_ORDER", "CHECK_SHELF_STOCK", "PLAN_ARM_SEQUEN
 _DONE = "SUCCEEDED"
 # Stopped orders keep their Pinky until the operator acknowledges the alert (store._pinky_holding_orders).
 _STOPPED = {"FAILED", "NEEDS_INTERVENTION"}
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def step_in(order: dict[str, Any], step_types: frozenset[str]) -> dict[str, Any] | None:
@@ -142,10 +138,10 @@ class OrderDispatcher:
             if changed:
                 with self._lock:
                     self._started.appendleft({"order_id": order_id, "pinky_id": started.get("pinky_id"),
-                                              "receiving_zone": started.get("receiving_zone"), "at": _now()})
+                                              "receiving_zone": started.get("receiving_zone"), "at": utc_now_iso()})
         with self._lock:
             self._state = {"waiting": len(self.desk.pending()), "blocked": blocked, "skipped": skipped,
-                           "checked_at": _now()}
+                           "checked_at": utc_now_iso()}
         return self.snapshot()
 
     def _line_gate(self) -> dict[str, Any] | None:
@@ -182,7 +178,7 @@ class OrderDispatcher:
                 self.tick()
             except Exception as exc:  # noqa: BLE001 (a pass must never end the loop; the screen shows why)
                 with self._lock:
-                    self._state = {**self._state, "checked_at": _now(),
+                    self._state = {**self._state, "checked_at": utc_now_iso(),
                                    "blocked": {"order_id": None, "code": "DISPATCH_ERROR", "message": str(exc)}}
 
     def close(self) -> None:

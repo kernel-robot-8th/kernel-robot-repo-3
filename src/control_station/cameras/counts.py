@@ -19,19 +19,16 @@ import os
 import statistics
 import time
 from collections import Counter
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+
+from control_station import utc_now_iso
 
 
 class CountUnavailable(RuntimeError):
     def __init__(self, error_code: str, message: str) -> None:
         super().__init__(message)
         self.error_code = error_code
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
 def sample_frames(
@@ -102,7 +99,7 @@ class ShelfStockCounter:
             for shelf, frame_counts in per_shelf.items():
                 shelves[shelf] = median_counts(frame_counts)
             frames_used[camera_id] = [int(frame.get("frame_sequence") or 0) for frame in frames]
-        return {"source": "shelf_camera", "simulated": False, "captured_at": _now(), "shelves": shelves,
+        return {"source": "shelf_camera", "simulated": False, "captured_at": utc_now_iso("milliseconds"), "shelves": shelves,
                 "frames": frames_used, "method": f"median of {self.frames} frames, IN_SLOT detections"}
 
 
@@ -199,7 +196,7 @@ class PinkyLoadCounter:
                     if self._on_tray(item) and str(item.get("class_name")) not in self.ignore)
             for frame in frames
         ]
-        return {"source": self.camera_id, "simulated": False, "captured_at": _now(), "pinky_id": pinky_id,
+        return {"source": self.camera_id, "simulated": False, "captured_at": utc_now_iso("milliseconds"), "pinky_id": pinky_id,
                 "counts": median_counts(per_frame), "region_px": self.region,
                 "frames": [int(frame.get("frame_sequence") or 0) for frame in frames],
                 "ignored_classes": sorted(self.ignore), "method": f"median of {self.frames} frames inside the tray region"}
@@ -261,7 +258,7 @@ class PinkyLoadCounter:
             self._held[name] = {"count": count, "confidence": best[name].get("confidence"), "seen": now}
         for name in [name for name, held in self._held.items() if now - held["seen"] > self.live_hold_s]:
             del self._held[name]
-        return {**base, "state": "READY", "captured_at": _now(),
+        return {**base, "state": "READY", "captured_at": utc_now_iso("milliseconds"),
                 "counts": {name: held["count"] for name, held in sorted(self._held.items())},
                 "items": [{"class_name": name, "confidence": held["confidence"], "seen_now": name in newest_counts,
                            "seen_s_ago": round(now - held["seen"], 1)} for name, held in sorted(self._held.items())],
@@ -285,7 +282,7 @@ class PinkyLoadCounter:
             (x, y), (rx, ry) = marker["center_px"], entry["spot_center_px"]
             offset = round(((x - rx) ** 2 + (y - ry) ** 2) ** 0.5, 1)
             result = {**{key: entry[key] for key in ("pinky_id", "name", "marker_id", "spot_id")},
-                      "offset_px": offset, "marker_visible": True, "last_seen_at": _now()}
+                      "offset_px": offset, "marker_visible": True, "last_seen_at": utc_now_iso("milliseconds")}
             if offset <= self.arrival_tolerance_px:
                 self._arrived = {**result, "state": "ARRIVED"}
                 return self._arrived

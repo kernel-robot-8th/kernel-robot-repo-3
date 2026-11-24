@@ -14,7 +14,22 @@
     web/          관제 화면과 손님 주문 창 (정적 파일)
 """
 
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 # 저장소 루트. config/, data/, .control-station/ 같은 파일 경로는 모두 여기서 시작한다.
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def utc_now_iso(timespec: str = "seconds") -> str:
+    """지금 시각을 UTC ISO 8601 문자열로. timespec은 "seconds", "milliseconds", "microseconds" 중 하나.
+
+    작업·단계·이벤트 기록은 같은 초 안의 순서까지 남기려고 "microseconds"를 쓴다.
+    """
+    return datetime.now(timezone.utc).isoformat(timespec=timespec)
+
+
+def env_flag(name: str) -> bool:
+    """환경 변수가 정확히 "1"일 때만 켜짐. 비어 있거나 다른 값이면 꺼짐."""
+    return os.environ.get(name, "").strip() == "1"

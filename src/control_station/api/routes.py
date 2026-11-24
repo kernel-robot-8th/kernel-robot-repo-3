@@ -102,7 +102,7 @@ POST_ROUTES: tuple[Route, ...] = (
     ),
     Route(_path("/api/tasks"), tasks.post_task),
     # The big red button: the arms and every Pinky in one request (stop_all.py).
-    Route(_path("/api/stop-all"), status.post_stop_all, "Cross-origin stop request rejected", reads_body=False),
+    Route(_path("/api/stop-all"), status.post_stop_everything, "Cross-origin stop request rejected", reads_body=False),
     Route(_path("/api/pinky/stop-all"), pinky.post_stop_all, "Cross-origin Pinky-stop request rejected",
           reads_body=False),
     Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "pinky"] and parts[3] == "stop",

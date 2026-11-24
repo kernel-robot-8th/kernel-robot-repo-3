@@ -30,7 +30,6 @@ The devices behind the observers and the picker are plugged in from outside (the
 
 from __future__ import annotations
 
-import math
 import threading
 import time
 from collections import Counter
@@ -38,14 +37,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from control_station.orders.assignment import ArmPlanError, PickStats, plan_arms
-from control_station.pinky.docking import (  # noqa: F401
-    COMPLETE,
-    OPERATOR,
-    REDOCK,
-    DockHandshake,
-    _result_text,
-    redock_offset,
-)
+from control_station.pinky.docking import COMPLETE, OPERATOR, REDOCK, DockHandshake, _result_text  # noqa: F401
 from control_station.pinky.fleet_client import STATION_PHASES, PinkyFleetError
 from control_station.storage.store import PINKY_NAMES, shipment_of
 

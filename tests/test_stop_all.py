@@ -156,7 +156,7 @@ class StopEverythingTests(unittest.TestCase):
 
     def test_the_route_answers_202_when_all_accepted_and_207_otherwise(self) -> None:
         route = next(route for route in POST_ROUTES if route.matches("/api/stop-all", ["api", "stop-all"]))
-        self.assertIs(route.handle, stop_api.post_stop_all)
+        self.assertIs(route.handle, stop_api.post_stop_everything)
         self.assertFalse(route.reads_body)
         self.assertIsNotNone(route.cross_origin_message)
 
@@ -164,7 +164,7 @@ class StopEverythingTests(unittest.TestCase):
             sent: list[tuple[int, dict[str, object]]] = []
             handler = SimpleNamespace(app=self.app(pinky_gateway=FakeGateway(accepted)),
                                       _json=lambda status, body: sent.append((status, body)))
-            stop_api.post_stop_all(handler, "/api/stop-all", ["api", "stop-all"], None)
+            stop_api.post_stop_everything(handler, "/api/stop-all", ["api", "stop-all"], None)
             self.assertEqual(sent[0][0], expected)
             self.assertEqual(len(sent[0][1]["pinkies"]), 3)
 

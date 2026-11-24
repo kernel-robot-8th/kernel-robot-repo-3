@@ -5,23 +5,18 @@ from __future__ import annotations
 import json
 import threading
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from control_station import REPO_ROOT
+from control_station import REPO_ROOT, utc_now_iso
 from control_station.arms.commands import ArmCommandStore
 from control_station.storage.database import ArmSequenceRecord
 
 DEFAULT_PATH = REPO_ROOT / "config" / "omx-act-sequences.json"
 MAX_SEQUENCE_STEPS = 4
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 class ArmSequenceError(ValueError):
@@ -104,7 +99,7 @@ class ArmSequenceSupervisor:
                         ArmSequenceRecord.state.in_(["QUEUED", "DISPATCHED", "RUNNING"])))
                     if row:
                         row.state = "RUNNING" if command["state"] in {"ACCEPTED", "RUNNING"} else "DISPATCHED"
-                        row.updated_at = _now()
+                        row.updated_at = utc_now_iso("microseconds")
             elif command["state"] == "QUEUED":
                 with self.sessions.begin() as session:
                     row = session.scalar(select(ArmSequenceRecord).where(
@@ -112,7 +107,7 @@ class ArmSequenceSupervisor:
                         ArmSequenceRecord.state.in_(["DISPATCHED", "RUNNING"])))
                     if row:
                         row.state = "QUEUED"
-                        row.updated_at = _now()
+                        row.updated_at = utc_now_iso("microseconds")
 
     def start(self, sequence_id: str) -> dict[str, Any]:
         with self._lock:
@@ -160,7 +155,7 @@ class ArmSequenceSupervisor:
         command = self.commands.create({"robot_id": first["robot_id"], "operation": "PICK_WITH_POLICY",
             "valid_for_s": 600, "target": {"object_class": first["object_class"]},
             "place": {"slot_id": "CART_1"}, "source": {"kind": "OPERATOR_INPUT", "note": f"연속 실행 {definition['label']} 1단계"}})
-        now = _now()
+        now = utc_now_iso("microseconds")
         with self.sessions.begin() as session:
             row = ArmSequenceRecord(id=run_id, sequence_key=definition["sequence_id"], robot_id=first["robot_id"],
                 state="QUEUED", current_step=0, steps=definition["steps"], results=[],
@@ -176,7 +171,7 @@ class ArmSequenceSupervisor:
                     ArmSequenceRecord.state.in_(["QUEUED", "DISPATCHED"])))
                 if row:
                     row.state = "RUNNING"
-                    row.updated_at = _now()
+                    row.updated_at = utc_now_iso("microseconds")
             return
         # A retried final event can recover sequence advancement if the HTTP request failed
         # after the command event was committed.
@@ -194,7 +189,7 @@ class ArmSequenceSupervisor:
                 if state == "CANCELED":
                     row.state = "NEEDS_INTERVENTION"
                     row.current_command_id = None
-                    row.updated_at = _now()
+                    row.updated_at = utc_now_iso("microseconds")
                     return
                 if row.state == "CANCELING":
                     row.state = "NEEDS_INTERVENTION"
@@ -205,7 +200,7 @@ class ArmSequenceSupervisor:
                                                   "home_confirmed": result.get("pose_reached") is True,
                                                   "placement_confirmed": result.get("place_confirmed") is True}]
                     row.current_command_id = None
-                    row.updated_at = _now()
+                    row.updated_at = utc_now_iso("microseconds")
                     return
                 allowed_unknown = state == "UNKNOWN" and command.get("reason_code") == "PLACE_NOT_VERIFIED"
                 if (state != "SUCCEEDED" and not allowed_unknown) or result.get("pose_reached") is not True:
@@ -213,7 +208,7 @@ class ArmSequenceSupervisor:
                     row.results = [*row.results, {"step": row.current_step, "object_class": row.steps[row.current_step]["object_class"],
                                                   "command_id": command["command_id"], "state": state,
                                                   "reason_code": command.get("reason_code"), "home_confirmed": False}]
-                    row.updated_at = _now()
+                    row.updated_at = utc_now_iso("microseconds")
                     return
                 current_step = row.current_step
                 row.results = [*row.results, {"step": current_step, "object_class": row.steps[current_step]["object_class"],
@@ -226,7 +221,7 @@ class ArmSequenceSupervisor:
                 if finished_sequence:
                     row.state = "COMPLETED"
                     row.current_command_id = None
-                    row.updated_at = _now()
+                    row.updated_at = utc_now_iso("microseconds")
                 else:
                     next_step = row.steps[current_step + 1]
                     robot_id = next_step["robot_id"]
@@ -249,7 +244,7 @@ class ArmSequenceSupervisor:
                 if row and row.state == "RUNNING" and row.current_command_id == previous_command_id:
                     row.current_step += 1
                     row.current_command_id = next_command["command_id"]
-                    row.updated_at = _now()
+                    row.updated_at = utc_now_iso("microseconds")
 
     def cancel(self, run_id: str) -> dict[str, Any]:
         with self._lock:
@@ -264,5 +259,5 @@ class ArmSequenceSupervisor:
             with self.sessions.begin() as session:
                 row = session.get(ArmSequenceRecord, run_id)
                 row.state = "CANCELING" if command_id and canceled_command["state"] != "CANCELED" else "CANCELED"
-                row.updated_at = _now()
+                row.updated_at = utc_now_iso("microseconds")
                 return self._present(row)
