@@ -3205,8 +3205,9 @@ class Handler(BaseHTTPRequestHandler):
                     STATE.routes[robot_id]=route
                 else:
                     # 이미 멈춘(또는 집에 가려고 기다리던) 핑키를 또 멈추면 그 자리에 붙잡아 둔다.
-                    # 주의: 끝난 경로의 status는 'complete'라서 여기 'completed'와 맞지 않는다.
-                    if route.get('status') in {'cancelled','failed','completed'}:
+                    # 끝난 경로의 status는 'complete'다(2026-11-25 수정: 예전에는 'completed'와 비교해 끝난 경로를
+                    # 알아보지 못했고, hold가 없어 60초 뒤 혼자 복귀하려 했다).
+                    if route.get('status') in {'cancelled','failed','complete'}:
                         route['hold']=True
                     route.update(status='cancel_requested',message='정지 유지와 Nav2 취소를 요청합니다.',auto_return_at=None)
                 route['stop_pending']=True

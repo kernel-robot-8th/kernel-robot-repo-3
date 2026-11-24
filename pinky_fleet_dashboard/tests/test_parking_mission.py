@@ -136,3 +136,32 @@ class RunnerFlowTest(unittest.TestCase):
             self.assertEqual(set(pool.map(exercise,app.ROBOTS)),set(app.ROBOTS))
 
 if __name__=="__main__": unittest.main()
+
+
+class StopAfterFinishedRouteTest(unittest.TestCase):
+    """끝난 경로(status 'complete')의 핑키를 멈추면 그 자리에 붙잡아 둔다(hold).
+
+    예전에는 'completed'와 비교해 끝난 경로를 알아보지 못했고, hold가 없어 60초 뒤 혼자 복귀하려 했다."""
+
+    def test_stopping_a_finished_route_holds_the_pinky(self):
+        state = app.FleetState()
+        state.password = 'test-only'
+        state.routes['10'] = {'status': 'complete', 'labels': ['1', '2'], 'message': '경로 완료'}
+
+        class Workers:
+            def submit(self, fn, *args):
+                pass
+
+        with patch.multiple(app, STATE=state, WORKERS=Workers()):
+            server = ThreadingHTTPServer(('127.0.0.1', 0), app.Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                req = urllib.request.Request(f'http://127.0.0.1:{server.server_port}/api/robots/10/route/cancel',
+                                             data=b'{}', headers={'Content-Type': 'application/json'}, method='POST')
+                with urllib.request.urlopen(req) as response:
+                    self.assertEqual(response.status, 202)
+                self.assertTrue(state.routes['10'].get('hold'))
+            finally:
+                server.shutdown()
+                server.server_close()
