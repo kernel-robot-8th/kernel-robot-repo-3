@@ -133,6 +133,19 @@ class OrderDeskTest(unittest.TestCase):
         self.desk.start(second["id"])
         self.assertEqual(finish(self.desk, self.store, second["id"])["receiving_zone"], "zone_a")
 
+    def test_a_zone_taken_in_the_race_does_not_leave_the_pinky_held(self) -> None:
+        # 구역을 고른 뒤 쓰기 전에 다른 주문이 그 구역에서 시작한 경우. 예전에는 핑키를 먼저 써서,
+        # 구역 쓰기가 실패하면 핑키만 배정된 접수 대기 주문이 남아 그 핑키를 붙잡았다.
+        from control_station.storage.store import ZoneUnavailable
+
+        order = self.desk.receive([{"object_class": "carrot", "quantity": 1}])
+        with mock.patch.object(self.store, "assign_zone", side_effect=ZoneUnavailable("다른 주문이 사용 중")):
+            with self.assertRaises(OrderDeskError) as busy:
+                self.desk.start(order["id"])
+        self.assertEqual(busy.exception.error_code, "ZONE_BUSY")
+        waiting = self.store.get_task(order["id"])
+        self.assertEqual((waiting["status"], waiting["pinky_id"]), ("PENDING", None))
+
     def test_an_operators_zone_is_kept(self) -> None:
         self.use_two_zones()
         first = self.desk.receive([{"object_class": "carrot", "quantity": 1}], "zone_b")  # A would rank first

@@ -330,19 +330,24 @@ class OrderDesk:
             zone = self.zone_plan(order)
             if zone.zone_id is None:
                 raise OrderDeskError("ZONE_BUSY", zone.summary, zone=zone.as_dict())
+            assignment = None
             if order["pinky_id"] is None:
                 assignment = choose_pinky(self.pinky_candidates())
                 if assignment.pinky_id is None:
                     raise OrderDeskError("PINKY_UNAVAILABLE", assignment.summary, assignment=assignment.as_dict())
-                try:
-                    self.store.assign_pinky(order_id, assignment.pinky_id, assignment.as_dict())
-                except PinkyUnavailable as exc:  # 고른 뒤 쓰기 전에 다른 주문이 가져갔다
-                    raise OrderDeskError("PINKY_UNAVAILABLE", str(exc)) from exc
+            # 구역을 먼저 쓴다. 접수 대기 주문의 구역은 다른 주문을 막지 않지만 핑키는 막기 때문이다. 그래서 두 쓰기
+            # 사이의 경쟁으로 거절되더라도 핑키가 이 주문에 묶이지 않는다(2026-11-25 수정: 예전에는 핑키를 먼저 써서,
+            # 구역 쓰기가 실패하면 핑키만 배정된 접수 대기 주문이 남았다).
             if order["receiving_zone"] is None:
                 try:
                     self.store.assign_zone(order_id, zone.zone_id, self.zones[zone.zone_id].label, zone.as_dict())
                 except ZoneUnavailable as exc:  # 고른 뒤 쓰기 전에 다른 주문이 거기서 시작했다
                     raise OrderDeskError("ZONE_BUSY", f"수령 구역이 모두 사용 중이에요: {exc}") from exc
+            if assignment is not None:
+                try:
+                    self.store.assign_pinky(order_id, assignment.pinky_id, assignment.as_dict())
+                except PinkyUnavailable as exc:  # 고른 뒤 쓰기 전에 다른 주문이 가져갔다
+                    raise OrderDeskError("PINKY_UNAVAILABLE", str(exc)) from exc
         return self.orchestrator.start(order_id)
 
     @staticmethod
