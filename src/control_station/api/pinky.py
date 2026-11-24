@@ -82,7 +82,7 @@ def get_nav_log(h: ControlStationHandler, route: str, parts: list[str], body: No
 def get_map(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
     """핑키 지도: Nav2 격자, 금지 구역, 주차장, 5번, 교차로 7, 웨이포인트, 수령 구역, 핑키 위치(지도 좌표)"""
     # 수령 구역은 주문 데스크가 갖고 있다. 데스크가 없으면(서버 조립 전 등) 구역 없이 그린다.
-    zones =[zone.as_dict() for zone in getattr(h.app.order_desk, "zones", {}).values()] if hasattr(h.app, "order_desk") else []
+    zones = [zone.as_dict() for zone in getattr(h.app.order_desk, "zones", {}).values()] if hasattr(h.app, "order_desk") else []
     h._json(200, h.app.pinky_gateway.map_view(zones))
 
 
@@ -152,7 +152,7 @@ def post_dock_handshake(h: ControlStationHandler, route: str, parts: list[str], 
         repeat = body.get("repeat")
         repeat = repeat if isinstance(repeat, int) and not isinstance(repeat, bool) else 0
         # 관제 자체의 자동 처리(dock_auto)가 켜져 있으면, 화면의 체크 상자와 관계없이 이 호출도 실제로 신호를 보낸다.
-        result =h.app.dock_supervisor.step(pinky_id, body.get("auto") is True or bool(getattr(h.app, "dock_auto", False)), repeat)
+        result = h.app.dock_supervisor.step(pinky_id, body.get("auto") is True or bool(getattr(h.app, "dock_auto", False)), repeat)
     except Exception as exc:  # 핑키 관제 대시보드가 답하지 않음
         h._json_error(502, "PINKY_FLEET_UNREACHABLE", f"핑키 상태를 읽지 못했습니다: {exc}")
         return

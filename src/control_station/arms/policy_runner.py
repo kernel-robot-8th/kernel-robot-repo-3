@@ -1,8 +1,15 @@
-"""Lifecycle management for one bounded LeRobot async policy run.
+"""액션 수에 상한을 둔 LeRobot 비동기 정책 실행 한 번의 수명 관리 (POST /api/arm/policy/start|stop).
 
-A policy is trained on one arm (`arm_id` in config/omx-act-policies.json) and runs only on that arm's follower port
-and cameras (arms/config.py). A policy without `arm_id` runs on the single-arm settings, as before. One run at a time:
-the two arms take turns (config/fleet-planning.json arms_overlap false)."""
+관제가 LeRobot의 async_inference 로봇 클라이언트를 자식 프로세스로 띄운다. 정책 추론 서버(policy server)는 따로 떠
+있어야 하고(CONTROL_STATION_POLICY_SERVER_ADDRESS), 이 클라이언트가 카메라 영상과 관절 값을 보내고 받은 액션으로
+팔을 움직인다. 기본으로는 꺼져 있고 CONTROL_STATION_POLICY_ENABLED=1이어야 켜진다.
+
+정책은 팔 한 대에서 학습되므로(config/omx-act-policies.json의 `arm_id`), 그 팔의 팔로워 포트와 카메라(arms/config.py)
+에서만 실행한다. `arm_id`가 없는 정책은 예전처럼 단일 팔 설정으로 실행한다. 한 번에 하나만 실행한다: 두 팔은 번갈아
+움직인다(config/fleet-planning.json의 arms_overlap false).
+
+주문 흐름의 집기(arms/pick.py)는 이 모듈을 쓰지 않는다. 그쪽은 팔 명령 큐를 거쳐 팔 쪽 워커가 정책을 실행한다.
+"""
 
 from __future__ import annotations
 
@@ -19,10 +26,12 @@ from control_station import utc_now_iso
 from control_station.arms.config import ArmConfigError, ArmRegistry, arm_devices, load_arms
 from control_station.arms.policies import ActPolicyError, load_act_policies
 
+# 정책 클라이언트가 max_action_steps(액션 상한)에 도달해 끝날 때 내는 종료 코드.
 ACTION_LIMIT_EXIT_CODE = 75
 
 
 def _env_int(name: str, default: int | None = None) -> int | None:
+    """정수 환경 변수. 비어 있으면 default, 정수가 아니면 ValueError(서버 시작이 실패한다)."""
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
         return default
@@ -33,7 +42,7 @@ def _env_int(name: str, default: int | None = None) -> int | None:
 
 
 def _policy_profiles(path: str | None) -> dict[str, dict[str, Any]]:
-    """The run profiles: one per policy in config/omx-act-policies.json, the same list the order flow uses."""
+    """실행 프로필: config/omx-act-policies.json의 정책마다 하나. 주문 흐름이 쓰는 목록과 같다."""
     try:
         registry = load_act_policies(path)
     except ActPolicyError as exc:
@@ -49,10 +58,14 @@ def _policy_profiles(path: str | None) -> dict[str, dict[str, Any]]:
 
 
 class PolicyRunSupervisor:
-    """Start one configured async inference client with a strict action budget.
+    """설정된 비동기 추론 클라이언트 하나를 엄격한 액션 상한과 함께 시작·중단하고 상태를 알려 준다.
 
-    The process exit at the action limit is not treated as task success. The
-    LeRobot client does not receive a grasp/place completion signal.
+    액션 상한에 도달해 프로세스가 끝나도 작업 성공으로 보지 않는다. LeRobot 클라이언트는 집기·적재 완료 신호를
+    받지 않기 때문이다. 결과는 사람이나 카메라가 따로 확인해야 한다.
+
+    상태(_state): DISABLED, STOPPED, STARTING, RUNNING, STOPPING, LIMIT_REACHED, INTERRUPTED, ERROR.
+    프로세스 종료는 따로 감시하지 않고, snapshot()·start()·stop() 등을 부를 때 poll()로 확인한다(_refresh_locked).
+    모든 상태 변경은 self._lock 안에서 한다(HTTP 요청 스레드 여러 개가 동시에 부를 수 있다).
     """
 
     def __init__(self, *, disabled_reason: str | None = None, arms: ArmRegistry | None = None) -> None:
@@ -80,22 +93,24 @@ class PolicyRunSupervisor:
             try:
                 arms = load_arms()
             except ArmConfigError:
-                arms = None  # arm-bound policies then report that their arm is not configured
-        # Per-arm devices for arm-bound policies; the single-arm settings below are for policies without arm_id.
+                arms = None  # 그러면 팔에 묶인 정책은 "그 팔이 설정되지 않았다"고 알린다
+        # 팔에 묶인 정책용 팔별 장치. 아래의 단일 팔 설정은 arm_id가 없는 정책용이다.
         self.arm_devices = arm_devices(arms.arms if arms is not None else ())
-        self._run_arm: dict[str, str | None] | None = None  # the arm of the running (or last) run
+        self._run_arm: dict[str, str | None] | None = None  # 실행 중인(또는 마지막) 실행의 팔
         self._run_devices: list[str] = []
         self.robot_port = os.environ.get("CONTROL_STATION_POLICY_ROBOT_PORT", "/dev/omx_follower")
         self.robot_id = os.environ.get("CONTROL_STATION_POLICY_ROBOT_ID", "omx_follower_arm")
-        # Devices by camera role. Each policy says which role feeds its `front` and `wrist` inputs (some were
-        # recorded with the two swapped), so the device is chosen per policy in _command.
-        # FRONT/WRIST are the older names of these settings: front was the overhead camera, wrist the gripper one.
+        # 카메라 역할별 장치. 정책마다 `front`·`wrist` 입력에 어느 역할을 넣을지 정해 두므로(일부는 둘을 바꿔
+        # 녹화했다), 장치는 _command에서 정책별로 고른다.
+        # FRONT/WRIST는 이 설정의 예전 이름이다: front는 탑(overhead) 카메라, wrist는 그리퍼 카메라였다.
         self.camera_devices = {
             "OVERHEAD": os.environ.get("CONTROL_STATION_POLICY_OVERHEAD_CAMERA")
             or os.environ.get("CONTROL_STATION_POLICY_FRONT_CAMERA", "/dev/video7"),
             "GRIPPER": os.environ.get("CONTROL_STATION_POLICY_GRIPPER_CAMERA")
             or os.environ.get("CONTROL_STATION_POLICY_WRIST_CAMERA", "/dev/video9"),
         }
+        # 아래는 LeRobot async 클라이언트 인자 그대로다. chunk_size_threshold(0–1)는 남은 액션 큐가 묶음 크기의 이 비율
+        # 아래로 줄면 새 관측을 보내 다음 묶음을 받는 기준이고, aggregate_fn_name은 겹치는 묶음의 액션을 합치는 방법이다.
         self.policy_device = os.environ.get("CONTROL_STATION_POLICY_DEVICE", "cuda")
         self.fps = _env_int("CONTROL_STATION_POLICY_FPS", 30)
         self.actions_per_chunk = _env_int("CONTROL_STATION_POLICY_ACTIONS_PER_CHUNK", 100)
@@ -131,7 +146,9 @@ class PolicyRunSupervisor:
         self._exit_code: int | None = None
 
     def run_config(self, profile: dict[str, Any]) -> dict[str, Any]:
-        """Arm, follower port, LeRobot robot id and camera device per role for one profile."""
+        """프로필 하나의 실행 설정: 팔, 팔로워 포트, LeRobot robot id, 역할별 카메라 장치.
+
+        팔에 묶인 정책인데 그 팔이 config/arms.json에 없거나 장치 설정이 모자라면 RuntimeError다."""
         arm_id = profile.get("arm_id")
         if arm_id is None:
             return {"arm_id": None, "arm_label": None, "port": self.robot_port, "robot_id": self.robot_id,
@@ -148,7 +165,7 @@ class PolicyRunSupervisor:
                 "robot_id": devices.robot_id, "cameras": dict(devices.cameras)}
 
     def devices_for(self, profile_id: str | None = None) -> list[str]:
-        """Cameras the run of this profile would open; [] when the profile cannot run here."""
+        """이 프로필로 실행하면 열게 될 카메라들. 이 PC에서 실행할 수 없는 프로필이면 []."""
         profile = self.policy_profiles.get(profile_id or self.current_profile_id)
         if profile is None:
             return []
@@ -159,12 +176,13 @@ class PolicyRunSupervisor:
         return [cameras[role] for role in ("OVERHEAD", "GRIPPER") if cameras.get(role)]
 
     def active_devices(self) -> list[str]:
-        """Cameras held by the live policy process (the control station keeps them closed meanwhile)."""
+        """살아 있는 정책 프로세스가 쓰는 카메라들(그동안 관제는 이 카메라를 닫아 둔다). 카메라 관리자가 콜백으로 부른다."""
         with self._lock:
             self._refresh_locked()
             return list(self._run_devices) if self._process is not None else []
 
     def _command(self, profile: dict[str, Any]) -> list[str]:
+        """자식 프로세스 명령줄. 액션 상한이 없으면 시작하지 않는다(정책이 끝없이 팔을 움직이지 않도록)."""
         if self.max_action_steps is None or self.max_action_steps <= 0:
             raise RuntimeError(
                 "CONTROL_STATION_POLICY_MAX_ACTION_STEPS에 양의 정수 액션 상한을 설정해야 합니다."
@@ -194,7 +212,7 @@ class PolicyRunSupervisor:
             f"--robot.port={config['port']}",
             f"--robot.id={config['robot_id']}",
             f"--robot.cameras={cameras}",
-            # LeRobot's default turns torque off on disconnect, which drops the arm when the client ends.
+            # LeRobot 기본값은 연결을 끊을 때 토크를 끈다. 그러면 클라이언트가 끝날 때 팔이 힘을 잃고 떨어진다.
             "--robot.disable_torque_on_disconnect=false",
             f"--task={profile['task']}",
             f"--server_address={self.server_address}",
@@ -206,11 +224,14 @@ class PolicyRunSupervisor:
             f"--max_action_steps={self.max_action_steps}",
             f"--chunk_size_threshold={self.chunk_size_threshold}",
             f"--aggregate_fn_name={self.aggregate_fn_name}",
-            # True opens a matplotlib window at exit that keeps the process alive until it is closed.
+            # True면 종료할 때 matplotlib 창이 떠서, 창을 닫을 때까지 프로세스가 끝나지 않는다.
             "--debug_visualize_queue_size=false",
         ]
 
     def _refresh_locked(self) -> None:
+        """프로세스가 끝났는지 확인하고 종료 코드로 상태를 정한다. self._lock을 잡은 채로 불러야 한다.
+
+        중단 요청(STOPPING) 뒤의 0·SIGINT 종료는 INTERRUPTED, 액션 상한 종료 코드는 LIMIT_REACHED, 그 밖은 ERROR다."""
         if self._process is None:
             return
         code = self._process.poll()
@@ -245,6 +266,7 @@ class PolicyRunSupervisor:
         self._updated_at = utc_now_iso()
 
     def snapshot(self) -> dict[str, object]:
+        """화면용 현재 상태. process_alive는 다른 곳(카메라 넘기기, 재고 확인 중지)에서도 쓴다."""
         with self._lock:
             self._refresh_locked()
             return {
@@ -257,7 +279,7 @@ class PolicyRunSupervisor:
                 "max_action_steps": self.max_action_steps,
                 "run_id": self._run_id,
                 "current_profile_id": self.current_profile_id,
-                # The arm of the running or last run (None: the single-arm settings), and each arm's readiness.
+                # 실행 중이거나 마지막 실행의 팔(None: 단일 팔 설정), 그리고 팔마다 실행 준비가 됐는지.
                 "current_arm": dict(self._run_arm) if self._run_arm else None,
                 "arms": [devices.summary() for devices in self.arm_devices.values()],
                 "current_profile": self.policy_profiles[self.current_profile_id],
@@ -269,6 +291,10 @@ class PolicyRunSupervisor:
             }
 
     def start(self, profile_id: str | None = None) -> dict[str, object]:
+        """정책 클라이언트를 시작한다. 꺼져 있거나 이미 실행 중이거나 설정이 모자라면 RuntimeError(API는 409).
+
+        로그는 실행마다 새 파일(policy-run-{run_id}.log)에 남긴다. start_new_session=True로 새 프로세스 그룹을 만들어,
+        중단할 때 os.killpg로 클라이언트와 그 자식 프로세스에 함께 SIGINT를 보낸다."""
         with self._lock:
             self._refresh_locked()
             if not self.enabled:
@@ -293,6 +319,7 @@ class PolicyRunSupervisor:
             )
             self._active_log_path.parent.mkdir(parents=True, exist_ok=True)
             self._log_file = self._active_log_path.open("ab", buffering=0)
+            # LeRobot 소스 위치는 설치 방식에 따라 두 가지라서, lerobot 패키지가 있는 쪽을 PYTHONPATH 앞에 넣는다.
             source_root = self.lerobot_dir / "src" / "lerobot" / "src"
             if not (source_root / "lerobot").is_dir():
                 source_root = self.lerobot_dir / "src"
@@ -329,6 +356,7 @@ class PolicyRunSupervisor:
             return self.snapshot()
 
     def stop(self) -> dict[str, object]:
+        """중단 신호(SIGINT, Ctrl+C와 같음)를 보낸다. 바로 멈췄다는 뜻이 아니며, 실제 종료는 다음 상태 확인 때 반영된다."""
         with self._lock:
             self._refresh_locked()
             if self._process is None:
@@ -343,6 +371,7 @@ class PolicyRunSupervisor:
             return self.snapshot()
 
     def close(self) -> None:
+        """서버 종료 시 살아 있는 정책 프로세스에 SIGINT를 보낸다(끝날 때까지 기다리지는 않는다)."""
         with self._lock:
             if self._process is not None and self._process.poll() is None:
                 try:

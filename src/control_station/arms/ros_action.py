@@ -1,9 +1,11 @@
-"""ROS 2 client of the arm pick action servers (/arm_01/pick_object, /arm_02/pick_object; PickObject.action).
+"""팔 집기 액션 서버(/arm_01/pick_object, /arm_02/pick_object; PickObject.action)의 ROS 2 클라이언트.
 
-Used by arm_pick.ArmActionPick when CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2. Like pinky/parking_ros.py, it has its own
-ROS context on the arms' domain and spins one executor in a daemon thread, so the HTTP server never blocks on ROS.
-This module only carries goals, feedback and results; what they mean for the order and the arm command record is
-decided in arms/pick.py.
+CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2일 때 arms/pick.py의 ArmActionPick이 쓴다(예전 모듈 이름 arm_pick).
+pinky/parking_ros.py처럼 팔 쪽 ROS domain에 자기만의 ROS context를 만들고, 실행기(executor) 하나를 데몬 스레드에서
+돌린다. 그래서 HTTP 서버 스레드가 ROS 때문에 막히는 일이 없다. 이 모듈은 목표·피드백·결과를 나르기만 하고, 그것이
+주문과 팔 명령 기록에 어떤 뜻인지는 arms/pick.py가 정한다.
+
+rclpy와 omx_interfaces는 RosPickTransport를 만들 때만 가져온다. ROS 2가 없는 PC에서도 관제의 나머지 기능은 돈다.
 """
 
 from __future__ import annotations
@@ -12,20 +14,23 @@ import threading
 from datetime import datetime
 from typing import Any, Callable
 
+# 목표를 보낸 뒤 서버가 받았는지(accepted) 답할 때까지 기다리는 최대 시간(초).
 GOAL_RESPONSE_TIMEOUT_S = 5.0
 
 
 def action_name(arm_id: str) -> str:
-    """arm-01 -> /arm_01/pick_object (scripts/omx_pick_action_server.py serves the same name)."""
+    """arm-01 -> /arm_01/pick_object (scripts/omx_pick_action_server.py가 같은 이름으로 서비스한다)."""
     return "/" + arm_id.replace("-", "_") + "/pick_object"
 
 
 class PickActionUnavailable(RuntimeError):
-    """No answer from the arm's action server: nothing was sent to the arm."""
+    """팔의 액션 서버가 답하지 않음: 팔에는 아무것도 보내지 않았다."""
 
 
 class _RosGoal:
-    """One sent goal: accepted or not, a cancel, and the result once it arrives."""
+    """보낸 목표 하나: 받아들여졌는지, 취소, 도착한 결과.
+
+    결과 콜백은 ROS 실행기 스레드에서 불리고, result()는 주문 흐름 스레드에서 부른다. 둘은 threading.Event로 맞춘다."""
 
     def __init__(self, handle: Any) -> None:
         self.accepted = bool(handle.accepted)
@@ -36,6 +41,7 @@ class _RosGoal:
             handle.get_result_async().add_done_callback(self._on_result)
 
     def _on_result(self, future: Any) -> None:
+        """결과 메시지를 dict로 바꿔 두고 기다리는 쪽을 깨운다 (ROS 실행기 스레드)."""
         response = future.result()
         result = response.result
         self._result = {
@@ -46,14 +52,16 @@ class _RosGoal:
         self._done.set()
 
     def cancel(self) -> None:
+        """취소를 요청한다(비동기). 실제로 멈췄는지는 결과의 outcome으로 알 수 있다."""
         self._handle.cancel_goal_async()
 
     def result(self, timeout_s: float) -> dict[str, Any] | None:
+        """최대 timeout_s초 기다려 결과를 돌려준다. 아직 없으면 None."""
         return self._result if self._done.wait(timeout_s) else None
 
 
 class RosPickTransport:
-    """send_goal(arm_id, target, on_feedback) for the arms' pick action servers."""
+    """팔 집기 액션 서버들에 send_goal(arm_id, target, on_feedback)을 제공한다. 팔마다 ActionClient 하나."""
 
     def __init__(self, domain_id: int, arm_ids: list[str]) -> None:
         try:
@@ -79,6 +87,10 @@ class RosPickTransport:
 
     def send_goal(self, arm_id: str, target: dict[str, Any], on_feedback: Callable[[dict[str, Any]], None],
                   server_wait_s: float = 2.0) -> _RosGoal:
+        """목표 하나를 보내고 서버의 수락 여부를 받을 때까지 기다린다.
+
+        서버를 server_wait_s초 안에 찾지 못하거나 GOAL_RESPONSE_TIMEOUT_S초 안에 답이 없으면 PickActionUnavailable이다.
+        on_feedback은 ROS 실행기 스레드에서 불린다."""
         client = self._clients.get(arm_id)
         if client is None:
             raise PickActionUnavailable(f"{arm_id}의 집기 액션 클라이언트가 없습니다")
@@ -87,6 +99,7 @@ class RosPickTransport:
         goal = self._goal_type()
         for field in ("command_id", "arm_id", "object_class", "policy_id", "policy_model", "policy_registry_version"):
             setattr(goal, field, str(target[field]))
+        # valid_until(ISO 문자열)을 ROS Time(sec, nanosec)으로 바꾼다.
         nanoseconds = int(datetime.fromisoformat(target["valid_until"]).timestamp() * 1_000_000_000)
         goal.valid_until.sec, goal.valid_until.nanosec = divmod(nanoseconds, 1_000_000_000)
 
@@ -103,6 +116,7 @@ class RosPickTransport:
         return _RosGoal(future.result())
 
     def close(self) -> None:
+        """실행기·노드·context를 정리하고 스레드를 최대 2초 기다린다."""
         self._executor.shutdown()
         self._node.destroy_node()
         self._context.try_shutdown()

@@ -1,4 +1,18 @@
-"""Persistent operator initiated sequences of registered ACT policies."""
+"""운영자가 시작하는, 등록된 ACT 정책 여러 개의 연속 실행 (DB에 저장되어 서버를 다시 켜도 남는다).
+
+예: "당근 -> 사과 -> 휴지"를 차례로 집기. 단계마다 PICK_WITH_POLICY 팔 명령을 하나씩 만들고, 워커 이벤트로 그
+명령이 끝나면(api/arm.py의 post_command -> on_worker_event) 다음 단계 명령을 만든다.
+
+- 정의: config/omx-act-sequences.json의 시퀀스(start), 또는 운영자가 고른 물체 순서(start_custom, 최대 4개).
+- 다음 단계로 넘어가는 조건: 팔이 home으로 돌아온 것이 측정됐을 때(pose_reached)만이다. SUCCEEDED이거나
+  UNKNOWN(PLACE_NOT_VERIFIED)이면서 pose_reached가 true여야 한다. 그 밖에는 NEEDS_INTERVENTION으로 멈춘다.
+- 실행 상태: QUEUED -> DISPATCHED -> RUNNING -> COMPLETED. 취소하면 대기 중 명령은 바로 CANCELED, 실행 중이면
+  CANCELING을 거쳐 NEEDS_INTERVENTION(사람이 팔 확인)이 된다.
+- 한 번에 하나의 시퀀스만 진행한다.
+
+HTTP 응답을 잃어도 진행이 멈추지 않도록, 조회할 때(_reconcile)와 같은 이벤트를 다시 받을 때 명령 상태로 다시
+맞춘다.
+"""
 
 from __future__ import annotations
 
@@ -16,14 +30,20 @@ from control_station.arms.commands import ArmCommandStore
 from control_station.storage.database import ArmSequenceRecord
 
 DEFAULT_PATH = REPO_ROOT / "config" / "omx-act-sequences.json"
+# 운영자가 고르는 연속 실행(start_custom)의 최대 단계 수.
 MAX_SEQUENCE_STEPS = 4
 
 
 class ArmSequenceError(ValueError):
+    """정의 파일이 잘못됐거나, 지금 상태에서 시작·취소할 수 없는 요청 (API는 409)."""
     pass
 
 
 class ArmSequenceSupervisor:
+    """연속 실행의 시작·진행·취소를 맡는다. 진행 상태는 ArmSequenceRecord(DB)에 있고, 팔 명령은 ArmCommandStore로 만든다.
+
+    self._lock은 시작과 단계 진행이 겹쳐 같은 시퀀스에 명령이 두 번 만들어지는 일을 막는다."""
+
     def __init__(self, sessions: sessionmaker, commands: ArmCommandStore, path: Path = DEFAULT_PATH) -> None:
         self.sessions = sessions
         self.commands = commands
@@ -31,6 +51,9 @@ class ArmSequenceSupervisor:
         self._lock = threading.RLock()
 
     def definitions(self) -> list[dict[str, Any]]:
+        """정의 파일을 읽어(부를 때마다 새로) 단계마다 정책을 확인한 목록을 돌려준다. 잘못되면 ArmSequenceError.
+
+        단계의 robot_id가 없으면 시퀀스의 robot_id를 쓴다. 그 팔에서 쓸 수 있는 정책이 없는 물체는 거부한다."""
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
             if raw.get("schema_version") != 1 or not isinstance(raw.get("sequences"), list):
@@ -61,12 +84,14 @@ class ArmSequenceSupervisor:
             raise ArmSequenceError(f"시퀀스 설정을 읽지 못했습니다: {exc}") from exc
 
     def _present(self, row: ArmSequenceRecord) -> dict[str, Any]:
+        """DB 행을 API 응답 모양으로 바꾼다."""
         return {"sequence_run_id": row.id, "sequence_id": row.sequence_key, "robot_id": row.robot_id,
                 "state": row.state, "current_step": row.current_step, "steps": row.steps,
                 "results": row.results, "current_command_id": row.current_command_id,
                 "created_at": row.created_at, "updated_at": row.updated_at}
 
     def get(self, run_id: str) -> dict[str, Any]:
+        """실행 하나. 먼저 명령 상태와 맞춘 뒤 읽는다. 없으면 KeyError."""
         self._reconcile(run_id)
         with self.sessions() as session:
             row = session.get(ArmSequenceRecord, run_id)
@@ -75,6 +100,7 @@ class ArmSequenceSupervisor:
             return self._present(row)
 
     def latest(self) -> dict[str, Any] | None:
+        """가장 최근에 만든 실행, 없으면 None."""
         with self.sessions() as session:
             row = session.scalar(select(ArmSequenceRecord).order_by(ArmSequenceRecord.created_at.desc()).limit(1))
             run_id = row.id if row else None
@@ -84,7 +110,8 @@ class ArmSequenceSupervisor:
         return None
 
     def _reconcile(self, run_id: str) -> None:
-        """A refresh can recover advancement after a lost HTTP response; unresolved command states stop the run."""
+        """조회할 때 현재 명령 상태로 실행 상태를 다시 맞춘다. HTTP 응답을 잃어 다음 단계로 못 넘어간 경우도 여기서
+        복구되고, 끝났지만 받아들일 수 없는 명령 상태면 실행을 멈춘다(on_worker_event와 같은 규칙)."""
         with self.sessions() as session:
             row = session.get(ArmSequenceRecord, run_id)
             command_id = row.current_command_id if row and row.state in {"QUEUED", "DISPATCHED", "RUNNING", "CANCELING"} else None
@@ -110,6 +137,7 @@ class ArmSequenceSupervisor:
                         row.updated_at = utc_now_iso("microseconds")
 
     def start(self, sequence_id: str) -> dict[str, Any]:
+        """정의 파일의 시퀀스를 시작한다(첫 단계 명령을 바로 만든다)."""
         with self._lock:
             definition = next((item for item in self.definitions() if item["sequence_id"] == sequence_id), None)
             if definition is None:
@@ -117,7 +145,9 @@ class ArmSequenceSupervisor:
             return self._start_definition(definition)
 
     def start_custom(self, object_classes: object) -> dict[str, Any]:
-        """Start a user-ordered selection of distinct, registered object policies."""
+        """운영자가 고른 순서대로, 서로 다른 등록 정책들을 시작한다.
+
+        이름은 팔 지정 없이 찾고(resolve), 각 단계의 팔은 그 정책에 묶인 팔이다. 팔에 묶이지 않은 정책은 받지 않는다."""
         if not isinstance(object_classes, list) or not 1 <= len(object_classes) <= MAX_SEQUENCE_STEPS:
             raise ArmSequenceError(f"object_classes는 1~{MAX_SEQUENCE_STEPS}개여야 합니다")
         policies = self.commands.act_policies
@@ -145,6 +175,10 @@ class ArmSequenceSupervisor:
             return self._start_definition(definition)
 
     def _start_definition(self, definition: dict[str, Any]) -> dict[str, Any]:
+        """진행 중인 시퀀스가 없으면 첫 단계 명령을 만들고 실행 기록을 저장한다. self._lock을 잡은 채로 부른다.
+
+        명령을 먼저 만든다. 팔 명령 저장소가 거부하면(다른 명령 진행 중 등) 실행 기록이 남지 않는다.
+        valid_for_s 600초는 저장소가 허용하는 최대값이다."""
         with self.sessions() as session:
             active = session.scalar(select(ArmSequenceRecord).where(
                 ArmSequenceRecord.state.in_(["QUEUED", "DISPATCHED", "RUNNING", "CANCELING"])))
@@ -164,6 +198,10 @@ class ArmSequenceSupervisor:
         return self._present(row)
 
     def on_worker_event(self, command: dict[str, Any], applied: bool) -> None:
+        """팔 명령의 워커 이벤트 뒤에 불린다(같은 이벤트의 재전송, _reconcile에서도). 이 명령이 현재 단계인 실행만 바꾼다.
+
+        ACCEPTED면 RUNNING으로 표시한다. 끝 상태면 결과를 적고, 조건을 만족하면 다음 단계 명령을 만들거나 완료한다.
+        applied는 지금 쓰지 않는다: 재전송이어도 같은 처리를 해야 진행을 복구할 수 있기 때문이다."""
         if command.get("state") == "ACCEPTED":
             with self._lock, self.sessions.begin() as session:
                 row = session.scalar(select(ArmSequenceRecord).where(
@@ -173,8 +211,7 @@ class ArmSequenceSupervisor:
                     row.state = "RUNNING"
                     row.updated_at = utc_now_iso("microseconds")
             return
-        # A retried final event can recover sequence advancement if the HTTP request failed
-        # after the command event was committed.
+        # 명령 이벤트가 커밋된 뒤 HTTP 요청이 실패했어도, 같은 마지막 이벤트를 다시 받으면 시퀀스 진행을 복구할 수 있다.
         if command.get("state") not in {"SUCCEEDED", "UNKNOWN", "FAILED", "REJECTED", "CANCELED", "EXPIRED"}:
             return
         with self._lock:
@@ -184,13 +221,15 @@ class ArmSequenceSupervisor:
                     ArmSequenceRecord.state.in_(["QUEUED", "DISPATCHED", "RUNNING", "CANCELING"])))
                 if row is None:
                     return
-                # A policy sequence only continues after an explicit measured home return.
+                # 정책 연속 실행은 home 복귀가 측정으로 확인됐을 때만 다음 단계로 간다.
+                # 운영자가 명령을 취소했으면 사람이 팔을 확인해야 하므로 NEEDS_INTERVENTION이다.
                 state, result = command["state"], command.get("result") or {}
                 if state == "CANCELED":
                     row.state = "NEEDS_INTERVENTION"
                     row.current_command_id = None
                     row.updated_at = utc_now_iso("microseconds")
                     return
+                # 시퀀스 취소 중에 명령이 (취소가 아닌 상태로) 끝남: 결과만 적고 멈춘다.
                 if row.state == "CANCELING":
                     row.state = "NEEDS_INTERVENTION"
                     row.results = [*row.results, {"step": row.current_step,
@@ -226,8 +265,9 @@ class ArmSequenceSupervisor:
                     next_step = row.steps[current_step + 1]
                     robot_id = next_step["robot_id"]
                     run_id = row.id
-            # Once home return is measured, release an unverified command so it cannot block a later run.
-            # This acknowledges only the arm pose; it does not turn PLACE_NOT_VERIFIED into success.
+            # 아래는 DB 트랜잭션 밖이다(팔 명령 저장소가 자기 트랜잭션과 잠금을 쓴다).
+            # home 복귀가 측정됐으면, 확인되지 않은 명령(UNKNOWN)을 풀어 줘서 다음 명령을 막지 않게 한다.
+            # 이것은 팔 자세만 확인한 것이고, PLACE_NOT_VERIFIED를 성공으로 바꾸지 않는다.
             if command["state"] == "UNKNOWN" and not command.get("operator_cleared_at"):
                 decision = "시퀀스 완료" if finished_sequence else "다음 정책 단계 진행"
                 self.commands.clear_unknown(
@@ -239,6 +279,7 @@ class ArmSequenceSupervisor:
             next_command = self.commands.create({"robot_id": robot_id, "operation": "PICK_WITH_POLICY", "valid_for_s": 600,
                 "target": {"object_class": next_step["object_class"]}, "place": {"slot_id": "CART_1"},
                 "source": {"kind": "OPERATOR_INPUT", "note": f"시퀀스 {sequence_label} {current_step + 2}단계"}})
+            # 명령을 만드는 사이에 취소됐거나 다른 경로가 이미 진행시켰으면 이 결과는 버린다(그 명령은 큐에 남는다).
             with self.sessions.begin() as session:
                 row = session.get(ArmSequenceRecord, run_id)
                 if row and row.state == "RUNNING" and row.current_command_id == previous_command_id:
@@ -247,6 +288,8 @@ class ArmSequenceSupervisor:
                     row.updated_at = utc_now_iso("microseconds")
 
     def cancel(self, run_id: str) -> dict[str, Any]:
+        """진행 중인 실행을 취소한다. 현재 명령이 바로 취소되면(QUEUED였음) CANCELED, 실행 중이라 워커의 취소 보고를
+        기다려야 하면 CANCELING이다. 없으면 KeyError, 진행 중이 아니면 ArmSequenceError."""
         with self._lock:
             with self.sessions() as session:
                 row = session.get(ArmSequenceRecord, run_id)
