@@ -17,9 +17,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from control_station.json_files import load_json_file
+from control_station import REPO_ROOT
+from control_station.storage.json_files import load_json_file
 
-DEFAULT_POLICIES_PATH = Path(__file__).resolve().parents[2] / "config" / "omx-act-policies.json"
+DEFAULT_POLICIES_PATH = REPO_ROOT / "config" / "omx-act-policies.json"
 MAX_POLICIES_BYTES = 64 * 1024
 CAMERA_ROLES = frozenset({"OVERHEAD", "GRIPPER"})
 POLICY_INPUTS = frozenset({"front", "wrist"})

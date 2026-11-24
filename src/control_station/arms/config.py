@@ -1,30 +1,110 @@
-"""Where each arm's devices are on this PC: follower serial port, LeRobot robot id, gripper and overhead cameras.
+"""팔 설정: 어느 팔이 어느 선반을 맡는지(config/arms.json)와, 이 PC에서 각 팔의 장치가 어디 있는지(환경 변수).
 
-With two arms there are six cameras: each arm has a gripper (joint) camera and an overhead camera that its ACT
-policies were trained with, plus the ceiling camera that checks Pinky's parking and the shelf camera that counts
-stock. Device paths differ per PC, so they come from .control-station/control-station.env, one set per arm:
+1) 팔과 담당 선반 (`load_arms`, `ArmRegistry`)
+   핑키가 서는 자리 하나의 양옆에 팔 두 대가 있다. 왼쪽 선반에서 찾은 물체는 왼쪽 팔이, 오른쪽 선반의 물체는
+   오른쪽 팔이 집는다(2026-11-11 결정). 그래서 주문한 물체마다 팔은 물체 종류가 아니라, 재고 확인에서 그 물체를
+   본 선반으로 정한다.
 
-    CONTROL_STATION_ARM01_FOLLOWER_PORT     /dev/serial/by-id/usb-ROBOTIS_OpenRB-150_<board serial>-if00
-    CONTROL_STATION_ARM01_ROBOT_ID          LeRobot calibration name (default CONTROL_STATION_POLICY_ROBOT_ID)
-    CONTROL_STATION_ARM01_GRIPPER_CAMERA    /dev/v4l/by-path/...   (by-path: two cameras of one model share a by-id)
-    CONTROL_STATION_ARM01_OVERHEAD_CAMERA   /dev/v4l/by-path/...
-    (ARM02 the same)
+   `board_serial`(선택)은 팔의 OpenRB-150 보드 시리얼로, 실물 팔을 가리킨다. 아래 2)의 예전 단일 팔 포트 설정은
+   이 시리얼로 어느 팔의 것인지 맞춘다.
 
-The side names work as well (2026-11-16, from main): CONTROL_STATION_LEFT_* for arm-01 and RIGHT_* for arm-02, with
-JOINT_CAMERA for the gripper camera and CEILING_CAMERA for the overhead one. An ARMxx setting wins over a side one.
+2) 팔마다 장치 경로 (`arm_devices`, `ArmDevices`)
+   팔로워 시리얼 포트, LeRobot robot id, 그리퍼·탑 카메라. 팔이 두 대면 카메라는 여섯 대다. 팔마다 ACT 정책을
+   학습할 때 쓴 그리퍼(관절) 카메라와 탑 카메라가 있고, 핑키 주차를 판정하는 천장 카메라와 재고를 세는 선반
+   카메라가 따로 있다. 장치 경로는 PC마다 달라서 .control-station/control-station.env에서 팔마다 한 벌씩 읽는다.
 
-The older single-arm settings (CONTROL_STATION_POLICY_ROBOT_PORT or CONTROL_STATION_FOLLOWER_PORT, the
-CONTROL_STATION_POLICY_*_CAMERA, CONTROL_STATION_ACT_OVERHEAD_CAMERA and CONTROL_STATION_JOINT_CAMERA) still
-work. They count for one arm only: the arm whose board serial is in that port path, and only while no ARMxx
-setting of that arm is given. An arm-bound policy therefore never runs on another arm's port or cameras.
+       CONTROL_STATION_ARM01_FOLLOWER_PORT     /dev/serial/by-id/usb-ROBOTIS_OpenRB-150_<보드 시리얼>-if00
+       CONTROL_STATION_ARM01_ROBOT_ID          LeRobot 보정 이름 (기본 CONTROL_STATION_POLICY_ROBOT_ID)
+       CONTROL_STATION_ARM01_GRIPPER_CAMERA    /dev/v4l/by-path/...   (같은 모델 카메라 두 대는 by-id가 같아서 by-path를 쓴다)
+       CONTROL_STATION_ARM01_OVERHEAD_CAMERA   /dev/v4l/by-path/...
+       (ARM02도 같다)
+
+   쪽 이름도 쓸 수 있다(2026-11-16, main에서). arm-01은 CONTROL_STATION_LEFT_*, arm-02는 RIGHT_*이고, 그리퍼 카메라는
+   JOINT_CAMERA, 탑 카메라는 CEILING_CAMERA다. ARMxx 설정이 쪽 이름 설정보다 우선한다.
+
+   예전 단일 팔 설정(CONTROL_STATION_POLICY_ROBOT_PORT 또는 CONTROL_STATION_FOLLOWER_PORT,
+   CONTROL_STATION_POLICY_*_CAMERA, CONTROL_STATION_ACT_OVERHEAD_CAMERA, CONTROL_STATION_JOINT_CAMERA)도 계속 된다.
+   다만 한 팔에만 해당한다. 그 포트 경로에 보드 시리얼이 들어 있는 팔이고, 그 팔의 ARMxx 설정이 없을 때만이다.
+   그래서 팔에 묶인 정책이 다른 팔의 포트나 카메라로 실행되는 일은 없다.
 """
 
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+from control_station import REPO_ROOT
+from control_station.storage.json_files import load_json_file
+
+
+# ──── 1) 팔과 담당 선반 (config/arms.json) ──────────────────────────────────────────────────────────────────────
+
+DEFAULT_ARMS_PATH = REPO_ROOT / "config" / "arms.json"
+MAX_ARMS_BYTES = 16 * 1024
+ARM_ID = re.compile(r"^arm-[0-9]{2}$")
+_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
+_BOARD_SERIAL = re.compile(r"^[0-9A-F]{32}$")
+_REQUIRED = {"arm_id", "label", "shelf_id", "stock_camera_id"}
+
+
+class ArmConfigError(ValueError):
+    """The arm file is missing or does not match schema version 1."""
+
+
+@dataclass(frozen=True)
+class ArmRegistry:
+    arms: tuple[dict[str, Any], ...]
+
+    @property
+    def arm_ids(self) -> frozenset[str]:
+        return frozenset(arm["arm_id"] for arm in self.arms)
+
+    def get(self, arm_id: str) -> dict[str, Any] | None:
+        return next((arm for arm in self.arms if arm["arm_id"] == arm_id), None)
+
+    def for_shelf(self, shelf_id: str) -> dict[str, Any] | None:
+        return next((arm for arm in self.arms if arm["shelf_id"] == shelf_id), None)
+
+
+def _arm(raw: object) -> dict[str, Any]:
+    if not isinstance(raw, dict) or not _REQUIRED <= set(raw) <= _REQUIRED | {"board_serial"}:
+        raise ArmConfigError("each arm needs arm_id, label, shelf_id and stock_camera_id (board_serial optional)")
+    arm_id = raw["arm_id"]
+    if not isinstance(arm_id, str) or not ARM_ID.fullmatch(arm_id):
+        raise ArmConfigError("arm_id must look like arm-01")
+    label = raw["label"]
+    if not isinstance(label, str) or not label.strip() or len(label) > 40:
+        raise ArmConfigError(f"{arm_id}.label must be text of 1 to 40 characters")
+    for key in ("shelf_id", "stock_camera_id"):
+        if not isinstance(raw[key], str) or not _NAME.fullmatch(raw[key]):
+            raise ArmConfigError(f"{arm_id}.{key} has an invalid format")
+    board_serial = raw.get("board_serial")
+    if board_serial is not None and (not isinstance(board_serial, str) or not _BOARD_SERIAL.fullmatch(board_serial)):
+        raise ArmConfigError(f"{arm_id}.board_serial must be the 32 hex digits of the OpenRB-150 serial")
+    return {"arm_id": arm_id, "label": label.strip(), "shelf_id": raw["shelf_id"],
+            "stock_camera_id": raw["stock_camera_id"], "board_serial": board_serial}
+
+
+def load_arms(path: str | Path | None = None) -> ArmRegistry:
+    arms_path = Path(path or os.environ.get("CONTROL_STATION_ARMS") or DEFAULT_ARMS_PATH)
+    _, document = load_json_file(arms_path, MAX_ARMS_BYTES, "팔 설정 파일", ArmConfigError)
+    if not isinstance(document, dict) or document.get("schema_version") != 1 or isinstance(document.get("schema_version"), bool):
+        raise ArmConfigError("팔 설정 파일의 schema_version은 1이어야 합니다")
+    if not isinstance(document.get("arms"), list) or not document["arms"]:
+        raise ArmConfigError("arms must be a non-empty list")
+    arms = tuple(_arm(item) for item in document["arms"])
+    for key in ("arm_id", "shelf_id", "board_serial"):
+        values = [arm[key] for arm in arms if arm[key] is not None]
+        if len(set(values)) != len(values):
+            raise ArmConfigError(f"duplicate {key} in arms")
+    return ArmRegistry(arms)
+
+
+# ──── 2) 팔마다 장치 경로 (환경 변수) ────────────────────────────────────────────────────────────────────────────────
 
 DEFAULT_ROBOT_ID = "omx_follower_arm"
 CAMERA_ROLES = ("GRIPPER", "OVERHEAD")

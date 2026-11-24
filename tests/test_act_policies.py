@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from control_station.act_policies import ActPolicyError, load_act_policies
+from control_station.arms.policies import ActPolicyError, load_act_policies
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT / "scripts"))

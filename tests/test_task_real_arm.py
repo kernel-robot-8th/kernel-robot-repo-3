@@ -10,13 +10,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from control_station.act_policies import load_act_policies
-from control_station.arm_commands import ArmCommandStore
-from control_station.load_check import MockLoadObserver
-from control_station.shelf_slot_map import load_shelf_slot_map
-from control_station.shelf_slot_zones import SlotSelectionError
-from control_station.store import TaskStore
-from control_station.task_orchestrator import MockTaskOrchestrator, policy_for_arm_job, policy_for_task
+from control_station.arms.policies import load_act_policies
+from control_station.arms.commands import ArmCommandStore
+from control_station.orders.task_runner import MockLoadObserver
+from control_station.cameras.shelf_slots import load_shelf_slot_map
+from control_station.cameras.shelf_slots import SlotSelectionError
+from control_station.storage.store import TaskStore
+from control_station.orders.task_runner import MockTaskOrchestrator, policy_for_arm_job, policy_for_task
 
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELED", "NEEDS_INTERVENTION"}
 

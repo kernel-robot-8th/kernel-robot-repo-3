@@ -5,7 +5,7 @@ With two arms there are six cameras (docs/implementation/runbook.md, 카메라 6
 - shelf_camera: the shelf camera that counts stock
 - arm01_gripper / arm02_gripper: each arm's gripper (joint) camera
 - arm01_overhead / arm02_overhead: each arm's overhead camera, an input of the ACT policies recorded on that arm
-The arm cameras come from arm_devices.py (CONTROL_STATION_ARM01_*_CAMERA, ARM02_*). A gripper camera is streamed
+The arm cameras come from arms/config.py (CONTROL_STATION_ARM01_*_CAMERA, ARM02_*). A gripper camera is streamed
 like the older joint camera; an overhead camera belongs to the policy and is only checked for presence unless
 CONTROL_STATION_OVERHEAD_CAMERA_PREVIEW=1. While a policy runs, the feeds on its devices are closed (V4L2 lets only
 one program stream a device). All six share one USB controller, so every device is opened as MJPG.
@@ -24,9 +24,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Mapping
 
-from control_station.arm_devices import ROLE_LABELS, ArmDevices, arm_devices, env_prefix
-from control_station.arms import ArmConfigError, load_arms
-from control_station.models import (
+from control_station.arms.config import ROLE_LABELS, ArmDevices, arm_devices, env_prefix
+from control_station.arms.config import ArmConfigError, load_arms
+from control_station.storage.models import (
     CameraConnectionState,
     CameraSnapshot,
     CameraStreamState,
@@ -112,7 +112,7 @@ class _CameraFeed:
 class _YoloDetector:
     """Run YOLO on camera frames and draw the detections.
 
-    The detections are shown on the dashboard, placed into shelf slots (shelf_slot_zones.py) and counted for the
+    The detections are shown on the dashboard, placed into shelf slots (cameras/shelf_slots.py) and counted for the
     order flow's stock and load checks. They are camera evidence only; they never move a robot by themselves.
     """
 

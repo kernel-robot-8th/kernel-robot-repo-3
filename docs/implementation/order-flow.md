@@ -18,7 +18,7 @@
 
 ## 단계
 
-주문을 등록하면 단계 목록을 주문마다 만듭니다(`store.order_step_definitions`). 물체 한 개마다 `PICK_ITEM`과 `VERIFY_TRANSFER`가 한 쌍씩 들어갑니다. 실행은 [order_flow.py](../../src/control_station/order_flow.py)가 맡습니다.
+주문을 등록하면 단계 목록을 주문마다 만듭니다(`store.order_step_definitions`). 물체 한 개마다 `PICK_ITEM`과 `VERIFY_TRANSFER`가 한 쌍씩 들어갑니다. 실행은 [orders/flow.py](../../src/control_station/orders/flow.py)가 맡습니다.
 
 | 단계 | 하는 일 | 멈추는 경우 |
 |---|---|---|
@@ -44,7 +44,7 @@
 
 ## 주문 접수와 배정
 
-주문 창에서 들어온 주문은 핑키·수령 구역 없이 접수 상태(`PENDING`)로 기다리고, 작업자가 시작할 때 수령 구역과 핑키를 정합니다. 배정 규칙은 `src/control_station/assignment.py`의 순수 함수라서 모의·실제 모드가 같습니다.
+주문 창에서 들어온 주문은 핑키·수령 구역 없이 접수 상태(`PENDING`)로 기다리고, 작업자가 시작할 때 수령 구역과 핑키를 정합니다. 배정 규칙은 `src/control_station/orders/assignment.py`의 순수 함수라서 모의·실제 모드가 같습니다.
 
 | 경로 | 하는 일 |
 | --- | --- |
@@ -66,7 +66,7 @@
 
 ## 자동 출발 (접수 순서대로)
 
-작업자가 주문마다 [시작]을 누르는 대신, 기다리는 주문을 오래된 순서대로 관제가 출발시킵니다([dispatcher.py](../../src/control_station/dispatcher.py)). 주문을 연달아 넣으면 핑키가 그 순서대로 하나씩 출발합니다. 핑키·수령 구역·팔을 고르는 규칙은 그대로이고(`OrderDesk.start`), 이 기능은 **언제 다음 주문을 출발시킬지**만 정합니다. 1초마다 줄을 한 번 봅니다.
+작업자가 주문마다 [시작]을 누르는 대신, 기다리는 주문을 오래된 순서대로 관제가 출발시킵니다([orders/dispatcher.py](../../src/control_station/orders/dispatcher.py)). 주문을 연달아 넣으면 핑키가 그 순서대로 하나씩 출발합니다. 핑키·수령 구역·팔을 고르는 규칙은 그대로이고(`OrderDesk.start`), 이 기능은 **언제 다음 주문을 출발시킬지**만 정합니다. 1초마다 줄을 한 번 봅니다.
 
 기본은 꺼져 있습니다. 주문 진행 탭 주문 접수의 **접수 순서대로 자동 출발** 스위치(확인 창을 거침)나 실행 때 `CONTROL_STATION_AUTO_DISPATCH=1`로 켭니다. 스위치 값은 서버 메모리에만 있어 관제를 다시 켜면 실행 때 값으로 돌아갑니다. 켜져 있어도 [시작]·[거절]은 그대로 쓸 수 있습니다.
 
@@ -95,13 +95,13 @@
 
 모의 결과는 이벤트와 결과에 `simulated: true`로 남습니다. 화면에는 "모의" 표시가 붙습니다.
 
-실제 팔로 집을 때(`CONTROL_STATION_ORDER_REAL_ARM=1`) 집기 단계는 계획된 팔에 `PICK_WITH_POLICY`를 보내고, 그 팔에서 녹화한 정책으로 그 팔의 워커가 끝내기를 기다립니다(정책 최대 시간 + 180초). 워커는 팔이 쉬는 자세로 돌아온 것까지만 알 수 있어 명령을 `UNKNOWN`(`PLACE_NOT_VERIFIED`)으로 끝내고, 옮김 확인 단계가 카메라 개수로 선반 −1·핑키 +1을 보면 그 명령을 닫습니다(`arm_pick.py`). 개수가 모의면 팔을 움직이기 전에 `TRANSFER_EVIDENCE_REQUIRED`로 멈춥니다. 명령은 기본으로 그 팔의 HTTP 워커가 가져가고, `CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2`면 관제가 그 팔의 ROS 2 집기 액션(`/arm_0N/pick_object`)으로 보냅니다. 어느 쪽이든 같은 팔 명령 기록과 같은 규칙을 씁니다([ROS 2 집기 액션](arm-command-api.md#ros-2-집기-액션-arm_0npick_object)). 옮김을 확인하지 못하면 명령은 `UNKNOWN`으로 남고, 수동 조작 화면에서 현장을 확인하고 닫아야 그 팔이 다음 명령을 받습니다.
+실제 팔로 집을 때(`CONTROL_STATION_ORDER_REAL_ARM=1`) 집기 단계는 계획된 팔에 `PICK_WITH_POLICY`를 보내고, 그 팔에서 녹화한 정책으로 그 팔의 워커가 끝내기를 기다립니다(정책 최대 시간 + 180초). 워커는 팔이 쉬는 자세로 돌아온 것까지만 알 수 있어 명령을 `UNKNOWN`(`PLACE_NOT_VERIFIED`)으로 끝내고, 옮김 확인 단계가 카메라 개수로 선반 −1·핑키 +1을 보면 그 명령을 닫습니다(`arms/pick.py`). 개수가 모의면 팔을 움직이기 전에 `TRANSFER_EVIDENCE_REQUIRED`로 멈춥니다. 명령은 기본으로 그 팔의 HTTP 워커가 가져가고, `CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2`면 관제가 그 팔의 ROS 2 집기 액션(`/arm_0N/pick_object`)으로 보냅니다. 어느 쪽이든 같은 팔 명령 기록과 같은 규칙을 씁니다([ROS 2 집기 액션](arm-command-api.md#ros-2-집기-액션-arm_0npick_object)). 옮김을 확인하지 못하면 명령은 `UNKNOWN`으로 남고, 수동 조작 화면에서 현장을 확인하고 닫아야 그 팔이 다음 명령을 받습니다.
 
 모의 팔에 카메라 개수를 쓸 때는 집기 단계 동안 사람이 물체를 선반에서 핑키 위로 옮겨야 옮김 확인을 통과합니다. 집기 단계 시간은 `CONTROL_STATION_MOCK_PICK_S`(기본 4초)로 늘릴 수 있습니다.
 
 ## 핑키 관제 연결 (HTTP)
 
-핑키 팀 관제(`origin/pinky_fleet`의 `pinky_fleet_dashboard/app.py`)에 HTTP로 붙습니다. 클라이언트는 [pinky_fleet.py](../../src/control_station/pinky_fleet.py)입니다.
+핑키 팀 관제(`origin/pinky_fleet`의 `pinky_fleet_dashboard/app.py`)에 HTTP로 붙습니다. 클라이언트는 [pinky/fleet_client.py](../../src/control_station/pinky/fleet_client.py)입니다.
 
 ROS가 아니라 HTTP인 이유:
 - 로봇 쪽에는 이 확인 신호를 받는 ROS 인터페이스가 없습니다. 핑키 관제가 SSH로 로봇에 파일을 써서 전달합니다.
@@ -116,7 +116,7 @@ ROS가 아니라 HTTP인 이유:
 
 ## 적재 자리 도착: 천장 캠과 핑키가 주고받는 순서 (2026-11-18)
 
-핑키가 5번에 서면(`docking_manual`) 천장 캠이 그 핑키의 마커를 그 핑키 자신의 등록 자리와 비교합니다. 판정을 차례로 받아 무엇을 돌려보낼지 정하는 곳은 [dock_handshake.py](../../src/control_station/dock_handshake.py) 하나이고, 주문 흐름(`WAIT_PINKY_ARRIVAL`)과 핑키 탭의 전체 주행 테스트가 같이 씁니다.
+핑키가 5번에 서면(`docking_manual`) 천장 캠이 그 핑키의 마커를 그 핑키 자신의 등록 자리와 비교합니다. 판정을 차례로 받아 무엇을 돌려보낼지 정하는 곳은 [pinky/docking.py](../../src/control_station/pinky/docking.py) 하나이고, 주문 흐름(`WAIT_PINKY_ARRIVAL`)과 핑키 탭의 전체 주행 테스트가 같이 씁니다.
 
 | 카메라가 본 것 | 돌려보내는 것 |
 |---|---|
@@ -138,7 +138,7 @@ ROS가 아니라 HTTP인 이유:
 
 | 구간 | 하는 일 | 파일 |
 |---|---|---|
-| 천장 캠 → 관제 | 그 핑키의 등록 자리를 따라가는 판정 노드의 실시간 상태에서 앞·왼쪽·각도 차이를 꺼냄. 새 프레임마다 한 번, 그 마커를 단 핑키가 임무 중일 때만 | [dock_guide.py](../../src/control_station/dock_guide.py) |
+| 천장 캠 → 관제 | 그 핑키의 등록 자리를 따라가는 판정 노드의 실시간 상태에서 앞·왼쪽·각도 차이를 꺼냄. 새 프레임마다 한 번, 그 마커를 단 핑키가 임무 중일 때만 | [pinky/docking.py](../../src/control_station/pinky/docking.py) |
 | 관제 → 핑키 관제 | `POST /api/robots/{id}/dock-guide` (`forward_mm`, `left_mm`, `dyaw_deg`). 앞 45 cm, 옆 15 cm, 40° 밖의 값은 버림 | `pinky_fleet_dashboard/app.py` |
 | 핑키 관제 → 핑키 | 그 핑키의 ROS 도메인에 `/fleet/dock_guide`(std_msgs/String, JSON)로 발행 | 같은 파일 |
 | 핑키 | 5번 진입(`DockEntry`) 중이고 값이 0.4초 안의 것일 때만 사용. 옆 어긋남과 각도로 회전 속도를 정하고(선 따라가기), 카메라가 본 앞쪽 차이가 0에 가까워지면 멈춤 | `scripts/mission_behaviors.py`, `scripts/ultrasonic_safety.py` |
@@ -171,7 +171,7 @@ ROS가 아니라 HTTP인 이유:
 
 ## 카메라로 개수 세기
 
-[camera_counts.py](../../src/control_station/camera_counts.py)가 셉니다. 공통으로 새 프레임 5장을 받아 종류별 중앙값을 씁니다.
+[cameras/counts.py](../../src/control_station/cameras/counts.py)가 셉니다. 공통으로 새 프레임 5장을 받아 종류별 중앙값을 씁니다.
 - 프레임이 최신이 아니면(`COUNT_CAMERA_NOT_FRESH`) 0개로 치지 않고 "셀 수 없음"으로 멈춥니다.
 - 검출기가 준비되지 않거나(`COUNT_DETECTOR_NOT_READY`) 칸 영역을 쓸 수 없을 때(`COUNT_SLOT_ZONES_NOT_READY`)도 마찬가지입니다.
 

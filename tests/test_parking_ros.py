@@ -4,7 +4,7 @@ import threading
 import unittest
 from types import SimpleNamespace
 
-from control_station.parking_ros import (
+from control_station.pinky.parking_ros import (
     NODE_UNAVAILABLE,
     ParkingObservationError,
     STALE_STATE_S,
@@ -187,7 +187,7 @@ class SnapshotTests(unittest.TestCase):
 
     def test_each_registered_spot_is_followed_by_its_own_node(self) -> None:
         # Each Pinky has its own registration of the loading spot; its live state comes from its own node's topic.
-        from control_station.parking_ros import parking_node_name, state_topic
+        from control_station.pinky.parking_ros import parking_node_name, state_topic
         self.assertEqual(parking_node_name("pinky_dock_1", "pinky_dock_1"), "pinky_parking")
         self.assertEqual(state_topic("pinky_dock_p1", "pinky_dock_1"), "/pinky_parking_pinky_dock_p1/state")
         self.assertEqual(parking_node_name("dock-2.b", "pinky_dock_1"), "pinky_parking_dock_2_b")

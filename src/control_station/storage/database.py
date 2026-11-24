@@ -10,6 +10,8 @@ from sqlalchemy.engine import Engine, URL
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 from sqlalchemy.types import JSON
 
+from control_station import REPO_ROOT
+
 
 class Base(DeclarativeBase):
     pass
@@ -172,7 +174,7 @@ class ArmSequenceRecord(Base):
 
 
 def database_path() -> Path:
-    default_path = Path(__file__).resolve().parents[2] / "data" / "tasks.sqlite3"
+    default_path = REPO_ROOT / "data" / "tasks.sqlite3"
     return Path(os.environ.get("CONTROL_STATION_DB", default_path))
 
 

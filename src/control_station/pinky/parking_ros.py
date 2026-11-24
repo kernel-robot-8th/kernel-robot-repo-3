@@ -103,7 +103,7 @@ def image_overlay(message: Any) -> dict[str, object]:
 
 def parking_node_name(spot_id: str, primary_spot_id: str) -> str:
     """The parking node that follows spot_id live. A node follows one spot, and each Pinky has its own registration
-    of the loading spot (pinky_markers.py), so ceiling_parking.launch.py runs one node per registered spot under this
+    of the loading spot (pinky/markers.py), so ceiling_parking.launch.py runs one node per registered spot under this
     same rule: 'pinky_parking' for the primary spot (its spot_id argument, CONTROL_STATION_PARKING_SPOT here), and
     'pinky_parking_<spot>' for the others, every character that is not a letter or a digit turned into '_'."""
     if spot_id == primary_spot_id:

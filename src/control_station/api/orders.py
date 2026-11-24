@@ -1,4 +1,4 @@
-"""Order window and order intake API: a thin HTTP layer over control_station.order_desk.OrderDesk.
+"""Order window and order intake API: a thin HTTP layer over control_station.orders.desk.OrderDesk.
 
 GET  /api/catalog                    what can be ordered, how many can still be sold, receiving zones (info)
 GET  /api/inventory                  shelf inventory: on the shelves, reserved, available, recent changes
@@ -21,9 +21,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from control_station.order_desk import OrderDeskError
-from control_station.store import InvalidStateTransition, TaskNotFoundError
-from control_station.task_orchestrator import TaskExecutionConflict
+from control_station.orders.desk import OrderDeskError
+from control_station.storage.store import InvalidStateTransition, TaskNotFoundError
+from control_station.orders.task_runner import TaskExecutionConflict
 
 if TYPE_CHECKING:
     from control_station.app import ControlStationHandler

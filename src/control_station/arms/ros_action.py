@@ -1,9 +1,9 @@
 """ROS 2 client of the arm pick action servers (/arm_01/pick_object, /arm_02/pick_object; PickObject.action).
 
-Used by arm_pick.ArmActionPick when CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2. Like parking_ros.py, it has its own
+Used by arm_pick.ArmActionPick when CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2. Like pinky/parking_ros.py, it has its own
 ROS context on the arms' domain and spins one executor in a daemon thread, so the HTTP server never blocks on ROS.
 This module only carries goals, feedback and results; what they mean for the order and the arm command record is
-decided in arm_pick.py.
+decided in arms/pick.py.
 """
 
 from __future__ import annotations

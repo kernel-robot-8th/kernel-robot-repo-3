@@ -19,10 +19,10 @@
 |---|---|---|---|
 | `/ceiling_camera/image_raw` | `sensor_msgs/msg/Image` | `CeilingCameraNode` (`ceiling_parking.launch.py`) | 판정 노드 (같은 컨테이너, 프로세스 내부 전달) |
 | `/ceiling_camera/image_raw/compressed` | `sensor_msgs/msg/CompressedImage` | 같음 | 관제 Head Camera (`CONTROL_STATION_HEAD_CAMERA=ros:/ceiling_camera/image_raw/compressed`) |
-| `/pinky_parking/state` | `parking_vision_interfaces/msg/ParkingState` (reliable, keep-last 1, transient_local) | `ParkingVisionNode` | 관제 `parking_ros.py` → `GET /api/parking-spots/{spot_id}/live` |
-| `/pinky_parking/check` | `parking_vision_interfaces/srv/CheckParking` | `ParkingVisionNode` | 관제 `parking_ros.py` → `/check`, `VERIFY_ARRIVAL`, 주문 `WAIT_PINKY_ARRIVAL` |
+| `/pinky_parking/state` | `parking_vision_interfaces/msg/ParkingState` (reliable, keep-last 1, transient_local) | `ParkingVisionNode` | 관제 `pinky/parking_ros.py` → `GET /api/parking-spots/{spot_id}/live` |
+| `/pinky_parking/check` | `parking_vision_interfaces/srv/CheckParking` | `ParkingVisionNode` | 관제 `pinky/parking_ros.py` → `/check`, `VERIFY_ARRIVAL`, 주문 `WAIT_PINKY_ARRIVAL` |
 | `/omx/move_to_slot` | `omx_interfaces/action/MoveToSlot` | `scripts/omx_ros_worker.py` | `scripts/omx_move_to_slot_client.py`, `ros2 action send_goal` ([실습](omx-ros-practice.md)). 관제에는 이 action 클라이언트가 없음 |
-| `/arm_01/pick_object`, `/arm_02/pick_object` | `omx_interfaces/action/PickObject` | `scripts/omx_pick_action_server.py --robot-id arm-0N` (팔마다 하나) | 관제 `arm_action_ros.py` → 주문 `PICK_ITEM` (`CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2`일 때). [설명](arm-command-api.md#ros-2-집기-액션-arm_0npick_object) |
+| `/arm_01/pick_object`, `/arm_02/pick_object` | `omx_interfaces/action/PickObject` | `scripts/omx_pick_action_server.py --robot-id arm-0N` (팔마다 하나) | 관제 `arms/ros_action.py` → 주문 `PICK_ITEM` (`CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2`일 때). [설명](arm-command-api.md#ros-2-집기-액션-arm_0npick_object) |
 | `navigate_to_pose` (상대 이름) | `nav2_msgs/action/NavigateToPose` | 외부 Nav2 | `CONTROL_STATION_MODE=ros2`일 때 `/api/robots`가 server 발견 여부만 봄. goal을 보내지 않음 |
 
 ## 관제가 ROS에 붙는 방식

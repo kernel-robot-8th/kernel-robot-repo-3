@@ -7,9 +7,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from control_station.load_check import MockLoadObserver, judge_load, mock_load_observer_from_env
-from control_station.store import TaskStore
-from control_station.task_orchestrator import MockTaskOrchestrator
+from control_station.orders.task_runner import MockLoadObserver, judge_load, mock_load_observer_from_env
+from control_station.storage.store import TaskStore
+from control_station.orders.task_runner import MockTaskOrchestrator
 
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELED", "NEEDS_INTERVENTION"}
 

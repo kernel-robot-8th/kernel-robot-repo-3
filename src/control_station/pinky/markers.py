@@ -14,12 +14,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from control_station.json_files import load_json_file
-from control_station.store import PINKY_IDS, PINKY_NAMES
+from control_station import REPO_ROOT
+from control_station.storage.json_files import load_json_file
+from control_station.storage.store import PINKY_IDS, PINKY_NAMES
 
-ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MARKERS_PATH = ROOT / "config" / "pinky-markers.json"
-SPOTS_DIR = ROOT / ".control-station" / "parking-spots"
+DEFAULT_MARKERS_PATH = REPO_ROOT / "config" / "pinky-markers.json"
+SPOTS_DIR = REPO_ROOT / ".control-station" / "parking-spots"
 
 
 class PinkyMarkerError(ValueError):

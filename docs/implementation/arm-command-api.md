@@ -289,7 +289,7 @@ ros2 action send_goal --feedback /omx/move_to_slot omx_interfaces/action/MoveToS
 
 ## ROS 2 집기 액션 (`/arm_0N/pick_object`)
 
-주문의 집기(`PICK_WITH_POLICY`)를 HTTP 워커 대신 ROS 2 action으로 보낼 수 있습니다. 관제를 `CONTROL_STATION_ORDER_REAL_ARM=1`, `CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2`로 켜면 관제가 action 클라이언트([arm_action_ros.py](../../src/control_station/arm_action_ros.py))가 되고, 팔마다 [omx_pick_action_server.py](../../scripts/omx_pick_action_server.py)가 서버입니다. 메시지 정의는 [PickObject.action](../../cpp/omx_interfaces/action/PickObject.action)입니다.
+주문의 집기(`PICK_WITH_POLICY`)를 HTTP 워커 대신 ROS 2 action으로 보낼 수 있습니다. 관제를 `CONTROL_STATION_ORDER_REAL_ARM=1`, `CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2`로 켜면 관제가 action 클라이언트([arms/ros_action.py](../../src/control_station/arms/ros_action.py))가 되고, 팔마다 [omx_pick_action_server.py](../../scripts/omx_pick_action_server.py)가 서버입니다. 메시지 정의는 [PickObject.action](../../cpp/omx_interfaces/action/PickObject.action)입니다.
 
 **왜 action인가.** 집기 한 번은 수십 초 걸리고, 그동안 진행을 보고 싶고(어디까지 왔나), 중간에 멈출 수 있어야 하며(취소), 끝나면 성공·실패·모름을 받아야 합니다. ROS 2 action은 이 세 가지(feedback·cancel·result)를 표준으로 줍니다. 서비스는 끝날 때까지 기다리기만 하고, 토픽은 한 목표의 결과를 짝지어 주지 않습니다.
 

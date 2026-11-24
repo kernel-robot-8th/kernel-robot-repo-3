@@ -2255,7 +2255,7 @@ function intakeCardHtml(order) {
       ${note.verdicts ? verdictListHtml(note.verdicts, null) : ''}</div>` : ''}`;
 }
 
-// Automatic dispatch (dispatcher.py): the switch, what the line waits for, and per-card reasons.
+// Automatic dispatch (orders/dispatcher.py): the switch, what the line waits for, and per-card reasons.
 const dispatchBar = document.querySelector('#dispatchBar');
 const dispatchAuto = document.querySelector('#dispatchAuto');
 const dispatchState = document.querySelector('#dispatchState');

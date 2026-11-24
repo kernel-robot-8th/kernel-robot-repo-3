@@ -37,10 +37,10 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from control_station.dock_handshake import COMPLETE, OPERATOR, REDOCK, DockHandshake, _result_text, redock_offset  # noqa: F401
-from control_station.assignment import ArmPlanError, PickStats, plan_arms
-from control_station.pinky_fleet import STATION_PHASES, PinkyFleetError
-from control_station.store import PINKY_NAMES, shipment_of
+from control_station.pinky.docking import COMPLETE, OPERATOR, REDOCK, DockHandshake, _result_text, redock_offset  # noqa: F401
+from control_station.orders.assignment import ArmPlanError, PickStats, plan_arms
+from control_station.pinky.fleet_client import STATION_PHASES, PinkyFleetError
+from control_station.storage.store import PINKY_NAMES, shipment_of
 
 ORDER_STEP_TYPES = frozenset({
     "VALIDATE_ORDER", "CHECK_SHELF_STOCK", "PLAN_ARM_SEQUENCE", "WAIT_PINKY_ARRIVAL", "CONFIRM_DOCKING",
@@ -116,7 +116,7 @@ class OrderFlow:
         redock_after_checks: int = 3,
         # The camera has to say ARRIVED this many checks in a row; after a redock is sent the Pinky is given
         # redock_wait_s to leave the spot before the same picture is judged again; a camera that cannot judge for
-        # camera_blind_s hands the arrival to the operator (dock_handshake.py).
+        # camera_blind_s hands the arrival to the operator (pinky/docking.py).
         arrived_checks: int = 2,
         redock_wait_s: float = 15.0,
         camera_blind_s: float = 20.0,
@@ -278,7 +278,7 @@ class OrderFlow:
                 "simulated": observation.get("simulated", False)}
 
     def _plan_arm_sequence(self, ctx: StepContext) -> dict[str, Any]:
-        """Give every unit an arm with the assignment rules (control_station.assignment.plan_arms).
+        """Give every unit an arm with the assignment rules (control_station.orders.assignment.plan_arms).
 
         The plan comes back in execution order and is written onto the PICK_ITEM/VERIFY_TRANSFER pairs in their
         step order, so the steps run exactly as planned."""
@@ -417,7 +417,7 @@ class OrderFlow:
                     observation = self.devices.parking(pinky)
                 except Exception as exc:  # node down, view moved, no frame: keep waiting, show why
                     observation = {"status": getattr(exc, "error_code", "PARKING_CHECK_FAILED"), "reason": str(exc)}
-                # What to say back to the Pinky: dock_handshake.py (twice ARRIVED -> go on; steadily MISALIGNED ->
+                # What to say back to the Pinky: pinky/docking.py (twice ARRIVED -> go on; steadily MISALIGNED ->
                 # redock with the camera's offset, then wait until it has left and come back; no registration, a
                 # blind camera or the redocks used up -> the operator looks and confirms).
                 decision = handshake.step("docking_manual", observation)

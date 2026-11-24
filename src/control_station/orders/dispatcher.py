@@ -1,7 +1,7 @@
 """Automatic dispatch: start the waiting orders one after another, oldest first, without the operator's [시작].
 
 The choice itself (which Pinky, which receiving zone, which arms) stays where it was: OrderDesk.start with the pure
-rules in assignment.py. This module only decides *when* the next order may start, and says why it is not starting:
+rules in orders/assignment.py. This module only decides *when* the next order may start, and says why it is not starting:
 
 - Order of departure. The next order starts as soon as the Pinky of the order before it has been sent off (its
   VALIDATE_ORDER step, which dispatches the Pinky, is done), so three orders mean three Pinkys leaving one after
@@ -28,9 +28,9 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Any
 
-from control_station.order_desk import OrderDeskError
-from control_station.store import InvalidStateTransition, TaskNotFoundError, shipment_of
-from control_station.task_orchestrator import TaskExecutionConflict
+from control_station.orders.desk import OrderDeskError
+from control_station.storage.store import InvalidStateTransition, TaskNotFoundError, shipment_of
+from control_station.orders.task_runner import TaskExecutionConflict
 
 # The line waits on these: they clear by themselves when a Pinky comes home or a zone is picked up.
 WAIT_CODES = {"PINKY_UNAVAILABLE", "ZONE_BUSY", "SHELF_STOCK_UNAVAILABLE"}

@@ -18,14 +18,14 @@ from pathlib import Path
 from unittest import mock
 
 from control_station.app import WEB_DIR, ControlStationHandler, ControlStationServer
-from control_station.arm_commands import ArmCommandStore
-from control_station.policy_run_supervisor import PolicyRunSupervisor
-from control_station.models import CameraConnectionState, CameraSnapshot, CameraStreamState, FrameFreshness
-from control_station.parking_ros import ParkingObservationError
-from control_station.shelf_slot_map import load_shelf_slot_map
-from control_station.shelf_slot_zones import ShelfSlotZones
-from control_station.store import TaskStore
-from control_station.task_orchestrator import MockTaskOrchestrator
+from control_station.arms.commands import ArmCommandStore
+from control_station.arms.policy_runner import PolicyRunSupervisor
+from control_station.storage.models import CameraConnectionState, CameraSnapshot, CameraStreamState, FrameFreshness
+from control_station.pinky.parking_ros import ParkingObservationError
+from control_station.cameras.shelf_slots import load_shelf_slot_map
+from control_station.cameras.shelf_slots import ShelfSlotZones
+from control_station.storage.store import TaskStore
+from control_station.orders.task_runner import MockTaskOrchestrator
 
 FRAME_SHA = "a" * 64
 CAPTURED_AT = "2026-11-03T12:00:00.000+00:00"

@@ -9,30 +9,30 @@
 | `run-control-station.sh` | 관제 실행. `--arm`이면 LeRobot 텔레오퍼레이션 시작 API를 켬. 주차 위치나 `ros:` 카메라를 설정하면 ROS 2와 `cpp/install`을 source. 세션 로그는 `.control-station/logs/` |
 | `src/control_station/app.py` | 서버 조립(`main`)과 요청 분배. 경로 표는 `api/routes.py` |
 | `src/control_station/api/` | `tasks.py`(주문·작업 목록·생성·시작·취소, 명령 해석), `flow.py`(주문 진행 화면, 경보 확인, 모의 세계 조작), `cameras.py`(카메라 목록, MJPEG 스트림), `arm.py`(텔레오퍼레이션·정책 한 번 실행, OMX 명령 큐, 선반 칸, 정책 목록), `status.py`(health, 로봇 상태, 주차 `/live`·`/check`), `common.py`(교차 출처 확인, JSON 본문, 작업 조건·주문 물체 검증). 경로별 상태·오류 코드는 `tests/test_api_routes.py`로 고정 |
-| `src/control_station/order_desk.py`, `api/orders.py` | 주문 접수 창구: 주문 창용 catalog, 핑키 없이 접수(`PENDING`), 배정 미리보기, 시작할 때 핑키 확정(`PINKY_ASSIGNED`), 거절. 수령 구역은 `receiving_zones.py`·`config/receiving-zones.json` |
-| `src/control_station/dispatcher.py` | 자동 출발(기본 꺼짐): 기다리는 주문을 접수 순서대로 시작. 앞 주문의 핑키가 출발하면 바로 다음 주문(`CONTROL_STATION_DISPATCH_WAIT_FOR_SPOT=1`이면 적재 자리 도착 뒤), 핑키·수령 구역이 없으면 줄 전체 대기, 그 주문만의 문제면 건너뜀, 멈춘 주문의 경보 확인 전에는 정지 ([주문 흐름](order-flow.md#자동-출발-접수-순서대로)) |
-| `src/control_station/inventory.py` | 선반 재고: 카메라 YOLO 개수(클래스 이름 = 물건 이름)는 같은 값이 3번 연속일 때만 확정, 팔이 일하는 동안은 마지막 확정값 유지, 10초 넘게 새 값이 없으면 그 물건은 "모름"으로 주문을 닫고 주문 창과 관제에 알림. 우리 집기는 옮김 확인 즉시 장부에서 빼고, 그 밖의 변화는 `RESTOCKED`·`REMOVED_OUTSIDE`로 기록. 주문 가능 수량 = 선반 수량 − 열린 주문의 예약(있음/품절/모름/판매 중지). 작업자가 물건마다 카메라 기준·판매 중지·직접 센 수량으로 바꿀 수 있고(`data/inventory-overrides.json`에 저장), 접수 검사는 `OUT_OF_STOCK`·`ITEM_CLOSED`. `GET /api/inventory`, `POST /api/inventory/{물건}` |
-| `src/control_station/assignment.py` | 핑키·OMX 배정 규칙(순수 함수): 핑키는 제외 조건 뒤 배터리 구간 → 오늘 운행 → 쉰 시간 → 번호, 팔은 제약이 많은 물체부터 성공률 → 남은 재고 → 설정 순서. 고른 이유를 함께 돌려줌 |
-| `src/control_station/order_flow.py` | 주문 단계 실행: 선반 재고 → 배정 규칙으로 팔 배정 → 핑키 도착 대기 → 물체별 집기·옮김 확인 → 총량 → 핑키 관제 신호. 적재 자리 하나를 주문끼리 나눠 씀 |
+| `src/control_station/orders/desk.py`, `api/orders.py` | 주문 접수 창구: 주문 창용 catalog, 핑키 없이 접수(`PENDING`), 배정 미리보기, 시작할 때 핑키 확정(`PINKY_ASSIGNED`), 거절. 수령 구역은 `orders/receiving_zones.py`·`config/receiving-zones.json` |
+| `src/control_station/orders/dispatcher.py` | 자동 출발(기본 꺼짐): 기다리는 주문을 접수 순서대로 시작. 앞 주문의 핑키가 출발하면 바로 다음 주문(`CONTROL_STATION_DISPATCH_WAIT_FOR_SPOT=1`이면 적재 자리 도착 뒤), 핑키·수령 구역이 없으면 줄 전체 대기, 그 주문만의 문제면 건너뜀, 멈춘 주문의 경보 확인 전에는 정지 ([주문 흐름](order-flow.md#자동-출발-접수-순서대로)) |
+| `src/control_station/orders/inventory.py` | 선반 재고: 카메라 YOLO 개수(클래스 이름 = 물건 이름)는 같은 값이 3번 연속일 때만 확정, 팔이 일하는 동안은 마지막 확정값 유지, 10초 넘게 새 값이 없으면 그 물건은 "모름"으로 주문을 닫고 주문 창과 관제에 알림. 우리 집기는 옮김 확인 즉시 장부에서 빼고, 그 밖의 변화는 `RESTOCKED`·`REMOVED_OUTSIDE`로 기록. 주문 가능 수량 = 선반 수량 − 열린 주문의 예약(있음/품절/모름/판매 중지). 작업자가 물건마다 카메라 기준·판매 중지·직접 센 수량으로 바꿀 수 있고(`data/inventory-overrides.json`에 저장), 접수 검사는 `OUT_OF_STOCK`·`ITEM_CLOSED`. `GET /api/inventory`, `POST /api/inventory/{물건}` |
+| `src/control_station/orders/assignment.py` | 핑키·OMX 배정 규칙(순수 함수): 핑키는 제외 조건 뒤 배터리 구간 → 오늘 운행 → 쉰 시간 → 번호, 팔은 제약이 많은 물체부터 성공률 → 남은 재고 → 설정 순서. 고른 이유를 함께 돌려줌 |
+| `src/control_station/orders/flow.py` | 주문 단계 실행: 선반 재고 → 배정 규칙으로 팔 배정 → 핑키 도착 대기 → 물체별 집기·옮김 확인 → 총량 → 핑키 관제 신호. 적재 자리 하나를 주문끼리 나눠 씀 |
 | `src/control_station/mock_world.py` | 선반 재고·핑키 위 물건·핑키 임무 단계·팔 집기를 흉내 내는 모의 세계와 사고 주입(모든 결과 `simulated: true`) |
-| `src/control_station/pinky_fleet.py` | 핑키 팀 관제(`pinky_fleet_dashboard`) HTTP 클라이언트: 임무 단계 읽기, `dock_complete`·`received` 신호 |
-| `src/control_station/camera_counts.py` | 선반 캠(칸 영역 안)과 탑 캠(핑키 쟁반 영역 안)의 YOLO 검출로 종류별 개수 세기(새 프레임 5장 중앙값) |
-| `src/control_station/arms.py`, `config/arms.json` | 팔과 담당 선반·재고 카메라 (왼쪽 선반=arm-01, 오른쪽 선반=arm-02) |
-| `src/control_station/flow_view.py` | 주문 진행 화면 요약(주문별 진행 막대, 핑키·팔 상태, 경보) |
-| `src/control_station/task_orchestrator.py` | 작업 실행. 주문은 `order_flow.py`에 넘김. 이전 형식 작업(이동·팔 7단계)은 모의 단계이고, 설정에 따라 `VERIFY_ARRIVAL`은 실제 주차 판정(`CONTROL_STATION_PARKING_SPOT`), `EXECUTE_ARM_TASK`는 실제 `PICK_WITH_POLICY` 명령(`CONTROL_STATION_TASK_REAL_ARM=1`), `VERIFY_LOAD`는 모의 적재 관측(`CONTROL_STATION_MOCK_LOAD_OBSERVED`) |
-| `src/control_station/arm_commands.py` | OMX 명령 큐(`arm_commands` 테이블): `MOVE_TO_SLOT`·`RETURN_HOME`·`PICK_WITH_POLICY`, 팔당 미완료 1건, ACK 제한 시간 뒤 `UNKNOWN`, 자동 재전송 없음 ([HTTP 인터페이스](arm-command-api.md)) |
-| `src/control_station/act_policies.py`, `config/omx-act-policies.json` | 물체 이름(YOLO 클래스·한글·별칭) → 그 물체용 ACT 정책(모델, front/wrist 카메라 역할, 최대 실행 시간); 파일 SHA-256을 명령에 고정 |
-| `src/control_station/shelf_slot_map.py`, `config/shelf-slots.json` | 선반 칸 정의와 그 SHA-256 버전 |
-| `src/control_station/shelf_slot_zones.py` | 정면 카메라의 칸 영역([선반 위치 보정](shelf-pose-calibration.md))과 검출별 칸 배정, 물체가 한 칸에서만 보일 때의 칸 근거(`select_slot_for_class`) |
-| `src/control_station/load_check.py` | 이전 형식 작업의 `VERIFY_LOAD` 판정. 관측기는 모의(`CONTROL_STATION_MOCK_LOAD_OBSERVED`)뿐 |
-| `src/control_station/parking_ros.py` | C++ 주차 노드의 `/pinky_parking/state`·`/pinky_parking/check`(그리고 핑키별 등록 자리를 따라가는 `/pinky_parking_<자리>/state`)를 관제 JSON(`/live`, `/check`, 도착 단계)으로 바꿈. 관제 자체 판정은 없음 |
-| `src/control_station/camera_adapters.py` | 카메라 feed(Head·Joint·Front·선반)를 V4L2(OpenCV) 또는 `ros:<토픽>`으로 받고, 카메라별 선택 YOLO/YOLO-World 검출 표시. 정책 실행·정책 명령 동안 정책 카메라를 닫았다가 다시 엶 |
-| `src/control_station/robot_adapters.py` | `/api/robots`: 모의 상태, 또는 ROS 2 모드에서 Nav2 `navigate_to_pose` action server 발견 여부만. 팔은 항상 "미설정" |
+| `src/control_station/pinky/fleet_client.py` | 핑키 팀 관제(`pinky_fleet_dashboard`) HTTP 클라이언트: 임무 단계 읽기, `dock_complete`·`received` 신호 |
+| `src/control_station/cameras/counts.py` | 선반 캠(칸 영역 안)과 탑 캠(핑키 쟁반 영역 안)의 YOLO 검출로 종류별 개수 세기(새 프레임 5장 중앙값) |
+| `src/control_station/arms/config.py`, `config/arms.json` | 팔과 담당 선반·재고 카메라 (왼쪽 선반=arm-01, 오른쪽 선반=arm-02) |
+| `src/control_station/orders/progress_view.py` | 주문 진행 화면 요약(주문별 진행 막대, 핑키·팔 상태, 경보) |
+| `src/control_station/orders/task_runner.py` | 작업 실행. 주문은 `orders/flow.py`에 넘김. 이전 형식 작업(이동·팔 7단계)은 모의 단계이고, 설정에 따라 `VERIFY_ARRIVAL`은 실제 주차 판정(`CONTROL_STATION_PARKING_SPOT`), `EXECUTE_ARM_TASK`는 실제 `PICK_WITH_POLICY` 명령(`CONTROL_STATION_TASK_REAL_ARM=1`), `VERIFY_LOAD`는 모의 적재 관측(`CONTROL_STATION_MOCK_LOAD_OBSERVED`) |
+| `src/control_station/arms/commands.py` | OMX 명령 큐(`arm_commands` 테이블): `MOVE_TO_SLOT`·`RETURN_HOME`·`PICK_WITH_POLICY`, 팔당 미완료 1건, ACK 제한 시간 뒤 `UNKNOWN`, 자동 재전송 없음 ([HTTP 인터페이스](arm-command-api.md)) |
+| `src/control_station/arms/policies.py`, `config/omx-act-policies.json` | 물체 이름(YOLO 클래스·한글·별칭) → 그 물체용 ACT 정책(모델, front/wrist 카메라 역할, 최대 실행 시간); 파일 SHA-256을 명령에 고정 |
+| `src/control_station/cameras/shelf_slots.py`, `config/shelf-slots.json` | 선반 칸 정의와 그 SHA-256 버전 |
+| `src/control_station/cameras/shelf_slots.py` | 정면 카메라의 칸 영역([선반 위치 보정](shelf-pose-calibration.md))과 검출별 칸 배정, 물체가 한 칸에서만 보일 때의 칸 근거(`select_slot_for_class`) |
+| `src/control_station/orders/task_runner.py` | 이전 형식 작업의 `VERIFY_LOAD` 판정. 관측기는 모의(`CONTROL_STATION_MOCK_LOAD_OBSERVED`)뿐 |
+| `src/control_station/pinky/parking_ros.py` | C++ 주차 노드의 `/pinky_parking/state`·`/pinky_parking/check`(그리고 핑키별 등록 자리를 따라가는 `/pinky_parking_<자리>/state`)를 관제 JSON(`/live`, `/check`, 도착 단계)으로 바꿈. 관제 자체 판정은 없음 |
+| `src/control_station/cameras/adapters.py` | 카메라 feed(Head·Joint·Front·선반)를 V4L2(OpenCV) 또는 `ros:<토픽>`으로 받고, 카메라별 선택 YOLO/YOLO-World 검출 표시. 정책 실행·정책 명령 동안 정책 카메라를 닫았다가 다시 엶 |
+| `src/control_station/pinky/robot_status.py` | `/api/robots`: 모의 상태, 또는 ROS 2 모드에서 Nav2 `navigate_to_pose` action server 발견 여부만. 팔은 항상 "미설정" |
 | `src/control_station/arm_supervisor.py` | 고정 LeRobot 텔레오퍼레이션 프로세스 시작·종료·상태 |
-| `src/control_station/policy_run_supervisor.py` | LeRobot async ACT client를 총 액션 상한으로 한 번 실행(기본 비활성). 정책 목록은 `config/omx-act-policies.json`, 정책별 `cameras`에 따라 위·그리퍼 카메라를 `front`/`wrist`에 넣음, 끝나도 토크 유지. 프로세스 결과만 기록 |
-| `src/control_station/json_files.py` | 설정 파일과 요청 본문의 JSON 읽기(중복 키 거부, 크기 제한 일반 파일만) |
-| `src/control_station/command_parser.py` | 제한 문법 초안 parser: 집기 조건(물체·색상·선반 층·목적지)과 주문 문장("당근 1개랑 사과 두 개") |
-| `models.py`, `database.py`, `store.py`, `migrations/` | 상태 어휘, SQLAlchemy ORM·SQLite, 작업·단계·이벤트 저장, Alembic revision |
+| `src/control_station/arms/policy_runner.py` | LeRobot async ACT client를 총 액션 상한으로 한 번 실행(기본 비활성). 정책 목록은 `config/omx-act-policies.json`, 정책별 `cameras`에 따라 위·그리퍼 카메라를 `front`/`wrist`에 넣음, 끝나도 토크 유지. 프로세스 결과만 기록 |
+| `src/control_station/storage/json_files.py` | 설정 파일과 요청 본문의 JSON 읽기(중복 키 거부, 크기 제한 일반 파일만) |
+| `src/control_station/orders/command_parser.py` | 제한 문법 초안 parser: 집기 조건(물체·색상·선반 층·목적지)과 주문 문장("당근 1개랑 사과 두 개") |
+| `storage/models.py`, `storage/database.py`, `storage/store.py`, `migrations/` | 상태 어휘, SQLAlchemy ORM·SQLite, 작업·단계·이벤트 저장, Alembic revision |
 | `src/control_station/web/` | 관제 화면 탭: 주문 진행(맨 위 주문 접수), 현황, 수동 조작, 작업 이력, API. 손님용 주문 창(목업) `/order` |
 | `cpp/` | Pinky 주차 판정의 유일한 구현(C++ 라이브러리·CLI `pinky_parking`·ROS 2 노드)과 `omx_interfaces`. [cpp/README.md](../../cpp/README.md) |
 | `scripts/` | 보정(`calibrate_camera_intrinsics.py`, `calibrate_shelf_pose.py`, 공용 `calibration_artifacts.py`), OMX 워커(`mock_omx_worker.py`, `omx_lerobot_worker.py`, `omx_ros_worker.py`), 정책 도우미(`omx_act_policy_test.sh`, `omx_act_policy_run.py`), `record_omx_pose.py`, `probe_omx_readonly.py`, `check_setup.sh` |

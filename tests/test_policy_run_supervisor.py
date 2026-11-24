@@ -10,8 +10,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from control_station.arms import ArmRegistry
-from control_station.policy_run_supervisor import PolicyRunSupervisor
+from control_station.arms.config import ArmRegistry
+from control_station.arms.policy_runner import PolicyRunSupervisor
 
 LEFT_SERIAL = "F58AE68650323952582E3120FF05260E"
 RIGHT_SERIAL = "A9F9354350323952582E3120FF070727"

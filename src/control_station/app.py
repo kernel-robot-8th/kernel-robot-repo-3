@@ -12,41 +12,42 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from control_station import REPO_ROOT
 from control_station.api import routes
 from control_station.api.common import is_cross_origin, is_retryable, read_json_object
-from control_station.act_policies import ActPolicyError, load_act_policies
-from control_station.arm_commands import ARM_ROBOT_IDS, ArmCommandStore
-from control_station.arm_sequences import ArmSequenceSupervisor
-from control_station.arm_action_ros import RosPickTransport
-from control_station.arm_pick import ArmActionPick, ArmQueuePick
-from control_station.arms import ArmConfigError, load_arms
-from control_station.policy_run_supervisor import PolicyRunSupervisor
-from control_station.camera_counts import (
+from control_station.arms.policies import ActPolicyError, load_act_policies
+from control_station.arms.commands import ARM_ROBOT_IDS, ArmCommandStore
+from control_station.arms.sequences import ArmSequenceSupervisor
+from control_station.arms.ros_action import RosPickTransport
+from control_station.arms.pick import ArmActionPick, ArmQueuePick
+from control_station.arms.config import ArmConfigError, load_arms
+from control_station.arms.policy_runner import PolicyRunSupervisor
+from control_station.cameras.counts import (
     ShelfStockCounter, camera_inventory, head_middle_view_from_env, head_shelf_view_from_env,
     load_counter_from_env, parse_region,
 )
-from control_station.camera_adapters import (
+from control_station.cameras.adapters import (
     OpenCVArmCameraStreamManager,
     UnconfiguredArmCameraStreamManager,
 )
-from control_station.load_check import mock_load_observer_from_env
+from control_station.orders.task_runner import mock_load_observer_from_env
 from control_station.mock_world import MockWorld
-from control_station.inventory import InventoryMonitor, InventoryOverrides
-from control_station.dispatcher import OrderDispatcher
-from control_station.order_desk import OrderDesk
-from control_station.order_flow import OrderDevices, OrderFlow
-from control_station.receiving_zones import ReceivingZoneError, load_receiving_zones
-from control_station.pinky_fleet import PinkyFleetClient
-from control_station.pinky_gateway import PinkyGateway
-from control_station.dock_guide import DockGuideRelay
-from control_station.dock_handshake import DockAutoLoop, DockSupervisor
-from control_station.pinky_markers import PinkyMarkerError, arrival_for, load_pinky_markers
-from control_station.parking_ros import RosParkingSource
-from control_station.robot_adapters import make_status_provider
-from control_station.shelf_slot_map import ShelfSlotMapError, load_shelf_slot_map
-from control_station.shelf_slot_zones import ShelfSlotZones, SlotSelectionError, select_slot_for_class
-from control_station.store import PINKY_NAMES, TaskStore
-from control_station.task_orchestrator import MockTaskOrchestrator
+from control_station.orders.inventory import InventoryMonitor, InventoryOverrides
+from control_station.orders.dispatcher import OrderDispatcher
+from control_station.orders.desk import OrderDesk
+from control_station.orders.flow import OrderDevices, OrderFlow
+from control_station.orders.receiving_zones import ReceivingZoneError, load_receiving_zones
+from control_station.pinky.fleet_client import PinkyFleetClient
+from control_station.pinky.gateway import PinkyGateway
+from control_station.pinky.docking import DockGuideRelay
+from control_station.pinky.docking import DockAutoLoop, DockSupervisor
+from control_station.pinky.markers import PinkyMarkerError, arrival_for, load_pinky_markers
+from control_station.pinky.parking_ros import RosParkingSource
+from control_station.pinky.robot_status import make_status_provider
+from control_station.cameras.shelf_slots import ShelfSlotMapError, load_shelf_slot_map
+from control_station.cameras.shelf_slots import ShelfSlotZones, SlotSelectionError, select_slot_for_class
+from control_station.storage.store import PINKY_NAMES, TaskStore
+from control_station.orders.task_runner import MockTaskOrchestrator
 
 
 WEB_DIR = Path(__file__).with_name("web")
@@ -381,7 +382,7 @@ def main() -> None:
     # The Pinky screen reads and commands through the same client, so it shares the client's status cache.
     server.pinky_gateway = PinkyGateway(fleet, world.fleet_status, markers=pinky_markers)
 
-    # The same camera <-> Pinky exchange for a Pinky driven from the test screen, without an order (dock_handshake.py):
+    # The same camera <-> Pinky exchange for a Pinky driven from the test screen, without an order (pinky/docking.py):
     # judged at its own registration, redocked with the camera's offset, completed when it is seen in place twice.
     def dock_signal(pinky_id: str, action: str, offset: dict[str, float] | None) -> dict[str, Any]:
         token = fleet_status(pinky_id).get("mission_token")
@@ -389,7 +390,7 @@ def main() -> None:
                 else fleet_confirm(pinky_id, action, token))
 
     # While a Pinky drives in, the camera's live offset from its own registered spot goes to it through the fleet
-    # dashboard, and its drive into the station steers on it (dock_guide.py). One relay per Pinky whose spot is
+    # dashboard, and its drive into the station steers on it (pinky/docking.py). One relay per Pinky whose spot is
     # registered and followed live, each reading its own marker's node, so a Pinky is never steered on another
     # one's registration. Only with a real dashboard and the parking node; CONTROL_STATION_DOCK_GUIDE=0 turns it off.
     server.dock_guides = {}
@@ -413,7 +414,7 @@ def main() -> None:
         if unguided:
             print("적재 자리 진입 안내 없음(등록 안 됨): " + ", ".join(unguided), flush=True)
 
-    dock_trials = Path(__file__).resolve().parents[2] / ".control-station" / "logs" / "dock-repeat.jsonl"
+    dock_trials = REPO_ROOT / ".control-station" / "logs" / "dock-repeat.jsonl"
     dock_trials_lock = threading.Lock()
 
     def record_dock_trial(trial: dict[str, Any]) -> None:
@@ -445,7 +446,7 @@ def main() -> None:
     # "탑재 목록" on the load camera card: what the camera sees on the Pinky tray right now. Display only, in every
     # mode; it never feeds the order flow (that uses the counters below).
     load_snapshots = getattr(server.camera_manager, "load_snapshots", server.camera_manager.snapshots)
-    server.load_view = load_counter_from_env(load_snapshots, Path(__file__).resolve().parents[2],
+    server.load_view = load_counter_from_env(load_snapshots, REPO_ROOT,
                                              parking_spot_id)
     server.head_shelf_view = head_shelf_view_from_env(server.camera_manager.snapshots)
     server.head_middle_view = head_middle_view_from_env(server.camera_manager.snapshots)
@@ -458,7 +459,7 @@ def main() -> None:
         server.load_view.region = [366.6, 107.8, 522.3, 263.5]
     if os.environ.get("CONTROL_STATION_ORDER_COUNTS", "").strip() == "camera":
         shelf_stock = ShelfStockCounter(server.camera_manager.snapshots, server.shelf_slot_zones, slot_map, server.arms)
-        load_counter = load_counter_from_env(load_snapshots, Path(__file__).resolve().parents[2],
+        load_counter = load_counter_from_env(load_snapshots, REPO_ROOT,
                                              parking_spot_id)
         pinky_load = load_counter
         print(f"주문 흐름의 개수 세기: 카메라 YOLO (핑키 쟁반 {load_counter.camera_id} {load_counter.region_or_none()})",
@@ -541,7 +542,7 @@ def main() -> None:
         return server.order_flow.station_owner is not None or bool(server.policy_run_supervisor.snapshot()["process_alive"])
 
     overrides_path = Path(os.environ.get("CONTROL_STATION_INVENTORY_OVERRIDES")
-                          or Path(__file__).resolve().parents[2] / "data" / "inventory-overrides.json")
+                          or REPO_ROOT / "data" / "inventory-overrides.json")
     server.inventory = InventoryMonitor(
         shelf_stock, arms_at_work, orderable_products, task_store.reserved_units, task_store.confirmed_transfers,
         overrides=InventoryOverrides(overrides_path),
@@ -553,7 +554,7 @@ def main() -> None:
     )
     # A larger order runs as shipments; each later one gets its Pinky from the desk when it starts.
     server.order_flow.choose_shipment_pinky = server.order_desk.assign_next_shipment
-    # Automatic dispatch (dispatcher.py): waiting orders start oldest first, each as soon as the Pinky before it
+    # Automatic dispatch (orders/dispatcher.py): waiting orders start oldest first, each as soon as the Pinky before it
     # has been sent off. Off unless CONTROL_STATION_AUTO_DISPATCH=1 or the switch on the order screen.
     # CONTROL_STATION_DISPATCH_WAIT_FOR_SPOT=1: the next order waits until that Pinky stands at the loading spot.
     auto_dispatch = os.environ.get("CONTROL_STATION_AUTO_DISPATCH", "").strip() == "1"

@@ -10,9 +10,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from control_station.inventory import InventoryBook, InventoryMonitor, InventoryOverrides, StockReading
+from control_station.orders.inventory import InventoryBook, InventoryMonitor, InventoryOverrides, StockReading
 from control_station.mock_world import MockWorld
-from control_station.store import TaskStore
+from control_station.storage.store import TaskStore
 from test_api_routes import ApiTestCase
 from test_order_desk import finish, make_desk
 from test_order_flow import CARROT_APPLE, TERMINAL

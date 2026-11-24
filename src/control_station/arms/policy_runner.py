@@ -1,7 +1,7 @@
 """Lifecycle management for one bounded LeRobot async policy run.
 
 A policy is trained on one arm (`arm_id` in config/omx-act-policies.json) and runs only on that arm's follower port
-and cameras (arm_devices.py). A policy without `arm_id` runs on the single-arm settings, as before. One run at a time:
+and cameras (arms/config.py). A policy without `arm_id` runs on the single-arm settings, as before. One run at a time:
 the two arms take turns (config/fleet-planning.json arms_overlap false)."""
 
 from __future__ import annotations
@@ -16,9 +16,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from control_station.act_policies import ActPolicyError, load_act_policies
-from control_station.arm_devices import arm_devices
-from control_station.arms import ArmConfigError, ArmRegistry, load_arms
+from control_station.arms.policies import ActPolicyError, load_act_policies
+from control_station.arms.config import arm_devices
+from control_station.arms.config import ArmConfigError, ArmRegistry, load_arms
 
 
 ACTION_LIMIT_EXIT_CODE = 75

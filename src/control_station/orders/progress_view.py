@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from control_station.pinky_fleet import STATION_PHASES
-from control_station.store import PINKY_NAMES, shipment_of  # noqa: E402  (re-exported for the API)
+from control_station.pinky.fleet_client import STATION_PHASES
+from control_station.storage.store import PINKY_NAMES, shipment_of  # noqa: E402  (re-exported for the API)
 PHASE_LABELS = {
     "parked": "주차장 대기", "driving": "이동 중", "docking_manual": "5번 도착 · 정지",
     "docking_anchor": "도킹완료 · 위치 재설정 중", "docked_manual": "정지 유지 · 수령 대기",

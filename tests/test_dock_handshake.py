@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 
-from control_station.dock_handshake import COMPLETE, OPERATOR, REDOCK, WAIT, DockHandshake, DockSupervisor
+from control_station.pinky.docking import COMPLETE, OPERATOR, REDOCK, WAIT, DockHandshake, DockSupervisor
 
 OFF = {"status": "MISALIGNED", "offset": {"distance_mm": 54.0, "forward_mm": 30.0, "left_mm": -45.0, "dyaw_deg": 6.0}}
 OK = {"status": "ARRIVED", "offset": {"distance_mm": 6.0, "forward_mm": 4.0, "left_mm": -4.0, "dyaw_deg": 0.5}}
@@ -180,7 +180,7 @@ class DockAutoLoopTests(unittest.TestCase):
     """The control station steps the exchange itself: no test screen has to be open (2026-11-24)."""
 
     def test_only_a_pinky_standing_at_the_loading_spot_is_stepped_and_only_while_the_switch_is_on(self) -> None:
-        from control_station.dock_handshake import DockAutoLoop
+        from control_station.pinky.docking import DockAutoLoop
         phases = {"10": "driving", "11": "docking_manual", "12": "parked"}
         stepped: list[str] = []
         switch = {"on": True}
@@ -197,7 +197,7 @@ class DockAutoLoopTests(unittest.TestCase):
         self.assertEqual(stepped, ["11", "10"])
 
     def test_a_fleet_dashboard_that_does_not_answer_does_not_end_the_loop(self) -> None:
-        from control_station.dock_handshake import DockAutoLoop
+        from control_station.pinky.docking import DockAutoLoop
 
         def phase(pinky_id: str) -> str:
             if pinky_id == "10":

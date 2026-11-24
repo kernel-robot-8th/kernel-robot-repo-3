@@ -12,10 +12,11 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from control_station.arm_commands import ArmCommandStore
-from control_station.database import ArmSequenceRecord
+from control_station import REPO_ROOT
+from control_station.arms.commands import ArmCommandStore
+from control_station.storage.database import ArmSequenceRecord
 
-DEFAULT_PATH = Path(__file__).resolve().parents[2] / "config" / "omx-act-sequences.json"
+DEFAULT_PATH = REPO_ROOT / "config" / "omx-act-sequences.json"
 MAX_SEQUENCE_STEPS = 4
 
 

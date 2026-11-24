@@ -1,27 +1,36 @@
-"""The exchange between the ceiling camera and a Pinky standing at the loading spot, up to "arrived".
+"""적재 자리(5번)에서 천장 카메라와 핑키가 주고받는 일: 선 뒤의 "도착" 판정과, 들어오는 동안의 방향 안내.
 
-The Pinky stops at station 5 and waits (phase docking_manual). The camera judges its marker against that Pinky's own
-registration. From the judgments, one after another, this decides what is said back to the Pinky:
+1) 도착 판정 (`DockHandshake`, `DockSupervisor`, `DockAutoLoop`)
+   핑키는 5번에 서서 기다린다(단계 `docking_manual`). 천장 카메라가 핑키의 마커를 그 핑키 자신의 등록 자리와
+   비교하고, 판정을 차례로 받아 핑키에게 무엇을 돌려보낼지 정한다.
 
-  ARRIVED, seen `arrived_checks` times in a row          -> COMPLETE  (the caller sends dock_complete)
-  MISALIGNED, seen `misaligned_checks` times in a row     -> REDOCK    (the caller sends redock with the camera's
-                                                             offset, so the Pinky comes in corrected by that much)
-  after a redock was sent                                 -> WAIT      until the Pinky has left the spot and stands
-                                                             there again: the picture from before the redock is not
-                                                             judged twice (it would send a second redock at once)
-  the Pinky is back                                       -> the redock's result is reported once: before -> after
-  no registration for this Pinky's marker                 -> OPERATOR  (a person looks and confirms)
-  the camera works but does not see the Pinky's marker
-  (NOT_FOUND) for `blind_s`                               -> REDOCK    without an offset: "come in again" (2026-11-19:
-                                                             the order has to go on, so it is called in again
-                                                             instead of waiting for a person), up to `max_redocks`
-  the camera cannot judge for `blind_s` for another reason -> OPERATOR  (node down, view moved: calling the Pinky in
-                                                             again would change nothing)
-  `max_redocks` used and still misaligned                 -> OPERATOR
+     ARRIVED가 `arrived_checks`번 연속             -> COMPLETE  호출한 쪽이 dock_complete를 보낸다
+     MISALIGNED가 `misaligned_checks`번 연속      -> REDOCK    카메라가 잰 어긋남을 같이 보내, 그만큼 고쳐 다시 들어오게 한다
+     redock을 보낸 뒤                              -> WAIT      핑키가 자리를 떠났다가 다시 설 때까지 기다린다.
+                                                                redock 전 화면을 두 번 판정하면 곧바로 redock을 또 보내기 때문이다
+     핑키가 다시 섬                                -> redock 결과(전 -> 후)를 한 번 기록한다
+     이 핑키의 마커 등록이 없음                    -> OPERATOR  사람이 보고 확인한다
+     카메라는 되는데 핑키 마커가 `blind_s` 동안
+     보이지 않음(NOT_FOUND)                        -> REDOCK    어긋남 없이 "다시 들어와". 주문이 이어져야 하므로 사람을
+                                                                기다리지 않고 다시 부른다(2026-11-19). 최대 `max_redocks`번
+     다른 이유로 `blind_s` 동안 판정하지 못함      -> OPERATOR  노드가 꺼졌거나 화면이 움직였다. 다시 불러도 소용없다
+     `max_redocks`를 다 쓰고도 어긋남              -> OPERATOR
 
-OPERATOR never moves anything by itself: the Pinky keeps standing and the arms stay still until a person confirms.
-This module only decides; sending the signals and keeping the records is the caller's (the order flow for an order,
-DockSupervisor for a Pinky driven from the test screen)."""
+   OPERATOR는 스스로 아무것도 움직이지 않는다. 사람이 확인할 때까지 핑키는 서 있고 팔도 움직이지 않는다.
+   이 부분은 판단만 한다. 신호를 보내고 기록을 남기는 것은 호출한 쪽의 일이다(주문이면 주문 흐름,
+   테스트 화면에서 몬 핑키면 DockSupervisor).
+
+2) 들어오는 동안 방향 안내 (`DockGuideRelay`, 2026-11-18)
+   주차 노드는 등록 자리 하나의 마커를 실시간으로 따라간다(/pinky_parking/state). 핑키가 등록 자리에서 얼마나
+   벗어났는지를 프레임마다 알려 준다. 그 마커를 단 핑키가 임무 중이고 화면에 보이는 동안, 새 어긋남을 핑키 관제
+   (POST /api/robots/{id}/dock-guide)로 보내고 핑키 관제가 핑키에게 넘긴다. 핑키는 5번으로 들어가는 동안 이 값을
+   보며 방향을 잡고(pinky_fleet_dashboard의 mission_behaviors.DockEntry), 카메라가 "자리에 왔다"고 보는 곳에서 멈춘다.
+   그래서 지도가 말한 곳에 섰다가 다시 불려 들어가는 대신 한 번에 자리에 들어온다.
+
+   실시간 상태는 팔 단계의 조건이 되지 않는다는 계약은 그대로다. 도착은 여전히 새 프레임으로 확정한 판정(1번)이
+   정한다. 여기서는 같은 숫자로 마지막 25 cm 주행만 안내하고, 안내가 끊긴 핑키는 예전처럼 자기 오도메트리로 들어온다.
+"""
+
 from __future__ import annotations
 
 import math
@@ -29,6 +38,9 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
+
+
+# ──── 1) 적재 자리 도착 판정 ──────────────────────────────────────────────────────────────────────────────────────
 
 WAIT, REDOCK, COMPLETE, OPERATOR = "WAIT", "REDOCK", "COMPLETE", "OPERATOR"
 NOT_SEEN = frozenset({"NOT_FOUND", "NOT_IN_VIEW"})  # the camera works, the marker is not there (the node's, the virtual camera's word)
@@ -343,3 +355,77 @@ def _result_text(result: dict[str, Any]) -> str:
     how = "카메라 보정" if result.get("guided") else "보정 없이"
     verdict = "정상 위치" if result.get("status") == "ARRIVED" else "아직 어긋남"
     return f"다시 맞추기 {result.get('attempt')}번째({how}) 결과: {numbers} · {verdict}"
+
+
+# ──── 2) 들어오는 동안 방향 안내 ────────────────────────────────────────────────────────────────────────────────────
+
+TRACKED_STATES = frozenset({"MOVING", "IN_POSITION", "OFF_POSITION"})
+PARKED_PHASES = frozenset({"parked"})
+
+
+def guide_from(live: dict[str, Any] | None) -> dict[str, float] | None:
+    """forward_mm, left_mm, dyaw_deg from a live snapshot while the marker is tracked, else None."""
+    if not isinstance(live, dict) or live.get("state") not in TRACKED_STATES:
+        return None
+    offset = live.get("offset") or {}
+    try:
+        guide = {key: float(offset[key]) for key in ("forward_mm", "left_mm", "dyaw_deg")}
+    except (KeyError, TypeError, ValueError):
+        return None
+    return guide if all(math.isfinite(value) for value in guide.values()) else None
+
+
+class DockGuideRelay:
+    """snapshot() -> the live state; phase(pinky_id) -> the Pinky's mission phase; send(pinky_id, guide) -> True when
+    the dashboard took it. One frame is sent once; after a refusal or an error it stays quiet for `retry_s`."""
+
+    def __init__(self, snapshot: Callable[[], dict[str, Any]], pinky_id: str,
+                 phase: Callable[[str], str | None], send: Callable[[str, dict[str, float]], bool], *,
+                 period_s: float = 0.1, retry_s: float = 3.0, clock: Callable[[], float] = time.monotonic) -> None:
+        self.snapshot, self.pinky_id, self.phase, self.send = snapshot, pinky_id, phase, send
+        self.period_s, self.retry_s, self.clock = period_s, retry_s, clock
+        self.sent = self.failed = 0
+        self.last: dict[str, Any] | None = None  # the last guide sent, with when
+        self._frame: Any = None
+        self._quiet_until = 0.0
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def tick(self) -> str:
+        """One round; returns what happened (for the status line and the tests)."""
+        now = self.clock()
+        if now < self._quiet_until:
+            return "QUIET"
+        live = self.snapshot()
+        guide = guide_from(live)
+        if guide is None:
+            return "NOT_TRACKED"
+        frame = live.get("frame_sequence")
+        if frame is not None and frame == self._frame:
+            return "SAME_FRAME"  # a stalled camera must not look fresh to the Pinky
+        try:
+            if self.phase(self.pinky_id) in PARKED_PHASES:
+                return "PARKED"
+            self._frame = frame
+            if self.send(self.pinky_id, guide):
+                self.sent += 1
+                self.last = {**guide, "at": time.time()}
+                return "SENT"
+        except Exception:  # the dashboard is away: try again later, the Pinky drives in without the guide
+            pass
+        self.failed += 1
+        self._quiet_until = now + self.retry_s
+        return "REFUSED"
+
+    def start(self) -> None:
+        def loop() -> None:
+            while not self._stop.wait(self.period_s):
+                self.tick()
+        self._thread = threading.Thread(target=loop, name="dock-guide-relay", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def status(self) -> dict[str, Any]:
+        return {"pinky_id": self.pinky_id, "sent": self.sent, "failed": self.failed, "last": self.last}

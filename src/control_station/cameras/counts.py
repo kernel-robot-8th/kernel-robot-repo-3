@@ -338,8 +338,8 @@ def load_counter_from_env(snapshots: Callable[[], list[Any]], repository_root: P
 
 def pinky_arrivals(repository_root: Path) -> list[dict[str, Any]]:
     """Each Pinky with a registered loading spot: its marker id and the marker center registered there (px)."""
-    from control_station.pinky_markers import PinkyMarkerError, load_pinky_markers
-    from control_station.store import PINKY_NAMES
+    from control_station.pinky.markers import PinkyMarkerError, load_pinky_markers
+    from control_station.storage.store import PINKY_NAMES
 
     try:
         markers = load_pinky_markers(spots_dir=repository_root / ".control-station" / "parking-spots")

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 
-from control_station.dock_guide import DockGuideRelay, guide_from
+from control_station.pinky.docking import DockGuideRelay, guide_from
 
 
 def live(state: str = "MOVING", frame: int = 1, **offset: float) -> dict:

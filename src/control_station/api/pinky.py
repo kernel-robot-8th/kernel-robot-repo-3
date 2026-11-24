@@ -1,4 +1,4 @@
-"""Pinky screen API: a thin HTTP layer over control_station.pinky_gateway.PinkyGateway.
+"""Pinky screen API: a thin HTTP layer over control_station.pinky.gateway.PinkyGateway.
 
 GET  /api/pinky                 every Pinky card, whether the fleet dashboard answered, recent commands
 GET  /api/pinky/map             the cell from above in map metres: Nav2 grid, keepout, fixed points, poses
@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from control_station.store import PINKY_IDS
+from control_station.storage.store import PINKY_IDS
 
 if TYPE_CHECKING:
     from control_station.app import ControlStationHandler

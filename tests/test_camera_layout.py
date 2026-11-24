@@ -11,8 +11,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from control_station.arm_devices import arm_devices
-from control_station.camera_adapters import OpenCVArmCameraStreamManager, UnconfiguredArmCameraStreamManager
+from control_station.arms.config import arm_devices
+from control_station.cameras.adapters import OpenCVArmCameraStreamManager, UnconfiguredArmCameraStreamManager
 
 ARMS = (
     {"arm_id": "arm-01", "label": "왼쪽 팔", "board_serial": "F58AE68650323952582E3120FF05260E"},

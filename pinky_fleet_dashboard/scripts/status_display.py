@@ -25,7 +25,7 @@ from pathlib import Path
 
 COLORS = {"orange": (255, 110, 0), "green": (0, 170, 60), "blue": (0, 90, 255), "red": (220, 0, 0)}
 WORDS = {"orange": "NO POSE", "green": "DRIVING", "blue": "READY", "red": "STOP"}
-NAMES = {"10": "P0", "11": "P1", "12": "P2"}  # the names on the control screens (control_station.store.PINKY_NAMES)
+NAMES = {"10": "P0", "11": "P1", "12": "P2"}  # the names on the control screens (control_station.storage.store.PINKY_NAMES)
 SILENCE_S = 3.0
 NO_SCREEN_REPORT_S = 90.0   # how long opening the screen is tried (every OPEN_RETRY_S) before this node ends
 OPEN_RETRY_S = 2.0

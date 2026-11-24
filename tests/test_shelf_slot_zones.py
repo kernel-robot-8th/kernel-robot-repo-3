@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from control_station.shelf_slot_map import load_shelf_slot_map
-from control_station.shelf_slot_zones import ShelfSlotZones, SlotSelectionError, select_slot_for_class
+from control_station.cameras.shelf_slots import load_shelf_slot_map
+from control_station.cameras.shelf_slots import ShelfSlotZones, SlotSelectionError, select_slot_for_class
 
 
 def camera(**overrides: object) -> dict[str, object]:

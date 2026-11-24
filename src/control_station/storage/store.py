@@ -16,7 +16,8 @@ from sqlalchemy import exists, or_, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
-from control_station.database import (
+from control_station import REPO_ROOT
+from control_station.storage.database import (
     OrderRequestRecord,
     TaskEventRecord,
     TaskRecord,
@@ -25,7 +26,7 @@ from control_station.database import (
     database_path,
     make_session_factory,
 )
-from control_station.models import StepStatus, TaskStatus
+from control_station.storage.models import StepStatus, TaskStatus
 
 
 ROBOT_ID_BY_KIND = {"MOBILE": "mobile-01", "ARM": "arm-01"}
@@ -403,7 +404,7 @@ class TaskStore:
             return self._present_with_history(task)
 
     def _migrate(self) -> None:
-        project_root = Path(__file__).resolve().parents[2]
+        project_root = REPO_ROOT
         config = Config(str(project_root / "alembic.ini"))
         database_url = self.engine.url.render_as_string(hide_password=False)
         config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))

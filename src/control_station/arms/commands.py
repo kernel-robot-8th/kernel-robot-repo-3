@@ -26,10 +26,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from control_station.act_policies import ActPolicyRegistry
-from control_station.database import ArmCommandEventRecord, ArmCommandRecord
-from control_station.models import StringEnum
-from control_station.shelf_slot_map import ShelfSlotMap
+from control_station.arms.policies import ActPolicyRegistry
+from control_station.storage.database import ArmCommandEventRecord, ArmCommandRecord
+from control_station.storage.models import StringEnum
+from control_station.cameras.shelf_slots import ShelfSlotMap
 
 
 # arm-01 is the left arm (left shelf), arm-02 the right arm (right shelf); config/arms.json maps them to shelves.

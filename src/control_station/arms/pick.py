@@ -28,8 +28,8 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
-from control_station.arm_commands import IN_FLIGHT, ArmCommandConflict, ArmCommandError, ArmCommandStore
-from control_station.order_flow import OrderFlowError
+from control_station.arms.commands import IN_FLIGHT, ArmCommandConflict, ArmCommandError, ArmCommandStore
+from control_station.orders.flow import OrderFlowError
 
 HOME_REACHED_UNVERIFIED = "ARM_HOME_PLACEMENT_NOT_VERIFIED"
 # Waiting for the worker to take the command, ACK it and move home again, on top of the policy's own run time.

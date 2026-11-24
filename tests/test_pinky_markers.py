@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from control_station.pinky_markers import PinkyMarkerError, arrival_for, load_pinky_markers
+from control_station.pinky.markers import PinkyMarkerError, arrival_for, load_pinky_markers
 
 
 class PinkyMarkersTest(unittest.TestCase):

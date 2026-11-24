@@ -5,7 +5,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, event, pool
 
-from control_station.database import Base
+from control_station.storage.database import Base
 
 
 config = context.config

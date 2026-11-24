@@ -19,15 +19,15 @@ from datetime import datetime, timezone
 from typing import Any
 
 from control_station.api.common import validate_order_items
-from control_station.assignment import (
+from control_station.orders.assignment import (
     ArmPlanError, PickStats, PinkyCandidate, ShipmentError, ZoneAssignment, ZoneCandidate, assign_fleet, choose_pinky,
     choose_zone, plan_arms, schedule_loading, split_into_shipments,
 )
-from control_station.fleet_planning import FleetPlanning, load_fleet_planning
-from control_station.order_flow import OrderDevices
-from control_station.pinky_fleet import PinkyFleetError
-from control_station.receiving_zones import ReceivingZone
-from control_station.store import (
+from control_station.orders.planning import FleetPlanning, load_fleet_planning
+from control_station.orders.flow import OrderDevices
+from control_station.pinky.fleet_client import PinkyFleetError
+from control_station.orders.receiving_zones import ReceivingZone
+from control_station.storage.store import (
     PINKY_IDS, PINKY_NAMES, InvalidStateTransition, PinkyUnavailable, TaskStore, ZoneUnavailable, shipment_of,
 )
 
@@ -111,8 +111,8 @@ class OrderDesk:
     store: TaskStore
     orchestrator: Any  # .start(task_id) -> (task, changed)
     devices: OrderDevices
-    arms: Any  # control_station.arms registry (.arms: list of arm dicts in config order)
-    policies: Any  # control_station.act_policies registry
+    arms: Any  # control_station.arms.config registry (.arms: list of arm dicts in config order)
+    policies: Any  # control_station.arms.policies registry
     zones: Mapping[str, ReceivingZone]
     pick_stats: Callable[[], PickStats]
     planning: FleetPlanning = field(default_factory=load_fleet_planning)

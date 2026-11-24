@@ -7,13 +7,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from control_station.act_policies import ActPolicyError, load_act_policies
+from control_station.arms.policies import ActPolicyError, load_act_policies
 from control_station.api.common import validate_order_items
-from control_station.arm_commands import ArmCommandError, ArmCommandStore
-from control_station.arms import ArmConfigError, load_arms
-from control_station.command_parser import parse_order_text
-from control_station.models import TaskStatus
-from control_station.store import PinkyUnavailable, TaskStore
+from control_station.arms.commands import ArmCommandError, ArmCommandStore
+from control_station.arms.config import ArmConfigError, load_arms
+from control_station.orders.command_parser import parse_order_text
+from control_station.storage.models import TaskStatus
+from control_station.storage.store import PinkyUnavailable, TaskStore
 from test_api_routes import ApiTestCase
 
 POLICY = {

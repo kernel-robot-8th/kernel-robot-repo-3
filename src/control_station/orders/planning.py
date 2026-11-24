@@ -12,10 +12,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from control_station.assignment import ArmPick, PickTiming
-from control_station.json_files import load_json_file
+from control_station import REPO_ROOT
+from control_station.orders.assignment import ArmPick, PickTiming
+from control_station.storage.json_files import load_json_file
 
-DEFAULT_PLANNING_PATH = Path(__file__).resolve().parents[2] / "config" / "fleet-planning.json"
+DEFAULT_PLANNING_PATH = REPO_ROOT / "config" / "fleet-planning.json"
 MAX_PLANNING_BYTES = 16 * 1024
 
 

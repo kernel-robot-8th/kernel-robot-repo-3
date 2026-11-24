@@ -11,13 +11,13 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from control_station.act_policies import load_act_policies
-from control_station.arm_action_ros import PickActionUnavailable, action_name
-from control_station.arm_commands import ArmCommandStore
-from control_station.arm_pick import HOME_REACHED_UNVERIFIED, ArmActionPick
-from control_station.order_flow import OrderFlowError
-from control_station.shelf_slot_map import load_shelf_slot_map
-from control_station.store import TaskStore
+from control_station.arms.policies import load_act_policies
+from control_station.arms.ros_action import PickActionUnavailable, action_name
+from control_station.arms.commands import ArmCommandStore
+from control_station.arms.pick import HOME_REACHED_UNVERIFIED, ArmActionPick
+from control_station.orders.flow import OrderFlowError
+from control_station.cameras.shelf_slots import load_shelf_slot_map
+from control_station.storage.store import TaskStore
 
 MOVING = ["CHECKING", "STARTING_POLICY", "RUNNING_POLICY", "RETURNING_HOME"]
 HOME = {"outcome": "HOME_REACHED_PLACE_NOT_VERIFIED", "reason_code": "PLACE_NOT_VERIFIED", "message": "home",

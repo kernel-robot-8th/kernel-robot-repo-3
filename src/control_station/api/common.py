@@ -6,8 +6,8 @@ import json
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
-from control_station.command_parser import MAX_SHELF_LEVEL
-from control_station.json_files import unique_keys
+from control_station.orders.command_parser import MAX_SHELF_LEVEL
+from control_station.storage.json_files import unique_keys
 
 if TYPE_CHECKING:
     from control_station.app import ControlStationHandler

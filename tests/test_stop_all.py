@@ -8,11 +8,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from control_station.api.routes import POST_ROUTES
-from control_station.api import stop as stop_api
-from control_station.arm_commands import ArmCommandStore
-from control_station.shelf_slot_map import load_shelf_slot_map
+from control_station.api import status as stop_api
+from control_station.arms.commands import ArmCommandStore
+from control_station.cameras.shelf_slots import load_shelf_slot_map
 from control_station.stop_all import stop_everything
-from control_station.store import TaskStore
+from control_station.storage.store import TaskStore
 
 
 def command_request(robot_id: str = "arm-01") -> dict[str, object]:

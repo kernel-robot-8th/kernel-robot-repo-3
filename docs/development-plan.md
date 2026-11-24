@@ -65,7 +65,7 @@ ROS 2 패키지와 토픽·서비스·액션은 [ROS 2 인터페이스 목록](i
 
 | 작업 | 예정 문서/파일 | 의존성 | 확인 방법 | 완료 조건 |
 | --- | --- | --- | --- | --- |
-| 핑키 도착 → 정책 집기 → 적재 확인 → 핑키 완료 신호 | `src/control_station/order_flow.py`, `src/control_station/pinky_fleet.py`, `src/control_station/camera_counts.py`, [주문 흐름](implementation/order-flow.md) | 천장 카메라 주차 판정, 물체별 ACT 정책(주문의 `PICK_ITEM`은 아직 모의), 탑 캠 쟁반 위 YOLO 검출, 핑키 관제 HTTP `received` 신호 | 모의 흐름 테스트, 실물은 사용자 승인 뒤 단계별 확인 | 적재 확인을 통과한 작업만 완료 신호를 한 번 보내고, 실패하면 신호 없이 멈춤 |
+| 핑키 도착 → 정책 집기 → 적재 확인 → 핑키 완료 신호 | `src/control_station/orders/flow.py`, `src/control_station/pinky/fleet_client.py`, `src/control_station/cameras/counts.py`, [주문 흐름](implementation/order-flow.md) | 천장 카메라 주차 판정, 물체별 ACT 정책(주문의 `PICK_ITEM`은 아직 모의), 탑 캠 쟁반 위 YOLO 검출, 핑키 관제 HTTP `received` 신호 | 모의 흐름 테스트, 실물은 사용자 승인 뒤 단계별 확인 | 적재 확인을 통과한 작업만 완료 신호를 한 번 보내고, 실패하면 신호 없이 멈춤 |
 
 ## 실제 장치 연동 전 확인 항목
 

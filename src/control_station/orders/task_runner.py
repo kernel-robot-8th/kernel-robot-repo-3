@@ -1,15 +1,22 @@
-"""Task execution on top of the persisted task/step state machine.
+"""작업 실행: 저장된 작업·단계 상태 기계 위에서 단계를 차례로 돌린다.
 
-Every step is simulated (`source: mock`) except, when enabled with CONTROL_STATION_TASK_REAL_ARM=1,
-EXECUTE_ARM_TASK: it queues one PICK_WITH_POLICY arm command for the policy named by the task's arm job
-(e.g. "당근 집기") and waits for the arm worker's result. The command is made only when the front camera sees
-the object in exactly one shelf slot (SR-13); that observation is stored with the command as its CAMERA source,
-and without it the step fails before any arm command exists. The worker cannot see whether the object was grasped
-and placed, so its best outcome is "back home, placement not verified"; VERIFY_ARM_RESULT records that the
-decision is left to VERIFY_LOAD, and the arm command stays UNKNOWN for the operator unless a non-mock load
-observation confirmed the load.
+주문(order_items가 있는 작업)은 자기 단계를 orders/flow.py의 OrderFlow로 돌린다. 이 파일이 직접 단계를 돌리는 것은
+이전 형식 작업(이동 + 팔 7단계)이다.
 
-An order (a task with order_items) runs its own steps through order_flow.OrderFlow instead.
+이전 형식 작업의 단계는 모두 모의(`source: mock`)다. 예외는 CONTROL_STATION_TASK_REAL_ARM=1로 켠 EXECUTE_ARM_TASK
+하나다. 작업의 팔 일(예: "당근 집기")이 가리키는 정책으로 PICK_WITH_POLICY 팔 명령을 하나 넣고 팔 워커의 결과를
+기다린다. 명령은 정면 카메라가 물체를 정확히 한 칸에서만 볼 때만 만든다(SR-13). 그 관측이 명령의 CAMERA 근거로
+함께 저장되고, 관측이 없으면 팔 명령을 만들기 전에 단계가 실패한다.
+
+워커는 물체를 잡아서 놓았는지 볼 수 없다. 그래서 가장 좋은 결과가 "원위치로 돌아옴, 놓은 것은 확인 안 됨"이다.
+VERIFY_ARM_RESULT는 판단을 VERIFY_LOAD에 넘긴다고 기록하고, 모의가 아닌 적재 관측이 확인해 주지 않으면 팔 명령은
+운영자가 볼 수 있게 UNKNOWN으로 남는다.
+
+적재 확인 (VERIFY_LOAD, 아래 첫 부분)
+  팔 단계 뒤에, 작업이 요구한 것이 모두 핑키 위에 올라갔는지 본다(docs/spec/data-flow.md의 B 구역 "목표 수량 적재
+  성공 확인"). 관측기가 핑키 위에서 본 개수를 알려 주면 judge_load가 기대 개수와 비교한다. 팔이 놓았다고 보고한
+  것은 별개의 결과이고, 핑키 위에서 본 것으로 치지 않는다. 관측기는 아직 MockLoadObserver뿐이다. 카메라를 열지
+  않고 설정한 개수를 알려 주므로 관측 결과에 simulated가 붙는다.
 """
 
 from __future__ import annotations
@@ -20,12 +27,11 @@ import time
 import uuid
 from typing import Any, Callable
 
-from control_station.arm_commands import IN_FLIGHT, ArmCommandConflict, ArmCommandError, ArmCommandStore
-from control_station.load_check import EXPECTED_LOAD_COUNT, LOAD_ERROR_CODES, LoadObserver, judge_load
-from control_station.models import StepStatus, TaskStatus
-from control_station.order_flow import ORDER_STEP_TYPES, OrderFlow, OrderFlowError, StepContext
-from control_station.shelf_slot_zones import SlotSelectionError
-from control_station.store import (
+from control_station.arms.commands import ArmCommandConflict, ArmCommandError, ArmCommandStore, IN_FLIGHT
+from control_station.storage.models import StepStatus, TaskStatus
+from control_station.orders.flow import ORDER_STEP_TYPES, OrderFlow, OrderFlowError, StepContext
+from control_station.cameras.shelf_slots import SlotSelectionError
+from control_station.storage.store import (
     DEFAULT_TASK_STEPS,
     InvalidStateTransition,
     ROBOT_ID_BY_KIND,
@@ -34,6 +40,67 @@ from control_station.store import (
     TaskStore,
 )
 
+
+# ──── 적재 확인 (VERIFY_LOAD) ─────────────────────────────────────────────────────────────────────────────────
+
+# One object per task while the flow is being verified (decided 2026-11-03). Orders can hold several items (e.g. 3);
+# those are planned as a check after every placement (the count before and after must differ by exactly one) plus
+# this total check before Pinky leaves, once tasks carry a quantity.
+EXPECTED_LOAD_COUNT = 1
+LOAD_OBSERVATION_SCHEMA_VERSION = 1
+
+# Returns {"source", "observed_count": int | None, "reason", ...}; raises with an error_code attribute when the
+# observation could not start.
+LoadObserver = Callable[[], dict[str, Any]]
+
+LOAD_ERROR_CODES = {
+    "INCOMPLETE": "LOAD_INCOMPLETE",
+    "EXCESS": "LOAD_EXCESS",
+    "NOT_VERIFIED": "LOAD_NOT_VERIFIED",
+}
+
+
+def judge_load(observation: dict[str, Any], expected_count: int) -> str:
+    """LOADED only when the observed count equals the expected count; a missing count is NOT_VERIFIED."""
+    count = observation.get("observed_count")
+    if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+        return "NOT_VERIFIED"
+    if count == expected_count:
+        return "LOADED"
+    return "INCOMPLETE" if count < expected_count else "EXCESS"
+
+
+class MockLoadObserver:
+    """Reports a fixed count without looking at anything, to exercise the VERIFY_LOAD flow in mock mode."""
+
+    def __init__(self, observed_count: int) -> None:
+        self.observed_count = observed_count
+
+    def __call__(self) -> dict[str, Any]:
+        return {
+            "observation_schema_version": LOAD_OBSERVATION_SCHEMA_VERSION,
+            "source": "mock",
+            "simulated": True,
+            "observed_count": self.observed_count,
+            "reason": "모의 관측: 카메라를 열지 않고 CONTROL_STATION_MOCK_LOAD_OBSERVED 값을 보고함",
+            "usable_for_robot_control": False,
+        }
+
+
+def mock_load_observer_from_env() -> MockLoadObserver | None:
+    raw = os.environ.get("CONTROL_STATION_MOCK_LOAD_OBSERVED", "").strip()
+    if not raw:
+        return None
+    try:
+        count = int(raw)
+    except ValueError:
+        count = -1
+    if count < 0:
+        raise ValueError("CONTROL_STATION_MOCK_LOAD_OBSERVED must be a non-negative integer")
+    return MockLoadObserver(count)
+
+
+# ──── 작업 실행 ───────────────────────────────────────────────────────────────────────────────────────────────
 
 class MockScenarioFailure(RuntimeError):
     """An explicitly configured mock-only failure at one workflow step."""

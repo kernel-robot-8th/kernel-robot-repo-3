@@ -8,7 +8,7 @@ import time
 import unittest
 from pathlib import Path
 
-from control_station.pinky_fleet import PinkyFleetClient, PinkyFleetError
+from control_station.pinky.fleet_client import PinkyFleetClient, PinkyFleetError
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 FLEET_DIR = REPOSITORY_ROOT / "simulation" / "virtual_pinky_fleet"

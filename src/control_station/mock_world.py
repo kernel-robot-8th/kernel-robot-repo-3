@@ -25,7 +25,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from control_station.pinky_fleet import PinkyFleetError
+from control_station.pinky.fleet_client import PinkyFleetError
 
 FAULT_KINDS = frozenset({"STOCK_SHORT", "PICK_FAILED", "ITEM_LOST", "EXTRA_ON_PINKY", "PINKY_MISALIGNED", "FLEET_REJECT"})
 # The apple policy was recorded on board F58AE686, the right arm (arm-02) since 2026-11-16, so apples stand on the

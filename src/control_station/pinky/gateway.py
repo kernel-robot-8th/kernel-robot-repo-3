@@ -18,9 +18,9 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
-from control_station.flow_view import PHASE_LABELS
-from control_station.pinky_fleet import PinkyFleetClient, PinkyFleetError
-from control_station.store import PINKY_IDS, PINKY_NAMES
+from control_station.orders.progress_view import PHASE_LABELS
+from control_station.pinky.fleet_client import PinkyFleetClient, PinkyFleetError
+from control_station.storage.store import PINKY_IDS, PINKY_NAMES
 
 # The live feeds a Pinky needs before it may drive, in the dashboard's names, with the words the screen uses.
 SENSOR_LABELS = {

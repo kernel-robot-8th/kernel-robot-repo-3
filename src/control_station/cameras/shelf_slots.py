@@ -1,16 +1,20 @@
-"""Shelf slot zones on the front camera image and the slot each detection falls in.
+"""선반 칸: 칸 정의 파일(config/shelf-slots.json)과 정면 카메라 화면 위의 칸 영역.
 
-The zones come from a shelf pose artifact (scripts/calibrate_shelf_pose.py) that an operator activates
-by copying it to `<CONTROL_STATION_SHELF_POSE_DIR>/<camera_id>.json`. A zone is used only when the
-artifact matches the live camera (ID, resolution, pixel transform) and the loaded slot map version.
-A detection's anchor is its bbox bottom-center, where an object meets the deck; it is matched against
-each slot's anchor zone (deck up to just above the front lip), not the whole slot volume, so an
-object on the upper deck cannot land in the lower slot below it.
+1) 칸 정의 (`load_shelf_slot_map`, `ShelfSlotMap`)
+   팔 명령이 가리킬 수 있는 선반 칸 목록이다. scripts/derive_shelf_slots.py가 팀의 3D 선반 모델에서 만든다.
+   파일의 SHA-256이 칸 정의 버전이 되고, 칸 명령마다 이 버전을 싣는다. 그래서 팔 워커는 자기가 배운 자세와
+   다른 칸 정의로 만든 명령을 거절할 수 있다.
 
-`ShelfSlotZones.annotate` only adds zones and per-detection slot assignments to a camera snapshot (the
-dashboard draws them, the stock counter counts with them). `select_slot_for_class` is the one place that
-turns them into a choice: it names the single slot holding an object, or refuses, and its record becomes
-the camera evidence of an arm command (POST /api/arm/commands/from-camera, the task flow's arm step).
+2) 칸 영역 (`ShelfSlotZones`, `select_slot_for_class`)
+   선반 위치 보정 결과(scripts/calibrate_shelf_pose.py)를 운영자가 `<CONTROL_STATION_SHELF_POSE_DIR>/<camera_id>.json`으로
+   복사하면 켜진다. 보정 결과가 지금 카메라(ID, 해상도, 영상 변환)와 불러온 칸 정의 버전에 맞을 때만 쓴다.
+
+   검출 하나의 기준점은 박스의 아래쪽 가운데, 곧 물체가 선반 바닥에 닿는 곳이다. 칸 전체가 아니라 칸의 기준
+   영역(바닥부터 앞 턱 바로 위까지)과 비교하므로, 위 칸에 있는 물체가 바로 아래 칸으로 잡히지 않는다.
+
+   `ShelfSlotZones.annotate`는 카메라 상태에 칸 영역과 검출별 칸을 덧붙이기만 한다(화면이 그리고, 재고 세기가 센다).
+   이것을 실제 선택으로 바꾸는 곳은 `select_slot_for_class` 하나다. 물체가 들어 있는 칸 하나를 고르거나 거절하고,
+   그 기록이 팔 명령의 카메라 근거가 된다(POST /api/arm/commands/from-camera, 작업 흐름의 팔 단계).
 """
 
 from __future__ import annotations
@@ -20,14 +24,63 @@ import json
 import os
 import re
 import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from control_station.json_files import unique_keys
-from control_station.shelf_slot_map import ShelfSlotMap
+from control_station import REPO_ROOT
+from control_station.storage.json_files import load_json_file, unique_keys
 
 
-DEFAULT_POSE_DIR = Path(__file__).resolve().parents[2] / ".control-station" / "shelf-pose-calibrations"
+# ──── 1) 칸 정의 (config/shelf-slots.json) ───────────────────────────────────────────────────────────────────
+
+DEFAULT_SLOT_MAP_PATH = REPO_ROOT / "config" / "shelf-slots.json"
+MAX_SLOT_MAP_BYTES = 256 * 1024
+_SLOT_ID = re.compile(r"^slot_[a-z]_\d+_\d+$")
+
+
+class ShelfSlotMapError(ValueError):
+    """The slot map file is missing or does not match schema version 1."""
+
+
+@dataclass(frozen=True)
+class ShelfSlotMap:
+    path: Path
+    version: str
+    document: dict[str, Any] = field(repr=False)
+    active_slots: dict[str, dict[str, Any]] = field(repr=False)
+
+
+def load_shelf_slot_map(path: str | Path | None = None) -> ShelfSlotMap:
+    slot_path = Path(path or os.environ.get("CONTROL_STATION_SHELF_SLOTS") or DEFAULT_SLOT_MAP_PATH)
+    raw, document = load_json_file(slot_path, MAX_SLOT_MAP_BYTES, "칸 정의 파일", ShelfSlotMapError)
+    if not isinstance(document, dict) or document.get("schema_version") != 1:
+        raise ShelfSlotMapError("칸 정의 파일은 schema_version 1이어야 합니다")
+    frame = document.get("frame")
+    if not isinstance(frame, dict) or frame.get("unit") != "m" or not isinstance(frame.get("frame_id"), str):
+        raise ShelfSlotMapError("칸 정의 파일의 frame에는 frame_id와 unit 'm'이 필요합니다")
+    slots = document.get("slots")
+    if not isinstance(slots, list) or not slots:
+        raise ShelfSlotMapError("칸 정의 파일에 slots가 없습니다")
+    seen: set[str] = set()
+    active: dict[str, dict[str, Any]] = {}
+    for slot in slots:
+        slot_id = slot.get("slot_id") if isinstance(slot, dict) else None
+        if not isinstance(slot_id, str) or not _SLOT_ID.fullmatch(slot_id) or slot_id in seen:
+            raise ShelfSlotMapError(f"잘못되었거나 중복된 slot_id: {slot_id!r}")
+        if not isinstance(slot.get("label"), str) or not isinstance(slot.get("active"), bool):
+            raise ShelfSlotMapError(f"{slot_id}에 label과 active가 필요합니다")
+        seen.add(slot_id)
+        if slot["active"]:
+            active[slot_id] = slot
+    if not active:
+        raise ShelfSlotMapError("사용하는(active) 칸이 하나도 없습니다")
+    return ShelfSlotMap(slot_path, hashlib.sha256(raw).hexdigest(), document, active)
+
+
+# ──── 2) 정면 카메라 화면 위의 칸 영역 ────────────────────────────────────────────────────────────────────────────────
+
+DEFAULT_POSE_DIR = REPO_ROOT / ".control-station" / "shelf-pose-calibrations"
 MAX_POSE_BYTES = 1_000_000
 _CAMERA_ID = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
 

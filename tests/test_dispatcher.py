@@ -9,15 +9,15 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from control_station.act_policies import load_act_policies
-from control_station.arms import load_arms
-from control_station.dispatcher import BEFORE_DEPARTURE, OrderDispatcher, own_problem, step_before_spot, step_in
+from control_station.arms.policies import load_act_policies
+from control_station.arms.config import load_arms
+from control_station.orders.dispatcher import BEFORE_DEPARTURE, OrderDispatcher, own_problem, step_before_spot, step_in
 from control_station.mock_world import MockWorld
-from control_station.order_desk import OrderDesk
-from control_station.order_flow import OrderFlow
-from control_station.receiving_zones import ReceivingZone
-from control_station.store import TaskStore
-from control_station.task_orchestrator import MockTaskOrchestrator
+from control_station.orders.desk import OrderDesk
+from control_station.orders.flow import OrderFlow
+from control_station.orders.receiving_zones import ReceivingZone
+from control_station.storage.store import TaskStore
+from control_station.orders.task_runner import MockTaskOrchestrator
 from test_api_routes import ApiTestCase
 from test_order_flow import devices
 

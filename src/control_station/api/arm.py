@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlsplit
 
-from control_station.arm_commands import ARM_ROBOT_IDS, ArmCommandConflict, ArmCommandError, ArmCommandNotFound
-from control_station.arm_sequences import ArmSequenceError
-from control_station.shelf_slot_zones import SlotSelectionError, select_slot_for_class
+from control_station.arms.commands import ARM_ROBOT_IDS, ArmCommandConflict, ArmCommandError, ArmCommandNotFound
+from control_station.arms.sequences import ArmSequenceError
+from control_station.cameras.shelf_slots import SlotSelectionError, select_slot_for_class
 
 if TYPE_CHECKING:
     from control_station.app import ControlStationHandler
