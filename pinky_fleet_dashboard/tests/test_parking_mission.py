@@ -73,7 +73,7 @@ class RunnerFlowTest(unittest.TestCase):
         source=(app.ROOT/'scripts/navigate_route.py').read_text()
         tree=ast.parse(source)
         selected=[n for n in tree.body if isinstance(n,(ast.FunctionDef,ast.ClassDef)) and n.name in ('run','angle','checkpoint','RouteFailure','mission_feedback','detour_wait','behaviour_feedback','capturable','Sightings')]
-        selected+=[n for n in tree.body if isinstance(n,ast.Assign) and getattr(n.targets[0],'id','') in ('NAV_RETRIES','NAV_RETRY_PAUSE_S','TRAFFIC_WAIT_LIMIT_S')]
+        selected+=[n for n in tree.body if isinstance(n,ast.Assign) and getattr(n.targets[0],'id','') in ('NAV_RETRIES','NAV_RETRY_PAUSE_S','TRAFFIC_WAIT_LIMIT_S','WAIT_STATES')]
         code=compile(ast.Module(body=selected,type_ignores=[]),'navigate_route_flow','exec')
         def exercise(rid):
             with tempfile.TemporaryDirectory() as directory:

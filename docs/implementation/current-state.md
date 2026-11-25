@@ -25,7 +25,7 @@
 | `src/control_station/shelf_slot_map.py`, `config/shelf-slots.json` | 선반 칸 정의와 그 SHA-256 버전 |
 | `src/control_station/shelf_slot_zones.py` | 정면 카메라의 칸 영역([선반 위치 보정](shelf-pose-calibration.md))과 검출별 칸 배정, 물체가 한 칸에서만 보일 때의 칸 근거(`select_slot_for_class`) |
 | `src/control_station/load_check.py` | 이전 형식 작업의 `VERIFY_LOAD` 판정. 관측기는 모의(`CONTROL_STATION_MOCK_LOAD_OBSERVED`)뿐 |
-| `src/control_station/parking_ros.py` | C++ 주차 노드의 `/pinky_parking/state`·`/pinky_parking/check`를 관제 JSON(`/live`, `/check`, 도착 단계)으로 바꿈. 관제 자체 판정은 없음 |
+| `src/control_station/parking_ros.py` | C++ 주차 노드의 `/pinky_parking/state`·`/pinky_parking/check`(그리고 핑키별 등록 자리를 따라가는 `/pinky_parking_<자리>/state`)를 관제 JSON(`/live`, `/check`, 도착 단계)으로 바꿈. 관제 자체 판정은 없음 |
 | `src/control_station/camera_adapters.py` | 카메라 feed(Head·Joint·Front·선반)를 V4L2(OpenCV) 또는 `ros:<토픽>`으로 받고, 카메라별 선택 YOLO/YOLO-World 검출 표시. 정책 실행·정책 명령 동안 정책 카메라를 닫았다가 다시 엶 |
 | `src/control_station/robot_adapters.py` | `/api/robots`: 모의 상태, 또는 ROS 2 모드에서 Nav2 `navigate_to_pose` action server 발견 여부만. 팔은 항상 "미설정" |
 | `src/control_station/arm_supervisor.py` | 고정 LeRobot 텔레오퍼레이션 프로세스 시작·종료·상태 |

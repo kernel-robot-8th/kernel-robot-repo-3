@@ -197,6 +197,9 @@ class Sightings:
 NAV_RETRIES = 20  # a goal Nav2 gave up on is sent again this often per stretch (not counted while waiting for traffic)
 TRAFFIC_WAIT_LIMIT_S = 900.  # standing for another Pinky longer than this is a jam a person has to look at
 NAV_RETRY_PAUSE_S = 3.  # a breath before the goal goes out again: whatever was in the way may be moving off
+# The behaviour layer stands for another Pinky: waiting for a zone, or giving way on the dashboard's word (reversing
+# a little, then standing; scripts/yielding.py). Neither is a failed stretch.
+WAIT_STATES = frozenset({'traffic_wait', 'yield_back', 'yield_wait'})
 
 
 def detour_wait(node,context,token):
@@ -549,7 +552,9 @@ def run(node, points):
             while cursor < end_index:
                 checkpoint(cursor, points[cursor], pose, passing=True, sampling='end_pose_no_crossing_sample')
                 cursor += 1
-            checkpoint(end_index, end, pose)
+            # The ceiling camera judges the stop at 5 and sends it back in when it is off (redock); the map pose is only
+            # logged here. 2026-11-25: P0 stood at 5 and the whole mission failed on 5.6 cm against the map's 5 cm.
+            checkpoint(end_index, end, pose, sampling='docking_service')
             attempt = 0
             while True:
                 note = f' (다시 맞춘 {attempt}번째)' if attempt else ''
@@ -600,12 +605,13 @@ def run(node, points):
             pose = node.pose(.8)
             context(pose)
             layer = behaviour_feedback()
-            if layer.get('state') == 'traffic_wait':
+            if layer.get('state') in WAIT_STATES:
                 # Standing for another Pinky is not a failed stretch: the clock starts again, and a goal Nav2 gives
                 # up on meanwhile (it sees no progress) is sent again below. Seen 2026-11-19: both waiting Pinkys
                 # ended their missions (status 6) while the first one was still at station 5.
                 if waited_at is None:
-                    print('MISSION_STATUS '+json.dumps(dict(phase=mission_phase, token=token, message=f"{end['label']}로 가는 길 · 다른 핑키가 지나가길 기다리는 중"), ensure_ascii=False), flush=True)
+                    why = '다른 핑키에게 길을 비켜 주는 중' if str(layer.get('state')).startswith('yield') else '다른 핑키가 지나가길 기다리는 중'
+                    print('MISSION_STATUS '+json.dumps(dict(phase=mission_phase, token=token, message=f"{end['label']}로 가는 길 · {why}"), ensure_ascii=False), flush=True)
                 waited_at = time.monotonic()
                 wait_began = wait_began or waited_at
                 if waited_at-wait_began > TRAFFIC_WAIT_LIMIT_S:
@@ -652,9 +658,9 @@ def run(node, points):
                     retries += 1
                     print('MISSION_STATUS '+json.dumps(dict(phase=mission_phase, token=token, message=f"웨이포인트 {end['label']} 구간 다시 시도 ({retries}/{NAV_RETRIES})"), ensure_ascii=False), flush=True)
                 pause = time.monotonic()+(0. if waited else NAV_RETRY_PAUSE_S)
-                while rclpy.ok() and not node.interrupted and (time.monotonic() < pause or behaviour_feedback().get('state') == 'traffic_wait'):
+                while rclpy.ok() and not node.interrupted and (time.monotonic() < pause or behaviour_feedback().get('state') in WAIT_STATES):
                     context(node.pose(.8))
-                    if behaviour_feedback().get('state') == 'traffic_wait':
+                    if behaviour_feedback().get('state') in WAIT_STATES:
                         waited_at = time.monotonic()
                         wait_began = wait_began or waited_at
                         if waited_at-wait_began > TRAFFIC_WAIT_LIMIT_S:

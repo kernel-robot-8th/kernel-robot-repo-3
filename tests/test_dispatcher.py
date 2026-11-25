@@ -112,17 +112,14 @@ class DispatcherTest(unittest.TestCase):
         dispatcher.tick()
         self.assertNotEqual(self.status(second["id"]), "PENDING")
 
-    def test_the_line_waits_when_every_zone_is_in_use(self) -> None:
+    def test_a_busy_zone_does_not_hold_the_line(self) -> None:
         orders = [self.desk.receive(APPLE), self.desk.receive(CARROT), self.desk.receive(APPLE)]
-        self.dispatcher.tick()
-        self.wait_until(lambda: self.sent_off(orders[0]["id"]), "the first Pinky was not sent off")
-        self.dispatcher.tick()
-        self.wait_until(lambda: self.sent_off(orders[1]["id"]), "the second Pinky was not sent off")
-        state = self.dispatcher.tick()
-        # Two zones, two orders on their way to them: the third keeps waiting and no Pinky is taken for it.
-        self.assertEqual((state["blocked"]["code"], state["blocked"]["order_id"]), ("ZONE_BUSY", orders[2]["id"]))
-        third = self.store.get_task(orders[2]["id"])
-        self.assertEqual((third["status"], third["pinky_id"], state["waiting"]), ("PENDING", None, 1))
+        for index in range(3):
+            self.dispatcher.tick()
+            self.wait_until(lambda: self.sent_off(orders[index]["id"]), f"Pinky {index + 1} was not sent off")
+        # Two zones, three Pinkys: the third order leaves too and queues for a zone (OrderFlow waits at loading).
+        zones = [self.store.get_task(order["id"])["receiving_zone"] for order in orders]
+        self.assertEqual(len(set(zones)), 2)
 
     def test_an_order_that_cannot_be_picked_is_passed_over(self) -> None:
         short, fine = self.desk.receive(APPLE), self.desk.receive(CARROT)

@@ -154,10 +154,11 @@ def source(client: FakeClient | None = None, now: float = 100.0) -> RosParkingSo
     """A RosParkingSource without rclpy: only the parts snapshot() and check() use."""
     instance = object.__new__(RosParkingSource)
     instance.spot_id = "pinky_dock_1"
+    instance.topics = {"pinky_dock_1": "/pinky_parking/state", "pinky_dock_p1": "/pinky_parking_pinky_dock_p1/state"}
     instance.feed_camera_id = "head_camera"
     instance._clock = lambda: now
     instance._lock = threading.Lock()
-    instance._state = None
+    instance._states = {}
     instance._client = client
     instance._request_type = SimpleNamespace
     return instance
@@ -171,18 +172,35 @@ class SnapshotTests(unittest.TestCase):
 
     def test_stale_state_is_not_shown_as_current(self) -> None:
         stale = source(now=100.0)
-        stale._state = (100.0 - STALE_STATE_S - 0.1, state_message(state="IN_POSITION"))
+        stale._states["pinky_dock_1"] = (100.0 - STALE_STATE_S - 0.1, state_message(state="IN_POSITION"))
         self.assertEqual(stale.snapshot()["state"], NODE_UNAVAILABLE)
 
     def test_state_of_another_spot_is_not_shown(self) -> None:
         other = source()
-        other._state = (100.0, state_message(spot_id="other_dock"))
+        other._states["pinky_dock_1"] = (100.0, state_message(spot_id="other_dock"))
         self.assertEqual(other.snapshot()["state"], NODE_UNAVAILABLE)
 
     def test_fresh_state(self) -> None:
         fresh = source()
-        fresh._state = (99.9, state_message())
+        fresh._states["pinky_dock_1"] = (99.9, state_message())
         self.assertEqual(fresh.snapshot()["state"], "OFF_POSITION")
+
+    def test_each_registered_spot_is_followed_by_its_own_node(self) -> None:
+        # Each Pinky has its own registration of the loading spot; its live state comes from its own node's topic.
+        from control_station.parking_ros import parking_node_name, state_topic
+        self.assertEqual(parking_node_name("pinky_dock_1", "pinky_dock_1"), "pinky_parking")
+        self.assertEqual(state_topic("pinky_dock_p1", "pinky_dock_1"), "/pinky_parking_pinky_dock_p1/state")
+        self.assertEqual(parking_node_name("dock-2.b", "pinky_dock_1"), "pinky_parking_dock_2_b")
+        both = source()
+        self.assertEqual(both.live_spots, ("pinky_dock_1", "pinky_dock_p1"))
+        both._on_state("pinky_dock_p1", state_message(spot_id="pinky_dock_p1", state="IN_POSITION"))
+        own = both.snapshot("pinky_dock_p1")
+        self.assertEqual((own["state"], own["spot_id"]), ("IN_POSITION", "pinky_dock_p1"))
+        self.assertEqual(own["judgment_source"], "ros:/pinky_parking_pinky_dock_p1/state")
+        # The other Pinky's spot heard nothing: it is not shown as the first one's state.
+        self.assertEqual(both.snapshot()["state"], NODE_UNAVAILABLE)
+        self.assertEqual(both.snapshot("pinky_dock_p0")["state"], NODE_UNAVAILABLE)  # not followed live
+        self.assertEqual(both.snapshot("pinky_dock_p0")["spot_id"], "pinky_dock_p0")
 
 
 class CheckTests(unittest.TestCase):

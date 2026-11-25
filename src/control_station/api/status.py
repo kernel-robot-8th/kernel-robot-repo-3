@@ -21,9 +21,17 @@ def get_health(h: ControlStationHandler, route: str, parts: list[str], body: Non
                 "camera_id": h.app.parking_camera_id,
                 "spot_id": h.app.parking_spot_id,
                 "live_tracking": h.app.parking_tracker is not None,
+                # every spot followed live: the primary one and each Pinky's own registration of the loading spot
+                "live_spots": list(_live_spots(h.app.parking_tracker)),
             },
         },
     )
+
+
+def _live_spots(tracker: object | None) -> tuple[str, ...]:
+    if tracker is None:
+        return ()
+    return tuple(getattr(tracker, "live_spots", None) or (tracker.spot_id,))
 
 
 def get_robots(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
@@ -35,14 +43,14 @@ def get_parking_live(h: ControlStationHandler, route: str, parts: list[str], bod
     """주차 실시간 상태 (화면 표시용)"""
     spot_id = route.removeprefix("/api/parking-spots/").removesuffix("/live")
     tracker = h.app.parking_tracker
-    if tracker is None or tracker.spot_id != spot_id:
+    if spot_id not in _live_spots(tracker):
         h._json_error(
             404,
             "PARKING_TRACKING_NOT_CONFIGURED",
-            "이 주차 위치는 실시간 추적 중이 아닙니다 (CONTROL_STATION_PARKING_SPOT)",
+            "이 주차 위치는 실시간 추적 중이 아닙니다 (CONTROL_STATION_PARKING_SPOT, config/pinky-markers.json)",
         )
         return
-    h._json(200, {"live": tracker.snapshot()})
+    h._json(200, {"live": tracker.snapshot() if spot_id == tracker.spot_id else tracker.snapshot(spot_id)})
 
 
 def get_parking_check(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:

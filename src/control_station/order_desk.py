@@ -28,7 +28,7 @@ from control_station.order_flow import OrderDevices
 from control_station.pinky_fleet import PinkyFleetError
 from control_station.receiving_zones import ReceivingZone
 from control_station.store import (
-    PINKY_IDS, PINKY_NAMES, InvalidStateTransition, PinkyUnavailable, TaskStore, ZoneUnavailable, shipment_of,
+    PINKY_IDS, PINKY_NAMES, InvalidStateTransition, PinkyUnavailable, TaskStore, shipment_of,
 )
 
 
@@ -132,7 +132,7 @@ class OrderDesk:
         """What can be ordered (objects with a trained policy), how many the shelves hold, and where to collect."""
         if self.policies is None:
             return {"products": [], "stock_error": "정책 정의 파일이 없어 주문을 받을 수 없습니다", "zones": []}
-        zones = [zone.as_dict() for zone in self.zones.values()]
+        zones = self._catalog_zones()
         if self.inventory is not None:
             view = self.inventory()
             products = [{"object_class": row["object_class"], "label": row["label"], "available": row["available"],
@@ -156,14 +156,24 @@ class OrderDesk:
         return {
             "products": list(products.values()),
             "stock_error": stock_error,
-            "zones": [zone.as_dict() for zone in self.zones.values()],
+            "zones": zones,
         }
+
+    def _catalog_zones(self) -> list[dict[str, Any]]:
+        """The receiving zones the customer picks from, each with how many started orders are still headed there
+        (`ahead`: 0 = the Pinky goes straight in, otherwise it comes after those)."""
+        try:
+            queues = self.store.zone_queues()
+        except Exception:  # the window still lists the zones if the count cannot be read
+            queues = {}
+        return [{**zone.as_dict(), "ahead": len(queues.get(zone.zone_id, []))} for zone in self.zones.values()]
 
     def receive(self, items: object, zone_id: object = None) -> dict[str, Any]:
         """Store a new order in the intake (status PENDING, no Pinky yet).
 
-        The customer does not pick a receiving zone: `start` assigns one (choose_zone). A zone given here is an
-        operator's choice and is kept as it is."""
+        The customer picks the receiving zone in the order window (2026-11-25) and it is kept as it is, even when
+        another order is using it then: this order goes after that one. Without one, `start` assigns one
+        (choose_zone)."""
         return self.receive_once(items, zone_id)[0]
 
     def receive_once(self, items: object, zone_id: object = None, idempotency_key: str | None = None,
@@ -314,10 +324,7 @@ class OrderDesk:
                 except PinkyUnavailable as exc:  # taken by another order between the choice and the write
                     raise OrderDeskError("PINKY_UNAVAILABLE", str(exc)) from exc
             if order["receiving_zone"] is None:
-                try:
-                    self.store.assign_zone(order_id, zone.zone_id, self.zones[zone.zone_id].label, zone.as_dict())
-                except ZoneUnavailable as exc:  # another order started there between the choice and the write
-                    raise OrderDeskError("ZONE_BUSY", f"수령 구역이 모두 사용 중이에요: {exc}") from exc
+                self.store.assign_zone(order_id, zone.zone_id, self.zones[zone.zone_id].label, zone.as_dict())
         return self.orchestrator.start(order_id)
 
     @staticmethod
@@ -411,6 +418,11 @@ class OrderDesk:
         if between:
             done_count = {1: "첫", 2: "두", 3: "세", 4: "네"}.get(current - 1, str(current - 1))
             title, detail = "남은 물건을 가지러 가요", f"{done_count} 번째 운송을 받았어요 · 남은 물건을 준비해요"
+        elif active is not None and active["step_type"] == "NOTIFY_PINKY_RECEIVED" and order["status"] == "RUNNING":
+            ahead = self.store.zone_ahead(order_id)[1]
+            if ahead:  # loaded, waiting at the loading spot for the zone (OrderFlow._notify_pinky_received)
+                title = f"{zone} 차례를 기다리고 있어요"
+                detail = f"물건은 다 실었어요 · 앞 주문 {len(ahead)}건을 받으면 바로 출발해요"
         load = Counter(step["detail"]["object_class"] for step in mine if step["step_type"] == "PICK_ITEM")
         return {
             "order_id": order_id, "status": order["status"], "stage": stage,
@@ -437,10 +449,12 @@ class OrderDesk:
     # ---- what the zone and Pinky choices are made from ---------------------------------------------------
 
     def zone_candidates(self) -> list[ZoneCandidate]:
-        holding = self.store.busy_zones()
+        queues = self.store.zone_queues()
         usage = self.store.zone_usage(self.today())
-        return [ZoneCandidate(zone.zone_id, zone.label, len(zone.route_labels), holding.get(zone.zone_id),
-                              usage.get(zone.zone_id, 0)) for zone in self.zones.values()]
+        return [ZoneCandidate(zone.zone_id, zone.label, len(zone.route_labels),
+                              (queues.get(zone.zone_id) or [None])[0], usage.get(zone.zone_id, 0),
+                              ahead=len(queues.get(zone.zone_id, [])))
+                for zone in self.zones.values()]
 
     def zone_plan(self, order: dict[str, Any]) -> ZoneAssignment:
         """The zone this order would go to now: its own (an operator's choice, only checked) or choose_zone's.

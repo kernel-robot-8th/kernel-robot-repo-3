@@ -1,7 +1,8 @@
 """Pinky parking judgment from the C++ ROS 2 node (docs/plans/pinky-parking-ros2-node.md).
 
 The node (cpp/parking_vision_ros) owns the judgment; the control station has no parking judgment of its own. This
-module subscribes to /pinky_parking/state, calls /pinky_parking/check and turns both into the JSON of the parking
+module subscribes to /pinky_parking/state (and to the node of every other spot followed live, one per Pinky's
+registration), calls /pinky_parking/check and turns both into the JSON of the parking
 contract (interface-contracts.md: GET /api/parking-spots/{spot_id}/live and /check), which the web panel and
 VERIFY_ARRIVAL use. A check that times out or cannot reach the node is not judged and is not retried. Nothing here
 sends a robot command.
@@ -9,15 +10,18 @@ sends a robot command.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable
+from functools import partial
+from typing import Any, Callable, Iterable
 
 
 OBSERVATION_SCHEMA_VERSION = 1
-STATE_TOPIC = "/pinky_parking/state"
-CHECK_SERVICE = "/pinky_parking/check"
+PRIMARY_NODE = "pinky_parking"
+STATE_TOPIC = f"/{PRIMARY_NODE}/state"
+CHECK_SERVICE = f"/{PRIMARY_NODE}/check"
 # The node publishes at 10 Hz; a state older than this means the node or its timer stopped.
 STALE_STATE_S = 2.0
 # A check collects for at most 3 s; the rest covers reloading the spot and the service round trip.
@@ -97,7 +101,21 @@ def image_overlay(message: Any) -> dict[str, object]:
     }
 
 
-def live_payload(message: Any, feed_camera_id: str | None) -> dict[str, object]:
+def parking_node_name(spot_id: str, primary_spot_id: str) -> str:
+    """The parking node that follows spot_id live. A node follows one spot, and each Pinky has its own registration
+    of the loading spot (pinky_markers.py), so ceiling_parking.launch.py runs one node per registered spot under this
+    same rule: 'pinky_parking' for the primary spot (its spot_id argument, CONTROL_STATION_PARKING_SPOT here), and
+    'pinky_parking_<spot>' for the others, every character that is not a letter or a digit turned into '_'."""
+    if spot_id == primary_spot_id:
+        return PRIMARY_NODE
+    return PRIMARY_NODE + "_" + re.sub(r"[^A-Za-z0-9]", "_", spot_id)
+
+
+def state_topic(spot_id: str, primary_spot_id: str) -> str:
+    return f"/{parking_node_name(spot_id, primary_spot_id)}/state"
+
+
+def live_payload(message: Any, feed_camera_id: str | None, topic: str = STATE_TOPIC) -> dict[str, object]:
     """The /live payload from a ParkingState message.
 
     feed_camera_id is the control station feed that shows the same camera (the web panel streams it); the node's
@@ -114,7 +132,7 @@ def live_payload(message: Any, feed_camera_id: str | None) -> dict[str, object]:
         "updated_at": iso_time(message.updated_at),
         "display_only": True,
         "usable_for_robot_control": False,
-        "judgment_source": "ros:" + STATE_TOPIC,
+        "judgment_source": "ros:" + topic,
     }
     if message.has_spot:
         payload.update(judgment_fields(message))
@@ -152,7 +170,9 @@ def observation_payload(response: Any, feed_camera_id: str | None) -> dict[str, 
 
 
 class RosParkingSource:
-    """Live state and confirmed checks of one spot from the parking node, in the contract's JSON shapes."""
+    """Live state and confirmed checks from the parking nodes, in the contract's JSON shapes. spot_id is the primary
+    spot; extra_spot_ids are the other spots followed live, each by its own node (parking_node_name). A check goes
+    to the primary node, which judges any registered spot."""
 
     def __init__(
         self,
@@ -160,6 +180,7 @@ class RosParkingSource:
         spot_id: str,
         feed_camera_id: str | None = None,
         clock: Callable[[], float] = time.monotonic,
+        extra_spot_ids: Iterable[str] = (),
     ) -> None:
         try:
             from parking_vision_interfaces.msg import ParkingState
@@ -174,58 +195,70 @@ class RosParkingSource:
                 " (parking_vision_interfaces)."
             ) from exc
         self.spot_id = spot_id
+        self.topics = {spot: state_topic(spot, spot_id) for spot in dict.fromkeys((spot_id, *extra_spot_ids))}
         self.feed_camera_id = feed_camera_id
         self._clock = clock
         self._request_type = CheckParking.Request
         self._lock = threading.Lock()
-        self._state: tuple[float, Any] | None = None
+        self._states: dict[str, tuple[float, Any]] = {}
         self._context = Context()
         self._context.init(domain_id=domain_id)
         self._node = Node("control_station_parking", context=self._context)
         # Matches the node's publisher, so a control station that starts later still gets the last state.
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self._node.create_subscription(ParkingState, STATE_TOPIC, self._on_state, qos)
+        for spot, topic in self.topics.items():
+            self._node.create_subscription(ParkingState, topic, partial(self._on_state, spot), qos)
         self._client = self._node.create_client(CheckParking, CHECK_SERVICE)
         self._executor = SingleThreadedExecutor(context=self._context)
         self._executor.add_node(self._node)
         self._thread = threading.Thread(target=self._executor.spin, name="parking-ros", daemon=True)
         self._thread.start()
 
-    def _on_state(self, message: Any) -> None:
-        with self._lock:
-            self._state = (self._clock(), message)
+    @property
+    def live_spots(self) -> tuple[str, ...]:
+        """The spots followed live, the primary one first."""
+        return tuple(self.topics)
 
-    def _unavailable(self, reason: str) -> dict[str, object]:
+    def _on_state(self, spot_id: str, message: Any) -> None:
+        with self._lock:
+            self._states[spot_id] = (self._clock(), message)
+
+    def _unavailable(self, reason: str, spot_id: str | None = None, topic: str = STATE_TOPIC) -> dict[str, object]:
         now = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         return {
             "state": NODE_UNAVAILABLE,
             "reason": reason,
-            "spot_id": self.spot_id,
+            "spot_id": spot_id or self.spot_id,
             "feed_camera_id": self.feed_camera_id,
             "frame_sequence": None,
             "captured_at": None,
             "updated_at": now,
             "display_only": True,
             "usable_for_robot_control": False,
-            "judgment_source": "ros:" + STATE_TOPIC,
+            "judgment_source": "ros:" + topic,
             "since": now,
         }
 
-    def snapshot(self) -> dict[str, object]:
+    def snapshot(self, spot_id: str | None = None) -> dict[str, object]:
+        """The live state of spot_id (the primary spot when None)."""
+        spot_id = spot_id or self.spot_id
+        topic = self.topics.get(spot_id)
+        if topic is None:
+            return self._unavailable(f"이 주차 위치는 실시간 추적 중이 아닙니다: {spot_id!r}", spot_id)
         with self._lock:
-            state = self._state
+            state = self._states.get(spot_id)
         if state is None:
-            return self._unavailable(f"주차 판정 노드 상태를 받지 못했습니다: {STATE_TOPIC}")
+            return self._unavailable(f"주차 판정 노드 상태를 받지 못했습니다: {topic}", spot_id, topic)
         received_at, message = state
         age = self._clock() - received_at
         # Never show a stopped node's last IN_POSITION as current.
         if age > STALE_STATE_S:
-            return self._unavailable(f"주차 판정 노드 상태가 {age:.1f}초째 갱신되지 않습니다: {STATE_TOPIC}")
-        if message.spot_id != self.spot_id:
+            return self._unavailable(f"주차 판정 노드 상태가 {age:.1f}초째 갱신되지 않습니다: {topic}", spot_id, topic)
+        if message.spot_id != spot_id:
             return self._unavailable(
-                f"주차 판정 노드가 다른 주차 위치를 추적합니다: {message.spot_id!r} (관제 설정 {self.spot_id!r})"
+                f"주차 판정 노드가 다른 주차 위치를 추적합니다: {message.spot_id!r} (관제 설정 {spot_id!r})", spot_id, topic
             )
-        return live_payload(message, self.feed_camera_id)
+        return live_payload(message, self.feed_camera_id, topic)
 
     def check(self, spot_id: str, timeout_s: float = CHECK_TIMEOUT_S) -> dict[str, object]:
         if not self._client.wait_for_service(timeout_sec=1.0):

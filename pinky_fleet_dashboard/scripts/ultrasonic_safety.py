@@ -20,13 +20,13 @@ from rclpy.executors import ExternalShutdownException
 from tf2_ros import Buffer, TransformListener, TransformException
 if __package__:
     from .line_following import LineAssist, default_profile, swept_clear, TemplateEstimator, validate_profile, normalize, surface_observation
-    from .mission_behaviors import BackOff, Crossing, Docking, DockEntry, DockExit, UltrasonicDetour
+    from .mission_behaviors import BackOff, Crossing, Docking, DockEntry, DockExit, GiveWay, UltrasonicDetour
     from .motion_gate import geometry, swept_footprint
     from .traffic import required_zones, lease_allows, LeaseReceiver
     from .control_journal import ControlJournal
 else:
     from line_following import LineAssist, default_profile, swept_clear, TemplateEstimator, validate_profile, normalize, surface_observation
-    from mission_behaviors import BackOff, Crossing, Docking, DockEntry, DockExit, UltrasonicDetour
+    from mission_behaviors import BackOff, Crossing, Docking, DockEntry, DockExit, GiveWay, UltrasonicDetour
     from motion_gate import geometry, swept_footprint
     from traffic import required_zones, lease_allows, LeaseReceiver
     from control_journal import ControlJournal
@@ -102,6 +102,11 @@ class UltrasonicSafety(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.line_status_publisher = self.create_publisher(String, '/line/status', 10)
         self.create_subscription(String,'/fleet/lease',self.on_lease,qos_profile_sensor_data)
+        # "Give way to another Pinky" from the dashboard (scripts/yielding.py, 2026-11-24): while it keeps coming this
+        # Pinky reverses a short way and stands, so the other one can pass.
+        self.give_way = GiveWay()
+        self.yield_order = None
+        self.create_subscription(String,'/fleet/yield',self.on_yield,qos_profile_sensor_data)
         # The ceiling camera's view of this Pinky near station 5, relayed by the dashboard (2026-11-18): its offset
         # from the registered spot. Only the drive into the station steers on it, and only while it is fresh.
         self.dock_guide = None
@@ -171,7 +176,7 @@ class UltrasonicSafety(Node):
     def publish_line_status(self) -> None:
         now = time.monotonic()
         state = self.line_state
-        if self.line_state.startswith(('docking_', 'crossing_', 'mission_', 'operator_', 'ultrasonic_')):
+        if self.line_state.startswith(('docking_', 'crossing_', 'mission_', 'operator_', 'ultrasonic_', 'yield_', 'traffic_')):
             state = self.line_state
         elif self.line_state == 'route_start_straight' and self.state == 'idle' and now-self.last_command_at <= .5:
             state = 'route_start_straight'
@@ -555,6 +560,18 @@ class UltrasonicSafety(Node):
             self.line_state = 'route_context_stale' if not valid else 'mission_wait'
             self.send()
             return
+        # Told to give way: back off and stand, whether it was driving or already waiting for a zone (the one waiting
+        # at the mouth of the passage is the one in the way). Never while it drives into or out of station 5.
+        if context.get('dock_exit') or context.get('dock_entry'):
+            self.give_way.update(None, None, now, False)
+        else:
+            motion = self.give_way.update(
+                self.fresh_yield(now), self.fresh_pose('odom'), now,
+                rear_clear=now-self.last_scan_at <= .6 and swept_footprint(self.scan_points, -self.give_way.speed_mps, 0., self.geometry))
+            if motion is not None:
+                self.line_state = motion.state
+                self.send(motion.linear, 0.)
+                return
         if not self.traffic_ready(context, now):
             self.line_state='traffic_wait'
             self.send()
@@ -603,6 +620,17 @@ class UltrasonicSafety(Node):
     def on_lease(self,msg):
         try:self.lease_receiver.receive(json.loads(msg.data),time.monotonic())
         except (ValueError,TypeError):pass
+
+    def on_yield(self,msg):
+        """{"id","to","back_m"} while the dashboard wants this Pinky to give way; kept with the time it arrived."""
+        try:data=json.loads(msg.data)
+        except (ValueError,TypeError):return
+        if isinstance(data,dict) and isinstance(data.get('id'),str) and isinstance(data.get('back_m'),(int,float)) and not isinstance(data.get('back_m'),bool):
+            self.yield_order=(dict(id=data['id'],to=data.get('to'),back_m=float(data['back_m'])),time.monotonic())
+
+    def fresh_yield(self,now,max_age_s=1.0):
+        order=getattr(self,'yield_order',None)
+        return order[0] if order is not None and 0<=now-order[1]<=max_age_s else None
 
     def traffic_ready(self,context,now):
         pose=self.fresh_pose('map')

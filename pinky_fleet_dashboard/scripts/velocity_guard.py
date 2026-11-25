@@ -41,11 +41,17 @@ class FinalVelocityGuard(Node):
         self.create_timer(.05,self.tick)
         self.lease_receiver=LeaseReceiver()
         self.create_subscription(String,'/fleet/lease',self.on_lease,qos_profile_sensor_data)
+        self.yield_at=-100.
+        self.create_subscription(String,'/fleet/yield',self.on_yield,qos_profile_sensor_data)
         self.shutting_down=False
         self.last_status=0.
     def on_lease(self,msg):
         try:self.lease_receiver.receive(json.loads(msg.data),time.monotonic())
         except (ValueError,TypeError):pass
+    def on_yield(self,msg):
+        try:
+            if isinstance(json.loads(msg.data).get('id'),str):self.yield_at=time.monotonic()
+        except (ValueError,TypeError,AttributeError):pass
     def on_command(self,msg):self.command,self.command_at=msg,time.monotonic()
     def on_range(self,msg):
         age=(self.get_clock().now()-Time.from_msg(msg.header.stamp)).nanoseconds/1e9
@@ -92,8 +98,12 @@ class FinalVelocityGuard(Node):
         # 2-20 cm), or one second of travel when it is not set.
         reach=((getattr(self,'runtime',None) or {}).get('navigation') or {}).get('guard_front_reach_m')
         reach=min(.20,max(.02,float(reach))) if isinstance(reach,(int,float)) and not isinstance(reach,bool) else None
+        # Giving way on the dashboard's word (scripts/yielding.py, 2026-11-24): straight back passes even while a zone
+        # this Pinky waits for is not its own (it stands at the edge of that zone facing it, so reversing takes it
+        # away). Only a pure reverse, only with a fresh order, and the swept footprint is checked as always.
+        giving_way=(0<=now-getattr(self,'yield_at',-100.)<=1.0 and self.command.linear.x<0 and abs(self.command.angular.z)<=.01)
         v,w,state=gate(self.command.linear.x,self.command.angular.z,fresh=fresh,
-                       stop=(CACHE/'stop_latch.json').exists(),context_valid=live and traffic,
+                       stop=(CACHE/'stop_latch.json').exists(),context_valid=live and (traffic or giving_way),
                        points=obstacles,config=self.config,reach_m=reach)
         msg=Twist();msg.linear.x=v;msg.angular.z=w;self.publisher.publish(msg)
         self.journal.record('final_velocity',state=state,robot_id=self.runtime['robot_id'],run_id=context.get('token'),

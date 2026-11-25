@@ -1,0 +1,93 @@
+{
+  "schema_version": 2,
+  "spot_id": "pinky_dock_p1",
+  "camera_id": "ceiling_camera",
+  "pixel_transform_id": "opencv-v4l2-capture-no-app-geometry-v1",
+  "image_size_px": {
+    "width": 640,
+    "height": 480
+  },
+  "intrinsic_calibration": {
+    "path": ".control-station/camera-calibrations/ceiling_camera.json",
+    "sha256": "7a3718bbfcbf962694945c9fdf724d91c4e28207eeec833218474580070165c6",
+    "calibration_id": "c5d9d0e9-ef0b-4dcd-b06e-3c899d3f1120"
+  },
+  "aruco_dictionary": "DICT_4X4_50",
+  "marker_id": 22,
+  "marker_side_mm": 70.0,
+  "marker_forward_axis": "+x",
+  "position_method": "corner rays intersected with the registered marker plane",
+  "opencv_version": "4.6.0",
+  "reference_pose_in_camera": {
+    "rotation": [
+      [
+        -0.08955476359390682,
+        0.9926325872837257,
+        -0.08161183112794118
+      ],
+      [
+        0.9399679075681424,
+        0.057141707471294975,
+        -0.3364448810863863
+      ],
+      [
+        -0.32930271341063555,
+        -0.1068427439262068,
+        -0.9381600881569796
+      ]
+    ],
+    "translation_mm": [
+      451.7867990965933,
+      -63.196058651989574,
+      1489.159815596773
+    ]
+  },
+  "reference_corners_px": [
+    [
+      491.66086947945803,
+      163.84049919270518
+    ],
+    [
+      493.00866430213284,
+      205.0166355774799
+    ],
+    [
+      449.8859719996862,
+      202.14494591762414
+    ],
+    [
+      449.2523439558974,
+      160.7778401444554
+    ]
+  ],
+  "reference_marker_side_on_plane_mm": 70.0,
+  "reference_frame_count": 15,
+  "reference_jitter": {
+    "position_mm": 0.1,
+    "yaw_deg": 0.121
+  },
+  "anchors": [
+    {
+      "marker_id": 1,
+      "center_px": [
+        377.5,
+        422.77
+      ]
+    }
+  ],
+  "view_check": {
+    "mode": "FIXED_MARKERS",
+    "max_anchor_shift_px": 30.0,
+    "single_anchor_trusted": true
+  },
+  "tolerance": {
+    "position_mm": 20.0,
+    "yaw_deg": 15.0
+  },
+  "axes": "dx +: 마커 오른쪽 변 방향, dy +: 마커 윗변(화살표) 방향, dyaw +: 천장 카메라에서 볼 때 반시계",
+  "created_at": "2026-11-24T12:27:45.357415+00:00",
+  "status": "DRAFT_ONLY",
+  "review_required": true,
+  "usable_for_robot_control": false,
+  "adjustment": "2026-11-24: 사용자가 P1(11번, 마커 22)을 적재 자리에 세우고 등록함(15프레임). 같은 날 P1이 스스로 주행해 들어와 선 자리(등록에서 3.5 mm)를 사용자가 'P1 적재 자리는 여기'라고 확정. 마커가 P2의 21번과 180° 반대로 붙어 있어 앞쪽 축은 +x. → 2026-11-24 21:46: 사용자가 P1을 손으로 다시 맞춰 세우고 '지금 P1 마커 멈췄으니까 이 위치 기억해줘'라고 한 자리로 옮김(직전 등록에서 핑키 앞으로 10.6 mm, 오른쪽으로 7.5 mm, 방향 −1.0°). 그 자리에서 확정 판정 4회(각 15프레임)로 잰 값으로 계산한 것이고 다시 찍은 것이 아님 — 21:48에 P1이 다시 밀려 그 자리에 없었음(밀린 자리는 이 기준에서 뒤로 13.0 mm, 왼쪽 2.9 mm, +3.0°로 허용 범위 안, 사용자도 '지금 위치도 오차범위상 가능'이라고 함). 계산식은 같은 날 저장한 실제 프레임으로 0.0 mm까지 맞는 것을 확인. 허용 오차 20 mm / 15°는 P2(pinky_dock_1)와 같게 그대로. 직전 파일: rejected/pinky_dock_p1.before-forward-11mm-right-8mm.json"
+}

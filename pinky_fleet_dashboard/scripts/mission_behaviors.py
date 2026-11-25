@@ -681,3 +681,45 @@ class BackOff:
             self.origin, self.started = odom, now
             return Motion(-self.speed_mps, 0., 'ultrasonic_back_off')
         return None
+
+
+class GiveWay:
+    """Give way to another Pinky on the dashboard's word (scripts/yielding.py, 2026-11-24): reverse straight, at most
+    the distance the order names, then stand until the order stops coming. Reversing goes on only while the LiDAR
+    shows the way back clear, and never longer than timeout_s; when it cannot reverse it simply stands, which is
+    still what the other Pinky needs (an obstacle that keeps still). One order is backed off for once: the same id
+    again means "keep standing"."""
+
+    def __init__(self, speed_mps=.05, limit_m=.40, timeout_s=10.):
+        self.speed_mps, self.limit_m, self.timeout_s = speed_mps, limit_m, timeout_s
+        self.order_id = None
+        self.origin = None      # where the reversing began (odom), None once it is over
+        self.started = 0.
+        self.backed_m = 0.
+
+    @property
+    def active(self):
+        return self.order_id is not None
+
+    def update(self, order, odom, now, rear_clear):
+        """order: {'id', 'back_m'} while the dashboard says give way, else None. A Motion (reversing, or standing),
+        or None when there is no order and the caller drives as before."""
+        if not isinstance(order, dict) or not isinstance(order.get('id'), str):
+            self.order_id = self.origin = None
+            return None
+        if order['id'] != self.order_id:
+            self.order_id, self.origin, self.started, self.backed_m = order['id'], odom, now, 0.
+        if self.origin is not None:
+            try:
+                wanted = min(self.limit_m, max(0., float(order.get('back_m', 0.))))
+            except (TypeError, ValueError):
+                wanted = 0.
+            self.backed_m = distance(odom, self.origin) if odom is not None else self.backed_m
+            if (odom is None or not rear_clear or now-self.started > self.timeout_s or self.backed_m >= wanted):
+                self.origin = None
+            else:
+                return Motion(-self.speed_mps, 0., 'yield_back')
+        return Motion(0., 0., 'yield_wait')
+
+    def status(self):
+        return dict(order=self.order_id, backing=self.origin is not None, backed_m=round(self.backed_m, 3))

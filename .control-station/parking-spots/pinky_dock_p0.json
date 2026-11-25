@@ -1,0 +1,93 @@
+{
+  "schema_version": 2,
+  "spot_id": "pinky_dock_p0",
+  "camera_id": "ceiling_camera",
+  "pixel_transform_id": "opencv-v4l2-capture-no-app-geometry-v1",
+  "image_size_px": {
+    "width": 640,
+    "height": 480
+  },
+  "intrinsic_calibration": {
+    "path": ".control-station/camera-calibrations/ceiling_camera.json",
+    "sha256": "7a3718bbfcbf962694945c9fdf724d91c4e28207eeec833218474580070165c6",
+    "calibration_id": "c5d9d0e9-ef0b-4dcd-b06e-3c899d3f1120"
+  },
+  "aruco_dictionary": "DICT_4X4_50",
+  "marker_id": 20,
+  "marker_side_mm": 70.0,
+  "marker_forward_axis": "-x",
+  "position_method": "corner rays intersected with the registered marker plane",
+  "opencv_version": "4.6.0",
+  "reference_pose_in_camera": {
+    "rotation": [
+      [
+        0.024748411030408812,
+        -0.9977478852650612,
+        -0.062343192094790334
+      ],
+      [
+        -0.9360892027158638,
+        -0.0012396380952670594,
+        -0.3517605262905018
+      ],
+      [
+        0.3508910382301719,
+        0.06706430307168457,
+        -0.9340117015023213
+      ]
+    ],
+    "translation_mm": [
+      435.733995129887,
+      -77.5149525251026,
+      1481.7842346106727
+    ]
+  },
+  "reference_corners_px": [
+    [
+      442.9814147949219,
+      193.7193603515625
+    ],
+    [
+      439.1676025390625,
+      152.60191345214844
+    ],
+    [
+      481.9289245605469,
+      153.14126586914062
+    ],
+    [
+      485.9935607910156,
+      194.38653564453125
+    ]
+  ],
+  "reference_marker_side_on_plane_mm": 70.0,
+  "reference_frame_count": 15,
+  "reference_jitter": {
+    "position_mm": 0.15,
+    "yaw_deg": 0.187
+  },
+  "anchors": [
+    {
+      "marker_id": 1,
+      "center_px": [
+        377.82,
+        423.38
+      ]
+    }
+  ],
+  "view_check": {
+    "mode": "FIXED_MARKERS",
+    "max_anchor_shift_px": 30.0,
+    "single_anchor_trusted": true
+  },
+  "tolerance": {
+    "position_mm": 20.0,
+    "yaw_deg": 15.0
+  },
+  "axes": "dx +: 마커 오른쪽 변 방향, dy +: 마커 윗변(화살표) 방향, dyaw +: 천장 카메라에서 볼 때 반시계",
+  "created_at": "2026-11-24T13:01:30.812782+00:00",
+  "status": "DRAFT_ONLY",
+  "review_required": true,
+  "usable_for_robot_control": false,
+  "adjustment": "2026-11-24 22:00: 사용자가 P0(10번 Pinky C76C, 마커 20)를 적재 자리에 손으로 세우고 등록을 요청함. 천장 캠 노드를 끄지 않고 /ceiling_camera/image_raw/compressed(카메라 원본 JPEG) 15프레임을 받아 등록 도구로 만든 파일. 앞쪽 축은 라이다 위치 찾기(지도 x 0.39 · y 1.69 m · 175°, 5번 자리에서 지도 −x를 봄)와 천장 캠 화면으로 확인해 −x(P2의 21번과 같은 방향으로 붙음). 허용 오차 20 mm / 15°는 P1·P2와 같게."
+}

@@ -35,6 +35,11 @@ const FLEET_TEST_DOCK_TONE = { COMPLETE: 'good', OPERATOR: 'attention', REDOCK: 
 // 도킹완료; steadily off -> 다시 맞추기 with the camera's offset, then wait until it is back; no registration, a blind
 // camera or three redocks used -> a person looks. With 자동 off the server only judges and the buttons send.
 function fleetTestVerdict(pinky) {
+  // Docked: the station's loading chain (arm -> YOLO tray count -> received), when 자동 처리 is on (load_relay.py).
+  const loading = pinkyScreen.view?.loading?.[pinky.pinky_id];
+  if (pinky.phase === 'docked_manual' && loading?.active) {
+    return [loading.tone || '', `적재 · ${loading.message || ''}`];
+  }
   if (!FLEET_TEST_DOCK_PHASES.has(pinky.phase) || !FLEET_TEST_ACTIVE.has(pinky.route?.status)) return null;
   const dock = fleetTest.dock[pinky.pinky_id];
   if (!dock) return ['', '카메라 판정을 확인하는 중'];
@@ -104,7 +109,30 @@ function fleetTestRowHtml(pinky, index, zones) {
     ${fleetTestVerdict(pinky) ? `<span class="fleet-test-verdict chip ${fleetTestVerdict(pinky)[0]}">${escapeHtml(fleetTestVerdict(pinky)[1])}</span>` : ''}</li>`;
 }
 
+// The box is the control station's own switch (dock_auto in GET /api/pinky): the station steps the camera <-> Pinky
+// exchange itself, so it goes on with this screen closed. Ticking it here changes the station's setting.
+let fleetTestAutoBusy = false;
+fleetTestAuto.addEventListener('change', async () => {
+  const auto = fleetTestAuto.checked;
+  fleetTestAutoBusy = true;
+  try {
+    const response = await fetch('/api/pinky/dock-auto', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auto }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(apiErrorMessage(result, '자동 처리 설정을 바꾸지 못했습니다'));
+    showToast(auto ? '적재 자리 도착 자동 처리를 켰어요' : '적재 자리 도착 자동 처리를 껐어요',
+      auto ? '카메라가 맞다고 보면 도킹완료, 어긋나면 다시 맞추기를 알아서 보내요' : '카메라는 판정만 하고, 도킹완료·다시 맞추기는 직접 눌러요');
+  } catch (error) {
+    fleetTestAuto.checked = !auto;
+    showToast('자동 처리 설정을 바꾸지 못했어요', error.message, 'error');
+  } finally {
+    fleetTestAutoBusy = false;
+  }
+});
+
 function renderFleetTest() {
+  if (!fleetTestAutoBusy && typeof pinkyScreen.view?.dock_auto === 'boolean') fleetTestAuto.checked = pinkyScreen.view.dock_auto;
   if (activeView !== 'pinky' || !fleetTestRows) return;
   const zones = fleetTestZones();
   const pinkies = fleetTestPinkies();

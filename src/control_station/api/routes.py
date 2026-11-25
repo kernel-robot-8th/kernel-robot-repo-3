@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
-from control_station.api import arm, cameras, flow, orders, pinky, status, tasks
+from control_station.api import arm, cameras, flow, orders, pinky, status, stop, tasks
 
 if TYPE_CHECKING:
     from control_station.app import ControlStationHandler
@@ -101,12 +101,15 @@ POST_ROUTES: tuple[Route, ...] = (
         "Cross-origin arm-command request rejected",
     ),
     Route(_path("/api/tasks"), tasks.post_task),
+    # The big red button: the arms and every Pinky in one request (stop_all.py).
+    Route(_path("/api/stop-all"), stop.post_stop_all, "Cross-origin stop request rejected", reads_body=False),
     Route(_path("/api/pinky/stop-all"), pinky.post_stop_all, "Cross-origin Pinky-stop request rejected",
           reads_body=False),
     Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "pinky"] and parts[3] == "stop",
           pinky.post_stop, "Cross-origin Pinky-stop request rejected", reads_body=False),
     Route(_path("/api/pinky/credentials"), pinky.post_credentials, "Cross-origin credentials request rejected"),
     Route(_path("/api/pinky/prepare-all"), pinky.post_prepare_all, "Cross-origin Pinky request rejected"),
+    Route(_path("/api/pinky/dock-auto"), pinky.post_dock_auto, "Cross-origin Pinky request rejected"),
     Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "pinky"] and parts[3] == "dock-handshake",
           pinky.post_dock_handshake, "Cross-origin Pinky request rejected"),
     Route(lambda route, parts: parts[:2] == ["api", "pinky"] and (

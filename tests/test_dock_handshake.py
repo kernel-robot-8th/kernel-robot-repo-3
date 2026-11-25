@@ -174,3 +174,55 @@ class DockRepeatTests(unittest.TestCase):
         self.assertEqual((last["sent"], last["repeat"]["successes"], last["repeat"]["trials"]), ("dock_complete", 2, 3))
         self.assertEqual([trial["outcome"] for trial in recorded], ["SUCCESS", "MISALIGNED", "SUCCESS"])
         self.assertEqual(recorded[0]["left_mm"], -4.0)
+
+
+class DockAutoLoopTests(unittest.TestCase):
+    """The control station steps the exchange itself: no test screen has to be open (2026-11-24)."""
+
+    def test_only_a_pinky_standing_at_the_loading_spot_is_stepped_and_only_while_the_switch_is_on(self) -> None:
+        from control_station.dock_handshake import DockAutoLoop
+        phases = {"10": "driving", "11": "docking_manual", "12": "parked"}
+        stepped: list[str] = []
+        switch = {"on": True}
+        loop = DockAutoLoop(("10", "11", "12"), phases.get,
+                            lambda pinky_id: stepped.append(pinky_id) or {"sent": "dock_complete"},
+                            enabled=lambda: switch["on"])
+        self.assertEqual(loop.tick(), ["11"])
+        self.assertEqual(loop.last, {"11": {"sent": "dock_complete"}})
+        phases["11"], phases["10"] = "dock_exit", "redocking"   # one has left, another is coming in again
+        self.assertEqual(loop.tick(), ["10"])
+        self.assertNotIn("11", loop.last)
+        phases["10"] = "docked_manual"  # docked: the loading relay (arm -> YOLO -> received) is stepped too
+        self.assertEqual(loop.tick(), ["10"])
+        switch["on"] = False
+        self.assertEqual(loop.tick(), [])
+        self.assertEqual(stepped, ["11", "10", "10"])
+
+    def test_a_fleet_dashboard_that_does_not_answer_does_not_end_the_loop(self) -> None:
+        from control_station.dock_handshake import DockAutoLoop
+
+        def phase(pinky_id: str) -> str:
+            if pinky_id == "10":
+                raise OSError("no answer")
+            return "docking_manual"
+
+        loop = DockAutoLoop(("10", "11"), phase, lambda pinky_id: {"sent": None})
+        self.assertEqual(loop.tick(), ["11"])
+        self.assertEqual(loop.last["10"], {"error": "no answer"})
+
+    def test_the_stations_own_steps_arrive_and_do_not_end_a_repeat_test_the_screen_asked_for(self) -> None:
+        # The loop steps with repeat=None: the count the test screen set for this stop stays.
+        state = {"phase": "docking_manual"}
+        sent: list[str] = []
+        supervisor = DockSupervisor(lambda pinky_id: {"phase": state["phase"], "mission_token": "t"},
+                                    lambda pinky_id: {"status": "ARRIVED", "offset": {"distance_mm": 2.0}},
+                                    lambda pinky_id, action, offset: sent.append(action) or {})
+        supervisor.step("11", True, None)                       # the station alone: twice in place -> dock_complete
+        self.assertEqual(supervisor.step("11", True, None)["sent"], "dock_complete")
+        state["phase"] = "driving"
+        supervisor.step("11", True, None)                       # it left: the stop's record is dropped
+        state["phase"] = "docking_manual"
+        supervisor.step("11", True, 3)                          # the screen asks for three confirmed entries
+        answer = supervisor.step("11", True, None)              # the station's step keeps that count
+        self.assertEqual((answer["sent"], answer["repeat"]["target"]), ("redock", 3))
+        self.assertEqual(sent, ["dock_complete", "redock"])
