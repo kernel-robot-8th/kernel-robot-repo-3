@@ -552,7 +552,9 @@ def run(node, points):
             while cursor < end_index:
                 checkpoint(cursor, points[cursor], pose, passing=True, sampling='end_pose_no_crossing_sample')
                 cursor += 1
-            checkpoint(end_index, end, pose)
+            # The ceiling camera judges the stop at 5 and sends it back in when it is off (redock); the map pose is only
+            # logged here. 2026-11-25: P0 stood at 5 and the whole mission failed on 5.6 cm against the map's 5 cm.
+            checkpoint(end_index, end, pose, sampling='docking_service')
             attempt = 0
             while True:
                 note = f' (다시 맞춘 {attempt}번째)' if attempt else ''

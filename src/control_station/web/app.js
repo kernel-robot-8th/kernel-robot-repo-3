@@ -1512,22 +1512,47 @@ function renderParkingFields(data, level, overlayLabel, extraRows = []) {
 }
 
 // Which Pinky carries the marker of each registered spot (/api/pinky: marker.spot_id), for the line under the camera.
-let parkingPinkies = new Map();  // spot_id -> { name, markerId }
+let parkingPinkies = new Map();  // spot_id -> { name, markerId, pose, phase }
 let parkingPinkiesAt = 0;
-const PARKING_PINKIES_REFRESH_MS = 30000;
+// Fast enough to follow a Pinky driving into the loading spot (/api/pinky is cached on the server for a moment).
+const PARKING_PINKIES_REFRESH_MS = 2000;
+// Within this distance of the map's loading spot (landmark dock5) a Pinky counts as standing there.
+const STATION_RADIUS_M = 0.3;
+const STATION_PHASES = new Set(['docking_manual', 'docking_anchor', 'docked_manual', 'dock_entry', 'redocking']);
+let parkingDock = null;  // {x_m, y_m} of the loading spot on the map
 
 async function loadParkingPinkies() {
   if (Date.now() - parkingPinkiesAt < PARKING_PINKIES_REFRESH_MS) return;
   parkingPinkiesAt = Date.now();
   try {
+    if (!parkingDock) {
+      const map = await (await fetch('/api/pinky/map', { cache: 'no-store' })).json();
+      parkingDock = (map.landmarks || []).find((landmark) => landmark.key === 'dock5') || null;
+    }
     const response = await fetch('/api/pinky', { cache: 'no-store' });
     const result = await response.json();
     if (!response.ok) throw new Error('pinky markers unavailable');
     parkingPinkies = new Map((result.pinkies || []).filter((pinky) => pinky.marker?.spot_id)
-      .map((pinky) => [pinky.marker.spot_id, { name: pinky.name, markerId: pinky.marker.marker_id }]));
+      .map((pinky) => [pinky.marker.spot_id, { name: pinky.name, markerId: pinky.marker.marker_id,
+        pose: pinky.connected ? pinky.pose : null, phase: pinky.phase }]));
   } catch {
     parkingPinkiesAt = Date.now() - PARKING_PINKIES_REFRESH_MS + 5000;  // keep what was known, ask again in 5 s
   }
+}
+
+// The spot of the Pinky that stands at the loading spot by the map (2026-11-25: the panel showed P2's spot while P0
+// stood there, because P0's camera judgment was unusable). Nearest Pinky inside STATION_RADIUS_M of dock5, else one in
+// a loading-spot phase; null when no Pinky is there by the map.
+function stationSpotByMap() {
+  let best = null;
+  for (const [spotId, pinky] of parkingPinkies) {
+    const pose = pinky.pose;
+    const distance = parkingDock && pose && Number.isFinite(pose.x_m) && Number.isFinite(pose.y_m)
+      ? Math.hypot(pose.x_m - parkingDock.x_m, pose.y_m - parkingDock.y_m) : Infinity;
+    const score = distance <= STATION_RADIUS_M ? distance : (STATION_PHASES.has(pinky.phase) ? STATION_RADIUS_M : Infinity);
+    if (Number.isFinite(score) && (!best || score < best.score)) best = { spotId, score };
+  }
+  return best?.spotId || null;
 }
 
 // The line under the camera: the Pinky whose marker the judged spot was registered with. A spot is one Pinky's own
@@ -1676,16 +1701,21 @@ async function pollParkingLive() {
   if (!parkingLive || parkingLiveBusy || !spotId) return;
   parkingLiveBusy = true;
   try {
-    if (parkingPinkies.size) loadParkingPinkies();  // refreshes in the background every 30 s
+    if (parkingPinkies.size) loadParkingPinkies();  // refreshes in the background every 2 s
     else await loadParkingPinkies();  // the first line under the camera waits for the names
     const liveOf = async (id) => {
       const response = await fetch(`/api/parking-spots/${encodeURIComponent(id)}/live`, { cache: 'no-store' });
       return { ok: response.ok, body: await response.json() };
     };
-    let { ok, body: result } = await liveOf(spotId);
-    // Each Pinky has its own registration of the loading spot. When the marker of the spot shown is not in view,
-    // show the spot whose marker is: the panel follows whichever Pinky stands there (unless the id is being typed).
-    if (document.activeElement !== parkingSpotInput && !(ok && PARKING_TRACKED_STATES.has(result.live?.state))) {
+    // The Pinky at the loading spot by the map decides which registration is shown; the camera cannot mix them up.
+    const typing = document.activeElement === parkingSpotInput;
+    const byMap = typing ? null : stationSpotByMap();
+    const shown = byMap && parkingLiveSpots.includes(byMap) ? byMap : spotId;
+    if (shown !== spotId) parkingSpotInput.value = shown;
+    let { ok, body: result } = await liveOf(shown);
+    // With no Pinky there by the map: when the marker of the spot shown is not in view, show the spot whose marker
+    // is, so the panel follows whichever Pinky stands there (unless the id is being typed).
+    if (!typing && !byMap && !(ok && PARKING_TRACKED_STATES.has(result.live?.state))) {
       for (const other of parkingLiveSpots) {
         if (other === spotId) continue;
         const seen = await liveOf(other);

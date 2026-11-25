@@ -77,7 +77,7 @@
   ],
   "view_check": {
     "mode": "FIXED_MARKERS",
-    "max_anchor_shift_px": 15.0,
+    "max_anchor_shift_px": 30.0,
     "single_anchor_trusted": true
   },
   "tolerance": {

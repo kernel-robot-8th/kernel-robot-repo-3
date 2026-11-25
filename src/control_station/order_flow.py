@@ -124,8 +124,13 @@ class OrderFlow:
         route_for: Callable[[str | None], list[str] | None] | None = None,
         pickup_timeout_s: float = 1800.0,
         choose_shipment_pinky: Callable[[str, int], dict[str, Any]] | None = None,
+        zone_ahead: Callable[[str], tuple[str | None, list[str]]] | None = None,
+        hand_pick_timeout_s: float = 300.0,
     ) -> None:
         self.arms = arms
+        self.hand_pick_timeout_s = hand_pick_timeout_s
+        # order id -> (its receiving zone, the older orders still headed there): a loaded Pinky waits for these.
+        self.zone_ahead = zone_ahead
         # (order id, shipment number) -> {"pinky_id": ... or None, "summary": ...}: the Pinky for a later shipment,
         # chosen and written on the order by the order desk (OrderDesk.assign_next_shipment). None: no shipments.
         self.choose_shipment_pinky = choose_shipment_pinky
@@ -568,8 +573,31 @@ class OrderFlow:
         )
         if result is None:
             return None
+        if not self.devices.pick_is_real and not load.get("simulated"):
+            # No arm, but the tray is counted by the camera's YOLO (CONTROL_STATION_ORDER_LOAD_COUNTS=camera,
+            # 2026-11-25): a person is the arm. Wait until YOLO sees this object on the tray, then go on.
+            if not self._wait_hand_pick(ctx, unit, on_pinky):
+                return None
         self._picked[ctx.task["id"]] = result
         return {**result, "unit": unit}
+
+    def _wait_hand_pick(self, ctx: StepContext, unit: dict[str, Any], before: int) -> bool:
+        """Until the tray camera sees one more `unit` object than before the pick (False when canceled)."""
+        name = unit.get("label", unit["object_class"])
+        ctx.record("HAND_PICK_WAITING", {"unit": unit, "message": f"팔 없음 · {name}을(를) 핑키 쟁반에 올려 주세요 (YOLO가 확인하면 진행)"})
+        deadline = time.monotonic() + self.hand_pick_timeout_s
+        while time.monotonic() < deadline:
+            try:
+                load = self.devices.pinky_load(self._pinky(ctx))
+                if load["counts"].get(unit["object_class"], 0) > before:
+                    ctx.record("HAND_PICK_SEEN", {"unit": unit, "message": f"YOLO가 쟁반 위 {name}을(를) 확인했어요"})
+                    return True
+            except Exception:  # no fresh frame for a moment: look again
+                pass
+            if ctx.cancel_event.wait(self.poll_s):
+                return False
+        raise OrderFlowError("HAND_PICK_TIMEOUT", f"{int(self.hand_pick_timeout_s)}초 안에 쟁반 위 {name}이(가) 보이지 않았습니다. "
+                             "쟁반과 천장 캠을 확인하세요", "cameras")
 
     def _verify_transfer(self, ctx: StepContext) -> dict[str, Any]:
         unit = ctx.step["detail"] or {}
@@ -704,7 +732,34 @@ class OrderFlow:
             return None
         return {"source": "pinky_fleet", "outcome": "PINKY_PARKED", "simulated": status.get("simulated", False)}
 
-    def _notify_pinky_received(self, ctx: StepContext) -> dict[str, Any]:
+    def _wait_for_zone(self, ctx: StepContext) -> bool:
+        """Hold the loaded Pinky at the loading spot while older orders are still headed for this order's receiving
+        zone (the customer picked a zone in use, 2026-11-25). Returns False when canceled. No time limit: the order
+        ahead either gets picked up or stops, and a stopped one keeps the zone until the operator acknowledges it,
+        which the step's event says."""
+        if self.zone_ahead is None:
+            return True
+        task_id, last = ctx.task["id"], None
+        while True:
+            try:
+                zone, ahead = self.zone_ahead(task_id)
+            except Exception:  # a missed read: look again
+                zone, ahead = None, last or []
+            if not ahead:
+                if last:
+                    ctx.record("ZONE_TURN", {"zone": zone, "message": f"{ctx.task.get('destination')} 차례 · 출발합니다"})
+                return True
+            if ahead != last:
+                last = ahead
+                ctx.record("ZONE_WAIT", {"zone": zone, "ahead": ahead, "message": (
+                    f"{ctx.task.get('destination')} 차례 기다림 · 앞 주문 {', '.join(ahead)} 수령 확인 뒤 출발 "
+                    "(멈춘 주문이면 경보를 확인해야 풀립니다)")})
+            if ctx.cancel_event.wait(self.poll_s):
+                return False
+
+    def _notify_pinky_received(self, ctx: StepContext) -> dict[str, Any] | None:
+        if not self._wait_for_zone(ctx):
+            return None
         answer = self._confirm(ctx, "received")
         self.release(ctx.task["id"])  # the arms are done with this Pinky; the next order may use the spot
         return {"source": "pinky_fleet", "outcome": "RECEIVED_SIGNAL_ACCEPTED", "answer": answer,

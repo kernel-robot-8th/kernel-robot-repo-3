@@ -1,0 +1,10 @@
+{
+ "robot": "10",
+ "map_to_odom": {
+  "x": 0.703,
+  "y": 1.307,
+  "yaw_rad": -1.081
+ },
+ "captured_at": 1794914063.6415336,
+ "note": "AMCL map->odom right before passive SLAM; slam_map starts at odom"
+}

@@ -189,12 +189,14 @@ class DockAutoLoopTests(unittest.TestCase):
                             enabled=lambda: switch["on"])
         self.assertEqual(loop.tick(), ["11"])
         self.assertEqual(loop.last, {"11": {"sent": "dock_complete"}})
-        phases["11"], phases["10"] = "docked_manual", "redocking"   # one was told, another is coming in again
+        phases["11"], phases["10"] = "dock_exit", "redocking"   # one has left, another is coming in again
         self.assertEqual(loop.tick(), ["10"])
         self.assertNotIn("11", loop.last)
+        phases["10"] = "docked_manual"  # docked: the loading relay (arm -> YOLO -> received) is stepped too
+        self.assertEqual(loop.tick(), ["10"])
         switch["on"] = False
         self.assertEqual(loop.tick(), [])
-        self.assertEqual(stepped, ["11", "10"])
+        self.assertEqual(stepped, ["11", "10", "10"])
 
     def test_a_fleet_dashboard_that_does_not_answer_does_not_end_the_loop(self) -> None:
         from control_station.dock_handshake import DockAutoLoop

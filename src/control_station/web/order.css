@@ -66,6 +66,12 @@ button:focus-visible { outline: 3px solid rgba(49, 130, 246, .35); outline-offse
 
 /* ---- products ---- */
 .product-list { display: grid; gap: 10px; }
+.zone-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.zone { display: grid; gap: 4px; padding: 18px; border: 0; border-radius: 22px; background: var(--card); box-shadow: var(--shadow); color: var(--text); font: inherit; text-align: left; cursor: pointer; transition: box-shadow .15s; }
+.zone.selected { box-shadow: 0 0 0 2px var(--blue), var(--shadow); }
+.zone:disabled { cursor: default; }
+.zone-name { font-size: 18px; font-weight: 700; }
+.zone-wait { color: var(--text-2); font-size: 14px; }
 .product { display: flex; align-items: center; gap: 14px; min-width: 0; padding: 18px; border-radius: 22px; background: var(--card); box-shadow: var(--shadow); transition: box-shadow .15s; }
 .product.selected { box-shadow: 0 0 0 2px var(--blue), var(--shadow); }
 .product-mark { display: grid; flex-shrink: 0; width: 52px; height: 52px; place-items: center; border-radius: 18px; background: var(--blue-soft); color: var(--blue-strong); font-size: 22px; font-weight: 700; }

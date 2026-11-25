@@ -39,7 +39,10 @@ def _answer(h: ControlStationHandler, entry: dict[str, Any]) -> None:
 
 def get_pinky(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:
     """핑키 화면: 핑키 3대 상태와 최근 명령"""
-    h._json(200, {**h.app.pinky_gateway.view(), "dock_auto": bool(getattr(h.app, "dock_auto", False))})
+    relay = getattr(h.app, "load_relay", None)
+    h._json(200, {**h.app.pinky_gateway.view(), "dock_auto": bool(getattr(h.app, "dock_auto", False)),
+                  # Docked Pinkys of the test drive: arm -> YOLO tray count -> received (load_relay.py).
+                  "loading": relay.view() if relay is not None else {}})
 
 
 def get_locate(h: ControlStationHandler, route: str, parts: list[str], body: None) -> None:

@@ -145,6 +145,14 @@ class ZoneCandidate:
     route_length: int  # waypoints the Pinky passes on its way there; fewer is a shorter trip
     holding_order: str | None = None  # a started order not yet picked up there keeps the zone
     uses_today: int = 0  # orders started today that went to this zone
+    # Started orders headed for this zone and not yet picked up there, the holder included (2026-11-25: a busy zone
+    # no longer refuses an order; the new one goes after these, one at a time).
+    ahead: int = 0
+
+    @property
+    def queued(self) -> int:
+        """Orders a new one would wait behind here (an older caller may give only holding_order)."""
+        return max(self.ahead, 1 if self.holding_order else 0)
 
 
 @dataclass(frozen=True)
@@ -174,46 +182,56 @@ def _zone_reason(candidate: ZoneCandidate) -> str:
     return f"오늘 {candidate.uses_today}회 · 경로 {candidate.route_length}곳"
 
 
+def _queue_text(candidate: ZoneCandidate) -> str:
+    """'바로 들어감' or who it waits behind, for the summary line."""
+    if not candidate.queued:
+        return "바로 들어감"
+    holder = f" (지금 주문 {candidate.holding_order})" if candidate.holding_order else ""
+    return f"앞 주문 {candidate.queued}건을 받은 뒤 들어감{holder}"
+
+
 def _zone_verdicts(candidates: Sequence[ZoneCandidate]) -> tuple[tuple[ZoneVerdict, ...], list[ZoneCandidate]]:
+    """Every zone can take the order (a busy one queues it); fewest orders ahead first, then the others."""
     order = {c.zone_id: index for index, c in enumerate(candidates)}
-    free = sorted((c for c in candidates if not c.holding_order),
-                  key=lambda c: (c.uses_today, c.route_length, order[c.zone_id]))
-    rank_of = {c.zone_id: index for index, c in enumerate(free, start=1)}
+    ranked = sorted(candidates, key=lambda c: (c.queued, c.uses_today, c.route_length, order[c.zone_id]))
+    rank_of = {c.zone_id: index for index, c in enumerate(ranked, start=1)}
     verdicts = tuple(
         ZoneVerdict(
-            c.zone_id, c.label, not c.holding_order,
-            f"주문 {c.holding_order}이 사용 중" if c.holding_order else _zone_reason(c),
+            c.zone_id, c.label, True,
+            f"{_queue_text(c)} · {_zone_reason(c)}",
             rank_of.get(c.zone_id),
-            ({"rule": "비어 있음(시작~수령 확인 중인 주문 없음)", "ok": not c.holding_order,
-              "detail": f"주문 {c.holding_order}" if c.holding_order else None},),
-            {"uses_today": c.uses_today, "route_length": c.route_length, "config_order": order[c.zone_id] + 1},
+            ({"rule": "앞에 기다리는 주문이 적은 구역", "ok": not c.queued,
+              "detail": f"주문 {c.holding_order} 외 {c.queued - 1}건" if c.queued > 1 else
+                        (f"주문 {c.holding_order}" if c.holding_order else None)},),
+            {"ahead": c.queued, "uses_today": c.uses_today, "route_length": c.route_length,
+             "config_order": order[c.zone_id] + 1},
         )
         for c in candidates
     )
-    return verdicts, free
+    return verdicts, ranked
 
 
 def choose_zone(candidates: Sequence[ZoneCandidate], *, requested: str | None = None) -> ZoneAssignment:
-    """Where the Pinky takes this order: a zone no started order is still using, then the one used least today,
-    then the shorter route, then config order. Two orders never share a zone, so a customer never meets someone
-    else's Pinky there.
+    """Where the Pinky takes this order: the zone with the fewest started orders still headed there, then the one
+    used least today, then the shorter route, then config order.
 
-    `requested` is a zone that came with the order (an operator's choice): it is kept, never swapped for another,
-    and only checked to be free, like a customer who waits for the spot they picked."""
-    verdicts, free = _zone_verdicts(candidates)
+    A busy zone does not refuse the order (2026-11-25): the order starts, its Pinky loads, and it waits at the loading
+    spot until the orders ahead were picked up there (OrderFlow, NOTIFY_PINKY_RECEIVED). Two Pinkys still never
+    stand in one zone together.
+
+    `requested` is the zone the customer (or an operator) picked with the order: it is kept, never swapped for
+    another, and the order goes after the ones already headed there."""
+    verdicts, ranked = _zone_verdicts(candidates)
     if requested is not None:
         wanted = next((c for c in candidates if c.zone_id == requested), None)
         if wanted is None:
             return ZoneAssignment(None, f"설정에 없는 수령 구역이에요 ({requested})", verdicts, operator_chosen=True)
-        if wanted.holding_order:
-            return ZoneAssignment(None, f"작업자가 고른 구역({wanted.label})은 주문 {wanted.holding_order}이 쓰고 있어요",
-                                  verdicts, operator_chosen=True)
-        return ZoneAssignment(wanted.zone_id, f"{wanted.label} · 작업자 지정", verdicts, operator_chosen=True)
-    if not free:
-        busy = ", ".join(f"{c.label}: 주문 {c.holding_order}" for c in candidates) or "설정된 구역 없음"
-        return ZoneAssignment(None, f"수령 구역이 모두 사용 중이에요 ({busy})", verdicts)
-    chosen = free[0]
-    return ZoneAssignment(chosen.zone_id, f"{chosen.label} · {_zone_reason(chosen)}", verdicts)
+        return ZoneAssignment(wanted.zone_id, f"{wanted.label} · 주문할 때 고른 곳 · {_queue_text(wanted)}", verdicts,
+                              operator_chosen=True)
+    if not ranked:
+        return ZoneAssignment(None, "설정된 수령 구역이 없어요", verdicts)
+    chosen = ranked[0]
+    return ZoneAssignment(chosen.zone_id, f"{chosen.label} · {_queue_text(chosen)} · {_zone_reason(chosen)}", verdicts)
 
 
 # ---------------------------------------------------------------------------------------------------------------

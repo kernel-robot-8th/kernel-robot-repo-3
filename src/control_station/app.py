@@ -34,12 +34,13 @@ from control_station.mock_world import MockWorld
 from control_station.inventory import InventoryMonitor, InventoryOverrides
 from control_station.dispatcher import OrderDispatcher
 from control_station.order_desk import OrderDesk
-from control_station.order_flow import OrderDevices, OrderFlow
+from control_station.order_flow import NOT_CARGO, OrderDevices, OrderFlow
 from control_station.receiving_zones import ReceivingZoneError, load_receiving_zones
 from control_station.pinky_fleet import PinkyFleetClient
 from control_station.pinky_gateway import PinkyGateway
 from control_station.dock_guide import DockGuideRelay
 from control_station.dock_handshake import DockAutoLoop, DockSupervisor
+from control_station.load_relay import LOADING_PHASE, LoadRelay
 from control_station.pinky_markers import PinkyMarkerError, arrival_for, load_pinky_markers
 from control_station.parking_ros import RosParkingSource
 from control_station.robot_adapters import make_status_provider
@@ -431,10 +432,23 @@ def main() -> None:
     # switches it (POST /api/pinky/dock-auto). Only with a real fleet dashboard: the mock world confirms by itself.
     server.dock_auto = os.environ.get("CONTROL_STATION_DOCK_AUTO", "1").strip() != "0"
     server.dock_auto_loop = None
+    # Docked without an order (the test drive): the arm loads (no arm attached: a person), the ceiling camera's YOLO
+    # counts the tray, and once it is loaded the Pinky gets `received` and drives to its receiving zone (load_relay.py).
+    try:
+        load_target = max(1, int(os.environ.get("CONTROL_STATION_TEST_LOAD_TARGET", "1")))
+    except ValueError:
+        load_target = 1
+    server.load_relay = LoadRelay(
+        fleet_status, lambda pinky_id: server.load_view(pinky_id), dock_signal, target=load_target,
+        in_order=lambda pinky_id: getattr(server, "order_flow", None) is not None and server.order_flow.holds_pinky(pinky_id))
     if fleet is not None:
+        def auto_step(pinky_id: str) -> dict[str, Any]:
+            if fleet_status(pinky_id).get("phase") == LOADING_PHASE:
+                return server.load_relay.step(pinky_id)
+            return server.dock_supervisor.step(pinky_id, True, None)
+
         server.dock_auto_loop = DockAutoLoop(
-            PINKY_NAMES, lambda pinky_id: fleet_status(pinky_id).get("phase"),
-            lambda pinky_id: server.dock_supervisor.step(pinky_id, True, None),
+            PINKY_NAMES, lambda pinky_id: fleet_status(pinky_id).get("phase"), auto_step,
             enabled=lambda: server.dock_auto).start()
         print("적재 자리 도착 자동 처리: " + ("켜짐 (카메라가 자리에 있다고 두 번 보면 도킹완료, 어긋나면 다시 맞추기)"
                                     if server.dock_auto else "꺼짐 (CONTROL_STATION_DOCK_AUTO=0)"), flush=True)
@@ -463,6 +477,36 @@ def main() -> None:
         pinky_load = load_counter
         print(f"주문 흐름의 개수 세기: 카메라 YOLO (핑키 쟁반 {load_counter.camera_id} {load_counter.region_or_none()})",
               flush=True)
+    elif os.environ.get("CONTROL_STATION_ORDER_LOAD_COUNTS", "").strip() == "camera":
+        # No shelf camera and no arm attached (2026-11-25): the ceiling camera's YOLO counts both the Pinky tray and
+        # the shelf strip it sees (head_shelf_view), and with mock picks the pick step waits until YOLO sees the
+        # object a person put on the tray. The ceiling camera does not tell the two shelves apart, so each object is
+        # put on the shelf of the arm whose policy picks it (carrot -> left arm's shelf_a, apple/watermelon/kiwi ->
+        # right arm's shelf_b), which is what the arm plan needs.
+        pinky_load = server.load_view
+        policy_shelf: dict[str, str] = {}
+        arm_shelf = {arm["arm_id"]: arm.get("shelf_id") for arm in (server.arms.arms if server.arms else [])}
+        for policy in (act_policies.policies.values() if act_policies is not None else []):
+            shelf = arm_shelf.get(policy.get("arm_id"))
+            if shelf:
+                policy_shelf.setdefault(policy["object_class"], shelf)
+        default_shelf = next(iter(arm_shelf.values()), "shelf_a")
+
+        def head_shelf_stock() -> dict[str, Any]:
+            observation = server.head_shelf_view("shelf")
+            shelves: dict[str, dict[str, int]] = {shelf: {} for shelf in set(arm_shelf.values()) or {default_shelf}}
+            for name, count in observation["counts"].items():
+                if name in NOT_CARGO:
+                    continue
+                shelves.setdefault(policy_shelf.get(name, default_shelf), {})[name] = int(count)
+            return {"source": "head_camera", "simulated": False, "shelves": shelves,
+                    "captured_at": observation.get("captured_at"), "frames": observation.get("frames"),
+                    "region_px": observation.get("region_px"), "method": "ceiling camera YOLO, shelf strip"}
+
+        shelf_stock = head_shelf_stock
+        print(f"주문 흐름의 개수 세기: 천장 캠 YOLO · 핑키 쟁반 {server.load_view.region_or_none()}, "
+              f"선반 {server.head_shelf_view.region_or_none()} (선반은 물건마다 정책의 팔 쪽으로) · "
+              "팔 없음이면 사람이 옮긴 것을 YOLO가 확인", flush=True)
     if fleet is not None and pinky_load == world.pinky_load:
         # Mock counts with real (or virtual) Pinkys: the mock tray is emptied when the customer takes the order, as
         # the mock fleet does at its receiving zone. Without this the next order on that Pinky found the old load
@@ -522,6 +566,7 @@ def main() -> None:
         arrival_timeout_s=arrival_timeout_s,
         pick_stats=pick_stats,
         route_for=route_for,
+        zone_ahead=task_store.zone_ahead,
     )
     server.task_orchestrator = MockTaskOrchestrator(
         task_store, mode=mode, arrival_check=arrival_check, load_check=load_check,

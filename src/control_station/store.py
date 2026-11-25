@@ -237,7 +237,8 @@ def _zone_holding_orders():  # type: ignore[no-untyped-def]
         TaskStepRecord.status != StepStatus.SUCCEEDED.value,
     )
     started = tuple(status for status in _ORDER_HOLDING_STATUSES if status != TaskStatus.PENDING.value)
-    return select(TaskRecord.receiving_zone, TaskRecord.id).where(
+    # Oldest start first: with several orders headed for one zone (a queue, 2026-11-25) the first one holds it.
+    return select(TaskRecord.receiving_zone, TaskRecord.id).order_by(TaskRecord.started_at, TaskRecord.id).where(
         TaskRecord.receiving_zone.is_not(None),
         TaskRecord.order_items.is_not(None),
         pickup_left,
@@ -979,9 +980,27 @@ class TaskStore:
             return self._present_with_history(task)
 
     def busy_zones(self) -> dict[str, str]:
-        """Receiving zone ID -> the started order still using it (not yet picked up there)."""
+        """Receiving zone ID -> the started order using it now (the oldest one not yet picked up there)."""
+        return {zone_id: queue[0] for zone_id, queue in self.zone_queues().items()}
+
+    def zone_queues(self) -> dict[str, list[str]]:
+        """Receiving zone ID -> the started orders headed there and not yet picked up, oldest start first. The first
+        one has the zone; each of the others waits at the loading spot for the ones before it."""
+        queues: dict[str, list[str]] = {}
         with self._sessions() as session:
-            return {zone_id: task_id for zone_id, task_id in session.execute(_zone_holding_orders()).all()}
+            for zone_id, task_id in session.execute(_zone_holding_orders()).all():
+                queues.setdefault(zone_id, []).append(task_id)
+        return queues
+
+    def zone_ahead(self, task_id: str) -> tuple[str | None, list[str]]:
+        """(zone, the orders before this one in that zone's queue); ([]) when it is first or holds no zone."""
+        with self._sessions() as session:
+            task = session.get(TaskRecord, task_id)
+            zone_id = task.receiving_zone if task is not None else None
+        if zone_id is None:
+            return None, []
+        queue = self.zone_queues().get(zone_id, [])
+        return zone_id, (queue[:queue.index(task_id)] if task_id in queue else queue)
 
     def zone_usage(self, since: str) -> dict[str, int]:
         """Receiving zone ID -> orders started since `since` (ISO time) that went there."""
@@ -998,7 +1017,8 @@ class TaskStore:
         return usage
 
     def assign_zone(self, task_id: str, zone_id: str, label: str, assignment: dict[str, object]) -> dict[str, Any]:
-        """Give a waiting order its receiving zone (and the zone's name as its destination), recording why."""
+        """Give a waiting order its receiving zone (and the zone's name as its destination), recording why. A zone in
+        use is given too: the order then goes after the ones already headed there (zone_queues)."""
         now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
         with self._claim_lock, self._sessions.begin() as session:
             task = session.get(TaskRecord, task_id)
@@ -1008,9 +1028,6 @@ class TaskStore:
                 raise InvalidStateTransition("접수 상태의 주문에만 수령 구역을 배정할 수 있습니다")
             if task.receiving_zone is not None:
                 raise InvalidStateTransition(f"이미 수령 구역 {task.receiving_zone}이 정해진 주문입니다")
-            holder = dict(session.execute(_zone_holding_orders()).all()).get(zone_id)
-            if holder is not None:
-                raise ZoneUnavailable(f"수령 구역({label})은 주문 {holder}이 사용 중입니다")
             task.receiving_zone = zone_id
             task.destination = label
             task.events.append(TaskEventRecord(

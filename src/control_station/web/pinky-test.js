@@ -35,6 +35,11 @@ const FLEET_TEST_DOCK_TONE = { COMPLETE: 'good', OPERATOR: 'attention', REDOCK: 
 // 도킹완료; steadily off -> 다시 맞추기 with the camera's offset, then wait until it is back; no registration, a blind
 // camera or three redocks used -> a person looks. With 자동 off the server only judges and the buttons send.
 function fleetTestVerdict(pinky) {
+  // Docked: the station's loading chain (arm -> YOLO tray count -> received), when 자동 처리 is on (load_relay.py).
+  const loading = pinkyScreen.view?.loading?.[pinky.pinky_id];
+  if (pinky.phase === 'docked_manual' && loading?.active) {
+    return [loading.tone || '', `적재 · ${loading.message || ''}`];
+  }
   if (!FLEET_TEST_DOCK_PHASES.has(pinky.phase) || !FLEET_TEST_ACTIVE.has(pinky.route?.status)) return null;
   const dock = fleetTest.dock[pinky.pinky_id];
   if (!dock) return ['', '카메라 판정을 확인하는 중'];

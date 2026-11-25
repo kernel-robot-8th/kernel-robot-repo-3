@@ -85,11 +85,11 @@ def zone(zone_id: str, route: int, **overrides) -> ZoneCandidate:
 
 
 class ChooseZoneTest(unittest.TestCase):
-    def test_a_zone_in_use_is_skipped(self) -> None:
+    def test_a_free_zone_comes_before_one_in_use(self) -> None:
         result = choose_zone([zone("zone_a", 3, holding_order="TASK-1"), zone("zone_b", 5)])
-        self.assertEqual((result.zone_id, result.summary), ("zone_b", "수령 구역 B · 오늘 0회 · 경로 5곳"))
-        self.assertEqual([(v.eligible, v.reason, v.rank) for v in result.verdicts],
-                         [(False, "주문 TASK-1이 사용 중", None), (True, "오늘 0회 · 경로 5곳", 1)])
+        self.assertEqual((result.zone_id, result.summary), ("zone_b", "수령 구역 B · 바로 들어감 · 오늘 0회 · 경로 5곳"))
+        self.assertEqual([(v.eligible, v.rank) for v in result.verdicts], [(True, 2), (True, 1)])
+        self.assertIn("앞 주문 1건을 받은 뒤 들어감 (지금 주문 TASK-1)", result.verdicts[0].reason)
         self.assertFalse(result.operator_chosen)
 
     def test_least_used_today_then_shorter_route_then_config_order(self) -> None:
@@ -98,20 +98,23 @@ class ChooseZoneTest(unittest.TestCase):
         self.assertEqual(choose_zone([zone("zone_a", 6), zone("zone_b", 4)]).zone_id, "zone_b")
         self.assertEqual(choose_zone([zone("zone_a", 4), zone("zone_b", 4)]).zone_id, "zone_a")
         keys = choose_zone([zone("zone_a", 4), zone("zone_b", 6, uses_today=1)]).verdicts[1].keys
-        self.assertEqual(keys, {"uses_today": 1, "route_length": 6, "config_order": 2})
+        self.assertEqual(keys, {"ahead": 0, "uses_today": 1, "route_length": 6, "config_order": 2})
 
-    def test_every_zone_in_use_assigns_none(self) -> None:
-        result = choose_zone([zone("zone_a", 3, holding_order="TASK-1"), zone("zone_b", 5, holding_order="TASK-2")])
-        self.assertIsNone(result.zone_id)
-        self.assertEqual(result.summary,
-                         "수령 구역이 모두 사용 중이에요 (수령 구역 A: 주문 TASK-1, 수령 구역 B: 주문 TASK-2)")
+    def test_every_zone_in_use_queues_behind_the_shortest_line(self) -> None:
+        result = choose_zone([zone("zone_a", 3, holding_order="TASK-1", ahead=2),
+                              zone("zone_b", 5, holding_order="TASK-2", ahead=1)])
+        self.assertEqual(result.zone_id, "zone_b")
+        self.assertEqual(result.summary, "수령 구역 B · 앞 주문 1건을 받은 뒤 들어감 (지금 주문 TASK-2) · 오늘 0회 · 경로 5곳")
 
-    def test_an_operators_zone_is_kept_and_only_checked(self) -> None:
+    def test_a_chosen_zone_is_kept_even_in_use(self) -> None:
         kept = choose_zone([zone("zone_a", 3), zone("zone_b", 9)], requested="zone_b")
-        self.assertEqual((kept.zone_id, kept.summary, kept.operator_chosen), ("zone_b", "수령 구역 B · 작업자 지정", True))
+        self.assertEqual((kept.zone_id, kept.summary, kept.operator_chosen),
+                         ("zone_b", "수령 구역 B · 주문할 때 고른 곳 · 바로 들어감", True))
         busy = choose_zone([zone("zone_a", 3), zone("zone_b", 9, holding_order="TASK-7")], requested="zone_b")
-        self.assertIsNone(busy.zone_id)  # never swapped for the free zone A
-        self.assertEqual(busy.summary, "작업자가 고른 구역(수령 구역 B)은 주문 TASK-7이 쓰고 있어요")
+        self.assertEqual(busy.zone_id, "zone_b")  # never swapped for the free zone A; it queues
+        self.assertEqual(busy.summary, "수령 구역 B · 주문할 때 고른 곳 · 앞 주문 1건을 받은 뒤 들어감 (지금 주문 TASK-7)")
+        unknown = choose_zone([zone("zone_a", 3)], requested="zone_x")
+        self.assertIsNone(unknown.zone_id)
 
 
 class PlanArmsTest(unittest.TestCase):

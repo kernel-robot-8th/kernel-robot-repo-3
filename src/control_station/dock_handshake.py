@@ -300,7 +300,8 @@ class DockAutoLoop:
     operator's box, CONTROL_STATION_DOCK_AUTO=0 starts with it off). An order's own flow still does its own handshake
     (the supervisor leaves a Pinky in an order alone)."""
 
-    PHASES = frozenset({DOCKING_PHASE, "redocking"})
+    # docked_manual: the loading relay (load_relay.py) runs the arm -> YOLO -> received chain of the test drive.
+    PHASES = frozenset({DOCKING_PHASE, "redocking", "docked_manual"})
 
     def __init__(self, pinky_ids: Any, phase: Callable[[str], str | None], step: Callable[[str], dict[str, Any]],
                  enabled: Callable[[], bool] = lambda: True, period_s: float = 1.0) -> None:
