@@ -85,7 +85,8 @@ class CameraLayoutTest(unittest.TestCase):
         self.assertEqual(len(normal.detections), 5)
         self.assertEqual(normal.frame_sequence, load.frame_sequence)
         head.load_detector.state = "error"
-        self.assertEqual(manager.load_snapshots()[0].detector_state, "error")
+        load = next(camera for camera in manager.load_snapshots() if camera.id == "head_camera")
+        self.assertEqual(load.detector_state, "error")
         self.assertEqual(self.by_id(manager)["head_camera"].detector_state, "ready")
 
     def test_four_arm_cameras_with_role_arm_and_link_state(self) -> None:
