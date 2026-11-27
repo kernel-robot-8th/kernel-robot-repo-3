@@ -213,7 +213,9 @@ class PolicyPick:
         if self.simulated:
             return self._simulate(policy, cancel_requested, started)
         home = {name: int(self.motion.poses["poses"]["home"]["ticks"][name]) for name in ARM_JOINTS}
-        watcher = RestWatcher(home, settings.policy_depart_ticks, settings.policy_rest_ticks, settings.policy_settle_s)
+        # Keywords: RestWatcher has no settle_s since 7c54c2d, and a fourth positional value landed in `departed`,
+        # so the run counted as already departed and stopped as RETURNED_TO_REST before the arm moved (2026-11-26).
+        watcher = RestWatcher(home, depart_ticks=settings.policy_depart_ticks, rest_ticks=settings.policy_rest_ticks)
         cameras = policy_cameras(policy, self.camera_devices)
         print(f"  정책 실행: {policy['model']} · front={cameras['front']} · wrist={cameras['wrist']}", flush=True)
         result = run_policy(

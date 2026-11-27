@@ -101,6 +101,92 @@ class OrderFlowTests(unittest.TestCase):
         self.assertIn("사과 주문 2 / 선반 0", task["error"]["message"])
         self.assertEqual(self.events(task, "ARM_PICK_STARTED"), [])
         self.assertEqual(self.step(task, "NOTIFY_PINKY_RECEIVED")["result"]["outcome"], "NOT_EXECUTED_AFTER_FAILURE")
+        # 2026-11-27: the Pinky used to leave in VALIDATE_ORDER and drove on although the order had already failed.
+        self.assertEqual(self.events(task, "PINKY_DISPATCHED"), [])
+        self.assertEqual(self.world.pinkies["10"]["phase"], "parked")
+
+    def test_a_fleet_busy_with_another_pinky_delays_the_start_instead_of_failing(self) -> None:
+        from control_station.pinky_fleet import PinkyFleetError
+
+        self.start()
+        real_dispatch, refusals = self.world.dispatch, []
+
+        def busy_twice(pinky_id, labels=None):
+            if len(refusals) < 2:
+                refusals.append(pinky_id)
+                raise PinkyFleetError("PINKY_FLEET_BUSY", "Pinky 11 작업이 끝날 때까지 기다려 주세요.")
+            return real_dispatch(pinky_id, labels)
+        self.flow.devices.dispatch = busy_twice
+        task = self.wait(self.order())
+        self.assertEqual(task["status"], "SUCCEEDED", task["error"])
+        self.assertEqual(len(refusals), 2)
+        self.assertEqual(len(self.events(task, "PINKY_DISPATCH_WAITING")), 1)
+        self.assertEqual(len(self.events(task, "PINKY_DISPATCHED")), 1)
+
+    def failing_routes(self, failures: int) -> list[str]:
+        """The first `failures` routes end in failure on the way (as 5 정면 missing its 5 cm check, 2026-11-27)."""
+        real_status, real_dispatch, sends = self.world.fleet_status, self.world.dispatch, []
+
+        def dispatch(pinky_id, labels=None):
+            sends.append(pinky_id)
+            return {"accepted": True, "simulated": True} if len(sends) <= failures else real_dispatch(pinky_id, labels)
+
+        def status(pinky_id):
+            if len(sends) <= failures:
+                return {"phase": "parked", "route_status": "failed", "location": "5 정면",
+                        "message": "경로 주행이 중단됐습니다."}
+            return real_status(pinky_id)
+        self.flow.devices.dispatch, self.flow.devices.fleet_status = dispatch, status
+        return sends
+
+    def test_a_route_that_fails_on_the_way_is_sent_again(self) -> None:
+        self.start()
+        sends = self.failing_routes(1)
+        task = self.wait(self.order())
+        self.assertEqual(task["status"], "SUCCEEDED", task["error"])
+        self.assertEqual(len(sends), 2)
+        self.assertEqual([e["payload"]["attempt"] for e in self.events(task, "PINKY_ROUTE_RETRY")], [1])
+
+    def test_a_route_that_keeps_failing_stops_the_order_after_the_retries(self) -> None:
+        self.start()
+        self.flow.max_route_retries, self.flow.route_retry_gap_s = 2, 0.0
+        sends = self.failing_routes(100)
+        task = self.wait(self.order())
+        self.assertEqual((task["status"], task["error"]["code"]), ("FAILED", "PINKY_ROUTE_FAILED"))
+        self.assertEqual(len(sends), 3)  # the first start and two more
+
+    def test_a_route_the_operator_cancelled_is_not_sent_again(self) -> None:
+        self.start(arrival_timeout_s=0.5)
+        sends = []
+        self.flow.devices.dispatch = lambda pinky_id, labels=None: sends.append(pinky_id) or {"accepted": True}
+        self.flow.devices.fleet_status = lambda pinky_id: {"phase": "parked", "route_status": "cancelled"}
+        task = self.wait(self.order())
+        self.assertEqual(task["error"]["code"], "PINKY_ARRIVAL_TIMEOUT")
+        self.assertEqual(len(sends), 1)
+
+    def test_a_failed_order_stops_the_route_it_sent_its_pinky_on(self) -> None:
+        self.start(arrival_timeout_s=0.5)
+        stops = []
+        self.flow.devices.dispatch = lambda pinky_id, labels=None: {"accepted": True}
+        self.flow.devices.fleet_status = lambda pinky_id: {"phase": "driving", "route_status": "running"}
+        self.flow.devices.stop_pinky = stops.append
+        task = self.wait(self.order())
+        self.assertEqual(task["error"]["code"], "PINKY_ARRIVAL_TIMEOUT")
+        deadline = time.monotonic() + 2
+        while not stops and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(stops, [task["pinky_id"]])
+
+    def test_other_refusals_still_stop_the_order(self) -> None:
+        from control_station.pinky_fleet import PinkyFleetError
+
+        self.start()
+
+        def refuse(pinky_id, labels=None):
+            raise PinkyFleetError("PINKY_DISPATCH_REJECTED", "주행준비를 다시 실행하세요")
+        self.flow.devices.dispatch = refuse
+        task = self.wait(self.order())
+        self.assertEqual((task["status"], task["error"]["code"]), ("FAILED", "PINKY_DISPATCH_REJECTED"))
 
     def test_pick_failure_and_loss_stop_the_order_without_a_signal(self) -> None:
         for fault, code in (("PICK_FAILED:carrot", "PICK_FAILED_STILL_ON_SHELF"), ("ITEM_LOST:carrot", "ITEM_LOST")):

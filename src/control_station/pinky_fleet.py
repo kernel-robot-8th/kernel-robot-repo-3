@@ -266,7 +266,12 @@ class PinkyFleetClient:
         if status == 202 and answer.get("ok"):
             return {"accepted": True, "simulated": answer.get("simulated") is True, "http_status": status,
                     "labels": answer.get("labels")}
-        raise PinkyFleetError("PINKY_DISPATCH_REJECTED", answer.get("error") or answer.get("message") or f"HTTP {status}")
+        reason = answer.get("error") or answer.get("message") or f"HTTP {status}"
+        if status == 409 and "작업이 끝날 때까지" in reason:
+            # The dashboard runs one Pinky job (preparation, localization, ...) at a time and refuses every start
+            # meanwhile; the flow waits that out instead of failing the order (order_flow._dispatch).
+            raise PinkyFleetError("PINKY_FLEET_BUSY", reason)
+        raise PinkyFleetError("PINKY_DISPATCH_REJECTED", reason)
 
     def mission_complete(self, pinky_id: str, token: str | None) -> dict[str, Any]:
         """Pickup confirmed at the receiving zone: POST /api/robots/<id>/mission-complete {token}; the Pinky

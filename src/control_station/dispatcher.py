@@ -34,10 +34,10 @@ from control_station.task_orchestrator import TaskExecutionConflict
 
 # The line waits on these: they clear by themselves when a Pinky comes home or a zone is picked up.
 WAIT_CODES = {"PINKY_UNAVAILABLE", "ZONE_BUSY", "SHELF_STOCK_UNAVAILABLE"}
-# Steps of a started order during which its Pinky has not been sent off yet (VALIDATE_ORDER dispatches it), and, for
+# Steps of a started order during which its Pinky has not been sent off yet (CHECK_SHELF_STOCK dispatches it), and, for
 # wait_for_spot, during which it has not been confirmed at the loading spot. START_SHIPMENT is in neither: there the
 # order waits for a parked Pinky, nothing is driving.
-BEFORE_DEPARTURE = frozenset({"VALIDATE_ORDER"})
+BEFORE_DEPARTURE = frozenset({"VALIDATE_ORDER", "CHECK_SHELF_STOCK"})  # the Pinky leaves once the stock is seen
 BEFORE_SPOT = frozenset({"VALIDATE_ORDER", "CHECK_SHELF_STOCK", "PLAN_ARM_SEQUENCE", "WAIT_PINKY_ARRIVAL"})
 _DONE = "SUCCEEDED"
 # Stopped orders keep their Pinky until the operator acknowledges the alert (store._pinky_holding_orders).

@@ -543,7 +543,7 @@ def main() -> None:
         pick_hooks = {"pick_is_real": True, "pick_settle": order_pick.settle}
     server.order_devices = OrderDevices(
         shelf_stock, pinky_load, fleet_status, fleet_confirm, order_parking, order_pick, dispatch, mission_complete,
-        **pick_hooks,
+        **pick_hooks, stop_pinky=fleet.stop if fleet is not None else None,
     )
     try:
         receiving_zones = load_receiving_zones()

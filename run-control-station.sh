@@ -20,7 +20,7 @@ POLICY_SERVER_ADDRESS="${POLICY_SERVER_HOST}:${POLICY_SERVER_PORT}"
 
 usage() {
   printf '사용법: %s [--help]\n' "$0"
-  printf '  인수 없음  관제와 설정된 정책 서버·팔 워커 시작\n'
+  printf '  인수 없음  핑키 관제(8765)·천장 캠 주차 launch·관제와 설정된 정책 서버·팔 워커 시작\n'
 }
 
 case "${1:-}" in
@@ -59,11 +59,9 @@ if [[ -z "${PYTHON_BIN}" ]]; then
   PYTHON_BIN="$(command -v python3)"
 fi
 
-if curl --silent --show-error --max-time 1 "${CONTROL_STATION_URL}/api/health" >/dev/null 2>&1; then
-  printf '이미 관제 서버가 실행 중입니다: %s\n' "${CONTROL_STATION_URL}"
-  exit 1
-fi
-
+# bash는 `&`로 띄운 프로그램에 SIGINT 무시를 물려주고, 그 안의 `trap - INT`로는 되돌릴 수 없습니다.
+# 그대로 두면 Ctrl-C 정리 때 보낸 INT를 관제·워커·정책 서버가 무시해 정리가 멈추므로 실행 직전에 기본값으로 되돌립니다.
+RESTORE_INT='import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp(sys.argv[1], sys.argv[1:])'
 CONTROL_STATION_PID=""
 POLICY_SERVER_PID=""
 STARTED_WORKER_PIDS=()
@@ -152,8 +150,17 @@ worker_process_running() {
   pgrep -f "[o]mx_lerobot_worker.py.*--robot-id $1([[:space:]]|$)" >/dev/null 2>&1
 }
 
+# 핑키 관제(8765)와 천장 캠 주차 launch도 함께 켭니다 (src/control_station/runtime_services.py, 관제 화면 사이드바와 같은 코드).
+# 둘 다 따로 떠서 이 스크립트를 Ctrl-C로 끝내도 남고, 다음 실행 때 그대로 재사용합니다.
+"${PYTHON_BIN}" -m control_station.runtime_services ensure || true
+
+if api_ready; then
+  printf '주문 관제는 이미 실행 중입니다: %s (핑키 관제·천장 캠 주차만 확인하고 끝냅니다)\n' "${CONTROL_STATION_URL}"
+  exit 0
+fi
+
 printf '관제 서버 시작: %s\n' "${CONTROL_STATION_URL}"
-setsid bash -c 'trap - INT; exec "$@"' _ "${PYTHON_BIN}" -m control_station.app &
+setsid python3 -c "${RESTORE_INT}" "${PYTHON_BIN}" -m control_station.app &
 CONTROL_STATION_PID=$!
 for _ in $(seq 1 30); do
   if api_ready; then break; fi
@@ -219,7 +226,7 @@ PY
         printf 'ACT 정책 서버 시작: %s (로그: %s)\n' "${POLICY_SERVER_ADDRESS}" "${POLICY_SERVER_LOG}"
         (
           cd "${LEROBOT_DIR}"
-          exec setsid bash -c 'trap - INT; exec "$@"' _ "${LEROBOT_PYTHON}" \
+          exec setsid python3 -c "${RESTORE_INT}" "${LEROBOT_PYTHON}" \
             -m lerobot.async_inference.policy_server \
             --host="${POLICY_SERVER_HOST}" --port="${POLICY_SERVER_PORT}" \
             --fps="${CONTROL_STATION_POLICY_FPS:-30}" \
@@ -255,7 +262,7 @@ PY
         return
       fi
       printf '%s 팔 워커 시작: %s (로그: %s)\n' "${side}" "${worker_id}" "${log_file}"
-      setsid bash -c 'trap - INT; exec "$@"' _ "${LEROBOT_PYTHON}" \
+      setsid python3 -c "${RESTORE_INT}" "${LEROBOT_PYTHON}" \
         "${REPO_DIR}/scripts/omx_lerobot_worker.py" \
         --server "${CONTROL_STATION_URL}" --robot-id "${robot_id}" --worker-id "${worker_id}" \
         --port "${port}" --poses "${REPO_DIR}/${poses}" \
@@ -263,6 +270,7 @@ PY
         --policy-rest-ticks "${CONTROL_STATION_POLICY_REST_TICKS:-150}" \
         --profile-velocity "${CONTROL_STATION_OMX_PROFILE_VELOCITY:-2}" \
         --profile-acceleration "${CONTROL_STATION_OMX_PROFILE_ACCELERATION:-1}" \
+        --tolerance "${CONTROL_STATION_OMX_TOLERANCE:-15}" \
         >>"${log_file}" 2>&1 &
       local pid=$!
       STARTED_WORKER_PIDS+=("${pid}")

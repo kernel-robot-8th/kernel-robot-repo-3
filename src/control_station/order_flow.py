@@ -1,8 +1,9 @@
 """The order flow: shelf stock -> arm plan -> wait for the Pinky -> pick and check each object -> total -> signal.
 
 Steps (made per order by store.order_step_definitions):
-  VALIDATE_ORDER       objects have policies, arms are configured; the mock world sends the Pinky off
-  CHECK_SHELF_STOCK    shelf cameras see at least the ordered number of each object (SHELF_STOCK_SHORT otherwise)
+  VALIDATE_ORDER       objects have policies, arms are configured
+  CHECK_SHELF_STOCK    shelf cameras see at least the ordered number of each object (SHELF_STOCK_SHORT otherwise);
+                       only then the Pinky is sent off, so an order without stock never moves a Pinky (2026-11-27)
   PLAN_ARM_SEQUENCE    each unit goes to the arm on the shelf where it was seen (left shelf -> left arm), grouped
                        by arm; written into the PICK_ITEM/VERIFY_TRANSFER steps
   WAIT_PINKY_ARRIVAL   the loading spot is free for this order, the Pinky fleet reports the Pinky stopped at the
@@ -10,7 +11,9 @@ Steps (made per order by store.order_step_definitions):
                        PINKY_POSITION_ABNORMAL; when the camera says MISALIGNED for redock_after_checks checks in a row
                        the Pinky is sent back in (redock: it backs out, squares up and drives in again), up to
                        max_redocks times, then the step keeps waiting for the operator. The arms never move before
-                       this passes.
+                       this passes. A route that ends in failure on the way (e.g. 5 정면 missed its 5 cm check,
+                       2026-11-27) is sent again from where the Pinky stands, every route_retry_gap_s, up to
+                       max_route_retries times; a route the operator stopped (cancelled) is never resent.
   CONFIRM_DOCKING      dock_complete to the Pinky fleet, which then holds the Pinky (docked_manual)
   PICK_ITEM            the planned arm picks one unit with its trained policy and puts it on the Pinky
   VERIFY_TRANSFER      shelf count -1 and Pinky count +1; still on the shelf -> PICK_FAILED_STILL_ON_SHELF;
@@ -23,7 +26,10 @@ Steps (made per order by store.order_step_definitions):
 An order larger than one tray runs as shipments, one after another (store.order_step_definitions): the steps from
 WAIT_PINKY_ARRIVAL to WAIT_PINKY_PARKED repeat per shipment, and START_SHIPMENT opens each later one once the
 previous Pinky is parked again (one Pinky drives at a time), choosing that load's Pinky and sending it off.
-Failures stop the order with no retry and no signal to the Pinky; the operator sees the alert and decides. The
+Failures stop the order with no retry and no signal to the Pinky, except that the route this order sent its Pinky
+on is stopped so the fleet brings the Pinky home and the loading spot frees itself (send_home_after_failure;
+2026-11-27, a failed order's Pinky used to stand docked at station 5 until someone sent it home) (one exception: a start the Pinky fleet refuses
+only because it is busy with another Pinky, e.g. a localization, is sent again for up to dispatch_busy_wait_s); the operator sees the alert and decides. The
 shipments after a failure never start.
 The devices behind the observers and the picker are plugged in from outside (the mock world for now).
 """
@@ -90,6 +96,9 @@ class OrderDevices:
     pick_is_real: bool = False
     # After VERIFY_TRANSFER saw the object move: (pick result, evidence) closes the arm's unverified command.
     pick_settle: Callable[[dict[str, Any], dict[str, Any]], None] | None = None
+    # Stop the Pinky's route (pinky id). The fleet then drives a stopped Pinky home by itself after its wait
+    # (pinky_fleet_dashboard navigation.json auto_return_after_stop_s); used when an order fails.
+    stop_pinky: Callable[[str], Any] | None = None
 
 
 def _label(policies: Any, object_class: str) -> str:
@@ -126,8 +135,14 @@ class OrderFlow:
         choose_shipment_pinky: Callable[[str, int], dict[str, Any]] | None = None,
         zone_ahead: Callable[[str], tuple[str | None, list[str]]] | None = None,
         hand_pick_timeout_s: float = 300.0,
+        dispatch_busy_wait_s: float = 60.0,
+        route_retry_gap_s: float = 10.0,
+        max_route_retries: int = 10,
     ) -> None:
         self.arms = arms
+        self.dispatch_busy_wait_s = dispatch_busy_wait_s
+        self.route_retry_gap_s = route_retry_gap_s
+        self.max_route_retries = max_route_retries
         self.hand_pick_timeout_s = hand_pick_timeout_s
         # order id -> (its receiving zone, the older orders still headed there): a loaded Pinky waits for these.
         self.zone_ahead = zone_ahead
@@ -165,6 +180,7 @@ class OrderFlow:
         self._before: dict[str, dict[str, int]] = {}
         self._picked: dict[str, dict[str, Any]] = {}  # task id -> the last pick's result, settled by VERIFY_TRANSFER
         self._guard = threading.Lock()
+        self._route_owner: dict[str, str] = {}  # pinky id -> the order whose route it drives (the latest dispatch)
 
     # ---- orchestrator hooks ----
     def run_step(self, ctx: StepContext) -> dict[str, Any] | None:
@@ -249,26 +265,56 @@ class OrderFlow:
         missing = [name for name in self._ordered(ctx) if not self.policies.matches(name)]
         if missing:
             raise OrderFlowError("ORDER_POLICY_NOT_FOUND", f"학습된 정책이 없는 물체: {', '.join(missing)}")
-        if self.devices.dispatch is not None:
-            self._dispatch(ctx)
         return {"source": "control_station", "outcome": "ORDER_VALID", "order_items": ctx.task["order_items"]}
 
-    def _dispatch(self, ctx: StepContext, pinky: str | None = None) -> None:
-        """Send the Pinky off on its route: parking -> station 5 -> the order's receiving zone."""
+    def _dispatch(self, ctx: StepContext, pinky: str | None = None) -> bool:
+        """Send the Pinky off on its route: parking -> station 5 -> the order's receiving zone. False when the order
+        was canceled while the fleet was busy with another Pinky."""
         pinky, zone = pinky or self._pinky(ctx), ctx.task.get("receiving_zone")
         labels = self.route_for(zone)
-        try:
-            answer = self.devices.dispatch(pinky, labels) or {}
-        except PinkyFleetError as exc:
-            raise OrderFlowError(exc.error_code, f"핑키 {self._name(pinky)} 출발 실패: {exc}", "pinky_fleet") from exc
-        except OSError as exc:
-            raise OrderFlowError("PINKY_FLEET_UNREACHABLE", f"핑키 관제에 연결하지 못했습니다: {exc}", "pinky_fleet") from exc
+        deadline = time.monotonic() + self.dispatch_busy_wait_s
+        waiting = False
+        while True:
+            try:
+                answer = self.devices.dispatch(pinky, labels) or {}
+                break
+            except PinkyFleetError as exc:
+                if exc.error_code != "PINKY_FLEET_BUSY" or time.monotonic() > deadline:
+                    raise OrderFlowError(exc.error_code, f"핑키 {self._name(pinky)} 출발 실패: {exc}", "pinky_fleet") from exc
+                if not waiting:
+                    waiting = True
+                    ctx.record("PINKY_DISPATCH_WAITING", {"pinky_id": pinky, "message": f"핑키 {self._name(pinky)} 출발 대기: {exc}"})
+            except OSError as exc:
+                raise OrderFlowError("PINKY_FLEET_UNREACHABLE", f"핑키 관제에 연결하지 못했습니다: {exc}", "pinky_fleet") from exc
+            if ctx.cancel_event.wait(max(self.poll_s, 1.0)):
+                return False
         simulated = bool(answer.get("simulated"))
         where = f"5번을 거쳐 {zone}까지" if labels else "5번으로"
         ctx.record("PINKY_DISPATCHED", {"pinky_id": pinky, "route": labels, "simulated": simulated,
                                         "message": ("모의: " if simulated else "") + f"핑키 {self._name(pinky)} 출발, {where}"})
+        with self._guard:
+            self._route_owner[pinky] = ctx.task["id"]
+        return True
 
-    def _check_shelf_stock(self, ctx: StepContext) -> dict[str, Any]:
+    def send_home_after_failure(self, task_id: str) -> str | None:
+        """The order failed: stop the route it sent its Pinky on, so the fleet drives the Pinky home after its wait
+        and the loading spot frees itself once the Pinky has left. Nothing happens when another order has since sent
+        that Pinky off, or when its route already ended. Returns what was done, for the log."""
+        with self._guard:
+            pinky = next((p for p, owner in self._route_owner.items() if owner == task_id), None)
+            if pinky is not None:
+                self._route_owner.pop(pinky)
+        if pinky is None or self.devices.stop_pinky is None:
+            return None
+        try:
+            if self.devices.fleet_status(pinky).get("route_status") not in {"starting", "running"}:
+                return None
+            self.devices.stop_pinky(pinky)
+        except (PinkyFleetError, OSError) as exc:
+            return f"{task_id} 실패 후 핑키 {self._name(pinky)} 정지 요청 실패: {exc}"
+        return f"{task_id} 실패: 핑키 {self._name(pinky)} 경로를 멈춤 (핑키 관제가 잠시 뒤 주차장으로 복귀시킴)"
+
+    def _check_shelf_stock(self, ctx: StepContext) -> dict[str, Any] | None:
         observation = self._observe("선반 재고", self.devices.shelf_stock)
         totals: Counter = Counter()
         for counts in observation["shelves"].values():
@@ -279,6 +325,8 @@ class OrderFlow:
         if short:
             text = ", ".join(f"{_label(self.policies, name)} 주문 {want} / 선반 {have}" for name, (want, have) in short.items())
             raise OrderFlowError("SHELF_STOCK_SHORT", f"선반 재고 부족: {text}", observation.get("source", "shelf_camera"))
+        if self.devices.dispatch is not None and not self._dispatch(ctx):
+            return None
         return {"source": observation.get("source"), "outcome": "STOCK_CONFIRMED", "shelves": observation["shelves"],
                 "simulated": observation.get("simulated", False)}
 
@@ -346,8 +394,8 @@ class OrderFlow:
             ctx.cancel_event.wait(self.poll_s)
         ctx.record("SHIPMENT_STARTED", {"shipment": number, "shipments": count, "pinky_id": pinky,
                                         "message": f"운송 {number}/{count} 시작 · 핑키 {self._name(pinky)} · {choice.get('summary')}"})
-        if self.devices.dispatch is not None:
-            self._dispatch(ctx, pinky)
+        if self.devices.dispatch is not None and not self._dispatch(ctx, pinky):
+            return None
         return {"source": "control_station", "outcome": "SHIPMENT_STARTED", "shipment": number, "shipments": count,
                 "pinky_id": pinky}
 
@@ -366,6 +414,7 @@ class OrderFlow:
                                   max_redocks=self.max_redocks, blind_s=self.camera_blind_s,
                                   redock_wait_s=self.redock_wait_s)
         name = self._name(pinky)
+        route_retries, next_retry_at = 0, 0.0
         while True:
             if ctx.cancel_event.is_set():
                 return None
@@ -386,6 +435,23 @@ class OrderFlow:
                 last_phase = status["phase"]
                 ctx.record("PINKY_STATUS", {"pinky_id": pinky, "phase": status["phase"], "message": status.get("message"),
                                             "location": status.get("location"), "simulated": status.get("simulated", False)})
+            if status.get("route_status") == "failed" and self.devices.dispatch is not None:
+                # The fleet reports a failed route as idle ("parked"), so without this the order would only wait for
+                # the arrival timeout. The order still wants the Pinky: send it again from where it stands.
+                why = status.get("message") or "이유 없음"
+                if route_retries >= self.max_route_retries:
+                    raise OrderFlowError("PINKY_ROUTE_FAILED",
+                                         f"핑키 {name}를 {route_retries}번 다시 보냈지만 주행이 또 중단됐습니다: {why}", "pinky_fleet")
+                if time.monotonic() >= next_retry_at:
+                    route_retries += 1
+                    ctx.record("PINKY_ROUTE_RETRY", {"pinky_id": pinky, "attempt": route_retries,
+                                                     "location": status.get("location"),
+                                                     "message": f"핑키 {name} 주행 중단({why}) → 적재 자리로 다시 보냄 ({route_retries}번째)"})
+                    if not self._dispatch(ctx, pinky):
+                        return None
+                    next_retry_at = time.monotonic() + self.route_retry_gap_s
+                ctx.cancel_event.wait(self.poll_s)
+                continue
             if status["phase"] != "docking_manual":
                 handshake.step(status["phase"], None)  # a redock in flight: the Pinky has left the spot
             if status["phase"] == "docking_manual":

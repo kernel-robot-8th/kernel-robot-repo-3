@@ -288,6 +288,22 @@ class LidarLocalizeTests(unittest.TestCase):
         self.assertLess(_math.hypot(sent[0][0] - 0.53, sent[0][1] - 0.38), 0.04)
         self.assertTrue(state.robots['10']['localization']['applied'])
 
+    def test_empty_scans_of_a_lidar_spinning_up_are_skipped(self):
+        grid = room(extra_walls={(col, 30) for col in range(1, 25)})
+        good = cast(grid, 0.53, 0.38, 0.0)
+        monitor, sent = self.monitor(grid, good)
+        empty = dict(good, ranges=[None] * len(good['ranges']))
+        served = []
+
+        def scan_after(robot_id, after, timeout):  # two empty scans first, as after a LiDAR restart
+            served.append(after)
+            return dict(empty if len(served) <= 2 else good, frame_id='rplidar_link', received_at=after + 0.1)
+        monitor.scan_after = scan_after
+        with patch.multiple(app, TELEMETRY=monitor, STATE=app.FleetState()):
+            ok, detail = app._localize_with_lidar('10')
+        self.assertTrue(ok, detail)
+        self.assertEqual(len(sent), 1)
+
     def test_no_amcl_means_no_pose(self):
         grid = room(extra_walls={(col, 30) for col in range(1, 25)})
         monitor, _ = self.monitor(grid, cast(grid, 0.53, 0.38, 0.0), subscribed=False)

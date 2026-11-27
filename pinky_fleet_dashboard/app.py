@@ -34,7 +34,7 @@ from scripts.traffic import TrafficCoordinator
 from scripts.runtime_bundle import install_command
 from scripts.motion_gate import geometry
 from scripts.control_journal import ControlJournal
-from scripts.scan_localizer import locate as locate_in_map, refine as refine_in_map
+from scripts.scan_localizer import MIN_POINTS as SCAN_MIN_POINTS, locate as locate_in_map, refine as refine_in_map, scan_points
 from scripts.fusion_grid import validated as validate_fusion_settings
 from scripts.ir_calibration import IRCalibrationStore
 
@@ -71,6 +71,7 @@ STILL_LINEAR_MPS = 0.02
 STILL_ANGULAR_RPS = 0.05
 # Two scans in a row must place the robot within these of each other before AMCL is given the pose.
 SCAN_AGREE_M = 0.05
+SCAN_WARMUP_S = 8.0  # skip near-empty scans this long (a LiDAR spinning up after a restart sends them)
 SCAN_AGREE_YAW_RAD = math.radians(5.0)
 WAYPOINTS_PATH = ROOT / "data" / "waypoints.json"
 LOCAL_MAP_DIR = Path.home() / "Documents" / "Pinky_backup"
@@ -1368,6 +1369,14 @@ def _lidar_match(robot_id: str, after: float):
     laser = TELEMETRY.frame_in_base(robot_id, scan["frame_id"])
     if laser is None:
         return None, f"라이다 장착 위치(TF {scan['frame_id']} → {TELEMETRY.base_frames[robot_id]})를 모릅니다."
+    # 2026-11-27: right after Nav2 came up, P1 got a scan with no usable return ("라이다 점이 0개뿐") although the
+    # LiDAR read ~700 points a moment later. Wait out such scans for a few seconds instead of failing on the first.
+    deadline = time.time() + SCAN_WARMUP_S
+    while len(scan_points(scan, laser)) < SCAN_MIN_POINTS and time.time() < deadline:
+        newer = TELEMETRY.scan_after(robot_id, scan["received_at"], 3.0)
+        if newer is None:
+            break
+        scan = newer
     # Where a standing Pinky is expected: any parking slot, station 5 (loading) and the receiving zones.
     # Pinkys are parked facing either way, so a slot counts by position; its mirror image lies near no known place.
     places = [(spot["x_m"], spot["y_m"], None) for spot in PARKING.values()]
