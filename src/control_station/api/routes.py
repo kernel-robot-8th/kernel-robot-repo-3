@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
-from control_station.api import arm, cameras, flow, orders, pinky, status, stop, tasks
+from control_station.api import arm, cameras, flow, orders, pinky, runtime, status, stop, tasks
 
 if TYPE_CHECKING:
     from control_station.app import ControlStationHandler
@@ -46,6 +46,7 @@ _NEXT_COMMAND = re.compile(r"/api/arm/[^/]+/commands/next")
 GET_ROUTES: tuple[Route, ...] = (
     Route(_prefix_suffix("/streams/", ".mjpg"), cameras.get_stream),
     Route(_path("/api/health"), status.get_health),
+    Route(_path("/api/runtime"), runtime.get_runtime),
     Route(_path("/api/robots"), status.get_robots),
     Route(_path("/api/cameras"), cameras.get_cameras),
     Route(_path("/api/arm/status"), arm.get_status),
@@ -101,6 +102,8 @@ POST_ROUTES: tuple[Route, ...] = (
         "Cross-origin arm-command request rejected",
     ),
     Route(_path("/api/tasks"), tasks.post_task),
+    Route(lambda route, parts: len(parts) == 4 and parts[:2] == ["api", "runtime"] and parts[3] == "start",
+          runtime.post_start, "Cross-origin runtime request rejected", reads_body=False),
     # The big red button: the arms and every Pinky in one request (stop_all.py).
     Route(_path("/api/stop-all"), stop.post_stop_all, "Cross-origin stop request rejected", reads_body=False),
     Route(_path("/api/pinky/stop-all"), pinky.post_stop_all, "Cross-origin Pinky-stop request rejected",

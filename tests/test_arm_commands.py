@@ -354,6 +354,33 @@ class PolicyCommandTests(unittest.TestCase):
         )
         self.assertEqual((done["state"], done["reason_code"]), ("UNKNOWN", "PLACE_NOT_VERIFIED"))
 
+    def left_pick_left_unverified(self) -> dict:
+        command = self.store.create(self.request(object_class="당근"))
+        claimed = self.store.claim_next("arm-01", "w1", 0)
+        base = {"robot_id": "arm-01", "worker_id": "w1", "simulated": False}
+        self.store.apply_worker_event(claimed["command_id"], {**base, "event_id": "a", "event": "ACCEPTED"})
+        self.store.apply_worker_event(
+            claimed["command_id"],
+            {**base, "event_id": "u", "event": "RESULT_UNKNOWN", "reason_code": "PLACE_NOT_VERIFIED", "pose_reached": True},
+        )
+        return command
+
+    def test_an_unconfirmed_pick_on_an_unplugged_arm_does_not_hold_the_other_arm_up(self) -> None:
+        self.left_pick_left_unverified()
+        right = dict(self.request(object_class="사과"), robot_id="arm-02")
+        with self.assertRaises(ArmCommandConflict) as error:  # the left worker polled just now: still blocking
+            self.store.create(right)
+        self.assertEqual(error.exception.error_code, "POLICY_RUN_ACTIVE")
+        later = arm_commands._now() + arm_commands.timedelta(seconds=arm_commands.OFFLINE_ARM_AFTER_S + 5)
+        with mock.patch.object(arm_commands, "_now", return_value=later):
+            self.assertEqual(self.store.create(right)["state"], "QUEUED")
+
+    def test_an_unconfirmed_pick_still_blocks_its_own_arm(self) -> None:
+        self.left_pick_left_unverified()
+        later = arm_commands._now() + arm_commands.timedelta(seconds=arm_commands.OFFLINE_ARM_AFTER_S + 5)
+        with mock.patch.object(arm_commands, "_now", return_value=later), self.assertRaises(ArmCommandConflict):
+            self.store.create(self.request(object_class="당근"))
+
 
 class PolicyCameraHandoverTests(PolicyCommandTests):
     """The control station closes the policy's cameras only while a PICK_WITH_POLICY command is with the worker."""

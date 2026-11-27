@@ -405,6 +405,10 @@ class MockTaskOrchestrator:
                 final = self.task_store.get_task(task_id) or {}
                 stopped = final.get("status") == TaskStatus.FAILED.value and final.get("pinky_id")
                 self.order_flow.release(task_id, stopped_pinky=final.get("pinky_id") if stopped else None)
+                if stopped:
+                    note = self.order_flow.send_home_after_failure(task_id)
+                    if note:
+                        print(note, flush=True)
 
     def _run_step(
         self,

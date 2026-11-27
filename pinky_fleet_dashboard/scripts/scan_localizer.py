@@ -20,6 +20,7 @@ from scipy import ndimage
 SIGMA_M = 0.05            # how far from a wall an end point may land and still mostly count
 MAX_RANGE_M = 4.0         # the cell is about 2.2 m x 2.6 m; farther returns see beyond the map
 BEAMS = 180               # end points used per score (of 720)
+MIN_POINTS = 40           # fewer usable returns than this (a LiDAR still spinning up) cannot be placed
 COARSE_YAW_STEP = math.radians(3.0)
 FINE_STEP_M = 0.01
 FINE_YAW_STEP = math.radians(0.5)
@@ -125,7 +126,7 @@ def locate(grid: dict[str, Any], scan: dict[str, Any], laser_pose: tuple[float, 
     candidates stands at one of them; otherwise the candidates go to the operator. The heading always comes
     from the scan."""
     points = scan_points(scan, laser_pose)
-    if len(points) < 40:
+    if len(points) < MIN_POINTS:
         return Match(False, None, None, None, 0.0, 0.0, f"라이다 점이 {len(points)}개뿐이라 위치를 찾을 수 없습니다")
     field = MapField(grid)
     cells = field.free_cells()
@@ -188,7 +189,7 @@ def refine(grid: dict[str, Any], scan: dict[str, Any], laser_pose: tuple[float, 
     """The best-fitting pose near one the operator gave: (score, x, y, yaw), searched only within span_m and
     span_yaw of it, so the answer stays on the operator's side of a symmetric cell."""
     points = scan_points(scan, laser_pose)
-    if len(points) < 40:
+    if len(points) < MIN_POINTS:
         return 0.0, x, y, yaw
     field = MapField(grid)
     best = (-1.0, x, y, yaw)

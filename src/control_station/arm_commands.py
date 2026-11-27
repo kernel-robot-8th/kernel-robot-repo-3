@@ -60,6 +60,11 @@ PHASES = frozenset(
     }
 )
 MAX_WAIT_S = 30.0
+# An unconfirmed (UNKNOWN) command of an arm whose worker has not polled for this long no longer holds the other arm
+# up (2026-11-27: the left arm's place_not_verified pick from the day before, with the left arm unplugged, refused
+# every right-arm pick of the next day's orders). It still blocks its own arm, and everything again once that arm's
+# worker is back, so it must be confirmed on site before that arm moves again.
+OFFLINE_ARM_AFTER_S = 60.0
 
 _SLOT_ID = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
 _TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
@@ -392,6 +397,19 @@ class ArmCommandStore:
             or (state == ArmCommandState.UNKNOWN and command.operator_cleared_at is None)
         )
 
+    def _unconfirmed_on_offline_arm(self, command: ArmCommandRecord, robot_id: str, now: datetime) -> bool:
+        """An UNKNOWN command of another arm whose worker is gone (OFFLINE_ARM_AFTER_S). Call with self._lock held."""
+        if command.robot_id == robot_id or command.state != ArmCommandState.UNKNOWN.value:
+            return False
+        heartbeat = self._workers.get(command.robot_id) or {}
+        if heartbeat.get("waiting_polls", 0) > 0:
+            return False
+        try:
+            last_poll = datetime.fromisoformat(str(heartbeat["last_poll_at"]))
+        except (KeyError, ValueError):
+            return True  # its worker never polled since this server started
+        return (now - last_poll).total_seconds() > OFFLINE_ARM_AFTER_S
+
     # ---- internal state changes ----
 
     @staticmethod
@@ -503,7 +521,8 @@ class ArmCommandStore:
                 ))
                 for active in open_commands:
                     self._settle(session, active, now)
-                blocking_all = [active for active in open_commands if self._blocks(active)]
+                blocking_all = [active for active in open_commands
+                                if self._blocks(active) and not self._unconfirmed_on_offline_arm(active, robot_id, now)]
                 active_policy = next(
                     (active for active in blocking_all if active.operation == "PICK_WITH_POLICY"), None
                 )

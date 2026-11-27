@@ -2473,14 +2473,71 @@ intakeOrders.addEventListener('click', (event) => {
   controlIntakeOrder(order, action);
 });
 
+// ---- 실행 구성요소 (사이드바): 핑키 관제·천장 캠 주차·정책 서버·팔 워커, 꺼진 것은 여기서 켬 ----
+const runtimeList = document.querySelector('#runtimeList');
+const runtimeStarting = new Map();  // service id -> message while a start request is in flight or settling
+const runtimeStateWords = { on: '켜짐', off: '꺼짐', warn: '확인 필요', skip: '안 씀' };
+
+function renderRuntime(services) {
+  runtimeList.innerHTML = services.map((service) => {
+    const starting = runtimeStarting.get(service.id);
+    if (starting && service.state !== 'off') runtimeStarting.delete(service.id);
+    const pending = runtimeStarting.has(service.id);
+    const state = pending ? 'starting' : service.state;
+    const detail = pending ? starting : service.detail;
+    const button = service.can_start && service.state === 'off'
+      ? `<button type="button" class="runtime-start" data-runtime-start="${escapeHtml(service.id)}"${pending ? ' disabled' : ''}>${pending ? '켜는 중…' : '켜기'}</button>`
+      : '';
+    return `<li class="runtime-item ${escapeHtml(state)}" title="${escapeHtml(runtimeStateWords[service.state] || service.state)}">`
+      + `<span class="dot"></span><span class="runtime-text"><strong>${escapeHtml(service.label)}</strong>`
+      + `<small>${escapeHtml(detail)}</small></span>${button}</li>`;
+  }).join('');
+}
+
+async function refreshRuntime() {
+  try {
+    const response = await fetch('/api/runtime', { cache: 'no-store' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    renderRuntime((await response.json()).services);
+  } catch {
+    runtimeList.innerHTML = '';
+  }
+}
+
+runtimeList.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-runtime-start]');
+  if (!button) return;
+  const id = button.dataset.runtimeStart;
+  runtimeStarting.set(id, '켜는 중…');
+  button.disabled = true;
+  button.textContent = '켜는 중…';
+  try {
+    const response = await fetch(`/api/runtime/${encodeURIComponent(id)}/start`, { method: 'POST' });
+    const answer = await response.json().catch(() => ({}));
+    if (!response.ok && response.status !== 409) {
+      runtimeStarting.delete(id);
+      window.alert(answer.message || answer.error || `켜지 못했습니다 (HTTP ${response.status})`);
+    } else {
+      // keep "켜는 중" until the status turns on; give up after 30 s so a failed start shows 꺼짐 again
+      window.setTimeout(() => { runtimeStarting.delete(id); refreshRuntime(); }, 30000);
+    }
+  } catch {
+    runtimeStarting.delete(id);
+    window.alert('관제 서버에 연결하지 못했습니다');
+  }
+  refreshRuntime();
+});
+
 showView(window.location.hash.slice(1));
 refresh();
+refreshRuntime();
 refreshFlow();
 refreshIntake();
 refreshTasks();
 refreshArmCommands();
 loadShelfSlots();
 window.setInterval(refresh, 3000);
+window.setInterval(refreshRuntime, 3000);
 window.setInterval(refreshFlow, 1000);
 window.setInterval(refreshIntake, 2000);
 window.setInterval(refreshIntakePreviews, 3000);

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" href="data:,">
-  <title>로봇 관제 서버</title>
+  <title>적재적소</title>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/manual.css">
   <link rel="stylesheet" href="/intake-plan.css">
@@ -23,7 +23,7 @@
 <body>
   <div class="app-shell">
     <aside class="sidebar">
-      <div class="brand"><h1>로봇 관제</h1><p>로컬 제어 서버</p></div>
+      <div class="brand"><h1>적재적소</h1><p>로컬 제어 서버</p></div>
       <nav class="main-nav" aria-label="주 메뉴">
         <button type="button" class="nav-item active" data-view="dashboard" aria-current="page">종합</button>
         <button type="button" class="nav-item" data-view="flow"><span>주문 진행</span><span id="intakeBadge" class="nav-badge" hidden></span></button>
@@ -37,6 +37,7 @@
       </nav>
       <a id="screenModeSwitch" class="screen-mode-switch" href="?dev=1">개발자 화면</a>
       <div id="serverStatus" class="server-status" role="status"><span class="dot"></span><span><strong>서버 확인 중</strong></span></div>
+      <ul id="runtimeList" class="runtime-list" aria-label="실행 구성요소"></ul>
     </aside>
 
     <main class="main-content">
@@ -175,7 +176,7 @@
       </div>
     </section>
     <section aria-labelledby="fleet-test-title">
-      <div class="section-heading"><h2 id="fleet-test-title">전체 주행 테스트</h2><span class="updated">주문 없이 · 적재 자리 → 수령 구역 → 자기 주차 칸 · 체크한 핑키만 움직여요 (한 대만도 가능)</span></div>
+      <div class="section-heading"><h2 id="fleet-test-title">핑키 상태 확인</h2><span class="updated">주문 없이 · 적재 자리 → 수령 구역 → 자기 주차 칸 · 체크한 핑키만 움직여요 (한 대만도 가능)</span></div>
       <div class="fleet-test-card">
         <div class="fleet-test-actions">
           <button type="button" id="fleetTestStart" disabled>전체 출발</button>

@@ -156,7 +156,7 @@ function renderFleetTest() {
 
 function fleetTestStartOne(pinky) {
   return sendPinkyCommand(pinky.pinky_id, 'test-mission', {
-    path: 'test-mission', label: '전체 주행 테스트 출발', body: { dropoff: fleetTest.zone[pinky.pinky_id], via: [] },
+    path: 'test-mission', label: '핑키 상태 확인 출발', body: { dropoff: fleetTest.zone[pinky.pinky_id], via: [] },
   });
 }
 
