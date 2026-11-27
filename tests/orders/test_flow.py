@@ -19,7 +19,7 @@ from control_station.orders.progress_view import build_flow_view, summarize_orde
 from control_station.orders.task_runner import MockTaskOrchestrator
 from control_station.storage.store import TaskStore
 
-from support import CARROT_APPLE, TERMINAL, ApiTestCase, devices
+from support import CARROT_APPLE, TERMINAL, ApiTestCase, act_policies, devices
 
 
 class OrderFlowTests(unittest.TestCase):
@@ -37,7 +37,7 @@ class OrderFlowTests(unittest.TestCase):
               drive_s: float = 0.2) -> None:
         self.world = MockWorld(parse_stock(stock) if stock else None, drive_s=drive_s, pick_s=0.05,
                                faults=parse_faults(faults))
-        self.flow = OrderFlow(load_arms(), policies or load_act_policies(), devices(self.world), dwell_s=0.0,
+        self.flow = OrderFlow(load_arms(), policies or act_policies(), devices(self.world), dwell_s=0.0,
                               poll_s=0.02, arrival_timeout_s=arrival_timeout_s, signal_timeout_s=2.0)
         self.orchestrator = MockTaskOrchestrator(self.store, order_flow=self.flow)
         self.addCleanup(self.orchestrator.close)
@@ -244,8 +244,8 @@ class FlowRouteTests(ApiTestCase):
         self.server.mock_world = world
         self.server.order_devices = devices(world)
         self.server.arms = load_arms()
-        self.server.arm_commands.act_policies = load_act_policies()
-        self.server.order_flow = OrderFlow(self.server.arms, load_act_policies(), self.server.order_devices, dwell_s=0.0, poll_s=0.02)
+        self.server.arm_commands.act_policies = act_policies()
+        self.server.order_flow = OrderFlow(self.server.arms, act_policies(), self.server.order_devices, dwell_s=0.0, poll_s=0.02)
         self.server.task_orchestrator.order_flow = self.server.order_flow
 
     def test_flow_summary_mock_controls_and_alert_ack(self) -> None:

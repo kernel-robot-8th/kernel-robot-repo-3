@@ -11,7 +11,6 @@ from pathlib import Path
 from unittest import mock
 
 from control_station.arms.config import load_arms
-from control_station.arms.policies import load_act_policies
 from control_station.cameras.counts import (
     CountUnavailable,
     PinkyLoadCounter,
@@ -28,6 +27,8 @@ from control_station.orders.flow import OrderDevices, OrderFlow
 from control_station.orders.task_runner import MockTaskOrchestrator
 from control_station.storage.models import CameraConnectionState, CameraSnapshot, CameraStreamState, FrameFreshness
 from control_station.storage.store import TaskStore
+
+from support import act_policies
 
 
 def detection(name: str, box: list[float], slot: str | None = None) -> dict:
@@ -242,7 +243,7 @@ class CountTests(unittest.TestCase):
                                   load_shelf_slot_map(), load_arms(), max_wait_s=0.2)
         devices = OrderDevices(stale, world.pinky_load, world.fleet_status, world.fleet_confirm, world.parking,
                                world.pick, world.dispatch)
-        orchestrator = MockTaskOrchestrator(store, order_flow=OrderFlow(load_arms(), load_act_policies(), devices,
+        orchestrator = MockTaskOrchestrator(store, order_flow=OrderFlow(load_arms(), act_policies(), devices,
                                                                          dwell_s=0.0, poll_s=0.02))
         self.addCleanup(orchestrator.close)
         task = store.create_task("핑키 적재 위치", "주문", order_items=[{"object_class": "carrot", "quantity": 1}])

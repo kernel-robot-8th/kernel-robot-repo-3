@@ -116,7 +116,7 @@ class MockScenarioFailure(RuntimeError):
 # 주차 관측 하나를 돌려준다(interface-contracts의 "Pinky 주차 정렬 관측"). 관측을 시작하지 못하면 error_code 속성이
 # 있는 예외를 올린다.
 ArrivalCheck = Callable[[], dict[str, Any]]
-# 물체 클래스 하나에 대한 정면 카메라 근거: shelf_slot_zones.select_slot_for_class의 선택 기록.
+# 물체 클래스 하나에 대한 정면 카메라 근거: cameras/shelf_slots.py의 select_slot_for_class가 남긴 선택 기록.
 # 카메라가 칸 하나를 집어내지 못하면 SlotSelectionError(error_code, details)를 올린다.
 TargetEvidence = Callable[[str], dict[str, Any]]
 

@@ -2,13 +2,13 @@
 
 관제가 OMX 명령(칸 자세, 원상복귀, 학습 정책)을 넘기고, OMX 쪽 워커가 그것을 가져가 실행한 뒤 결과를 알려 주는 HTTP 계약입니다. 관제와 OMX가 한 노트북에 있든 서버와 노트북으로 나뉘든 같은 API를 씁니다. 관제는 팔을 직접 움직이지 않습니다. 팔을 움직이는 것은 OMX 쪽 워커(LeRobot)입니다.
 
-현재 구현 범위: 명령 큐·상태 기록 API, 관제 화면의 **OMX 명령** 섹션(수동 조작 탭), 팔을 움직이지 않는 [모의 워커](../../scripts/mock_omx_worker.py)와 실물 워커. 명령은 운영자가 수동 조작 탭에서 직접 만들거나(`source.kind: OPERATOR_INPUT`), 이전 형식 작업의 팔 단계가 `CONTROL_STATION_TASK_REAL_ARM=1`일 때 만듭니다([작업 흐름 연결](#학습-정책으로-집기-pick_with_policy)). 주문 흐름의 `PICK_ITEM`은 아직 이 큐를 쓰지 않는 모의입니다. 좌표(XYZ) 목표는 쓰지 않습니다(2026-11-11 결정).
+현재 구현 범위: 명령 큐·상태 기록 API, 관제 화면의 **OMX 명령** 섹션(수동 조작 탭), 팔을 움직이지 않는 [모의 워커](../../scripts/mock_omx_worker.py)와 실물 워커. 명령은 운영자가 수동 조작 탭에서 직접 만들거나(`source.kind: OPERATOR_INPUT`), 이전 형식 작업의 팔 단계가 `CONTROL_STATION_TASK_REAL_ARM=1`일 때 만듭니다([작업 흐름 연결](#학습-정책으로-집기-pick_with_policy)). 주문 흐름의 `PICK_ITEM`은 기본이 모의이고, `CONTROL_STATION_ORDER_REAL_ARM=1`이면 이 큐(또는 ROS 2 집기 액션)로 보냅니다. 좌표(XYZ) 목표는 쓰지 않습니다(2026-11-11 결정).
 
 ## 왜 HTTP인가
 
 - OMX는 LeRobot으로 제어하고, LeRobot은 ROS 2 노드가 아닙니다. 관제는 이미 HTTP 서버이고 작업·명령 기록 DB를 갖고 있습니다.
 - 워커가 관제에 요청하는 방식(pull)이라 관제는 OMX PC 주소를 몰라도 됩니다. 워커 쪽은 Python 표준 라이브러리만 있으면 됩니다.
-- ROS 2 action은 처음에는 OMX PC의 ROS 2 설치와 LeRobot 가상환경의 `rclpy` 사용 가능 여부를 몰라 보류했습니다. 2026-11-04 이 PC에서 둘 다 확인했고, 칸 이동만 먼저 action으로 옮기는 중입니다(아래 [ROS 2 action 워커](#ros-2-action-워커-omxmove_to_slot)). 관제 쪽 action 클라이언트는 아직 없으므로, 관제 화면에서 보내는 명령은 지금도 이 HTTP 계약을 씁니다.
+- ROS 2 action은 처음에는 OMX PC의 ROS 2 설치와 LeRobot 가상환경의 `rclpy` 사용 가능 여부를 몰라 보류했습니다. 2026-11-04 이 PC에서 둘 다 확인했고, 칸 이동만 먼저 action으로 옮기는 중입니다(아래 [ROS 2 action 워커](#ros-2-action-워커-omxmove_to_slot)). 관제에는 칸 이동 action 클라이언트가 없어, 관제 화면에서 보내는 명령은 지금도 이 HTTP 계약을 씁니다. 주문의 집기만 action으로 보낼 수 있습니다(`CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2`).
 
 ## 전체 흐름
 
@@ -215,7 +215,7 @@ sequenceDiagram
 
 ## 학습 정책으로 집기 (`PICK_WITH_POLICY`)
 
-운영자가 관제 화면 **수동 조작** 탭의 물체별 버튼(**당근 집기**, **물티슈 집기**. 정책 파일에서 자동으로 만듦)을 누르면, 그 물체만 집도록 학습한 LeRobot ACT 정책을 OMX 워커가 실행합니다. 정면 카메라에서 물체를 확인하지 못하면(카메라 미설정, 미검출, 여러 칸 등) 이유를 보여 주고, 운영자가 확인하면 칸 근거 없이(`source.note`에 이유 기록) 명령을 만듭니다. **ACT 정책은 위치를 입력으로 받지 않습니다.** 카메라 영상과 관절 값만 보고 학습한 물체를 스스로 찾습니다. 그래서 관제는 물체 이름으로 **정책을 고르고**, 정면 카메라가 본 칸은 물체가 있다는 근거로만 명령에 남깁니다.
+운영자가 관제 화면 **수동 조작** 탭의 물체별 버튼(당근·사과·수박·키위. 정책 파일에서 자동으로 만듦)을 누르면, 그 물체만 집도록 학습한 LeRobot ACT 정책을 OMX 워커가 실행합니다. 정면 카메라에서 물체를 확인하지 못하면(카메라 미설정, 미검출, 여러 칸 등) 이유를 보여 주고, 운영자가 확인하면 칸 근거 없이(`source.note`에 이유 기록) 명령을 만듭니다. **ACT 정책은 위치를 입력으로 받지 않습니다.** 카메라 영상과 관절 값만 보고 학습한 물체를 스스로 찾습니다. 그래서 관제는 물체 이름으로 **정책을 고르고**, 정면 카메라가 본 칸은 물체가 있다는 근거로만 명령에 남깁니다.
 
 ```mermaid
 sequenceDiagram
@@ -224,7 +224,7 @@ sequenceDiagram
     participant W as OMX 워커
     participant P as 정책 서버 (LeRobot)
     Op->>API: from-camera {object_class: "당근", operation: PICK_WITH_POLICY}
-    API->>API: 당근 → carrot → 정책 carrot_act_v2, 정면 카메라에서 carrot이 한 칸에만 보이는지
+    API->>API: 당근 → carrot → 정책 carrot_act_v7, 정면 카메라에서 carrot이 한 칸에만 보이는지
     API-->>Op: 201 명령 (칸은 근거)
     W->>API: 명령 가져감 → 검사 → ACCEPTED (200일 때만 진행)
     W->>API: PROGRESS RETURNING_HOME
@@ -236,7 +236,7 @@ sequenceDiagram
     W->>API: RESULT_UNKNOWN / PLACE_NOT_VERIFIED, pose_reached true
 ```
 
-- 정책 정의: [config/omx-act-policies.json](../../config/omx-act-policies.json). 물체 이름(YOLO 클래스, 한글 이름, 별칭) → 모델(Hugging Face repo), 정책 입력 `front`/`wrist`에 넣을 카메라 역할(`OVERHEAD` 선반을 위에서 봄, `GRIPPER` 그리퍼), 최대 실행 시간. `arm_id`가 지정된 정책은 학습한 팔에서만 실행됩니다. 관제와 워커가 같은 파일을 읽고, 명령에는 파일의 SHA-256(`target.policy.registry_version`)이 고정됩니다. 다르면 워커가 `POLICY_REGISTRY_MISMATCH`로 거부합니다.
+- 정책 정의: [config/omx-act-policies.json](../../config/omx-act-policies.json). 물체 이름(YOLO 클래스, 한글 이름, 별칭) → 모델(Hugging Face repo), 정책 입력 `front`/`wrist`에 넣을 카메라 역할(`OVERHEAD` 선반을 위에서 봄, `GRIPPER` 그리퍼). `arm_id`가 지정된 정책은 학습한 팔에서만 실행됩니다. 관제와 워커가 같은 파일을 읽고, 명령에는 파일의 SHA-256(`target.policy.registry_version`)이 고정됩니다. 다르면 워커가 `POLICY_REGISTRY_MISMATCH`로 거부합니다.
 - 물체별 집기 UI에서 실행 팔을 선택합니다. 카메라에서 칸을 찾으면 `config/arms.json`의 shelf 담당 팔과 선택을 대조하고, 서로 다르면 `ARM_SHELF_MISMATCH`로 거부합니다. 선택하지 않은 경우 집기 버튼은 비활성 상태입니다.
 - 두 팔 워커 설정: `CONTROL_STATION_LEFT/RIGHT_FOLLOWER_PORT`, `CONTROL_STATION_LEFT/RIGHT_OMX_POSES`, `CONTROL_STATION_LEFT/RIGHT_CEILING_CAMERA`, `CONTROL_STATION_LEFT/RIGHT_JOINT_CAMERA`를 설정하고 각각 `scripts/omx_act_policy_test.sh worker --robot-id arm-01` 및 `--robot-id arm-02`로 실행합니다. 양쪽 워커는 대기할 수 있지만, 정책 실행 중에는 두 팔 모두 새 명령을 받지 않습니다. 반대 팔 명령이 미완료 상태이면 정책 집기도 등록되지 않습니다.
 - 명령: `target`은 `object_class`(필수)와 선택적 `pick_slot_id`만 받습니다. 관제가 `target.object_class`를 검출기 클래스 이름으로 바꾸고 `target.policy`(`policy_id`, `label`, `model`, `registry_version`)를 붙입니다. 정책이 없는 물체는 400입니다. `place`는 다른 집기 명령과 같이 필요합니다(화면에서는 `CART_1`).

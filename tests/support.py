@@ -3,6 +3,7 @@
 - ApiTestCase: 가짜 카메라·주차·로봇 상태로 관제 서버를 이 프로세스 안에 띄우고 HTTP로 요청하는 테스트의 바탕.
   장치를 열거나 로봇에 명령을 보내지 않는다.
 - devices, make_desk, finish: 모의 세계로 주문 흐름과 주문 창구를 만들고 주문 하나를 끝까지 돌리는 도우미.
+- act_policies: 테스트 전용 정책 등록부(tests/act-policies.json). 운영 등록부를 읽지 않아 모델 교체에 깨지지 않는다.
 """
 
 from __future__ import annotations
@@ -21,8 +22,9 @@ from unittest import mock
 from control_station.app import WEB_DIR, ControlStationHandler, ControlStationServer
 from control_station.arms.commands import ArmCommandStore
 from control_station.arms.config import load_arms
-from control_station.arms.policies import load_act_policies
+from control_station.arms.policies import ActPolicyRegistry, load_act_policies
 from control_station.arms.policy_runner import PolicyRunSupervisor
+from control_station.arms.sequences import ArmSequenceSupervisor
 from control_station.cameras.shelf_slots import ShelfSlotZones, load_shelf_slot_map
 from control_station.mock_world import MockWorld
 from control_station.orders.desk import OrderDesk
@@ -32,6 +34,19 @@ from control_station.orders.task_runner import MockTaskOrchestrator
 from control_station.pinky.parking_ros import ParkingObservationError
 from control_station.storage.models import CameraConnectionState, CameraSnapshot, CameraStreamState, FrameFreshness
 from control_station.storage.store import TaskStore
+
+# ── 테스트 전용 정책 등록부 ──
+
+# 운영 등록부(config/omx-act-policies.json)는 팀이 모델을 바꿀 때마다 달라진다. 동작을 보는 테스트가 그 파일을 읽으면
+# 모델 교체만으로 깨지므로(2026-11-21 물티슈 → 키위, 당근 v2 → v7·왼팔 고정 때 40개가 깨졌다) 고정된 파일을 쓴다.
+# 운영 등록부 자체를 확인하는 테스트(tests/arms/test_policies.py)만 load_act_policies()를 인자 없이 부른다.
+TEST_POLICIES_PATH = Path(__file__).with_name("act-policies.json")
+
+
+def act_policies() -> ActPolicyRegistry:
+    """테스트 전용 등록부: 당근·물티슈는 어느 팔이든, 사과·수박은 오른쪽 팔(arm-02) 전용."""
+    return load_act_policies(TEST_POLICIES_PATH)
+
 
 # ── 관제 서버를 띄우는 HTTP 테스트 ──
 
@@ -146,6 +161,7 @@ class ApiTestCase(unittest.TestCase):
         server.camera_manager = self.cameras
         server.task_store = self.task_store
         server.arm_commands = ArmCommandStore(self.task_store.session_factory, slot_map=slot_map)
+        server.arm_sequences = ArmSequenceSupervisor(self.task_store.session_factory, server.arm_commands)
         server.shelf_slot_zones = ShelfSlotZones(slot_map, directory=self.directory / "poses")
         server.parking_spot_id = "pinky_dock_1" if self.parking else None
         server.parking_camera_id = "head_camera" if self.parking else None
@@ -245,11 +261,11 @@ def finish(desk: OrderDesk, store: TaskStore, order_id: str, *, pickup: bool = T
 
 def make_desk(store: TaskStore, *, zones=ZONES) -> tuple[OrderDesk, MockWorld, MockTaskOrchestrator]:
     world = MockWorld(drive_s=0.2, pick_s=0.05)
-    flow = OrderFlow(load_arms(), load_act_policies(), devices(world), dwell_s=0.0, poll_s=0.02,
+    flow = OrderFlow(load_arms(), act_policies(), devices(world), dwell_s=0.0, poll_s=0.02,
                      arrival_timeout_s=10.0, signal_timeout_s=2.0,
                      route_for=lambda zone_id: list(zones[zone_id].route_labels) if zone_id in zones else None)
     orchestrator = MockTaskOrchestrator(store, order_flow=flow)
-    desk = OrderDesk(store, orchestrator, devices(world), load_arms(), load_act_policies(), zones,
+    desk = OrderDesk(store, orchestrator, devices(world), load_arms(), act_policies(), zones,
                      pick_stats=lambda: store.pick_success_stats(simulated=True), pickup=flow.confirm_pickup)
     flow.choose_shipment_pinky = desk.assign_next_shipment  # as app.py wires it
     desk.flow_waiting = lambda order_id: order_id in flow._pickups  # test helper: is the step waiting yet

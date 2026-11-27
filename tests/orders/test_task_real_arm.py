@@ -11,7 +11,6 @@ from pathlib import Path
 from unittest import mock
 
 from control_station.arms.commands import ArmCommandStore
-from control_station.arms.policies import load_act_policies
 from control_station.cameras.shelf_slots import SlotSelectionError, load_shelf_slot_map
 from control_station.orders.task_runner import (
     MockLoadObserver,
@@ -20,6 +19,8 @@ from control_station.orders.task_runner import (
     policy_for_task,
 )
 from control_station.storage.store import TaskStore
+
+from support import act_policies
 
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELED", "NEEDS_INTERVENTION"}
 
@@ -66,7 +67,7 @@ class RealArmTaskTests(unittest.TestCase):
         self.store = TaskStore(str(Path(directory.name) / "tasks.sqlite3"))
         self.addCleanup(self.store.close)
         self.arm = ArmCommandStore(
-            self.store.session_factory, slot_map=load_shelf_slot_map(), act_policies=load_act_policies()
+            self.store.session_factory, slot_map=load_shelf_slot_map(), act_policies=act_policies()
         )
         patcher = mock.patch.dict(os.environ, {"CONTROL_STATION_MOCK_STEP_DELAY": "0.05"})
         patcher.start()
@@ -101,13 +102,13 @@ class RealArmTaskTests(unittest.TestCase):
         return next(step for step in task["steps"] if step["step_type"] == step_type)
 
     def test_arm_job_text_chooses_the_policy(self) -> None:
-        registry = load_act_policies()
+        registry = act_policies()
         self.assertEqual(policy_for_arm_job(registry, "당근 집기")["policy_id"], "carrot_act_v2")
         self.assertEqual(policy_for_arm_job(registry, "물티슈 하나 올려줘")["policy_id"], "tissue_act_v1")
         self.assertIsNone(policy_for_arm_job(registry, "상자 적재"))
 
     def test_ordered_object_chooses_the_policy_before_the_arm_job_text(self) -> None:
-        registry = load_act_policies()
+        registry = act_policies()
         self.assertEqual(policy_for_task(registry, {"pick_request": {"category": "carrot"}, "arm_job": "집기 후 B에 배치"})["policy_id"],
                          "carrot_act_v2")
         self.assertEqual(policy_for_task(registry, {"pick_request": {"category": "물티슈"}, "arm_job": "당근 집기"})["policy_id"],

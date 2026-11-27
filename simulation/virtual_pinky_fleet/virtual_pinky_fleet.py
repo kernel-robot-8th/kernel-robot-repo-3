@@ -61,7 +61,6 @@ REDOCK_BACK_M, REDOCK_LIMIT = 0.35, 30  # scripts/navigate_route.py와 같은 �
 # 얼마나 떨어진 곳까지 가상 천장 카메라가 핑키를 볼 수 있는지(m).
 CAMERA_TOLERANCE = {"position_mm": 40.0, "yaw_deg": 15.0}
 CAMERA_VIEW_M = 0.45
-PASS_LABELS = ("통로 아래", "통로 위")  # 이 파일에서는 쓰이지 않는다.
 # 핑키 관제의 로봇 ID → 표시 이름, ROS domain, 배터리(%). 배터리는 줄지 않는다.
 ROBOTS = {
     "10": {"name": "Pinky C76C", "domain": 10, "battery": 92.0},

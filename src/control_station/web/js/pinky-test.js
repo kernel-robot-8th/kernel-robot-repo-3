@@ -35,7 +35,7 @@ const FLEET_TEST_DOCK_PHASES = new Set(['docking_manual', 'redocking']);
 const FLEET_TEST_DOCK_TONE = { COMPLETE: 'good', OPERATOR: 'attention', REDOCK: 'attention' };
 
 // 적재 자리에 선 핑키에 대해 카메라 <-> 핑키 주고받기가 말하는 것: [색, 글]. 거기 없으면 null.
-// 결정은 서버가 한다(control_station/dock_handshake.py, 주문과 같다): 제자리로 두 번 보이면 -> 도킹완료,
+// 결정은 서버가 한다(control_station/pinky/docking.py, 주문과 같다): 제자리로 두 번 보이면 -> 도킹완료,
 // 계속 어긋나면 -> 카메라 오프셋과 함께 다시 맞추기, 그 뒤 돌아올 때까지 기다림. 등록이 없거나 카메라가 못 보거나
 // 다시 맞추기를 세 번 다 쓰면 -> 사람이 본다. 자동이 꺼져 있으면 서버는 판정만 하고 버튼이 보낸다.
 function fleetTestVerdict(pinky) {

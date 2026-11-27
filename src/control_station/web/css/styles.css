@@ -41,7 +41,6 @@
   --yellow-ink: #8a5d00;
   --yellow-soft: #fff5d9;
   --red: #f04452;
-  --red-strong: #d9283a;
   --red-ink: #d22030;
   --red-soft: #ffeef0;
 
@@ -86,7 +85,7 @@ button:disabled { background: var(--fill); color: var(--text-disabled); cursor: 
 }
 :where(input, select):focus { border-color: var(--blue); background: var(--card); outline: none; box-shadow: 0 0 0 3px rgba(49, 130, 246, .15); }
 :where(input)::placeholder { color: var(--text-3); }
-.field, .task-form label, .slot-command-form label, .camera-command-form label, .mock-fault-form label, .parking-controls label {
+.task-form label, .slot-command-form label, .camera-command-form label, .mock-fault-form label, .parking-controls label {
   display: grid; gap: 6px; color: var(--text-2); font-size: 13px; font-weight: 500;
 }
 
@@ -172,7 +171,7 @@ p.loading { margin: 0; padding: 20px; }
 }
 
 /* 모든 패널은 회색 페이지 위의 흰 카드다. 강조는 테두리가 아니라 크기와 위치로 한다. */
-.card, .table-wrap, .arm-control, .task-form, .slot-command-form, .camera-card, .parking-panel, .api-list,
+.table-wrap, .arm-control, .task-form, .slot-command-form, .camera-card, .parking-panel, .api-list,
 .task-list, .task-detail, .pinky-card, .pinky-log-box, .robot-card, .order-card, .intake-card, .mock-panel {
   border-radius: var(--radius-card); background: var(--card); box-shadow: var(--shadow);
 }

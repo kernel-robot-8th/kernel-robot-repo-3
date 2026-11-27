@@ -7,7 +7,7 @@
 // usb_cam 0.8.1 대신 직접 만들었다. 2026-11-03에 usb_cam은 깨진 MJPEG 프레임 하나에 컨테이너 전체(그 안의 주차 판정
 // 노드까지)를 종료시켰고, 카메라가 다른 /dev/videoN으로 다시 잡히면 따라가지 못했으며, 상대 경로 by-path 링크를
 // 잘못 풀었고, 카메라에 brightness=50을 써 넣었다. 이 노드는 관제가 쓰던 캡처 루프
-// (camera_adapters.OpenCVArmCameraStreamManager)를 그대로 옮긴 것이다. 캡처 스레드 밖으로 예외를 내보내지 않고,
+// (cameras/adapters.py의 OpenCVArmCameraStreamManager)를 그대로 옮긴 것이다. 캡처 스레드 밖으로 예외를 내보내지 않고,
 // 실패하면 reopen_interval_s(기본 2초)마다 by-path 장치를 다시 풀어서 다시 열며, 카메라 설정값(controls)은
 // 건드리지 않는다. 카메라는 읽기만 한다.
 //

@@ -984,40 +984,17 @@ class TaskStore:
         """접수 대기 주문에 핑키를 주고, 첫 운송분의 핑키 단계에 그 핑키를 적고, 고른 이유를 PINKY_ASSIGNED로 남긴다.
 
         그 사이 다른 주문이 그 핑키를 가져갔으면 PinkyUnavailable."""
-        if pinky_id not in PINKY_IDS:
-            raise ValueError(f"unknown Pinky {pinky_id}")
-        now = utc_now_iso("microseconds")
-        with self._claim_lock, self._sessions.begin() as session:
-            task = session.get(TaskRecord, task_id)
-            if task is None:
-                raise TaskNotFoundError(task_id)
-            if task.order_items is None or task.status != TaskStatus.PENDING.value:
-                raise InvalidStateTransition("접수 상태의 주문에만 핑키를 배정할 수 있습니다")
-            if task.pinky_id is not None:
-                raise InvalidStateTransition(f"이미 핑키 {task.pinky_id}가 배정된 주문입니다")
-            holder = dict(session.execute(_pinky_holding_orders()).all()).get(pinky_id)
-            if holder is not None:
-                raise PinkyUnavailable(f"핑키 {pinky_id}는 끝나지 않은 주문 {holder}가 있습니다")
-            task.pinky_id = pinky_id
-            for step in task.steps:
-                if step.step_type in PINKY_STEP_TYPES and shipment_of(step) == 1:  # 뒤 운송분은 시작할 때 고른다
-                    step.robot_id = pinky_robot_id(pinky_id)
-            task.events.append(TaskEventRecord(
-                id=f"EVT-{uuid.uuid4().hex[:12].upper()}",
-                event_type="PINKY_ASSIGNED",
-                previous_status=task.status,
-                new_status=task.status,
-                occurred_at=now,
-                received_at=now,
-                payload={"pinky_id": pinky_id, "assignment": assignment, "shipment": 1},
-            ))
-            session.flush()
-            return self._present_with_history(task)
+        return self._assign_pinky(task_id, 1, pinky_id, assignment, first=True)
 
     def assign_shipment_pinky(self, task_id: str, shipment: int, pinky_id: str,
                               assignment: dict[str, object]) -> dict[str, Any]:
         """진행 중인 주문의 다음 운송분에 핑키를 준다. 주문은 이제 그 핑키를 쥔다(앞 운송분의 핑키는 주차장에 돌아와
         있다). 그 운송분의 핑키 단계에 핑키를 적고, 고른 이유를 PINKY_ASSIGNED(shipment 포함)로 남긴다."""
+        return self._assign_pinky(task_id, shipment, pinky_id, assignment, first=False)
+
+    def _assign_pinky(self, task_id: str, shipment: int, pinky_id: str, assignment: dict[str, object], *,
+                      first: bool) -> dict[str, Any]:
+        """assign_pinky(first: 접수 대기 주문의 첫 운송분)와 assign_shipment_pinky(진행 중인 주문의 뒤 운송분)의 공통 부분."""
         if pinky_id not in PINKY_IDS:
             raise ValueError(f"unknown Pinky {pinky_id}")
         now = utc_now_iso("microseconds")
@@ -1025,15 +1002,20 @@ class TaskStore:
             task = session.get(TaskRecord, task_id)
             if task is None:
                 raise TaskNotFoundError(task_id)
-            if task.order_items is None or task.status not in {TaskStatus.RUNNING.value, TaskStatus.VALIDATING.value}:
+            if first:
+                if task.order_items is None or task.status != TaskStatus.PENDING.value:
+                    raise InvalidStateTransition("접수 상태의 주문에만 핑키를 배정할 수 있습니다")
+                if task.pinky_id is not None:
+                    raise InvalidStateTransition(f"이미 핑키 {task.pinky_id}가 배정된 주문입니다")
+            elif task.order_items is None or task.status not in {TaskStatus.RUNNING.value, TaskStatus.VALIDATING.value}:
                 raise InvalidStateTransition("진행 중인 주문의 다음 운송분에만 핑키를 배정할 수 있습니다")
             holder = dict(session.execute(_pinky_holding_orders()).all()).get(pinky_id)
-            # 이 주문 자신이 쥔 핑키(앞 운송분의 핑키)는 다시 보내도 된다.
-            if holder is not None and holder != task_id:
+            # 뒤 운송분이면 이 주문 자신이 쥔 핑키(앞 운송분의 핑키)는 다시 보내도 된다.
+            if holder is not None and (first or holder != task_id):
                 raise PinkyUnavailable(f"핑키 {pinky_id}는 끝나지 않은 주문 {holder}가 있습니다")
             task.pinky_id = pinky_id
             for step in task.steps:
-                if step.step_type in PINKY_STEP_TYPES and shipment_of(step) == shipment:
+                if step.step_type in PINKY_STEP_TYPES and shipment_of(step) == shipment:  # 이 운송분의 단계만. 다른 운송분은 그 운송분을 시작할 때 고른다
                     step.robot_id = pinky_robot_id(pinky_id)
             task.events.append(TaskEventRecord(
                 id=f"EVT-{uuid.uuid4().hex[:12].upper()}",

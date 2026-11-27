@@ -45,7 +45,10 @@ class ReadRouteTests(ApiTestCase):
                 self.assertEqual(self.get(path), (404, error("Task not found")))
 
     def test_arm_read_routes(self) -> None:
-        self.assertEqual(self.get("/api/arm/status")[0], 404)
+        status, body = self.get("/api/arm/status")  # teleoperation was removed: always answers, always disabled
+        self.assertEqual(status, 200)
+        self.assertEqual((body["arm"]["enabled"], body["arm"]["state"]), (False, "DISABLED"))  # type: ignore[index]
+        self.assertIn("policy_run", body)
         self.assertEqual(self.get("/api/arm/commands")[0], 200)
         status, body = self.get("/api/arm/shelf-slots")
         self.assertEqual(status, 200)

@@ -58,7 +58,7 @@ ros2 launch parking_vision_ros ceiling_parking.launch.py repository_root:=$PWD s
 |---|---|
 | `CONTROL_STATION_PINKY_FLEET_URL` | 핑키 팀 관제 주소(예: `http://<핑키 관제 PC>:8765`). 없으면 모의 핑키 |
 | `CONTROL_STATION_ORDER_COUNTS=camera` | 선반 재고·핑키 위 개수를 카메라 YOLO로 셈. 없으면 모의 세계 |
-| `CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2` | 실제 팔 집기를 HTTP 워커 대신 ROS 2 액션 `/arm_0N/pick_object`로 보냄(팔마다 `scripts/omx_pick_action_server.py --robot-id arm-0N`). 기본 `http`. 액션 domain은 `CONTROL_STATION_ARM_ACTION_DOMAIN`, 없으면 `ROS_DOMAIN_ID`. 관제도 ROS·`cpp/install`을 source해야 함 |
+| `CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2` | 실제 팔 집기를 HTTP 워커 대신 ROS 2 액션 `/arm_0N/pick_object`로 보냄(팔마다 `scripts/omx_pick_action_server.py --robot-id arm-0N`). 기본 `http`. 액션 domain은 `CONTROL_STATION_ARM_ACTION_DOMAIN`, 없으면 `ROS_DOMAIN_ID`, 그것도 없으면 0. 관제도 ROS·`cpp/install`을 source해야 함 |
 | `CONTROL_STATION_ORDER_REAL_ARM=1` | 주문의 집기를 실제 팔로: 계획된 팔에 `PICK_WITH_POLICY`(팔마다 `scripts/omx_lerobot_worker.py --robot-id arm-0N` 실행 필요). 카메라 개수가 꼭 있어야 하며, 모의 개수면 팔을 움직이기 전에 멈춤 |
 | `CONTROL_STATION_ORDER_PARKING=mock` | 주차 위치가 설정돼 있어도 핑키 도착을 모의로 판정 |
 | `CONTROL_STATION_LOAD_CAMERA`, `CONTROL_STATION_PINKY_TRAY_REGION`, `CONTROL_STATION_PINKY_TRAY_MARGIN`, `CONTROL_STATION_LOAD_IGNORE_CLASSES` | 핑키 위 물건을 셀 카메라(기본 `head_camera`), 쟁반 영역(픽셀 `x1,y1,x2,y2`, 없으면 등록 마커 둘레 1.6변), 세지 않을 클래스(기본 `car`) |
@@ -116,7 +116,7 @@ curl -sS http://127.0.0.1:8000/api/tasks/TASK-ID
 
 서버가 정상 종료되고 camera worker도 실제로 종료되면 연결 상태는 `DISCONNECTED`, stream 상태는 `STOPPED`로 표시됩니다. 종료 대기 제한 안에 worker가 멈추지 않으면 마지막 관측 상태를 그대로 두어 종료를 완료한 것처럼 표시하지 않습니다.
 
-기본 장치 설정은 follower `/dev/omx_follower`, leader `/dev/omx_leader`입니다. 관제의 카메라 관측 화면은 왼쪽·오른쪽 천장 카메라와 왼쪽·오른쪽 관절 카메라를 표시합니다. 입력 경로는 각 역할에 대응하는 `CONTROL_STATION_LEFT_CEILING_CAMERA`, `CONTROL_STATION_RIGHT_CEILING_CAMERA`, `CONTROL_STATION_LEFT_JOINT_CAMERA`, `CONTROL_STATION_RIGHT_JOINT_CAMERA`로 설정합니다. `CONTROL_STATION_HEAD_CAMERA`는 Pinky 주차 화면에서 계속 사용하지만 카메라 관측 카드에서는 숨깁니다. 경로를 설정하지 않은 카메라도 미설정 카드로 표시합니다. USB 포트와 실제 장착 위치 대응은 화면으로 확인하세요. 환경 변수 `CONTROL_STATION_FOLLOWER_PORT`, `CONTROL_STATION_LEADER_PORT`로 모터 포트를 바꿀 수 있습니다.
+기본 팔로워 포트는 `/dev/omx_follower`입니다. 관제의 카메라 관측 화면은 왼쪽·오른쪽 천장 카메라와 왼쪽·오른쪽 관절 카메라를 표시합니다. 입력 경로는 각 역할에 대응하는 `CONTROL_STATION_LEFT_CEILING_CAMERA`, `CONTROL_STATION_RIGHT_CEILING_CAMERA`, `CONTROL_STATION_LEFT_JOINT_CAMERA`, `CONTROL_STATION_RIGHT_JOINT_CAMERA`로 설정합니다. `CONTROL_STATION_HEAD_CAMERA`(천장 카메라)는 카메라 카드로도 보이고 Pinky 도착 확인 패널에도 씁니다. 경로를 설정하지 않은 카메라도 미설정 카드로 표시합니다. USB 포트와 실제 장착 위치 대응은 화면으로 확인하세요. 환경 변수 `CONTROL_STATION_FOLLOWER_PORT`로 모터 포트를 바꿀 수 있습니다.
 
 ### 좌·우 팔 키보드 관절 조그
 
@@ -178,9 +178,9 @@ CONTROL_STATION_POLICY_MAX_ACTION_STEPS=300 \
 ./run-control-station.sh
 ```
 
-`300`은 설정 예시입니다. 실제 실행 전에 시연 한 회의 길이에 맞게 양의 정수로 바꾸세요. 이는 LeRobot이 로봇에 보낸 총 action 수이며 `actions_per_chunk=100`과는 별개입니다. `profile_id`를 주지 않으면 정책 파일의 첫 정책(지금 `carrot_act_v2`)을 씁니다. 그 밖의 기본값은 follower `/dev/omx_follower`, 위·그리퍼 카메라 `/dev/video7`·`/dev/video9`, CUDA, 30 FPS, chunk 100, threshold 0.7입니다. 설정은 `CONTROL_STATION_POLICY_*` 환경변수로 바꿀 수 있습니다. Python은 기본 `~/Desktop/lerobot/venv/bin/python`을 사용하며 `CONTROL_STATION_LEROBOT_DIR`와 `CONTROL_STATION_LEROBOT_PYTHON`으로 checkout/환경 경로를 지정할 수 있습니다.
+`300`은 설정 예시입니다. 실제 실행 전에 시연 한 회의 길이에 맞게 양의 정수로 바꾸세요. 이는 LeRobot이 로봇에 보낸 총 action 수이며 `actions_per_chunk=100`과는 별개입니다. `profile_id`를 주지 않으면 정책 파일의 첫 정책(지금 `carrot_act_v7`)을 씁니다. 그 밖의 기본값은 follower `/dev/omx_follower`, 위·그리퍼 카메라 `/dev/video7`·`/dev/video9`, CUDA, 30 FPS, chunk 100, threshold 0.7입니다. 설정은 `CONTROL_STATION_POLICY_*` 환경변수로 바꿀 수 있습니다. Python은 기본 `~/Desktop/lerobot/venv/bin/python`을 사용하며 `CONTROL_STATION_LEROBOT_DIR`와 `CONTROL_STATION_LEROBOT_PYTHON`으로 checkout/환경 경로를 지정할 수 있습니다.
 
-관제의 **학습 정책 한 번 실행** 버튼 또는 `POST /api/arm/policy/start?profile_id=<정책 ID>`(예: `carrot_act_v2`)가 클라이언트를 시작합니다. 응답과 상태 조회의 `run_id`로 실행을 식별할 수 있습니다. client는 설정된 총 액션 수를 보내면 종료하고 관제 상태를 `LIMIT_REACHED`로 표시합니다. 이는 제한에 도달했다는 뜻이며 물체를 잡거나 놓았다는 결과가 아닙니다. **중단 요청** 또는 `POST /api/arm/policy/stop`은 실행을 멈추도록 요청하고 결과를 `INTERRUPTED`/미확정으로 표시합니다. 텔레오퍼레이션과 정책 client는 동시에 시작할 수 없습니다. 실행 로그는 `.control-station/logs/policy-run-<run_id>.log`에 남으므로 해당 로그와 카메라/실물 상태를 확인하세요. 관제 UI의 프로세스 상태만으로 팔 준비나 Pick & Place 성공을 판단하지 않습니다.
+관제의 **학습 정책 한 번 실행** 버튼 또는 `POST /api/arm/policy/start?profile_id=<정책 ID>`(예: `carrot_act_v7`)가 클라이언트를 시작합니다. 응답과 상태 조회의 `run_id`로 실행을 식별할 수 있습니다. client는 설정된 총 액션 수를 보내면 종료하고 관제 상태를 `LIMIT_REACHED`로 표시합니다. 이는 제한에 도달했다는 뜻이며 물체를 잡거나 놓았다는 결과가 아닙니다. **중단 요청** 또는 `POST /api/arm/policy/stop`은 실행을 멈추도록 요청하고 결과를 `INTERRUPTED`/미확정으로 표시합니다. 실행 로그는 `.control-station/logs/policy-run-<run_id>.log`에 남으므로 해당 로그와 카메라/실물 상태를 확인하세요. 관제 UI의 프로세스 상태만으로 팔 준비나 Pick & Place 성공을 판단하지 않습니다.
 
 ## OMX 읽기 전용 상태 조회
 
@@ -190,7 +190,7 @@ LeRobot이 설치된 Python 환경에서 follower의 현재 관절 raw 값, torq
 /경로/lerobot/venv/bin/python scripts/probe_omx_readonly.py
 ```
 
-이 도구의 연결 handshake는 예상 모터 ID/모델 ping을 수행하고, 나머지는 `sync_read`만 사용합니다. 포트를 닫을 때 `disable_torque=False`를 지정합니다. 목표 위치·토크·모드·보정값은 쓰지 않습니다. 관제 텔레오퍼레이션 또는 다른 프로그램이 포트를 사용 중이면 동시에 실행하지 마세요.
+이 도구의 연결 handshake는 예상 모터 ID/모델 ping을 수행하고, 나머지는 `sync_read`만 사용합니다. 포트를 닫을 때 `disable_torque=False`를 지정합니다. 목표 위치·토크·모드·보정값은 쓰지 않습니다. 다른 프로그램(정책, 워커)이 포트를 사용 중이면 동시에 실행하지 마세요.
 
 출력은 한 시점의 관측값입니다. `readiness_state`는 항상 `UNKNOWN`으로 남으며, torque 비활성화·hardware error 0·USB 응답은 비상정지, 작업공간 clear, 동작 가능 상태 또는 집기 성공을 증명하지 않습니다. register `Min_Position_Limit`/`Max_Position_Limit`은 OMX-F의 확장 위치 모드에서 안전한 선반 작업 한계로 간주하지 않습니다. 읽기 전용 probe를 실물 준비 상태 API 대신 사용하지 않습니다.
 
@@ -202,14 +202,14 @@ LeRobot이 설치된 Python 환경에서 follower의 현재 관절 raw 값, torq
 set -a; source .control-station/control-station.env; set +a   # 모든 터미널
 scripts/omx_act_policy_test.sh server            # 터미널 1: 정책 서버 (GPU, 모터 연결 없음). 두 방법 모두 필요
 # 관제에서: 관제 서버를 켜고 (헤드캠이 정책 카메라와 같으면 정책 명령이 도는 동안만 관제가 헤드캠을 닫음)
-scripts/omx_act_policy_test.sh worker            # 터미널 2: OMX 워커 → 관제 화면 수동 조작 탭 "당근 집기"/"물티슈 집기"
+scripts/omx_act_policy_test.sh worker            # 터미널 2: OMX 워커 → 관제 화면(`?dev=1`) 수동 조작 탭의 물체별 집기 타일(당근·사과·수박·키위)
 # 관제 없이:
 scripts/omx_act_policy_test.sh client [물체]     # 터미널 2: 팔이 움직임(기본 당근). 놓기가 끝나면 Ctrl+C
 scripts/omx_act_policy_test.sh worker            # 그다음 관제 화면 원상복귀
 ```
 
 - 준비: LeRobot 가상환경에 `grpcio==1.73.1`, `matplotlib`이 필요합니다(2026-11-07 이 PC에 설치, 기존 패키지 변경 없음). 계정 `dialout` 권한이 없으면 도우미가 `sg dialout`으로 실행합니다.
-- 팔 2대일 때는 [팔 2대 · 카메라 6대](#팔-2대--카메라-6대)의 팔별 변수를 씁니다. 팔 1대만 쓸 때는 장치를 환경 변수로 지정합니다: `CONTROL_STATION_ACT_OVERHEAD_CAMERA`(필수, 선반을 위에서 보는 카메라), `CONTROL_STATION_JOINT_CAMERA`(그리퍼 카메라), `CONTROL_STATION_FOLLOWER_PORT`, `CONTROL_STATION_OMX_POSES`(워커 자세 파일). 정책 입력 `front`/`wrist`에 어느 카메라를 넣을지는 정책 파일의 `cameras`가 정합니다(물티슈 정책은 녹화 때 이름이 뒤바뀌어 front에 그리퍼 카메라를 넣음). 카메라 번호(`/dev/videoN`)는 꽂을 때마다 바뀌므로 by-id/by-path를 씁니다. 같은 모델의 카메라라도 **학습 때와 같은 위치·시점**의 카메라를 줘야 합니다. 다른 PC의 명령에 있는 장치 번호를 그대로 쓰지 않습니다.
+- 팔 2대일 때는 [팔 2대 · 카메라 6대](#팔-2대--카메라-6대)의 팔별 변수를 씁니다. 팔 1대만 쓸 때는 장치를 환경 변수로 지정합니다: `CONTROL_STATION_ACT_OVERHEAD_CAMERA`(필수, 선반을 위에서 보는 카메라), `CONTROL_STATION_JOINT_CAMERA`(그리퍼 카메라), `CONTROL_STATION_FOLLOWER_PORT`, `CONTROL_STATION_OMX_POSES`(워커 자세 파일). 정책 입력 `front`/`wrist`에 어느 카메라를 넣을지는 정책 파일의 `cameras`가 정합니다(사과 정책은 녹화 때 이름이 뒤바뀌어 front에 그리퍼 카메라를 넣음). 카메라 번호(`/dev/videoN`)는 꽂을 때마다 바뀌므로 by-id/by-path를 씁니다. 같은 모델의 카메라라도 **학습 때와 같은 위치·시점**의 카메라를 줘야 합니다. 다른 PC의 명령에 있는 장치 번호를 그대로 쓰지 않습니다.
 - 정책에는 완료 신호가 없습니다. robot_client는 Ctrl+C를 누를 때까지 계속 동작하므로, 사람이 놓기가 끝난 것을 보고 멈춥니다.
 - LeRobot 기본값은 종료할 때 토크를 끄는 것(`disable_torque_on_disconnect=True`)이라 팔이 떨어집니다. 도우미는 `false`를 줘서 마지막 자세를 유지합니다. 연결할 때는 LeRobot이 모터 설정을 쓰느라 토크가 잠깐 꺼지므로 쉬는 자세에서 시작합니다. 시작 전에 `Goal_Position`이 현재 위치와 같은지 읽어 두면 토크가 켜질 때 팔이 튀지 않는지 알 수 있습니다.
 - 팔 포트는 배타적으로 열리지 않습니다(Dynamixel SDK가 pyserial exclusive를 쓰지 않음). 정책과 워커가 동시에 떠 있으면 둘 다 모터에 쓸 수 있으므로, 도우미는 다른 팔 프로세스가 있으면 시작하지 않습니다. 워커는 정책을 끈 뒤에 켭니다.
@@ -228,12 +228,12 @@ scripts/omx_act_policy_test.sh worker            # 그다음 관제 화면 원�
 |---|---|---|---|
 | 천장 캠 (`head_camera`) | 핑키 정차(주차) 확인 + 핑키 위 적재 YOLO | 주차 판정 launch가 열고 관제는 토픽 | `CONTROL_STATION_CEILING_CAMERA`(launch), `CONTROL_STATION_HEAD_CAMERA=ros:/ceiling_camera/image_raw/compressed` |
 | 선반 캠 (`shelf_camera`) | 선반 재고 YOLO | 관제 | `CONTROL_STATION_SHELF_CAMERA` |
-| 왼쪽 팔 그리퍼 캠 (`arm01_gripper`) | arm-01 정책 입력 | 정책 실행 때 정책, 팔 원격 조작(`CONTROL_STATION_ARM_ENABLED=1`)이면 평소 관제 화면 | `CONTROL_STATION_ARM01_GRIPPER_CAMERA` |
+| 왼쪽 팔 그리퍼 캠 (`arm01_gripper`) | arm-01 정책 입력 | 정책 실행 때 정책. 관제는 꽂혀 있는지만 확인 | `CONTROL_STATION_ARM01_GRIPPER_CAMERA` |
 | 왼쪽 팔 탑 캠 (`arm01_overhead`) | arm-01 ACT 정책 입력(학습 때와 같은 위치·시점) | 정책. 관제는 꽂혀 있는지만 확인(`CONTROL_STATION_OVERHEAD_CAMERA_PREVIEW=1`이면 화면에 띄움) | `CONTROL_STATION_ARM01_OVERHEAD_CAMERA` |
 | 오른쪽 팔 그리퍼 캠 (`arm02_gripper`) | arm-02 정책 입력 | 위와 같음 | `CONTROL_STATION_ARM02_GRIPPER_CAMERA` |
 | 오른쪽 팔 탑 캠 (`arm02_overhead`) | arm-02 ACT 정책 입력 | 위와 같음 | `CONTROL_STATION_ARM02_OVERHEAD_CAMERA` |
 
-팔마다 팔로워 포트와 LeRobot 보정 이름도 따로 줍니다: `CONTROL_STATION_ARM01_FOLLOWER_PORT`, `CONTROL_STATION_ARM01_ROBOT_ID`(기본 `CONTROL_STATION_POLICY_ROBOT_ID` 또는 `omx_follower_arm`), ARM02도 같습니다. 어느 팔이 어느 보드인지는 [config/arms.json](../../config/arms.json)의 `board_serial`입니다(arm-01 왼쪽 `F58AE686…`, arm-02 오른쪽 `A9F93543…`).
+팔마다 팔로워 포트와 LeRobot 보정 이름도 따로 줍니다: `CONTROL_STATION_ARM01_FOLLOWER_PORT`, `CONTROL_STATION_ARM01_ROBOT_ID`(기본 `CONTROL_STATION_POLICY_ROBOT_ID` 또는 `omx_follower_arm`), ARM02도 같습니다. 어느 팔이 어느 보드인지는 [config/arms.json](../../config/arms.json)의 `board_serial`입니다(arm-01 왼쪽 `A9F93543…`, arm-02 오른쪽 `F58AE686…`).
 
 - `GET /api/cameras`의 각 카메라에 `role`(역할 문구), `robot_id`(팔), `opened_by`(`control_station`/`policy`/`ros_node`), `link_label`(`연결됨`/`연결 전`), `setting`(환경 변수 이름)이 붙습니다.
 - 두 설정이 같은 장치로 풀리면(심볼릭 링크 포함) 둘 다 쓰지 않고 오류로 알립니다. 예전 단일 팔 설정의 `joint_camera`·`front_camera`가 팔 카메라와 같은 장치면 팔 카메라 쪽만 남습니다.
@@ -451,7 +451,7 @@ curl -s http://127.0.0.1:8000/api/parking-spots/pinky_dock_1/check
 
 자동 재주행이나 재판정은 하지 않습니다. 이동 단계는 모의이므로, 판정은 Pinky가 실제로 서 있는 위치를 봅니다.
 
-관제 화면 **현황** 탭 아래쪽의 **Pinky 도착 확인** 패널에서 볼 수 있습니다.
+관제 화면 **장비·카메라** 탭 아래쪽의 **Pinky 도착 확인** 패널에서 볼 수 있습니다.
 
 - **실시간 상태:** 노드가 `spot_id` 위치를 10 Hz로 추적하고(등록된 핑키 자리마다 노드 하나: `/pinky_parking`, `/pinky_parking_<자리>`), 관제는 각 노드의 `state`를 받아 `GET /api/parking-spots/{spot_id}/live`로 보여 줍니다. 패널은 보고 있는 자리의 마커가 화면에 없으면 마커가 보이는 다른 등록 자리로 저절로 바뀝니다(화면은 0.5초마다 갱신). 상태는 화면 밖 → 이동 중 → 정상 위치 / 위치 벗어남이며, 같은 마커 여러 개·시야 미확인·카메라 없음·등록 파일 오류는 확인 불가로 표시합니다. 최근 1초 동안 5 mm·2° 안에서 멈춰 있어야 정상 위치/위치 벗어남을 판정합니다. 멈춘 Pinky도 프레임 하나하나는 약 ±1.5 mm·±0.55° 흔들려서, 처음 정한 2 mm·0.5°로는 계속 이동 중으로 나왔습니다(2026-11-02).
 - **화면 구성:** 왼쪽은 천장 카메라 실시간 영상입니다. 그 위에 등록 위치(흰 점선)와 지금 Pinky 마커·앞쪽 방향(상태 색)을 겹쳐 그립니다. 영상 바로 아래에는 지금 보이는 핑키 이름(P0·P1·P2)과 마커 번호·등록 자리를 적습니다(`/api/pinky`의 핑키별 마커 대응으로 찾고, 마커가 안 보이면 "없음"과 어느 핑키 자리를 보고 있는지 적음, 2026-11-24). 오른쪽은 진행 단계, 상태, 앞·왼쪽·회전 수치, 허용 오차 대비 배수, 위치 벗어남일 때의 보정 방향 안내, 위에서 본 그림입니다. 색은 정상 위치 초록, 조금 벗어남 주황, 많이 벗어남 빨강, 이동 중 파랑, 확인 불가 회색입니다.

@@ -35,8 +35,6 @@ from typing import Any, Callable
 ARM_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll")
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICIES = REPOSITORY_ROOT / "config" / "omx-act-policies.json"
-# 정책 파일의 cameras가 가리키는 카메라 역할: 선반을 위에서 보는 카메라, 그리퍼 카메라.
-ROLES = ("OVERHEAD", "GRIPPER")
 
 
 def max_home_error_ticks(home: dict[str, int], current: dict[str, int]) -> int:

@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "notes": "테스트 전용 정책 등록부 (tests/support.py의 act_policies()가 읽음). 운영 등록부 config/omx-act-policies.json은 팀이 모델을 바꿀 때마다 달라지므로, 동작을 보는 테스트는 이 고정된 파일을 쓴다. 당근·물티슈는 어느 팔이든(arm_id null), 사과·수박은 오른쪽 팔(arm-02) 전용. 물티슈는 별칭 '티슈'가 '물티슈' 안에 들어 있는 경우를, 물티슈·사과는 front와 wrist 카메라가 뒤바뀐 정책을 대표한다. 물체는 기본 모의 재고(mock_world.DEFAULT_STOCK)와 같다. 모델 이름은 실제로 내려받지 않는다.",
+  "policies": [
+    {
+      "policy_id": "carrot_act_v2",
+      "arm_id": null,
+      "object_class": "carrot",
+      "label": "당근",
+      "aliases": ["당근", "carrot"],
+      "model": "JJinJJin2/omx_act_policy_v2",
+      "policy_type": "act",
+      "task": "Pick up Doll",
+      "cameras": {"front": "OVERHEAD", "wrist": "GRIPPER"}
+    },
+    {
+      "policy_id": "tissue_act_v1",
+      "arm_id": null,
+      "object_class": "tissue",
+      "label": "물티슈",
+      "aliases": ["물티슈", "티슈", "tissue"],
+      "model": "JJinJJin2/omx_act_policy",
+      "policy_type": "act",
+      "task": "Pick up Doll",
+      "cameras": {"front": "GRIPPER", "wrist": "OVERHEAD"}
+    },
+    {
+      "policy_id": "apple_act_20261109",
+      "arm_id": "arm-02",
+      "object_class": "apple",
+      "label": "사과",
+      "aliases": ["사과", "apple"],
+      "model": "neverlish/omx_act_record-apple-20261109-1",
+      "policy_type": "act",
+      "task": "Pick up Doll",
+      "cameras": {"front": "GRIPPER", "wrist": "OVERHEAD"}
+    },
+    {
+      "policy_id": "watermelon_act_20261108",
+      "arm_id": "arm-02",
+      "object_class": "watermelon",
+      "label": "수박",
+      "aliases": ["수박", "watermelon"],
+      "model": "neverlish/omx_act_record-watermelon-20261108-1",
+      "policy_type": "act",
+      "task": "Pick up Doll",
+      "cameras": {"front": "OVERHEAD", "wrist": "GRIPPER"}
+    }
+  ]
+}

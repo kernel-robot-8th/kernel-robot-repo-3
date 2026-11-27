@@ -10,7 +10,6 @@ from pathlib import Path
 from unittest import mock
 
 from control_station.arms.config import load_arms
-from control_station.arms.policies import load_act_policies
 from control_station.mock_world import MockWorld
 from control_station.orders.desk import OrderDesk
 from control_station.orders.dispatcher import BEFORE_DEPARTURE, OrderDispatcher, own_problem, step_before_spot, step_in
@@ -19,7 +18,7 @@ from control_station.orders.receiving_zones import ReceivingZone
 from control_station.orders.task_runner import MockTaskOrchestrator
 from control_station.storage.store import TaskStore
 
-from support import ApiTestCase, devices
+from support import ApiTestCase, act_policies, devices
 
 ZONES = {"zone_a": ReceivingZone("zone_a", "수령 구역 A", ("5", "수령 1")),
          "zone_b": ReceivingZone("zone_b", "수령 구역 B", ("5", "수령 2"))}
@@ -38,12 +37,12 @@ class DispatcherTest(unittest.TestCase):
         self.addCleanup(self.store.close)
         # A long drive: the first Pinky is on its way while the test looks at the second order.
         self.world = MockWorld(drive_s=1.0, pick_s=0.05)
-        self.flow = OrderFlow(load_arms(), load_act_policies(), devices(self.world), dwell_s=0.0, poll_s=0.02,
+        self.flow = OrderFlow(load_arms(), act_policies(), devices(self.world), dwell_s=0.0, poll_s=0.02,
                               arrival_timeout_s=10.0, signal_timeout_s=2.0,
                               route_for=lambda zone_id: list(ZONES[zone_id].route_labels) if zone_id in ZONES else None)
         orchestrator = MockTaskOrchestrator(self.store, order_flow=self.flow)
         self.addCleanup(orchestrator.close)
-        self.desk = OrderDesk(self.store, orchestrator, devices(self.world), load_arms(), load_act_policies(), ZONES,
+        self.desk = OrderDesk(self.store, orchestrator, devices(self.world), load_arms(), act_policies(), ZONES,
                               pick_stats=lambda: self.store.pick_success_stats(simulated=True),
                               pickup=self.flow.confirm_pickup)
         self.flow.choose_shipment_pinky = self.desk.assign_next_shipment
@@ -172,10 +171,10 @@ class DispatchApiTest(ApiTestCase):
     def setUp(self) -> None:
         super().setUp()
         world = MockWorld(drive_s=0.2, pick_s=0.05)
-        flow = OrderFlow(load_arms(), load_act_policies(), devices(world), dwell_s=0.0, poll_s=0.02)
+        flow = OrderFlow(load_arms(), act_policies(), devices(world), dwell_s=0.0, poll_s=0.02)
         self.server.task_orchestrator.order_flow = flow
         self.server.order_desk = OrderDesk(self.task_store, self.server.task_orchestrator, devices(world), load_arms(),
-                                           load_act_policies(), ZONES, pick_stats=dict)
+                                           act_policies(), ZONES, pick_stats=dict)
         self.server.order_dispatcher = OrderDispatcher(self.server.order_desk, self.task_store)
 
     def test_switch_and_view(self) -> None:

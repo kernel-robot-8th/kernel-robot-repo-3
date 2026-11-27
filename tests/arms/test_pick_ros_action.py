@@ -13,11 +13,12 @@ from pathlib import Path
 
 from control_station.arms.commands import ArmCommandStore
 from control_station.arms.pick import HOME_REACHED_UNVERIFIED, ArmActionPick
-from control_station.arms.policies import load_act_policies
 from control_station.arms.ros_action import PickActionUnavailable, action_name
 from control_station.cameras.shelf_slots import load_shelf_slot_map
 from control_station.orders.flow import OrderFlowError
 from control_station.storage.store import TaskStore
+
+from support import act_policies
 
 MOVING = ["CHECKING", "STARTING_POLICY", "RUNNING_POLICY", "RETURNING_HOME"]
 HOME = {"outcome": "HOME_REACHED_PLACE_NOT_VERIFIED", "reason_code": "PLACE_NOT_VERIFIED", "message": "home",
@@ -75,7 +76,7 @@ class ArmActionPickTest(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.task_store = TaskStore(str(Path(directory.name) / "tasks.sqlite3"))
         self.addCleanup(self.task_store.close)
-        self.policies = load_act_policies()
+        self.policies = act_policies()
         self.store = ArmCommandStore(self.task_store.session_factory, slot_map=load_shelf_slot_map(),
                                      act_policies=self.policies, ack_timeout_s=10)
 

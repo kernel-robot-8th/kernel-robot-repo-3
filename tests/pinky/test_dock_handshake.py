@@ -1,4 +1,4 @@
-"""The camera <-> Pinky exchange at the loading spot (control_station/dock_handshake.py), without devices."""
+"""The camera <-> Pinky exchange at the loading spot (control_station/pinky/docking.py), without devices."""
 from __future__ import annotations
 
 import unittest

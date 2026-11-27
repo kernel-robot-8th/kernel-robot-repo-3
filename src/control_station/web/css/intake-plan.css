@@ -65,7 +65,7 @@
 .plan-rule { margin: 6px 0 0; color: var(--text-3); font-size: 12px; }
 .plan-rule b { color: var(--blue-strong); }
 
-/* 이유 표. 순위를 가른 열(.decider)은 파랑과 '결정' 표시, 배정된 줄(.chosen)은 연파랑. .mini는 지금 쓰지 않는다. */
+/* 이유 표. 순위를 가른 열(.decider)은 파랑과 '결정' 표시, 배정된 줄(.chosen)은 연파랑. */
 .plan-table-wrap { overflow-x: auto; }
 .plan-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .plan-table th { padding: 6px 8px; border-bottom: 1px solid var(--line); color: var(--text-3); font-size: 12px; font-weight: 500; text-align: left; white-space: nowrap; }

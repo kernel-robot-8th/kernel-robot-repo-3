@@ -13,6 +13,8 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from omx_act_policy_run import DEFAULT_POLICIES, RestWatcher, load_policies, policy_cameras  # noqa: E402
 
+from support import TEST_POLICIES_PATH  # noqa: E402
+
 HOME = {"shoulder_pan": 2033, "shoulder_lift": 748, "elbow_flex": 3175, "wrist_flex": 2945, "wrist_roll": 2025}
 
 
@@ -21,20 +23,25 @@ def shifted(**deltas: int) -> dict[str, int]:
 
 
 class ActPolicyRegistryTests(unittest.TestCase):
+    # The first two read the committed config/omx-act-policies.json. They name no policy id or model, so swapping a
+    # model or an object there does not break them.
     def test_committed_registry_maps_korean_and_detector_names(self) -> None:
         registry = load_act_policies()
-        self.assertEqual(registry.resolve("당근")["model"], "JJinJJin2/omx_act_policy_v2")
-        self.assertEqual(registry.resolve("Carrot")["policy_id"], "carrot_act_v2")
-        self.assertEqual(registry.resolve("물티슈")["object_class"], "tissue")
+        for policy in registry.policies.values():
+            arm_id = policy["arm_id"]
+            for name in (policy["label"], policy["object_class"].title(), *policy["aliases"]):
+                with self.subTest(policy=policy["policy_id"], name=name):
+                    self.assertEqual(registry.resolve(name, arm_id)["policy_id"], policy["policy_id"])
         self.assertIsNone(registry.resolve("ball"))
 
     def test_worker_and_control_station_see_the_same_registry_version(self) -> None:
         version, policies = load_policies(DEFAULT_POLICIES)
-        self.assertEqual(version, load_act_policies().version)
-        self.assertEqual(sorted(policies), ["apple_act_20261119", "carrot_act_v7", "tissue_act_v1", "watermelon_act_20261119"])
+        registry = load_act_policies()
+        self.assertEqual(version, registry.version)
+        self.assertEqual(sorted(policies), sorted(registry.policies))
 
     def test_bad_registries_are_refused(self) -> None:
-        good = json.loads(DEFAULT_POLICIES.read_text(encoding="utf-8"))
+        good = json.loads(TEST_POLICIES_PATH.read_text(encoding="utf-8"))
         carrot = good["policies"][0]
         cases = {
             "same name in two policies": [carrot, {**carrot, "policy_id": "other"}],
@@ -51,7 +58,7 @@ class ActPolicyRegistryTests(unittest.TestCase):
 
 class PolicyRunTests(unittest.TestCase):
     def test_cameras_follow_the_roles_each_policy_was_trained_with(self) -> None:
-        _, policies = load_policies(DEFAULT_POLICIES)
+        _, policies = load_policies(TEST_POLICIES_PATH)
         devices = {"OVERHEAD": "/dev/overhead", "GRIPPER": "/dev/gripper"}
         self.assertEqual(policy_cameras(policies["carrot_act_v2"], devices), {"front": "/dev/overhead", "wrist": "/dev/gripper"})
         # The tissue dataset was recorded with the two camera names swapped.

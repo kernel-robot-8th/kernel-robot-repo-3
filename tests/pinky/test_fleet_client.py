@@ -14,12 +14,13 @@ from pathlib import Path
 from unittest import mock
 
 from control_station.arms.config import load_arms
-from control_station.arms.policies import load_act_policies
 from control_station.mock_world import MockWorld
 from control_station.orders.flow import OrderDevices, OrderFlow
 from control_station.orders.task_runner import MockTaskOrchestrator
 from control_station.pinky.fleet_client import BatteryHistory, PinkyFleetClient, PinkyFleetError, _fresh_battery
 from control_station.storage.store import TaskStore
+
+from support import act_policies
 
 
 class FakeFleet:
@@ -125,7 +126,7 @@ class PinkyFleetClientTests(unittest.TestCase):
         world = MockWorld(drive_s=0.1, pick_s=0.05)
         devices = OrderDevices(world.shelf_stock, world.pinky_load, self.client.fleet_status, self.client.fleet_confirm,
                                world.parking, world.pick, None)
-        orchestrator = MockTaskOrchestrator(store, order_flow=OrderFlow(load_arms(), load_act_policies(), devices,
+        orchestrator = MockTaskOrchestrator(store, order_flow=OrderFlow(load_arms(), act_policies(), devices,
                                                                          dwell_s=0.0, poll_s=0.02))
         self.addCleanup(orchestrator.close)
         task = store.create_task("핑키 적재 위치", "주문", order_items=[{"object_class": "carrot", "quantity": 1}])

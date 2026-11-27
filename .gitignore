@@ -236,3 +236,9 @@ __marimo__/
 
 # Local control-station data
 /data/
+
+# 핑키 관제가 돌면서 만드는 파일. 경로 정의(data/waypoints.json)만 추적한다.
+# 주행준비·도로 예약 기록, IR 보정값, SLAM 실험 결과, 경로 백업(waypoints.before-*.json), 로그는 PC마다 달라 올리지 않는다.
+/pinky_fleet_dashboard/data/*
+!/pinky_fleet_dashboard/data/waypoints.json
+/pinky_fleet_dashboard/logs/

@@ -15,7 +15,7 @@ from control_station.orders.command_parser import parse_order_text
 from control_station.storage.models import TaskStatus
 from control_station.storage.store import PinkyUnavailable, TaskStore
 
-from support import ApiTestCase
+from support import ApiTestCase, act_policies
 
 POLICY = {
     "policy_type": "act", "task": "Pick up Doll", "cameras": {"front": "OVERHEAD", "wrist": "GRIPPER"},
@@ -94,7 +94,7 @@ class ArmPolicyTests(unittest.TestCase):
 
 class OrderItemTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.policies = load_act_policies()  # committed: carrot, tissue, apple
+        self.policies = act_policies()  # the test registry: carrot, tissue, apple, watermelon
 
     def test_names_become_object_classes_and_repeats_are_added(self) -> None:
         items = validate_order_items(
@@ -192,7 +192,7 @@ class PinkyAssignmentTests(unittest.TestCase):
 class OrderRouteTests(ApiTestCase):
     def setUp(self) -> None:
         super().setUp()
-        self.server.arm_commands.act_policies = load_act_policies()
+        self.server.arm_commands.act_policies = act_policies()
 
     def test_order_is_stored_with_a_pinky_and_a_summary(self) -> None:
         status, body = self.post("/api/tasks", {"order_items": [{"object_class": "당근", "quantity": 1},

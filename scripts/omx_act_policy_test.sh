@@ -4,7 +4,7 @@
 #   set -a; source .control-station/control-station.env; set +a   # PC별 장치 경로
 #   터미널 1:  scripts/omx_act_policy_test.sh server        정책 서버 (GPU, 모터 연결 없음). 아래 두 방식 모두 필요
 #
-# 관제에서 실행 (관제 화면 수동 조작 탭 "당근 집기"·"물티슈 집기" → PICK_WITH_POLICY):
+# 관제에서 실행 (관제 화면(?dev=1) 수동 조작 탭의 물체별 집기 타일 → PICK_WITH_POLICY):
 #   터미널 2:  scripts/omx_act_policy_test.sh worker --robot-id arm-02   우측 OMX 워커
 #              arm-01은 좌측, arm-02는 우측 설정을 환경 변수에서 각각 불러옵니다.
 #              실험: worker --policy-any-start  (칸 앞 등 쉬는 자세가 아닌 곳에서도 정책 시작, 한 스텝 40틱 제한)
@@ -30,7 +30,6 @@ PY="${LEROBOT_PYTHON:-$HOME/lerobot-venv/bin/python}"
 FOLLOWER="${CONTROL_STATION_FOLLOWER_PORT:-/dev/omx_follower}"
 GRIPPER="${CONTROL_STATION_JOINT_CAMERA:-/dev/v4l/by-id/usb-Innomaker_Innomaker-U20CAM-720P_SN0001-video-index0}"
 OVERHEAD="${CONTROL_STATION_ACT_OVERHEAD_CAMERA:-}"
-POSES="${CONTROL_STATION_OMX_POSES:-$REPO_DIR/config/omx-slot-poses.json}"
 POLICIES="$REPO_DIR/config/omx-act-policies.json"
 
 # 팔 포트를 쓸 수 있는 프로세스(워커, 텔레옵, 녹화, 정책 클라이언트)가 하나라도 떠 있는지 본다. client 전용 검사.

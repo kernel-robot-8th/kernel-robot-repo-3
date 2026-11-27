@@ -27,7 +27,7 @@
 | `PLAN_ARM_SEQUENCE` | 물체마다 팔을 배정하고 팔별로 묶어 순서를 정함([배정 규칙](#주문-접수와-배정)). 결과와 물체별 배정 이유는 뒤 단계의 `robot_id`·`detail`과 `PLAN_CREATED` 이벤트 | `POLICY_NOT_FOR_ARM`, `SHELF_STOCK_SHORT` |
 | `WAIT_PINKY_ARRIVAL` | 핑키가 5번에 정지(`docking_manual`)하고, 적재 자리가 비고, 주차 판정이 `ARRIVED`일 때 통과. 위치가 어긋나 있으면 경보만 띄우고 계속 기다리다가, 정상 위치가 되면 자동으로 다음 단계로 감 | `PINKY_ARRIVAL_TIMEOUT` (기본 600초) |
 | `CONFIRM_DOCKING` | 핑키 관제에 `dock_complete` 전송 → `docking_anchor`(5번 지도 위치 재설정, 최대 18초)를 거쳐 `docked_manual`(정지 유지) 확인. 기본 30초 안에 안 바뀌면 실패 | `PINKY_SIGNAL_REJECTED`, `PINKY_SIGNAL_NOT_DELIVERED`, `PINKY_SIGNAL_NOT_APPLIED` |
-| `PICK_ITEM` | 배정된 팔이 물체 하나를 집어 핑키 위에 놓음 (**지금은 모의**) | — |
+| `PICK_ITEM` | 배정된 팔이 물체 하나를 집어 핑키 위에 놓음 (기본은 모의, `CONTROL_STATION_ORDER_REAL_ARM=1`이면 실제 팔) | — |
 | `VERIFY_TRANSFER` | 집기 전과 비교해 선반 −1, 핑키 +1인지 확인 | `PICK_FAILED_STILL_ON_SHELF`(선반에 그대로), `ITEM_LOST`(선반에도 핑키에도 없음), `TRANSFER_NOT_VERIFIED` |
 | `VERIFY_LOAD_TOTAL` | 핑키 위 종류별 개수가 주문과 같고 다른 물건이 없는지 | `LOAD_INCOMPLETE`, `LOAD_EXTRA_ITEM`, `LOAD_MISMATCH` |
 | `NOTIFY_PINKY_RECEIVED` | 핑키 관제에 `received` 전송. 응답 202는 핑키 관제가 받았다는 뜻이고, 핑키가 출발했다는 뜻은 아님 | `PINKY_SIGNAL_REJECTED` 등 |
@@ -58,7 +58,7 @@
 | `POST /api/dispatch` | `{"auto": true\|false}` 자동 출발 켜기·끄기. 끄면 이미 출발한 주문은 그대로 진행 |
 
 - **핑키:** 진행 중 주문이 있거나, 핑키 관제가 답하지 않거나, 주차장 대기가 아니거나, 운행 준비가 안 됐거나, 배터리가 30% 미만이면 제외합니다. 남은 핑키는 배터리 10% 구간이 높은 순 → 오늘 운행 횟수가 적은 순 → 오래 쉰 순 → 번호 순으로 고릅니다. 남은 핑키가 없으면 `PINKY_UNAVAILABLE`이고 주문은 접수 상태로 남습니다.
-- **팔:** 팔은 자기 선반에서, 정책이 있는 물체만 집습니다. 집을 수 있는 팔이 적은 물체부터 정하고, 두 팔이 다 되면 집기 성공률((성공+1)/(시도+2)) → 지금까지 맡은 개수가 적은 팔 → 그 선반에 남은 수량 → 설정 순서로 고릅니다. 실행은 맡은 개수가 많은 팔부터 한 팔씩 합니다. 성공률은 지금 집기가 모의라서 모의 결과로만 셉니다.
+- **팔:** 팔은 자기 선반에서, 정책이 있는 물체만 집습니다. 집을 수 있는 팔이 적은 물체부터 정하고, 두 팔이 다 되면 집기 성공률((성공+1)/(시도+2)) → 지금까지 맡은 개수가 적은 팔 → 그 선반에 남은 수량 → 설정 순서로 고릅니다. 실행은 맡은 개수가 많은 팔부터 한 팔씩 합니다. 성공률은 이 서버가 하는 집기 종류(기본 모의, `CONTROL_STATION_ORDER_REAL_ARM=1`이면 실제)의 기록으로만 셉니다.
 - **큰 주문은 운송분으로 나눠 차례로:** 아래 [운송분](#큰-주문-운송분으로-나눠-차례로) 참고.
 - **두 팔 순서:** ACT 정책이 집기 → 핑키 위에 놓기 → 대기 자세까지 한 번에 학습돼 있어, 한 팔의 정책이 끝난 뒤 다른 팔이 시작합니다(`arms_overlap: false`). 미리보기의 적재 시간표(`schedule_loading`)도 한 팔씩 계산합니다. 두 팔 겹치기(적재 공간 잠금, 먼저 준비된 팔부터 놓기)는 함수와 테스트로 남겨 두었고, 정책이 "집어서 대기 자세까지"로 나뉘면 켤 수 있습니다.
 - **수령 구역:** 고객이 고르지 않고 주문 시작 때 서버가 정합니다(`choose_zone`). **Confluence와 다름:** UR/SR은 고객이 A-1~A-3을 고른다고 돼 있으나, 2026-11-14 결정으로 수령 구역은 출발(주문 시작) 시 서버가 배정합니다. 규칙: 시작~수령 확인 중인 다른 주문이 쓰는 구역 제외(멈춘 주문은 경보 확인 전까지 붙잡음) → 오늘 덜 쓴 구역 → 경로(`route_labels`)가 짧은 구역 → `config/receiving-zones.json` 순서. 모두 사용 중이면 `ZONE_BUSY`로 거절하고 핑키도 배정하지 않습니다. 작업자가 접수 때 지정한 구역은 바꾸지 않고 비었는지만 확인합니다. 주문은 처음부터 수령 구역 단계(도착 대기·수령 확인·주차 복귀)를 갖고, 핑키 경로는 배정된 구역의 웨이포인트 순서입니다. 고객 추적(`/track`)은 배정 전이면 `zone: null`, `zone_note: "받을 곳은 로봇이 출발할 때 알려 드려요"`입니다.
@@ -95,7 +95,7 @@
 
 모의 결과는 이벤트와 결과에 `simulated: true`로 남습니다. 화면에는 "모의" 표시가 붙습니다.
 
-실제 팔로 집을 때(`CONTROL_STATION_ORDER_REAL_ARM=1`) 집기 단계는 계획된 팔에 `PICK_WITH_POLICY`를 보내고, 그 팔에서 녹화한 정책으로 그 팔의 워커가 끝내기를 기다립니다(정책 최대 시간 + 180초). 워커는 팔이 쉬는 자세로 돌아온 것까지만 알 수 있어 명령을 `UNKNOWN`(`PLACE_NOT_VERIFIED`)으로 끝내고, 옮김 확인 단계가 카메라 개수로 선반 −1·핑키 +1을 보면 그 명령을 닫습니다(`arms/pick.py`). 개수가 모의면 팔을 움직이기 전에 `TRANSFER_EVIDENCE_REQUIRED`로 멈춥니다. 명령은 기본으로 그 팔의 HTTP 워커가 가져가고, `CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2`면 관제가 그 팔의 ROS 2 집기 액션(`/arm_0N/pick_object`)으로 보냅니다. 어느 쪽이든 같은 팔 명령 기록과 같은 규칙을 씁니다([ROS 2 집기 액션](arm-command-api.md#ros-2-집기-액션-arm_0npick_object)). 옮김을 확인하지 못하면 명령은 `UNKNOWN`으로 남고, 수동 조작 화면에서 현장을 확인하고 닫아야 그 팔이 다음 명령을 받습니다.
+실제 팔로 집을 때(`CONTROL_STATION_ORDER_REAL_ARM=1`) 집기 단계는 계획된 팔에 `PICK_WITH_POLICY`를 보내고, 그 팔에서 녹화한 정책으로 그 팔의 워커가 끝내기를 기다립니다(60초 + 180초 = 240초. 정책별 최대 시간 항목은 지금 정책 파일에 없어 60초로 계산). 워커는 팔이 쉬는 자세로 돌아온 것까지만 알 수 있어 명령을 `UNKNOWN`(`PLACE_NOT_VERIFIED`)으로 끝내고, 옮김 확인 단계가 카메라 개수로 선반 −1·핑키 +1을 보면 그 명령을 닫습니다(`arms/pick.py`). 개수가 모의면 팔을 움직이기 전에 `TRANSFER_EVIDENCE_REQUIRED`로 멈춥니다. 명령은 기본으로 그 팔의 HTTP 워커가 가져가고, `CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2`면 관제가 그 팔의 ROS 2 집기 액션(`/arm_0N/pick_object`)으로 보냅니다. 어느 쪽이든 같은 팔 명령 기록과 같은 규칙을 씁니다([ROS 2 집기 액션](arm-command-api.md#ros-2-집기-액션-arm_0npick_object)). 옮김을 확인하지 못하면 명령은 `UNKNOWN`으로 남고, 수동 조작 화면에서 현장을 확인하고 닫아야 그 팔이 다음 명령을 받습니다.
 
 모의 팔에 카메라 개수를 쓸 때는 집기 단계 동안 사람이 물체를 선반에서 핑키 위로 옮겨야 옮김 확인을 통과합니다. 집기 단계 시간은 `CONTROL_STATION_MOCK_PICK_S`(기본 4초)로 늘릴 수 있습니다.
 
@@ -139,14 +139,14 @@ ROS가 아니라 HTTP인 이유:
 | 구간 | 하는 일 | 파일 |
 |---|---|---|
 | 천장 캠 → 관제 | 그 핑키의 등록 자리를 따라가는 판정 노드의 실시간 상태에서 앞·왼쪽·각도 차이를 꺼냄. 새 프레임마다 한 번, 그 마커를 단 핑키가 임무 중일 때만 | [pinky/docking.py](../../src/control_station/pinky/docking.py) |
-| 관제 → 핑키 관제 | `POST /api/robots/{id}/dock-guide` (`forward_mm`, `left_mm`, `dyaw_deg`). 앞 45 cm, 옆 15 cm, 40° 밖의 값은 버림 | `pinky_fleet_dashboard/app.py` |
+| 관제 → 핑키 관제 | `POST /api/robots/{id}/dock-guide` (`forward_mm`, `left_mm`, `dyaw_deg`). 앞 50 cm, 옆 25 cm 밖의 값은 버림(방향은 ±180°까지 받음) | `pinky_fleet_dashboard/app.py` |
 | 핑키 관제 → 핑키 | 그 핑키의 ROS 도메인에 `/fleet/dock_guide`(std_msgs/String, JSON)로 발행 | 같은 파일 |
 | 핑키 | 5번 진입(`DockEntry`) 중이고 값이 0.4초 안의 것일 때만 사용. 옆 어긋남과 각도로 회전 속도를 정하고(선 따라가기), 카메라가 본 앞쪽 차이가 0에 가까워지면 멈춤 | `scripts/mission_behaviors.py`, `scripts/ultrasonic_safety.py` |
 
 - 값이 끊기면(마커가 가려짐, PC가 조용함) 예전처럼 바퀴 거리로 직진해서 들어갑니다. 카메라가 멈추는 깊이를 바꿀 수 있는 폭은 센 거리의 앞 8 cm, 뒤 6 cm까지입니다.
 - 끄는 방법: `pinky_fleet_dashboard/config/navigation.json`에 `"dock_camera_guide": false`(핑키 관제가 전달을 거절), 또는 관제 실행 때 `CONTROL_STATION_DOCK_GUIDE=0`.
 - 실시간 상태는 계약상 "표시 전용"이고 팔 단계의 조건으로 쓰지 않습니다. 그 점은 그대로입니다. 도착 판정은 여전히 새 프레임으로 하는 확인(`CheckParking`)이 하고, 실시간 값은 마지막 직진의 조향에만 씁니다.
-- **핑키마다 자기 등록 자리로 안내합니다 (2026-11-24).** 마커를 붙인 위치가 핑키마다 달라 등록이 따로 있고([핑키 마커](../../config/pinky-markers.json)), 판정 노드는 한 자리만 실시간으로 따라가므로 `ceiling_parking.launch.py`가 등록된 자리마다 노드를 하나씩 띄웁니다: `spot_id` 인자의 자리는 `/pinky_parking`, 나머지는 `/pinky_parking_<자리>`(글자·숫자가 아닌 문자는 `_`). 관제는 등록된 핑키마다 안내 전달을 하나씩 두고 그 핑키 자리의 노드만 읽으므로, 다른 핑키의 등록으로 조향되는 일은 없습니다. 등록이 없는 핑키(지금 P0)는 안내 없이 예전처럼 들어갑니다. 실행 때 관제가 `적재 자리 진입 안내: … P1(pinky_dock_p1), P2(pinky_dock_1)`처럼 알려 줍니다. 새로 등록한 자리는 천장 캠 launch와 관제를 다시 띄워야 따라갑니다(이미 따라가는 자리의 등록 파일을 고친 것은 노드가 바로 다시 읽음). 따라가는 자리 목록은 `GET /api/health`의 `parking.live_spots`, 자리별 실시간 값은 `GET /api/parking-spots/{spot_id}/live`. **2026-11-24: P1 자리의 실시간 값이 P1 마커로 나오는 것까지 확인했고, P1이 이 안내로 실제로 들어오는 주행은 아직 보지 못했습니다.**
+- **핑키마다 자기 등록 자리로 안내합니다 (2026-11-24).** 마커를 붙인 위치가 핑키마다 달라 등록이 따로 있고([핑키 마커](../../config/pinky-markers.json)), 판정 노드는 한 자리만 실시간으로 따라가므로 `ceiling_parking.launch.py`가 등록된 자리마다 노드를 하나씩 띄웁니다: `spot_id` 인자의 자리는 `/pinky_parking`, 나머지는 `/pinky_parking_<자리>`(글자·숫자가 아닌 문자는 `_`). 관제는 등록된 핑키마다 안내 전달을 하나씩 두고 그 핑키 자리의 노드만 읽으므로, 다른 핑키의 등록으로 조향되는 일은 없습니다. 등록이 없는 핑키는 안내 없이 예전처럼 들어갑니다(2026-11-24부터 세 대 모두 등록됨). 실행 때 관제가 `적재 자리 진입 안내: … P0(pinky_dock_p0), P1(pinky_dock_p1), P2(pinky_dock_1)`처럼 알려 줍니다. 새로 등록한 자리는 천장 캠 launch와 관제를 다시 띄워야 따라갑니다(이미 따라가는 자리의 등록 파일을 고친 것은 노드가 바로 다시 읽음). 따라가는 자리 목록은 `GET /api/health`의 `parking.live_spots`, 자리별 실시간 값은 `GET /api/parking-spots/{spot_id}/live`. **2026-11-24: P1 자리의 실시간 값이 P1 마커로 나오는 것까지 확인했고, P1이 이 안내로 실제로 들어오는 주행은 아직 보지 못했습니다.**
 - 확인한 것: 모의 주행(옆 3 cm·각도 3° 어긋난 출발에서 옆 1 mm·각도 1° 안쪽으로 정지, 지연 0.2초·노이즈 포함), 그리고 실제 P2가 서 있는 채로 값을 받는지(`/line/status`의 `dock_guide_fresh`). **실제로 들어오는 주행은 아직 확인하지 못했습니다.**
 - 핑키 쪽 코드는 주행준비 때 올라가므로, 이 기능은 주행준비를 다시 한 핑키부터 적용됩니다.
 
@@ -197,7 +197,7 @@ ROS가 아니라 HTTP인 이유:
 - **색은 뜻으로만 씁니다.** 파랑은 관제가 하는 일과 지금 보는 화면, 노랑은 사람이 확인하거나 처리할 일(시작을 기다리는 주문, 경고), 빨강은 정지·위험·오류, 초록은 확인된 정상입니다.
 - **모의 표시:** 평소 화면에는 "모의" 표시, 모드 이름, 모의 세계 패널을 보이지 않습니다. 주소에 `?dev=1`을 붙이면 모두 나타납니다(모의 값에는 점선 테두리의 "모의" 표시). 화면 스크립트는 `isDevView()`(app.js) 하나로 이를 판단합니다. 모의 모드에서 핑키 명령은 "보내지 않음"으로 보이고, 핑키 연결 줄은 "핑키 관제에 연결하기 전이에요"라고 적습니다.
 - **글꼴:** Pretendard(SIL OFL)를 `web/fonts/`에 함께 두어 인터넷이 없어도 같은 모양으로 보입니다. 라이선스는 `web/fonts/Pretendard-OFL.txt`입니다.
-- **요약 카드:** 주문 진행·핑키·재고·현황 탭 맨 위에 한 문장과 큰 숫자를 둡니다. 주문 진행은 시작을 기다리는 주문·진행 중인 주문·멈춘 주문·연결된 핑키, 핑키는 연결·주행 가능·정지 적용 중, 재고는 주문 받는 물건·품절·재고를 모르는 물건·주문이 잡아 둔 개수, 현황은 통신되는 로봇 인터페이스와 영상이 들어오는 카메라 수입니다.
+- **요약 카드:** 주문 진행·핑키·재고·장비·카메라 탭 맨 위에 한 문장과 큰 숫자를 둡니다. 주문 진행은 시작을 기다리는 주문·진행 중인 주문·멈춘 주문·연결된 핑키, 핑키는 연결·주행 가능·정지 적용 중, 재고는 주문 받는 물건·품절·재고를 모르는 물건·주문이 잡아 둔 개수, 장비·카메라는 통신되는 로봇 인터페이스와 영상이 들어오는 카메라 수입니다.
 - **주소:** 주소 끝(`#flow`, `#pinky`, `#inventory`, `#overview` 등)이 지금 탭을 가리키므로 새로고침해도 같은 탭이 열립니다.
 - **휴대폰 폭:** 메뉴가 가로로 넘기는 한 줄이 되고, 머리글의 **핑키 전체 정지**는 스크롤해도 위에 붙어 있습니다.
 
@@ -271,11 +271,11 @@ ros2 launch parking_vision_ros ceiling_parking.launch.py repository_root:=$PWD s
 - `CONTROL_STATION_MOCK_PINKY_DRIVE_S`: 모의 핑키 이동 시간, 기본 8초
 - `CONTROL_STATION_MOCK_PICK_S`: 모의 집기 시간, 기본 4초
 - `CONTROL_STATION_ORDER_STEP_DWELL_S`: 빠른 단계를 화면에 잠깐 보여 주는 시간, 기본 0.8초
-- `CONTROL_STATION_MOCK_SHELF_STOCK`: 모의 선반 재고. 예: `shelf_a:apple=2;shelf_b:carrot=3` (기본 `shelf_a:apple=4,carrot=3,tissue=1;shelf_b:carrot=1,tissue=2`. 사과 정책은 왼쪽 팔 arm-01에서 녹화돼 오른쪽 선반의 사과는 집을 팔이 없습니다)
+- `CONTROL_STATION_MOCK_SHELF_STOCK`: 모의 선반 재고. 예: `shelf_a:apple=2;shelf_b:carrot=3` (기본 `shelf_a:carrot=3,tissue=1;shelf_b:apple=4,carrot=1,tissue=2`. 지금 정책 파일로는 당근이 왼쪽 팔, 사과가 오른쪽 팔 전용이라 오른쪽 선반의 당근은 집을 팔이 없고, 물티슈는 정책이 없어 주문할 수 없습니다)
 
 카메라를 다시 꽂거나 옮겨 주차 판정이 `VIEW_UNVERIFIED`(고정 마커가 등록 때보다 15 px 넘게 이동)가 되면, 핑키를 정차 위치에 세우고 다시 등록합니다. 절차는 [실행 방법](runbook.md#정답-위치-등록)에 있습니다.
 - 2026-11-11에 이 절차로 `pinky_dock_1`을 다시 등록했습니다(마커 21, 70 mm, 고정 마커 1 신뢰, 25 mm / 5°).
-- 지금 등록은 마커 21번 핑키 한 대 기준입니다. 핑키 세 대를 구분하려면 핑키별로 마커를 등록해야 합니다.
+- 2026-11-24부터 핑키마다 따로 등록돼 있습니다: 10번 핑키 마커 20(`pinky_dock_p0`), 11번 핑키 마커 22(`pinky_dock_p1`), 12번 핑키 마커 21(`pinky_dock_1`) ([핑키 마커](../../config/pinky-markers.json)).
 
 ## 큰 주문: 운송분으로 나눠 차례로
 
@@ -296,4 +296,4 @@ ros2 launch parking_vision_ros ceiling_parking.launch.py repository_root:=$PWD s
 - 실제 팔 집기(`CONTROL_STATION_ORDER_REAL_ARM=1`, HTTP 큐 또는 ROS 2 액션)를 실물 팔·카메라로 끝까지 돌려 보기. 코드는 들어가 있고 가짜 팔로워·모의로만 확인했습니다.
 - 큰 주문의 운송분을 동시에 달리게 하기(핑키 관제의 교통 관리와 수령 구역 여러 칸이 확인된 뒤).
 - 탑 캠에서 핑키 쟁반 위 물건 검출 개선(YOLO 학습).
-- 핑키 관제 외부 접속, 핑키별 주차 마커 등록.
+- 핑키 관제 외부 접속.

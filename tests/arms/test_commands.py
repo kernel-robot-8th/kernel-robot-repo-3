@@ -15,10 +15,13 @@ from control_station.api import arm as arm_api
 from control_station.app import WEB_DIR, ControlStationHandler, ControlStationServer
 from control_station.arms import commands as arm_commands
 from control_station.arms.commands import ArmCommandConflict, ArmCommandError, ArmCommandStore
-from control_station.arms.policies import DEFAULT_POLICIES_PATH, load_act_policies
+from control_station.arms.policies import load_act_policies
+from control_station.arms.sequences import ArmSequenceSupervisor
 from control_station.cameras.adapters import UnconfiguredArmCameraStreamManager
 from control_station.cameras.shelf_slots import ShelfSlotMapError, load_shelf_slot_map
 from control_station.storage.store import TaskStore
+
+from support import TEST_POLICIES_PATH, act_policies
 
 
 def command_request(**overrides: object) -> dict[str, object]:
@@ -301,7 +304,7 @@ class PolicyCommandTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.task_store = TaskStore(str(Path(directory.name) / "tasks.sqlite3"))
         self.addCleanup(self.task_store.close)
-        self.policies = load_act_policies()  # the committed config/omx-act-policies.json
+        self.policies = act_policies()  # the test registry (tests/act-policies.json)
         self.store = ArmCommandStore(
             self.task_store.session_factory, slot_map=load_shelf_slot_map(), act_policies=self.policies
         )
@@ -423,6 +426,8 @@ class ArmCommandHttpTests(unittest.TestCase):
             ("127.0.0.1", 0), partial(ControlStationHandler, directory=str(WEB_DIR))
         )
         server.arm_commands = ArmCommandStore(task_store.session_factory, slot_map=load_shelf_slot_map())
+        # As app.py wires it: every worker event is also passed to the sequence supervisor.
+        server.arm_sequences = ArmSequenceSupervisor(task_store.session_factory, server.arm_commands)
         self.server = server
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -472,7 +477,7 @@ class ArmCommandHttpTests(unittest.TestCase):
     def test_policy_list_and_camera_policy_command_without_a_policy(self) -> None:
         status, body = self.call("GET", "/api/arm/policies")
         self.assertEqual((status, body["error_code"]), (404, "ACT_POLICIES_NOT_CONFIGURED"))
-        self.server.arm_commands.act_policies = load_act_policies()
+        self.server.arm_commands.act_policies = act_policies()
         status, body = self.call("GET", "/api/arm/policies")
         self.assertEqual(status, 200)
         self.assertEqual([policy["label"] for policy in body["policies"]], ["당근", "물티슈", "사과", "수박"])
@@ -484,7 +489,7 @@ class ArmCommandHttpTests(unittest.TestCase):
         self.assertEqual((status, body["error_code"]), (400, "ARM_COMMAND_INVALID"))
 
     def test_camera_policy_command_goes_to_the_arm_in_the_body(self) -> None:
-        document = json.loads(DEFAULT_POLICIES_PATH.read_text(encoding="utf-8"))
+        document = json.loads(TEST_POLICIES_PATH.read_text(encoding="utf-8"))
         for policy in document["policies"]:
             policy["arm_id"] = "arm-01" if policy["object_class"] == "apple" else None
         directory = tempfile.TemporaryDirectory()

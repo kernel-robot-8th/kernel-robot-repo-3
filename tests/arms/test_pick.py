@@ -13,11 +13,12 @@ from unittest import mock
 
 from control_station.arms.config import load_arms
 from control_station.arms.pick import HOME_REACHED_UNVERIFIED, ArmQueuePick
-from control_station.arms.policies import load_act_policies
 from control_station.mock_world import MockWorld
 from control_station.orders.flow import OrderDevices, OrderFlow, OrderFlowError
 from control_station.orders.task_runner import MockTaskOrchestrator
 from control_station.storage.store import TaskStore
+
+from support import act_policies
 
 HOME_UNVERIFIED = {"state": "UNKNOWN", "reason_code": "PLACE_NOT_VERIFIED", "result": {"pose_reached": True}}
 
@@ -26,7 +27,7 @@ class FakeCommands:
     """Arm command queue stand-in: `get` walks through the given states and then repeats the last one."""
 
     def __init__(self, *states: dict) -> None:
-        self.act_policies = load_act_policies()
+        self.act_policies = act_policies()
         self.states = list(states)
         self.created: list[dict] = []
         self.cancelled: list[str] = []
@@ -135,7 +136,7 @@ class RealPickOrderTest(unittest.TestCase):
         devices = OrderDevices(shelf, load, world.fleet_status, world.fleet_confirm, world.parking, real_pick,
                                world.dispatch, world.mission_complete, pick_is_real=True,
                                pick_settle=lambda done, evidence: self.settled.append({**done, **evidence}))
-        flow = OrderFlow(load_arms(), load_act_policies(), devices, dwell_s=0.0, poll_s=0.02,
+        flow = OrderFlow(load_arms(), act_policies(), devices, dwell_s=0.0, poll_s=0.02,
                          arrival_timeout_s=10.0, signal_timeout_s=2.0)
         orchestrator = MockTaskOrchestrator(self.store, order_flow=flow)
         self.addCleanup(orchestrator.close)

@@ -13,10 +13,10 @@
 | `run-control-station.sh` | 관제 실행. `.control-station/control-station.env`가 있으면 읽고, 팔 포트·자세·카메라가 설정돼 있으면 ACT 정책 서버와 팔 워커 가운데 빠진 것만 시작. 주차 위치나 `ros:` 카메라를 설정하면 ROS 2와 `cpp/install`을 source. 세션 로그는 `.control-station/logs/` |
 | `src/control_station/__init__.py` | 패키지 공통: 저장소 루트 `REPO_ROOT`, 시각 문자열 `utc_now_iso`, 켜기 설정 `env_flag` |
 | `src/control_station/app.py` | 서버 조립(`main`)과 요청 분배. 경로 표는 `api/routes.py` |
-| `src/control_station/api/` | `tasks.py`(주문·작업 목록·생성·시작·취소, 명령 해석), `flow.py`(주문 진행 화면, 경보 확인, 모의 세계 조작), `cameras.py`(카메라 목록, MJPEG 스트림), `arm.py`(텔레오퍼레이션·정책 한 번 실행, OMX 명령 큐, 선반 칸, 정책 목록), `status.py`(health, 로봇 상태, 주차 `/live`·`/check`), `common.py`(교차 출처 확인, JSON 본문, 작업 조건·주문 물체 검증). 경로별 상태·오류 코드는 `tests/api/test_routes.py`로 고정 |
+| `src/control_station/api/` | `tasks.py`(주문·작업 목록·생성·시작·취소, 명령 해석), `flow.py`(주문 진행 화면, 경보 확인, 모의 세계 조작), `cameras.py`(카메라 목록, MJPEG 스트림), `arm.py`(정책 한 번 실행, OMX 명령 큐, 선반 칸, 정책 목록·연속 실행), `status.py`(health, 로봇 상태, 주차 `/live`·`/check`, 전체 정지), `common.py`(교차 출처 확인, JSON 본문, 작업 조건·주문 물체 검증). 경로별 상태·오류 코드는 `tests/api/test_routes.py`로 고정 |
 | `src/control_station/stop_all.py` | 팔(명령·연속 실행·정책 실행)과 핑키 전체에 한 번에 정지 요청. 소프트웨어 요청이며 비상정지가 아님. `POST /api/stop-all` |
 | `src/control_station/mock_world.py` | 선반 재고·핑키 위 물건·핑키 임무 단계·팔 집기를 흉내 내는 모의 세계와 사고 주입(모든 결과 `simulated: true`) |
-| `src/control_station/web/` | 관제 화면(`index.html`, `css/`, `js/`) 탭: 주문 진행(맨 위 주문 접수), 현황, 수동 조작, 핑키, 작업 이력, API. 손님용 주문 창 `/order`(`order.html`, 서비스 워커 `order-sw.js`) |
+| `src/control_station/web/` | 관제 화면(`index.html`, `css/`, `js/`) 탭: 종합, 주문 진행(맨 위 주문 접수), 핑키, 재고, 작업 이력, 장비·카메라. 주소에 `?dev=1`을 붙이면 수동 조작, ROS 모니터, API도 보임. 손님용 주문 창 `/order`(`order.html`, 서비스 워커 `order-sw.js`) |
 
 ### 주문 (`orders/`)
 
@@ -37,10 +37,10 @@
 | 파일 | 현재 책임 |
 |---|---|
 | `src/control_station/arms/config.py`, `config/arms.json` | 팔과 담당 선반·재고 카메라(왼쪽 선반=arm-01, 오른쪽 선반=arm-02), 이 PC에서 팔마다 장치 경로(팔로워 포트, 그리퍼·탑 카메라, 환경 변수) |
-| `src/control_station/arms/commands.py` | OMX 명령 큐(`arm_commands` 테이블): `MOVE_TO_SLOT`·`RETURN_HOME`·`PICK_WITH_POLICY`, 팔당 미완료 1건, ACK 제한 시간 뒤 `UNKNOWN`, 자동 재전송 없음 ([HTTP 인터페이스](arm-command-api.md)) |
+| `src/control_station/arms/commands.py` | OMX 명령 큐(`arm_commands` 테이블): `MOVE_TO_SLOT`·`RETURN_HOME`·`PICK_WITH_POLICY`·`JOG_JOINT`, 팔당 미완료 1건, ACK 제한 시간 뒤 `UNKNOWN`, 자동 재전송 없음 ([HTTP 인터페이스](arm-command-api.md)) |
 | `src/control_station/arms/pick.py` | 실제 팔로 주문 집기(`CONTROL_STATION_ORDER_REAL_ARM=1`): 계획된 팔에 `PICK_WITH_POLICY`를 HTTP 워커 큐(기본) 또는 ROS 2 액션으로 보내고, 옮김 확인이 카메라 개수로 명령을 닫음 |
 | `src/control_station/arms/ros_action.py` | 팔 집기 액션 서버(`/arm_01/pick_object`, `/arm_02/pick_object`)의 ROS 2 클라이언트(`CONTROL_STATION_ORDER_ARM_TRANSPORT=ros2`). 자기 executor를 데몬 스레드에서 돌림 |
-| `src/control_station/arms/policies.py`, `config/omx-act-policies.json` | 물체 이름(YOLO 클래스·한글·별칭) → 그 물체용 ACT 정책(모델, front/wrist 카메라 역할, 최대 실행 시간); 파일 SHA-256을 명령에 고정 |
+| `src/control_station/arms/policies.py`, `config/omx-act-policies.json` | 물체 이름(YOLO 클래스·한글·별칭) → 그 물체용 ACT 정책(모델, front/wrist 카메라 역할, 학습한 팔 `arm_id`); 파일 SHA-256을 명령에 고정 |
 | `src/control_station/arms/policy_runner.py` | LeRobot async ACT client를 총 액션 상한으로 한 번 실행(기본 비활성). 정책 목록은 `config/omx-act-policies.json`, 정책별 `cameras`에 따라 위·그리퍼 카메라를 `front`/`wrist`에 넣음, 끝나도 토크 유지. 프로세스 결과만 기록 |
 | `src/control_station/arms/sequences.py` | 운영자가 시작한 등록 정책 연속 실행과 그 기록(`config/omx-act-sequences.json`) |
 
@@ -81,14 +81,14 @@
 | GET | `/api/flow` | 주문 진행 화면 요약: 최근 주문의 단계별 상태·지금 하는 일·팔 순서, 핑키 3대 단계, 팔 2대 상태, 경보, 적재 자리, 모의 세계 상태 |
 | POST | `/api/flow/alerts/{task_id}/ack` | 멈춘 주문의 경보를 운영자가 확인함(`ALERT_ACKNOWLEDGED` 이벤트). 작업 상태는 그대로이고, 그 주문이 잡고 있던 적재 자리·핑키를 놓음 |
 | POST | `/api/mock-world` | 모의 세계 조작: `{"action":"inject","fault":...,"argument":...}` 또는 `{"action":"restock"}` |
-| GET | `/api/health` | 서버 모드와 주차 설정(`parking.camera_id`(패널이 보여 줄 feed), `parking.spot_id`, `parking.live_tracking`) |
+| GET | `/api/health` | 서버 모드와 주차 설정(`parking.camera_id`(패널이 보여 줄 feed), `parking.spot_id`, `parking.live_tracking`, 따라가는 자리 목록 `parking.live_spots`) |
 | GET | `/api/robots` | 모의 상태 또는 ROS 2 Nav2 action server 발견 여부. 발견은 goal 전송·준비·안전 판정이 아님 |
 | GET | `/api/cameras` | 카메라별 연결·스트림·freshness, 프레임 sequence·해상도·SHA-256·`pixel_transform_id`, YOLO/YOLO-World 검출(`detector_state`, `detections`)과 모델 provenance. 선반 위치 보정이 활성화된 카메라는 `slot_zones`와 검출별 `slot_assignment`(표시 전용) 포함 |
 | GET | `/streams/{camera_id}.mjpg` | 카메라 MJPEG 스트림 |
 | GET | `/api/parking-spots/{spot_id}/live` | 주차 노드가 추적하는 위치의 화면 표시용 실시간 상태. 추적하지 않는 위치면 `PARKING_TRACKING_NOT_CONFIGURED`(404). 진행 판단에 쓰지 않음 |
 | GET | `/api/parking-spots/{spot_id}/check` | 노드의 `/pinky_parking/check`로 요청 이후 프레임만 판정해 `{"observation": ...}` 반환. 오류 코드는 [주차 정렬 관측 계약](../spec/interface-contracts.md#pinky-주차-정렬-관측-초안). 작업 이력에 기록하지 않음 |
 | GET | `/api/arm/status` | 학습 정책 한 번 실행 프로세스 상태. 관제의 텔레오퍼레이션 기능은 제거되어 팔은 비활성으로 응답 |
-| POST | `/api/arm/policy/start?profile_id=<정책 ID>`, `/api/arm/policy/stop` | `config/omx-act-policies.json`의 정책 하나(예: `carrot_act_v2`, 없으면 첫 정책)를 총 액션 상한으로 실행, 중단 요청. 프로세스 종료 상태만 기록 |
+| POST | `/api/arm/policy/start?profile_id=<정책 ID>`, `/api/arm/policy/stop` | `config/omx-act-policies.json`의 정책 하나(예: `carrot_act_v7`, 없으면 첫 정책)를 총 액션 상한으로 실행, 중단 요청. 프로세스 종료 상태만 기록 |
 | GET | `/api/arm/policies`, `/api/arm/shelf-slots` | 물체별 학습 정책 목록, 선반 칸 정의 |
 | GET | `/api/arm/commands`, `/api/arm/commands/{id}`, `/api/arm/{robot_id}/commands/next` | OMX 명령 목록·조회, 워커의 long-poll |
 | POST | `/api/arm/commands`, `/api/arm/commands/from-camera`, `/api/arm/commands/{id}/events`·`cancel`·`clear-unknown` | OMX 명령 등록(정면 카메라 칸 확인 포함), 워커 이벤트 보고, 취소, 결과 불명 정리 ([HTTP 인터페이스](arm-command-api.md)) |
@@ -101,7 +101,7 @@
 | GET, POST | `/api/catalog`, `/api/inventory`, `/api/inventory/{물건}` | 주문 창의 물건·남은 수량·수령 구역, 선반 재고, 작업자 재고 수정(`{mode: auto\|closed\|manual, count?}`) |
 | GET, POST | `/api/orders`, `/api/orders/{id}/assignment`·`track`, `/api/orders/{id}/start`·`reject`·`pickup-confirm`·`arrival-confirm` | 주문 접수와 대기 목록, 배정 미리보기, 고객 추적, 시작·거절·수령 확인·도착 확인([주문 접수와 배정](order-flow.md#주문-접수와-배정)) |
 | GET | `/api/pinky`, `/api/pinky/map`, `/api/pinky/{id}/locate`·`ros`·`nav-log` | 핑키 화면 상태, 지도, 라이다 위치 후보(읽기만), ROS 모니터, Nav2 로그 |
-| POST | `/api/pinky/{id}/ready`·`initial-pose`·`localize`·`set-pose`·`nav-restart`·`waypoints`·`test-mission`·`signal`·`route-clear`·`return-home`·`reset`, `/api/pinky/prepare-all`, `/api/pinky/credentials` | 주행준비·위치 잡기·Nav2 복구·웨이포인트·시험 임무 등을 핑키 관제로 전달. SSH 비밀번호는 넘기기만 함 |
+| POST | `/api/pinky/{id}/ready`·`initial-pose`·`localize`·`set-pose`·`nav-restart`·`waypoints`·`waypoints/{웨이포인트 id}/delete`·`test-mission`·`signal`·`route-clear`·`return-home`·`reset`, `/api/pinky/prepare-all`, `/api/pinky/credentials` | 주행준비·위치 잡기·Nav2 복구·웨이포인트·시험 임무 등을 핑키 관제로 전달. SSH 비밀번호는 넘기기만 함 |
 | POST | `/api/pinky/{id}/dock-handshake`, `/api/pinky/dock-auto` | 적재 자리에 선 핑키를 천장 캠으로 한 번 판정(`auto`면 신호까지), 도착 자동 처리 켜기·끄기 |
 | POST | `/api/stop-all`, `/api/pinky/stop-all`, `/api/pinky/{id}/stop` | 팔과 핑키 전체, 핑키 전체, 핑키 한 대 정지 요청. 202는 요청 접수일 뿐 멈춤 확인이 아님 |
 
