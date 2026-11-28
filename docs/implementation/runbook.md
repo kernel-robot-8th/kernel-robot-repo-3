@@ -130,7 +130,7 @@ CONTROL_STATION_FRONT_CAMERA=/dev/v4l/by-path/pci-0000:00:14.0-usb-0:2:1.0-video
 
 V4L2 장치는 한 프로세스만 영상을 받을 수 있어, 관제가 Front Camera를 열고 있으면 정책 client가 같은 장치를 열지 못합니다. 그래서 정책 시작 요청을 받으면 관제가 Front Camera capture를 먼저 닫고, 닫힌 것을 확인한 뒤 정책 client를 시작합니다. 정책 프로세스가 살아 있는 동안 카드는 `연결 끊김`/`중지`와 사용 중 안내를 표시하고, 프로세스가 끝나면 자동으로 다시 엽니다. 5초 안에 닫힘을 확인하지 못하면 정책을 시작하지 않고 409 오류를 반환합니다. 이 해제는 Front Camera feed 하나만 대상으로 하며, 정책이 여는 다른 카메라(위·그리퍼 중 Front Camera가 아닌 쪽)를 관제의 다른 feed가 열고 있으면 처리하지 않습니다.
 
-`.control-station/control-station.env`에 팔별 포트, 자세 파일, 천장·관절 카메라를 설정하면 런처가 관제 준비 후 ACT 서버와 각 워커의 heartbeat를 확인합니다. 정책 서버는 LeRobot 실행환경의 `CONTROL_STATION_LEROBOT_PYTHON`을 사용하며 기본 경로는 `~/Desktop/lerobot/venv/bin/python`입니다. `CONTROL_STATION_POLICY_REST_TICKS`는 정책 종료 후 모든 관절이 초기자세에서 허용되는 최대 오차이며, 이 PC는 200틱을 사용합니다. 실행 로그는 `.control-station/logs/policy-server-<session>.log`, `worker-left-<session>.log`, `worker-right-<session>.log`에 기록됩니다. 기존에 준비된 서비스는 재사용하고, `CONTROL_STATION_AUTO_START_ARM_RUNTIME=0`이면 자동 기동을 끕니다. 팔 설정이 없는 저장소 복제 환경은 관제 화면/API만 시작합니다.
+`.control-station/control-station.env`에 팔별 포트, 자세 파일, 천장·관절 카메라를 설정하면 런처가 관제 준비 후 ACT 서버와 각 워커의 heartbeat를 확인합니다. 정책 서버는 LeRobot 실행환경의 `CONTROL_STATION_LEROBOT_PYTHON`을 사용하며 기본 경로는 `~/Desktop/lerobot/venv/bin/python`입니다. `CONTROL_STATION_POLICY_REST_TICKS`는 정책의 home 복귀 감지 범위이며 이 PC는 400틱을 사용합니다. 세 번 연속 관측되고 settle 시간이 지나면 ACT 출력을 멈춘 뒤 기록된 home 자세로 정렬합니다. 저장된 home tick을 목표로 이동하고 정지 상태에서 최대 오차 50틱 이내인지 확인합니다. 선반 칸 이동의 도착 허용 오차 15틱은 바뀌지 않습니다. 실행 로그는 `.control-station/logs/policy-server-<session>.log`, `worker-left-<session>.log`, `worker-right-<session>.log`에 기록됩니다. 기존에 준비된 서비스는 재사용하고, `CONTROL_STATION_AUTO_START_ARM_RUNTIME=0`이면 자동 기동을 끕니다. 팔 설정이 없는 저장소 복제 환경은 관제 화면/API만 시작합니다.
 
 ## 학습 정책 한 번 실행
 

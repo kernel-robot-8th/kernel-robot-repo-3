@@ -79,6 +79,8 @@ class Worker:
         target = command["target"]
         if command["operation"] == "RETURN_HOME":
             pass  # a real worker replays its recorded "home" pose; there is no target to check
+        elif command["operation"] == "OPEN_GRIPPER":
+            pass  # simulated worker reports simulated opening evidence only
         elif command["operation"] == "PICK_WITH_POLICY":
             pass  # the policy finds the object itself; a camera-observed slot is evidence only
         elif command["operation"] == "MOVE_TO_SLOT":
@@ -106,6 +108,8 @@ class Worker:
         target = command["target"]
         if command["operation"] == "RETURN_HOME":
             where = "home"
+        elif command["operation"] == "OPEN_GRIPPER":
+            where = "그리퍼 열기"
         elif command["operation"] == "JOG_JOINT":
             where = f"{target.get('joint')} {target.get('direction')}"
         elif target.get("pick_slot_id") is not None:
@@ -123,6 +127,19 @@ class Worker:
                 self.send(command, "REJECTED", reason_code=reason)
                 return
             command = self.send(command, "ACCEPTED")  # only an HTTP 200 here allows motion
+            if command["operation"] == "OPEN_GRIPPER":
+                if command["cancel_requested"]:
+                    self.send(command, "CANCELED", phase="OPENING_GRIPPER")
+                    return
+                self.execute_phase(command, "OPENING_GRIPPER")
+                command = self.send(command, "PROGRESS", phase="OPENING_GRIPPER")
+                if self.args.result == "succeeded":
+                    self.send(command, "SUCCEEDED", details={"simulated": True, "gripper_open_confirmed": True})
+                elif self.args.result == "failed":
+                    self.send(command, "FAILED", reason_code="MOCK_GRIPPER_OPEN_FAILED")
+                else:
+                    self.send(command, "RESULT_UNKNOWN", reason_code="MOCK_RESULT_UNCONFIRMED")
+                return
             if command["operation"] == "JOG_JOINT":
                 if command["cancel_requested"]:
                     self.send(command, "CANCELED", phase="JOINT_JOG")
@@ -156,7 +173,11 @@ class Worker:
                 # Like the real worker: back home, but grasp and placement are not observed.
                 self.send(command, "RESULT_UNKNOWN", reason_code="PLACE_NOT_VERIFIED", pose_reached=True)
             elif self.args.result == "succeeded":
-                self.send(command, "SUCCEEDED", pose_reached=True)
+                self.send(command, "SUCCEEDED", pose_reached=True, details={
+                    "simulated": True,
+                    **({"max_error_ticks": 0, "tolerance_ticks": 0} if command["operation"] == "RETURN_HOME" else {}),
+                    **({"gripper_closed_confirmed": True} if command["operation"] == "RETURN_HOME" else {}),
+                })
             elif self.args.result == "failed":
                 self.send(command, "FAILED", reason_code="MOCK_GRASP_FAILED")
             else:

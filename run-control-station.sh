@@ -260,7 +260,7 @@ PY
         --server "${CONTROL_STATION_URL}" --robot-id "${robot_id}" --worker-id "${worker_id}" \
         --port "${port}" --poses "${REPO_DIR}/${poses}" \
         --policy-server "${POLICY_SERVER_ADDRESS}" \
-        --policy-rest-ticks "${CONTROL_STATION_POLICY_REST_TICKS:-150}" \
+        --policy-rest-ticks "${CONTROL_STATION_POLICY_REST_TICKS:-400}" \
         --profile-velocity "${CONTROL_STATION_OMX_PROFILE_VELOCITY:-2}" \
         --profile-acceleration "${CONTROL_STATION_OMX_PROFILE_ACCELERATION:-1}" \
         >>"${log_file}" 2>&1 &

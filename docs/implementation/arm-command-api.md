@@ -37,7 +37,9 @@ sequenceDiagram
 
 ## 명령 (관제 → 워커)
 
-워커가 `GET /api/arm/{robot_id}/commands/next`로 받는 `command` 객체입니다. 대상은 명령을 만든 시점에 고정되며, 실행 중에 바뀌지 않습니다. 명령 종류는 `MOVE_TO_SLOT`(칸 자세 재생), `RETURN_HOME`(home 자세), `PICK_WITH_POLICY`(물체별 학습 정책), `JOG_JOINT`(운영자가 지정한 관절의 고정 크기 상대 조그)입니다. 좌표(XYZ) 명령은 2026-11-11에 없앴습니다.
+워커가 `GET /api/arm/{robot_id}/commands/next`로 받는 `command` 객체입니다. 대상은 명령을 만든 시점에 고정되며, 실행 중에 바뀌지 않습니다. 명령 종류는 `MOVE_TO_SLOT`(칸 자세 재생), `RETURN_HOME`(home 자세와 그리퍼 접기), `OPEN_GRIPPER`(그리퍼 열기), `PICK_WITH_POLICY`(물체별 학습 정책), `JOG_JOINT`(운영자가 지정한 관절의 고정 크기 상대 조그)입니다. 좌표(XYZ) 명령은 2026-11-11에 없앴습니다.
+
+`OPEN_GRIPPER`는 `target: {}`와 `place: null`로 요청하며 해당 팔의 그리퍼를 완전히 여는 명령입니다. 물체가 현재 위치에 놓이므로 작업자는 안전한 받침 위에서 실행해야 합니다. 워커는 gripper hardware error를 읽고 수락한 뒤 `OPENING_GRIPPER`를 보고하고, 목표 위치 도달을 측정합니다. `SUCCEEDED`에는 `details.gripper_open_confirmed: true`와 시작·목표·최종 tick이 필요합니다. 목표에 도달하지 않으면 `FAILED`, 측정 결과가 불명확하면 `RESULT_UNKNOWN`을 보냅니다.
 
 `JOG_JOINT`는 `target: {"joint":"shoulder_pan","direction":"POSITIVE"}` 형식만 받습니다. 허용 관절은 어깨 좌우·상하, 팔꿈치, 손목 굽힘·회전의 5개이고 한 번에 20틱(약 1.76°)만 움직입니다. 워커는 현재 위치와 hardware error를 다시 읽고, 100–3995틱 가드 범위를 벗어나는 목표를 거부하며 저속 profile(2/1)로 실행합니다. 이 가드와 한 단계 이동은 충돌 없는 작업 공간을 증명하지 않습니다. 운영자는 팔 하나씩 선택하고 주변을 비운 상태에서 조작해야 합니다.
 
@@ -201,11 +203,11 @@ sequenceDiagram
 
 2. **워커 실행** ([omx_lerobot_worker.py](../../scripts/omx_lerobot_worker.py)): `sg dialout -c "~/lerobot-venv/bin/python scripts/omx_lerobot_worker.py --server http://127.0.0.1:8000"`. 모터에 쓰지 않고 흐름만 보려면 `--dry-run`(실물 모터를 읽기만 함, 결과는 `RESULT_UNKNOWN`/`DRY_RUN_NO_MOTION`), 팔이 연결돼 있지 않으면 `--fake-follower`(이 프로세스 안의 가짜 모터가 프로파일 속도로 움직임, 모든 이벤트 `simulated: true`). 이동 로직과 안전장치는 ROS 2 워커와 함께 [omx_slot_motion.py](../../scripts/omx_slot_motion.py)에 있습니다.
 3. **관제에서 명령**: **수동 조작 → OMX 명령**에서 칸을 고르고 **칸 앞으로 이동**.
-4. **원상복귀** (`RETURN_HOME`): 같은 섹션의 **원상복귀** 버튼. 명령에는 칸·놓을 곳이 없고(`target` 필드 모두 `null`, `place: null`), 워커가 자기 자세 파일의 `home`으로 갑니다. 안전장치와 성공 조건(`pose_reached: true`)은 칸 이동과 같습니다. `home`이 기록되지 않았으면 `POSE_NOT_RECORDED`로 거부합니다. API: `POST /api/arm/commands` body `{"robot_id": "arm-01", "operation": "RETURN_HOME", "valid_for_s": 60, "source": {"kind": "OPERATOR_INPUT"}}`. 2026-11-04 확인: 임시 관제에서 모의 워커와 `--fake-follower` 워커로 `SUCCEEDED`를 확인했습니다. 같은 날 관제 화면에서 실물 팔 원상복귀(`CMD-35E067AE79B9`, `--profile-velocity 5 --max-delta 1500`, 어깨 들기 1289틱 이동)가 `SUCCEEDED`였고 도착 오차는 최대 13틱이었습니다.
+4. **원상복귀** (`RETURN_HOME`): 같은 섹션의 **원상복귀 · 그리퍼 접기** 버튼. 명령에는 칸·놓을 곳이 없고(`target` 필드 모두 `null`, `place: null`), 워커가 해당 팔의 기록된 `home` 관절 tick을 목표로 이동합니다. 정지 상태에서 최대 오차 50틱 이내를 확인한 뒤 그리퍼를 닫습니다. 그리퍼가 물체를 잡거나 누르지 않도록 주변을 확인합니다. 관절과 그리퍼의 측정 완료가 모두 있어야 `SUCCEEDED`입니다. `home`이 기록되지 않았으면 `POSE_NOT_RECORDED`로 거부합니다. API: `POST /api/arm/commands` body `{"robot_id": "arm-01", "operation": "RETURN_HOME", "valid_for_s": 60, "source": {"kind": "OPERATOR_INPUT"}}`.
 
 워커의 동작과 안전장치:
 - LeRobot의 `OMXFollower` 대신 LeRobot Dynamixel 버스를 직접 씁니다. `OMXFollower.connect()`는 모터 설정을 다시 쓰고, 목표 위치를 맞추지 않은 채 토크를 켜기 때문입니다.
-- `ACCEPTED`에 200을 받은 뒤에만 움직입니다. 토크를 켜기 전에 목표 위치를 현재 위치로 맞추고, 모터 자체의 속도 프로파일(`Profile_Velocity` 기본 10 ≈ 14°/s, `Profile_Acceleration` 기본 2 ≈ 43°/s², 약 0.3초에 걸쳐 가속·감속)로 천천히 움직입니다. 처음 쓴 15/10은 실물에서 출발·정지가 너무 급했습니다. 그리퍼는 명령하지 않습니다.
+- `ACCEPTED`에 200을 받은 뒤에만 움직입니다. 토크를 켜기 전에 목표 위치를 현재 위치로 맞추고, 모터 자체의 속도 프로파일(`Profile_Velocity` 기본 10 ≈ 14°/s, `Profile_Acceleration` 기본 2 ≈ 43°/s², 약 0.3초에 걸쳐 가속·감속)로 천천히 움직입니다. 처음 쓴 15/10은 실물에서 출발·정지가 너무 급했습니다. `MOVE_TO_SLOT`은 그리퍼를 움직이지 않으며, `RETURN_HOME`은 관절 도착 뒤 gripper를 2010틱의 접힌 위치로 보냅니다.
 - 어느 관절이든 변화량이 `--max-delta`(기본 1200 = 약 105°)를 넘으면 `TARGET_TOO_FAR`로 거부합니다. 자세가 기록되지 않았으면 `POSE_NOT_RECORDED`, 칸 정의 버전이 다르면 `SLOT_MAP_MISMATCH`입니다.
 - 다섯 관절이 목표에서 `--tolerance`(기본 15틱 ≈ 1.3°) 안에 들어오고 `Moving`이 0이면 `SUCCEEDED`, `--move-timeout`(30초)을 넘기면 그 자리에 멈추고 `FAILED`/`MOVE_TIMEOUT`, 통신 오류면 멈추고 `RESULT_UNKNOWN`입니다. 관제에서 취소하면 1초 안에 그 자리에 멈추고 `CANCELED`입니다.
 - 관절 공간에서 바로 이동하므로 경로 중간의 선반 충돌을 검사하지 않습니다. 시작 자세와 목표 자세 사이에 선반이 없게 기록하고, 현장에서 전원을 끊을 수 있게 지켜봅니다.
@@ -242,9 +244,9 @@ sequenceDiagram
 - 명령: `target`은 `object_class`(필수)와 선택적 `pick_slot_id`만 받습니다. 관제가 `target.object_class`를 검출기 클래스 이름으로 바꾸고 `target.policy`(`policy_id`, `label`, `model`, `registry_version`)를 붙입니다. 정책이 없는 물체는 400입니다. `place`는 다른 집기 명령과 같이 필요합니다(화면에서는 `CART_1`).
 - 워커 검사(거부 사유): 가짜·dry-run 팔(`POLICY_NEEDS_REAL_ARM`), 정책 파일 버전·정책 ID(`POLICY_REGISTRY_MISMATCH`, `POLICY_UNKNOWN`), 다른 팔에서 녹화한 정책이거나 포트가 이 팔의 보드가 아님(`POLICY_WRONG_ARM`), home 미기록(`POSE_NOT_RECORDED`), 만료(`EXPIRED`), 카메라 장치 없음(`CAMERA_UNAVAILABLE`), 다른 프로그램이 카메라 사용 중(`CAMERA_BUSY`), 정책 서버 응답 없음(`POLICY_SERVER_UNAVAILABLE`), 저장된 home 자세가 최대 이동 한도보다 멀리 있음(`TARGET_TOO_FAR`).
 - 카메라 넘겨주기: V4L2 카메라는 한 프로그램만 열 수 있습니다. 관제가 그 명령 팔의 정책 카메라(`CONTROL_STATION_ARM01_*_CAMERA`/`ARM02_*`, 예전 단일 팔 설정이면 `CONTROL_STATION_ACT_OVERHEAD_CAMERA`, `CONTROL_STATION_JOINT_CAMERA`와 같은 장치)를 화면에 띄우고 있으면, 워커가 정책 명령을 가져가는 순간(`DISPATCHED`) 그 카메라를 닫고 명령이 끝나면(`DISPATCHED`·`ACCEPTED`·`RUNNING`이 아니게 되면) 다시 엽니다. 그동안 화면에는 "학습 정책 실행 중"이 표시됩니다. 워커는 카메라를 열기 전에 다른 프로세스가 장치를 열고 있지 않은지 최대 5초 기다리고, 그래도 열려 있으면 `CAMERA_BUSY`로 거부합니다. 2026-11-07 임시 관제에서 실제 헤드캠(허브 4.4)으로 확인: 명령을 가져가는 응답(0.04초) 안에 닫히고, 명령이 끝난 뒤 다시 `STREAMING`.
-- 실행: ACCEPTED 뒤 먼저 이 팔의 기록된 `home` 자세로 복귀합니다. 복귀가 확인된 뒤 서보 속도 프로파일을 0(학습 때와 같은 전원 기본값)으로 되돌리고 LeRobot `RobotClient`를 실행합니다. 복귀 취소·실패 시 정책을 시작하지 않습니다. LeRobot이 연결하면서 모터 설정을 쓰느라 토크가 잠깐 꺼집니다. 정지할 때는 토크를 유지합니다(`disable_torque_on_disconnect=False`).
-- 멈추는 조건: 정책에는 완료 신호가 없으므로, 워커가 LeRobot의 동일한 follower bus에서 읽은 실제 `Present_Position` 관절값으로 판정합니다. 어느 관절이든 home에서 300틱 넘게 벗어난 뒤 다섯 관절 모두 `--policy-rest-ticks`(기본 150틱) 이내인 서로 다른 측정값 3개가 연속되면 `RETURNED_TO_REST`입니다. 이 신호는 팔이 home 근처로 돌아왔다는 뜻이며 물체 집기·적재 완료를 뜻하지 않습니다.
-- 정책 실행을 시간 경과로 종료하는 코드는 없습니다. 실제 관절값이 home을 벗어난 뒤 허용 오차 안으로 돌아와 안정된 것이 확인되거나, 운영자가 취소하거나 통신·장치 오류가 발생하면 종료합니다. 작업 흐름도 팔 명령의 최종 이벤트를 기다립니다.
+- 실행: ACCEPTED 뒤 먼저 이 팔의 기록된 `home` 관절 tick을 목표로 이동합니다. 정지 상태에서 최대 오차 50틱 이내인지 확인하며, 도착이 확인되지 않으면 정책을 시작하지 않습니다. 도착 확인 뒤 서보 속도 프로파일을 0(학습 때와 같은 전원 기본값)으로 되돌리고 LeRobot `RobotClient`를 실행합니다. LeRobot이 연결하면서 모터 설정을 쓰느라 토크가 잠깐 꺼집니다. 정지할 때는 토크를 유지합니다(`disable_torque_on_disconnect=False`). 선반 칸 이동 허용 오차는 기존 15틱을 유지합니다.
+- 멈추는 조건: 정책에는 완료 신호가 없으므로, 워커가 LeRobot의 동일한 follower bus에서 읽은 실제 `Present_Position` 관절값으로 판정합니다. 어느 관절이든 home에서 300틱 넘게 벗어난 뒤 다섯 관절 모두 `--policy-rest-ticks`(기본 400틱) 이내인 서로 다른 측정값 3개가 연속되고 1.5초 동안 그 범위를 유지하면 `RETURNED_TO_REST`입니다. ACT 출력을 멈춘 뒤 저장된 home tick을 목표로 정렬하고 정지 상태에서 최대 50틱 이내를 확인한 뒤 그리퍼를 접습니다. rest 복귀는 물체 집기·적재 완료를 뜻하지 않습니다.
+- 정책은 120초 뒤 제한 종료합니다. rest 복귀가 감지되거나 제한 시간이 끝나면, ACT 제어 루프 정지를 확인한 뒤 home 정렬을 한 번 시도합니다. home 복귀가 확인되면 정책을 다시 실행하지 않고 종료하며, 집기·적재 결과는 미확인으로 남깁니다. 제어 루프 정지나 home 복귀를 확인할 수 없으면 실패·현장 확인 상태로 멈추고 자동 재시도하지 않습니다.
 - 순차 정책 실행은 관제 화면에서 등록된 정책을 체크하고 실행 순서를 정해 시작합니다(1~4개, 중복 물체 제외). 서버는 정책 등록 정보를 기준으로 각 물체의 담당 팔에 단계별 `PICK_WITH_POLICY` 명령을 보냅니다. 직전 워커 결과가 `SUCCEEDED` 또는 `UNKNOWN`/`PLACE_NOT_VERIFIED`이고 실측 `pose_reached: true`인 경우에만 다음 단계를 보냅니다. 그 외 실패·취소·ACK 불명·만료·초기 자세 미복귀는 시퀀스를 멈춥니다. 적재 여부는 미확인으로 기록하고, 다음 단계 진행을 위해 UNKNOWN 명령만 시퀀스 메모와 함께 해제합니다. 선택 가능한 정책은 [config/omx-act-policies.json](../../config/omx-act-policies.json)에서 읽습니다.
 - 순차 실행 API: `GET /api/arm/sequences`는 최근 실행을 반환하고, `POST /api/arm/sequences`는 `{"object_classes":["carrot","apple"]}`처럼 순서가 있는 물체 목록으로 시작합니다. 기존 사전 정의를 실행할 때는 `{"sequence_id":"..."}`도 지원합니다. `POST /api/arm/sequences/{run_id}/cancel`은 현재 명령 취소를 요청합니다. 화면은 각 단계 담당 팔과 진행 상태를 표시합니다.
 - 결과:

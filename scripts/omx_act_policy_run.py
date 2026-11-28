@@ -58,17 +58,19 @@ class RestWatcher:
 
     home: dict[str, int]
     depart_ticks: int = 300
-    rest_ticks: int = 150
+    rest_ticks: int = 400
+    settle_s: float = 0.0
     departed: bool = False
     rest_samples: int = 0
     last_sample_id: int = 0
     farthest: int = 0
+    rest_started_at: float | None = None
 
     def distance(self, ticks: dict[str, int]) -> int:
         return max_home_error_ticks(self.home, ticks)
 
     def update(self, sample_id: int, ticks: dict[str, int]) -> bool:
-        """True after departure and three distinct measured positions return within home tolerance."""
+        """True after departure, three distinct home samples, and the configured settle time."""
         if sample_id <= self.last_sample_id or any(name not in ticks for name in ARM_JOINTS):
             return False
         self.last_sample_id = sample_id
@@ -76,16 +78,22 @@ class RestWatcher:
         self.farthest = max(self.farthest, distance)
         if distance > self.depart_ticks:
             self.departed = True
+            self.rest_samples = 0
+            self.rest_started_at = None
+            return False
         if not self.departed or distance > self.rest_ticks:
             self.rest_samples = 0
+            self.rest_started_at = None
             return False
+        if self.rest_started_at is None:
+            self.rest_started_at = time.monotonic()
         self.rest_samples += 1
-        return self.rest_samples >= 3
+        return self.rest_samples >= 3 and time.monotonic() - self.rest_started_at >= self.settle_s
 
 
 @dataclass
 class PolicyRunResult:
-    stop_reason: str  # RETURNED_TO_REST, CANCELED, ERROR
+    stop_reason: str  # RETURNED_TO_REST, CANCELED, TIMEOUT, ERROR
     farthest_from_home_ticks: int
     last_commanded_ticks: dict[str, int] = field(default_factory=dict)
     last_observed_ticks: dict[str, int] = field(default_factory=dict)
@@ -93,6 +101,7 @@ class PolicyRunResult:
     actions_sent: int = 0
     message: str = ""
     run_s: float = 0.0
+    control_stopped: bool = True
 
 
 def devices_in_use(paths: list[str]) -> list[str]:
@@ -159,8 +168,10 @@ def run_policy(
     started: Callable[[], None] | None = None,
     max_step_ticks: int | None = None,
     policy_device: str = "cuda",
+    max_run_s: float = 120.0,
+    max_actions: int = 800,
 ) -> PolicyRunResult:
-    """Run until measured departure followed by return-to-home, operator cancel, or an execution error.
+    """Run until measured departure and return, operator cancel, timeout, or an execution error.
     Torque stays on afterwards.
 
     `max_step_ticks` limits how far any joint goal may be from the present position at each step (1/30 s); used
@@ -220,9 +231,11 @@ def run_policy(
     )
     client = WatchedClient(config)  # connects the arm: LeRobot briefly turns torque off while it configures
     receiver = control = None
+    result: PolicyRunResult | None = None
     try:
         if not client.start():
-            return PolicyRunResult("ERROR", 0, message="policy server refused the client")
+            result = PolicyRunResult("ERROR", 0, message="policy server refused the client")
+            return result
         receiver = threading.Thread(target=client.receive_actions, daemon=True)
         control = threading.Thread(target=client.control_loop, args=(policy["task"],), daemon=True)
         receiver.start()
@@ -243,6 +256,10 @@ def run_policy(
                 try:
                     if cancel_requested():
                         reason = "CANCELED"
+                    elif client.actions_sent >= max_actions:
+                        reason, message = "TIMEOUT", f"policy exceeded {max_actions} action maximum"
+                    elif now - run_started_at >= max_run_s:
+                        reason, message = "TIMEOUT", f"policy exceeded {max_run_s:g}s maximum runtime"
                 except Exception as error:  # cannot read the cancel flag: stop the policy rather than run blind
                     reason, message = "ERROR", f"cancel check failed: {error}"[:300]
         final_observed = dict(client.last_observed_ticks)
@@ -251,7 +268,7 @@ def run_policy(
             for name in ARM_JOINTS
             if name in final_observed and name in watcher.home
         }
-        return PolicyRunResult(
+        result = PolicyRunResult(
             reason,
             watcher.farthest,
             last_commanded_ticks=dict(client.last_commanded_ticks),
@@ -261,6 +278,7 @@ def run_policy(
             message=message,
             run_s=time.monotonic() - run_started_at,
         )
+        return result
     finally:
         client.shutdown_event.set()
         if control is not None:
@@ -268,3 +286,5 @@ def run_policy(
         client.stop()  # robot.disconnect keeps torque (config above), cameras and the gRPC channel close
         if receiver is not None:
             receiver.join(timeout=3)
+        if result is not None:
+            result.control_stopped = control is None or not control.is_alive()

@@ -21,7 +21,7 @@ import math
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -177,6 +177,13 @@ class SlotMotion:
         values = self.bus.sync_read("Present_Position", list(ARM_JOINTS), normalize=False, num_retry=3)
         return {name: int(value) for name, value in values.items()}
 
+    def pose_error(self, goal: dict[str, int]) -> tuple[dict[str, int], int, bool]:
+        """Read current positions and whether all arm joints have stopped, without writing motor registers."""
+        current = self.present()
+        moving = self.bus.sync_read("Moving", list(ARM_JOINTS), normalize=False, num_retry=3)
+        error = max(abs(goal[name] - current[name]) for name in ARM_JOINTS)
+        return current, error, not any(moving.values())
+
     def write(self, register: str, values: dict[str, int]) -> None:
         if self.settings.dry_run:
             print(f"  (dry-run) {register} <- {values}", flush=True)
@@ -224,6 +231,35 @@ class SlotMotion:
         goal = {name: int(pose["ticks"][name]) for name in ARM_JOINTS}
         return self.check_goal(goal, valid_until)
 
+    def recorded_pose(self, slot_id: str) -> dict[str, int]:
+        """Return a saved pose without applying a one-step distance limit."""
+        pose = self.poses["poses"].get(slot_id)
+        if pose is None:
+            raise Rejected("POSE_NOT_RECORDED", f"no joint pose recorded for {slot_id}")
+        return {name: int(pose["ticks"][name]) for name in ARM_JOINTS}
+
+    def move_staged(self, goal: dict[str, int], cancel_requested: Callable[[], bool], *,
+                    tolerance_ticks: int = 50) -> Outcome:
+        """Move along bounded joint-space segments so distant saved home poses are reachable."""
+        start = self.present()
+        max_delta = max(1, self.settings.max_delta)
+        largest = max(abs(goal[name] - start[name]) for name in ARM_JOINTS)
+        # Leave margin for feedback error at the end of each segment.
+        segment_limit = max(1, max_delta - min(tolerance_ticks, max_delta // 4))
+        segments = max(1, (largest + segment_limit - 1) // segment_limit)
+        outcome: Outcome | None = None
+        for index in range(1, segments + 1):
+            waypoint = {
+                name: round(start[name] + (goal[name] - start[name]) * index / segments)
+                for name in ARM_JOINTS
+            }
+            self.check_goal(waypoint, datetime.now(timezone.utc) + timedelta(minutes=5))
+            outcome = self.move(waypoint, cancel_requested, tolerance_ticks=tolerance_ticks)
+            if outcome.outcome != "SUCCEEDED":
+                return outcome
+        assert outcome is not None
+        return outcome
+
     def check_goal(self, goal: dict[str, int], valid_until: datetime) -> dict[str, int]:
         """The checks every joint goal passes before anything moves: not expired, no joint changes too much."""
         if valid_until <= datetime.now(timezone.utc):
@@ -267,11 +303,13 @@ class SlotMotion:
 
     def move(self, goal: dict[str, int], cancel_requested: Callable[[], bool],
              progress: Callable[[dict[str, int], int], None] | None = None, *, sync: bool = False,
-             profile_velocity: int | None = None, profile_acceleration: int | None = None) -> Outcome:
+             profile_velocity: int | None = None, profile_acceleration: int | None = None,
+             tolerance_ticks: int | None = None) -> Outcome:
         """Move to `goal` and report how it ended. `progress(present, max_error)` is first called just before the
         goal is written (nothing has moved yet), then about every 0.1 s while moving. `sync` scales each joint's
         profile so all joints arrive together (see synced_profiles)."""
         settings = self.settings
+        tolerance = settings.tolerance if tolerance_ticks is None else tolerance_ticks
         now: dict[str, int] = {}
         try:
             start = self.present()
@@ -294,7 +332,7 @@ class SlotMotion:
                 errors = {name: abs(goal[name] - now[name]) for name in ARM_JOINTS}
                 if progress:
                     progress(now, max(errors.values()))
-                if settings.dry_run or max(errors.values()) <= settings.tolerance:
+                if settings.dry_run or max(errors.values()) <= tolerance:
                     moving = {} if settings.dry_run else self.bus.sync_read("Moving", list(ARM_JOINTS), normalize=False)
                     if not any(moving.values()):
                         if settings.dry_run:

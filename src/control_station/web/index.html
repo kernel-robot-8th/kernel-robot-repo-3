@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="/manual.css">
   <link rel="stylesheet" href="/intake-plan.css">
   <link rel="stylesheet" href="/dashboard.css">
-  <script src="/app.js" defer></script>
+  <script src="/app.js?v=20261126-1" defer></script>
   <script src="/intake-plan.js" defer></script>
   <script src="/route-strip.js" defer></script>
   <script src="/pinky-map.js" defer></script>
@@ -329,8 +329,9 @@
 
         <article class="manual-card manual-recover" aria-labelledby="recover-title">
           <header class="manual-card-head"><h3 id="recover-title">복구</h3></header>
-          <p class="manual-hint">정책이 중간에 멈췄거나 팔이 어색한 자세일 때 기록해 둔 home 자세로 돌려보내요.</p>
-          <button type="button" id="armReturnHome" class="secondary wide">원상복귀</button>
+          <p class="manual-hint">팔별 원상복귀와 그리퍼 열기를 실행할 수 있어요. 그리퍼를 열면 물건이 현재 위치에 떨어지니 안전한 받침 위에서 실행하세요.</p>
+          <div id="armHomeButtons" class="manual-home-buttons" aria-label="팔별 원상복귀"></div>
+          <div id="armOpenButtons" class="manual-home-buttons" aria-label="팔별 그리퍼 열기"></div>
         </article>
       </div>
 

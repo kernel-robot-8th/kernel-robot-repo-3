@@ -36,7 +36,9 @@ from omx_act_policy_run import (
     DEFAULT_POLICIES, PolicyRunResult, RestWatcher, check_policy_server, load_policies, policy_cameras, run_policy,
     wait_devices_free,
 )
-from omx_slot_motion import ARM_JOINTS, REPOSITORY_ROOT, Rejected, SlotMotion, board_serial
+from omx_slot_motion import (
+    ARM_JOINTS, GRIPPER_CLOSED, REPOSITORY_ROOT, Outcome, Rejected, SlotMotion, board_serial,
+)
 
 DEFAULT_GRIPPER_CAMERA = "/dev/v4l/by-id/usb-Innomaker_Innomaker-U20CAM-720P_SN0001-video-index0"
 
@@ -77,7 +79,8 @@ def add_policy_arguments(parser: argparse.ArgumentParser, robot_id: str) -> None
                         or DEFAULT_GRIPPER_CAMERA,
                         help="camera on the gripper (env CONTROL_STATION_ARM01_GRIPPER_CAMERA, else CONTROL_STATION_JOINT_CAMERA)")
     policy.add_argument("--policy-depart-ticks", type=int, default=300, help="a joint this far from home = policy started moving")
-    policy.add_argument("--policy-rest-ticks", type=int, default=150, help="all joints this close to home = back at rest")
+    policy.add_argument("--policy-rest-ticks", type=int, default=400,
+                        help="all joints this close to home = return phase; final home alignment follows")
     policy.add_argument("--policy-settle-s", type=float, default=1.5, help="seconds at rest before stopping the policy")
     policy.add_argument("--policy-device", default="cuda",
                         help="where the policy server runs the model (cpu while another job fills the GPU)")
@@ -162,7 +165,7 @@ class PolicyPick:
         # replans after acceptance and physically returns home before it starts the policy.
         try:
             with self.motion.follower():
-                self.motion.plan("home", self.motion.slot_map_version, valid_until)
+                self.motion.recorded_pose("home")
         except Rejected as rejected:
             return rejected.reason_code, None
         return None, policy
@@ -176,22 +179,28 @@ class PolicyPick:
                            phase="RETURNING_HOME")
         try:
             with self.motion.follower():
-                goal = self.motion.plan("home", self.motion.slot_map_version,
-                                        datetime.now(timezone.utc) + timedelta(seconds=60))
-                outcome = self.motion.move(goal, cancel_requested)
+                goal = self.motion.recorded_pose("home")
+                current, error_ticks, stationary = self.motion.pose_error(goal)
+                home_tolerance = 50
+                if error_ticks == home_tolerance and stationary:
+                    print(f"  정책 시작 전 초기자세 확인: 최대 오차 {error_ticks} ticks", flush=True)
+                    return None
+                outcome = self.motion.move_staged(goal, cancel_requested, tolerance_ticks=home_tolerance)
+                current, error_ticks, stationary = self.motion.pose_error(goal)
         except Rejected as rejected:
             return PickEnd("FAILED", rejected.reason_code, str(rejected)[:300], phase="RETURNING_HOME")
         except (ConnectionError, OSError, RuntimeError) as error:
             return PickEnd("RESULT_UNKNOWN", "HOME_RETURN_ERROR", str(error)[:300], phase="RETURNING_HOME")
 
-        details = {"goal_ticks": goal, "final_ticks": outcome.final_ticks,
-                   "max_error_ticks": outcome.max_error_ticks, "outcome": outcome.outcome}
-        if outcome.outcome == "SUCCEEDED":
-            print("  정책 시작 전 초기자세 복귀 확인", flush=True)
-            return None
+        details = {"goal_ticks": goal, "final_ticks": current,
+                   "max_error_ticks": error_ticks, "tolerance_ticks": home_tolerance,
+                   "outcome": outcome.outcome}
         if outcome.outcome == "CANCELED":
             return PickEnd("CANCELED", "OPERATOR_CANCELED", "초기자세 복귀 중 취소되었습니다.",
                            phase="RETURNING_HOME", details={"home_return": details})
+        if outcome.outcome == "SUCCEEDED" or (error_ticks <= home_tolerance and stationary):
+            print(f"  정책 시작 전 초기자세 확인: 최대 오차 {error_ticks} ticks", flush=True)
+            return None
         return PickEnd("FAILED" if outcome.outcome == "FAILED" else "RESULT_UNKNOWN",
                        outcome.reason_code or "HOME_RETURN_FAILED", outcome.message or "초기자세 복귀 실패",
                        phase="RETURNING_HOME", details={"home_return": details})
@@ -213,13 +222,22 @@ class PolicyPick:
         if self.simulated:
             return self._simulate(policy, cancel_requested, started)
         home = {name: int(self.motion.poses["poses"]["home"]["ticks"][name]) for name in ARM_JOINTS}
-        watcher = RestWatcher(home, settings.policy_depart_ticks, settings.policy_rest_ticks, settings.policy_settle_s)
+        # Keep runtime state fields out of positional arguments: the fourth argument used to
+        # initialize `departed`, making the watcher accept a return before leaving home.
+        watcher = RestWatcher(
+            home=home,
+            depart_ticks=settings.policy_depart_ticks,
+            rest_ticks=settings.policy_rest_ticks,
+            settle_s=settings.policy_settle_s,
+        )
         cameras = policy_cameras(policy, self.camera_devices)
         print(f"  정책 실행: {policy['model']} · front={cameras['front']} · wrist={cameras['wrist']}", flush=True)
         result = run_policy(
             policy, port=settings.port, cameras=cameras, server_address=settings.policy_server, watcher=watcher,
             cancel_requested=cancel_requested, started=started,
             max_step_ticks=settings.policy_max_step_ticks, policy_device=settings.policy_device,
+            max_run_s=45.0,
+            max_actions=800,
         )
         return result, self._report(policy, result)
 
@@ -257,10 +275,15 @@ class PolicyPick:
         elif result.stop_reason == "NEVER_DEPARTED":
             end = PickEnd("FAILED", "POLICY_DID_NOT_MOVE", details={"policy_run": policy_details})
         elif result.stop_reason == "TIMEOUT":
-            # Not back at rest: it may hold the object or be near the shelf, so no automatic move home.
-            end = PickEnd("FAILED", "POLICY_TIMEOUT_NOT_AT_REST",
-                          "정책을 멈췄고 팔은 그 자리에서 토크를 유지합니다. 현장 확인 뒤 원상복귀하세요.",
-                          details={"policy_run": policy_details})
+            if policy_details.get("control_stopped") is True:
+                # The ACT control loop has stopped. The operator requested one bounded attempt followed by home.
+                end = self.finish_at_home(policy_details)
+                if end.event == "RESULT_UNKNOWN" and end.reason_code == "PLACE_NOT_VERIFIED":
+                    end.message = "정책 제한 시간이 끝나 home으로 복귀했습니다. 집기·적재는 확인되지 않았습니다."
+            else:
+                end = PickEnd("RESULT_UNKNOWN", "POLICY_CONTROL_LOOP_NOT_STOPPED",
+                              "정책 제어 루프 정지가 확인되지 않아 home 이동을 시작하지 않았습니다.",
+                              details={"policy_run": policy_details})
         else:
             end = PickEnd("RESULT_UNKNOWN", "POLICY_RUN_ERROR", result.message[:300] or None,
                           details={"policy_run": policy_details})
@@ -276,27 +299,49 @@ class PolicyPick:
         time.sleep(0.5)  # let the servos finish the last goal the policy wrote
         try:
             with self.motion.follower():
-                goal = self.motion.plan("home", self.motion.slot_map_version,
-                                        datetime.now(timezone.utc) + timedelta(seconds=60))
-                outcome = self.motion.move(goal, lambda: False)
+                goal = self.motion.recorded_pose("home")
+                current, error_ticks, stationary = self.motion.pose_error(goal)
+                home_tolerance = 50
+                if error_ticks == home_tolerance and stationary:
+                    outcome = Outcome("SUCCEEDED", False, pose_reached=True,
+                                      final_ticks=current, max_error_ticks=error_ticks)
+                else:
+                    outcome = self.motion.move_staged(goal, lambda: False, tolerance_ticks=home_tolerance)
+                    current, error_ticks, stationary = self.motion.pose_error(goal)
+                home_reached = outcome.outcome == "SUCCEEDED" or (
+                    error_ticks <= home_tolerance and stationary
+                )
+                gripper_start = gripper_final = None
+                if home_reached:
+                    # Read and command the gripper while the follower bus is still open.
+                    gripper_start = int(self.motion.bus.sync_read(
+                        "Present_Position", ["gripper"], normalize=False, num_retry=3
+                    )["gripper"])
+                    gripper_final = self.motion.gripper_to(GRIPPER_CLOSED, timeout_s=10.0)
         except Rejected as rejected:
             return PickEnd("FAILED", rejected.reason_code, details={"policy_run": policy_details})
         except (ConnectionError, OSError, RuntimeError) as error:
             print(f"  정책 실행 오류: home alignment: {error}", flush=True)
             return PickEnd("RESULT_UNKNOWN", "POLICY_RUN_ERROR", f"home alignment: {error}"[:300],
                            details={"policy_run": policy_details})
-        home_details = {"goal_ticks": goal, "final_ticks": outcome.final_ticks, "max_error_ticks": outcome.max_error_ticks}
+        home_details = {"goal_ticks": goal, "final_ticks": current, "max_error_ticks": error_ticks,
+                        "tolerance_ticks": home_tolerance}
         details = {"policy_run": policy_details, "home_return": home_details}
-        measured_home_error = (
-            max(abs(int(outcome.final_ticks[name]) - goal[name]) for name in ARM_JOINTS)
-            if all(name in outcome.final_ticks for name in ARM_JOINTS) else None
-        )
-        if outcome.outcome == "SUCCEEDED" or (
-            measured_home_error is not None and measured_home_error <= self.settings.policy_rest_ticks
-        ):
+        if home_reached:
+            gripper_closed = gripper_final <= GRIPPER_CLOSED + 50
+            home_details.update({
+                "gripper_start_ticks": gripper_start,
+                "gripper_goal_ticks": GRIPPER_CLOSED,
+                "gripper_final_ticks": gripper_final,
+                "gripper_closed_confirmed": gripper_closed,
+            })
+            if not gripper_closed:
+                return PickEnd("FAILED", "GRIPPER_CLOSE_NOT_CONFIRMED",
+                               "home 자세에는 도착했지만 그리퍼 닫힘은 확인되지 않았습니다.",
+                               pose_reached=True, details=details)
             # The arm is home; grasp and placement were not observed, so success cannot be claimed.
-            home_details["max_error_ticks"] = measured_home_error
-            home_details["tolerance_ticks"] = self.settings.policy_rest_ticks
+            if outcome.outcome != "SUCCEEDED":
+                home_details["outcome"] = "WITHIN_TOLERANCE"
             return PickEnd("RESULT_UNKNOWN", "PLACE_NOT_VERIFIED", "정책 동작 뒤 초기자세 허용범위 복귀. 집기·적재는 확인하지 않았습니다.",
                            pose_reached=True, details=details)
         return PickEnd("FAILED" if outcome.outcome == "FAILED" else "RESULT_UNKNOWN",

@@ -36,7 +36,7 @@ from pathlib import Path
 
 from mock_omx_worker import Refused, Worker, request_json
 from omx_policy_pick import PolicyPick, add_policy_arguments, arm_env, finish_policy_arguments
-from omx_slot_motion import ARM_JOINTS, Outcome, Rejected, SlotMotion, add_motion_arguments
+from omx_slot_motion import ARM_JOINTS, GRIPPER_CLOSED, GRIPPER_OPEN, Outcome, Rejected, SlotMotion, add_motion_arguments
 
 class LeRobotOmxWorker(Worker):
     banner = "실물 OMX 워커 {worker_id}: {url} 대기 (명령을 받으면 팔이 움직입니다)"
@@ -62,12 +62,14 @@ class LeRobotOmxWorker(Worker):
             except Rejected as rejected:
                 return rejected.reason_code
             return None
+        if command["operation"] == "OPEN_GRIPPER":
+            return None
         if command["operation"] not in ("MOVE_TO_SLOT", "RETURN_HOME"):
             return "NOT_IMPLEMENTED"
         # RETURN_HOME replays this worker's own "home" pose, which belongs to the slot map it was loaded with.
         home = command["operation"] == "RETURN_HOME"
         try:
-            self.goal = self.motion.plan(
+            self.goal = self.motion.recorded_pose("home") if home else self.motion.plan(
                 "home" if home else target.get("pick_slot_id"),
                 self.motion.slot_map_version if home else target.get("slot_map_version"),
                 datetime.fromisoformat(command["valid_until"]),
@@ -131,7 +133,7 @@ class LeRobotOmxWorker(Worker):
         try:
             result, policy_details = self.pick.run(
                 policy, cancel_requested=cancel_requested,
-                started=lambda: self.send(command, "PROGRESS", phase="APPROACH_TARGET"),
+                started=lambda: self.send(command, "PROGRESS", phase="POLICY_RUNNING"),
             )
         except Refused as refused:
             print(f"  관제가 진행 보고를 거부함 ({refused}). 정책은 멈췄고 팔은 그 자리에서 토크를 유지합니다.", flush=True)
@@ -157,6 +159,9 @@ class LeRobotOmxWorker(Worker):
     def handle(self, command: dict) -> None:
         if command["operation"] == "PICK_WITH_POLICY":
             self.handle_policy(command)
+            return
+        if command["operation"] == "OPEN_GRIPPER":
+            self.handle_open_gripper(command)
             return
         target = command["target"]
         if command["operation"] == "RETURN_HOME":
@@ -186,6 +191,42 @@ class LeRobotOmxWorker(Worker):
             except Refused:
                 pass
 
+    def handle_open_gripper(self, command: dict) -> None:
+        """Open the gripper and report measured position; never infer release from the goal write."""
+        accepted = False
+        try:
+            with self.motion.follower():
+                errors = self.motion.bus.sync_read("Hardware_Error_Status", ["gripper"], normalize=False, num_retry=3)
+                if int(errors["gripper"]):
+                    self.send(command, "REJECTED", reason_code="MOTOR_HARDWARE_ERROR", message=str(errors))
+                    return
+                start = int(self.motion.bus.sync_read("Present_Position", ["gripper"], normalize=False, num_retry=3)["gripper"])
+                command = self.send(command, "ACCEPTED")
+                accepted = True
+                if command["cancel_requested"]:
+                    self.send(command, "CANCELED", phase="OPENING_GRIPPER")
+                    return
+                command = self.send(command, "PROGRESS", phase="OPENING_GRIPPER")
+                final = self.motion.gripper_to(GRIPPER_OPEN, timeout_s=10.0)
+                confirmed = final >= GRIPPER_OPEN - 50
+                details = {"start_ticks": start, "goal_ticks": GRIPPER_OPEN, "final_ticks": final,
+                           "tolerance_ticks": 50, "gripper_open_confirmed": confirmed}
+                if confirmed:
+                    self.send(command, "SUCCEEDED", details=details)
+                else:
+                    self.send(command, "FAILED", reason_code="GRIPPER_OPEN_NOT_CONFIRMED", details=details)
+        except Refused as refused:
+            print(f"  중단: 관제가 거부함 ({refused}). 더 진행하지 않습니다.", flush=True)
+        except (ConnectionError, OSError, RuntimeError, KeyError, ValueError) as error:
+            print(f"  그리퍼 열기 확인 오류: {error}", flush=True)
+            try:
+                if accepted:
+                    self.send(command, "RESULT_UNKNOWN", reason_code="GRIPPER_OPEN_RESULT_UNKNOWN", message=str(error)[:300])
+                else:
+                    self.send(command, "REJECTED", reason_code="FOLLOWER_PORT_UNAVAILABLE", message=str(error)[:300])
+            except Refused:
+                pass
+
     def move(self, command: dict, goal: dict[str, int]) -> None:
         command = self.send(command, "PROGRESS", phase="APPROACH_TARGET")
         next_check = time.monotonic() + 1.0
@@ -199,13 +240,64 @@ class LeRobotOmxWorker(Worker):
             return status == 200 and body["command"]["cancel_requested"]
 
         is_jog = command["operation"] == "JOG_JOINT"
-        result = self.motion.move(
-            goal,
-            cancel_requested,
-            profile_velocity=2 if is_jog else None,
-            profile_acceleration=1 if is_jog else None,
-        )
-        details = {"goal_ticks": goal, "final_ticks": result.final_ticks, "max_error_ticks": result.max_error_ticks}
+        if command["operation"] == "RETURN_HOME":
+            # Position feedback can settle a few ticks from the commanded goal.
+            home_tolerance = 50
+            current, error_ticks, stationary = self.motion.pose_error(goal)
+            if error_ticks <= home_tolerance and stationary:
+                result = Outcome("SUCCEEDED", self.motion.simulated, pose_reached=True,
+                                 final_ticks=current, max_error_ticks=error_ticks)
+            else:
+                previous_timeout = self.motion.settings.move_timeout
+                self.motion.settings.move_timeout = max(previous_timeout, 90.0)
+                try:
+                    result = self.motion.move_staged(goal, cancel_requested, tolerance_ticks=home_tolerance)
+                finally:
+                    self.motion.settings.move_timeout = previous_timeout
+                current, error_ticks, stationary = self.motion.pose_error(goal)
+                if result.outcome == "FAILED" and error_ticks == 0 and stationary:
+                    result = Outcome("SUCCEEDED", self.motion.simulated, pose_reached=True,
+                                    final_ticks=current, max_error_ticks=error_ticks)
+            details = {"goal_ticks": goal, "final_ticks": current, "max_error_ticks": error_ticks,
+                       "tolerance_ticks": home_tolerance}
+            if result.outcome == "SUCCEEDED":
+                status, body = request_json(
+                    "GET", f"{self.base}/api/arm/commands/{command['command_id']}", timeout=5
+                )
+                if status != 200:
+                    self.send(command, "RESULT_UNKNOWN", reason_code="HOME_CANCEL_STATE_UNKNOWN",
+                              message=f"HTTP {status}", pose_reached=True, details=details)
+                    return
+                if body["command"]["cancel_requested"]:
+                    self.send(command, "CANCELED", phase="CLOSING_GRIPPER", pose_reached=True, details=details)
+                    return
+                command = self.send(command, "PROGRESS", phase="CLOSING_GRIPPER")
+                gripper_start = int(self.motion.bus.sync_read(
+                    "Present_Position", ["gripper"], normalize=False, num_retry=3
+                )["gripper"])
+                gripper_final = self.motion.gripper_to(GRIPPER_CLOSED, timeout_s=10.0)
+                gripper_closed = gripper_final <= GRIPPER_CLOSED + 50
+                details.update({
+                    "gripper_start_ticks": gripper_start,
+                    "gripper_goal_ticks": GRIPPER_CLOSED,
+                    "gripper_final_ticks": gripper_final,
+                    "gripper_tolerance_ticks": 50,
+                    "gripper_closed_confirmed": gripper_closed,
+                })
+                if not gripper_closed:
+                    self.send(command, "FAILED", reason_code="GRIPPER_CLOSE_NOT_CONFIRMED",
+                              message="팔은 home에 도착했지만 그리퍼 닫힘은 확인되지 않았습니다.",
+                              pose_reached=True, details=details)
+                    return
+        else:
+            result = self.motion.move(
+                goal,
+                cancel_requested,
+                profile_velocity=2 if is_jog else None,
+                profile_acceleration=1 if is_jog else None,
+            )
+            details = {"goal_ticks": goal, "final_ticks": result.final_ticks,
+                       "max_error_ticks": result.max_error_ticks}
         if result.outcome == "SUCCEEDED":
             self.send(command, "SUCCEEDED", result, pose_reached=True, details=details)
         elif result.outcome == "CANCELED":

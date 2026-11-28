@@ -544,6 +544,8 @@ const armCommandMessage = document.querySelector('#armCommandMessage');
 const armCommandRows = document.querySelector('#armCommandRows');
 const armWorkerState = document.querySelector('#armWorkerState');
 const armPicker = document.querySelector('#armPicker');
+const armHomeButtons = document.querySelector('#armHomeButtons');
+const armOpenButtons = document.querySelector('#armOpenButtons');
 const manualNow = document.querySelector('#manualNow');
 const manualNowArm = document.querySelector('#manualNowArm');
 const armCommandCount = document.querySelector('#armCommandCount');
@@ -618,6 +620,46 @@ function renderArmPicker() {
   }
 }
 
+function renderHomeButtons() {
+  if (!armHomeButtons) return;
+  const html = manualArms().map((arm) => {
+    const worker = workerFor(arm.arm_id);
+    const live = workerLive(worker);
+    const blocking = manual.commands.find((command) => command.robot_id === arm.arm_id && command.blocks_new_commands);
+    const disabled = manual.busy || !live || Boolean(blocking);
+    const status = manual.busy ? '다른 명령 전송 중'
+      : blocking ? `기존 명령 ${armCommandStateLabels[blocking.state] || blocking.state}`
+        : live ? `워커 연결됨 · ${worker.worker_id}` : '워커 연결 전';
+    const title = blocking ? `현재 ${blocking.state} 명령이 끝난 뒤 사용할 수 있어요`
+      : !live ? '해당 팔 워커가 연결되면 사용할 수 있어요' : `${arm.label}을 기록된 home 자세로 이동한 뒤 그리퍼를 접습니다`;
+    return `<div class="manual-home-action"><button type="button" class="secondary wide" data-home-arm="${escapeHtml(arm.arm_id)}" title="${escapeHtml(title)}"${disabled ? ' disabled' : ''}>${escapeHtml(arm.label)} 원상복귀 · 그리퍼 접기</button><small>${escapeHtml(status)}</small></div>`;
+  }).join('');
+  if (armHomeButtons.dataset.html !== html) {
+    armHomeButtons.dataset.html = html;
+    armHomeButtons.innerHTML = html;
+  }
+}
+
+function renderOpenButtons() {
+  if (!armOpenButtons) return;
+  const html = manualArms().map((arm) => {
+    const worker = workerFor(arm.arm_id);
+    const live = workerLive(worker);
+    const blocking = manual.commands.find((command) => command.robot_id === arm.arm_id && command.blocks_new_commands);
+    const disabled = manual.busy || !live || Boolean(blocking);
+    const status = manual.busy ? '다른 명령 전송 중'
+      : blocking ? `기존 명령 ${armCommandStateLabels[blocking.state] || blocking.state}`
+        : live ? `워커 연결됨 · ${worker.worker_id}` : '워커 연결 전';
+    const title = blocking ? `현재 ${blocking.state} 명령이 끝난 뒤 사용할 수 있어요`
+      : !live ? '해당 팔 워커가 연결되면 사용할 수 있어요' : '그리퍼가 열려 물체를 현재 위치에 놓습니다';
+    return `<div class="manual-home-action"><button type="button" class="secondary wide" data-open-arm="${escapeHtml(arm.arm_id)}" title="${escapeHtml(title)}"${disabled ? ' disabled' : ''}>${escapeHtml(arm.label)} 그리퍼 열기</button><small>${escapeHtml(status)}</small></div>`;
+  }).join('');
+  if (armOpenButtons.dataset.html !== html) {
+    armOpenButtons.dataset.html = html;
+    armOpenButtons.innerHTML = html;
+  }
+}
+
 armPicker.addEventListener('click', (event) => {
   const button = event.target.closest('[data-arm-id]');
   if (!button || button.disabled || button.dataset.armId === manual.armId) return;
@@ -648,12 +690,26 @@ function renderArmWorkers() {
 
 function commandWhat(command) {
   const target = command.target;
-  return { MOVE_TO_SLOT: '칸 앞으로 이동', RETURN_HOME: '원상복귀' }[command.operation]
+  return { MOVE_TO_SLOT: '칸 앞으로 이동', RETURN_HOME: '원상복귀', OPEN_GRIPPER: '그리퍼 열기' }[command.operation]
     || (target.policy ? `${escapeHtml(target.policy.label)} 집기` : `${escapeHtml(target.object_class)} → ${escapeHtml(command.place.slot_id)}`);
+}
+
+function armCommandDisplayState(command) {
+  if (command.state === 'UNKNOWN' && command.reason_code === 'PLACE_NOT_VERIFIED'
+      && command.result?.pose_reached === true) {
+    return { label: '작업 종료 · 초기자세 복귀', short: '종료 · 초기자세 복귀', tone: 'good' };
+  }
+  const [short, tone] = armCommandStateShort[command.state] || [command.state, ''];
+  return { label: armCommandStateLabels[command.state] || command.state, short, tone };
+}
+
+function armCommandDisplayReason(command) {
+  return command.reason_code === 'PLACE_NOT_VERIFIED' ? '적재 여부 미확인' : command.reason_code;
 }
 
 function commandWhere(command) {
   const target = command.target;
+  if (command.operation === 'OPEN_GRIPPER') return '그리퍼';
   if (target.pick_slot_id) {
     const camera = command.source?.kind === 'CAMERA'
       ? ` · 정면 캠 ${escapeHtml(command.source.class_name)} ${Math.round(command.source.confidence * 100)}%`
@@ -685,9 +741,12 @@ function renderManualNow() {
     manualNow.dataset.html = '';
     return;
   }
-  const [word, tone] = armCommandStateShort[command.state] || [command.state, ''];
+  const displayState = armCommandDisplayState(command);
+  const word = displayState.short;
+  const tone = displayState.tone;
   const cleared = command.operator_cleared_at ? ` · 현장 확인 ${escapeHtml(formatClock(command.operator_cleared_at))}` : '';
-  const reason = command.reason_code ? `<small class="manual-reason">${escapeHtml(command.reason_code)}</small>` : '';
+  const reasonText = armCommandDisplayReason(command);
+  const reason = reasonText ? `<small class="manual-reason">${escapeHtml(reasonText)}</small>` : '';
   const simulated = command.result && command.result.simulated ? '<span class="simulated">모의</span>' : '';
   const html = `
     <div class="manual-now-row">
@@ -715,11 +774,12 @@ function renderArmCommands(commands) {
       ? `${commandWhat(command)}<small>${escapeHtml(target.policy.model)}</small>`
       : commandWhat(command);
     const simulated = command.result && command.result.simulated ? '<span class="simulated">모의</span>' : '';
-    const reason = command.reason_code ? `<small>${escapeHtml(command.reason_code)}</small>` : '';
+    const reasonText = armCommandDisplayReason(command);
+    const reason = reasonText ? `<small>${escapeHtml(reasonText)}</small>` : '';
     const cleared = command.operator_cleared_at ? `<small>현장 확인 ${escapeHtml(formatClock(command.operator_cleared_at))}</small>` : '';
     return `<tr>
       <td>${escapeHtml(command.command_id)}<small>${escapeHtml(armLabel(command.robot_id))} · ${escapeHtml(formatClock(command.created_at))}</small></td>
-      <td>${escapeHtml(armCommandStateLabels[command.state] || command.state)}${simulated}${reason}${cleared}</td>
+      <td>${escapeHtml(armCommandDisplayState(command).label)}${simulated}${reason}${cleared}</td>
       <td>${what}<small>${commandWhere(command)}</small></td>
       <td>${escapeHtml(command.worker_id || '-')}<small>${escapeHtml(formatClock(command.last_event_at || command.dispatched_at))}</small></td>
       <td>${commandAction(command)}</td>
@@ -749,6 +809,8 @@ async function refreshArmCommands() {
     manual.workers = data.workers;
     manual.commands = data.commands;
     renderArmPicker();
+    renderHomeButtons();
+    renderOpenButtons();
     renderArmWorkers();
     renderManualNow();
     renderArmCommands(data.commands);
@@ -842,7 +904,8 @@ const cameraCheckErrors = new Set([
 function setManualBusy(busy) {
   manual.busy = busy;
   policyButtons.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
-  document.querySelector('#armReturnHome').disabled = busy;
+  renderHomeButtons();
+  renderOpenButtons();
 }
 
 async function sendPolicyWithoutCamera(policy, armId, why) {
@@ -1082,8 +1145,6 @@ async function refreshSequences() {
         CANCELING: '취소 처리 중', COMPLETED: '모든 단계 완료',
         NEEDS_INTERVENTION: '중단됨 · 현장 확인 필요', CANCELED: '취소됨',
       };
-      sequenceStatus.textContent = `${run.sequence_id} · ${runStateLabels[run.state] || run.state}${placementUnknown && run.results.length ? ' · 적재 여부 미확인' : ''}`;
-
       const currentCommand = run.current_command_id
         ? await fetch(`/api/arm/commands/${encodeURIComponent(run.current_command_id)}`, { cache: 'no-store' })
           .then(async (response) => {
@@ -1092,24 +1153,35 @@ async function refreshSequences() {
             return payload.command;
           })
         : null;
+      const liveCommand = currentCommand && ['QUEUED', 'DISPATCHED', 'ACCEPTED', 'RUNNING'].includes(currentCommand.state)
+        ? currentCommand : null;
+
       const commandStateLabels = {
         QUEUED: '팔 워커 대기 중', DISPATCHED: '워커가 명령을 가져감', ACCEPTED: '팔 워커가 수락함',
         RUNNING: '정책 실행 중', CANCELING: '정지 요청 처리 중', SUCCEEDED: '완료',
         UNKNOWN: '결과 미확인', FAILED: '실패', REJECTED: '실행 거부', CANCELED: '취소됨', EXPIRED: '명령 만료',
       };
       const phaseLabels = {
-        APPROACH_TARGET: '물체 접근 중', RETURNING_HOME: '초기자세 복귀 중',
+        APPROACH_TARGET: '물체 접근 중', POLICY_RUNNING: '정책 실행 중', RETURNING_HOME: '초기자세 복귀 중', CLOSING_GRIPPER: '그리퍼 접는 중',
         VERIFY_TRANSFER: '물체 이동 확인 중',
       };
+      const livePhase = liveCommand?.events?.at(-1)?.payload?.phase;
+      sequenceStatus.textContent = liveCommand
+        ? `${sequenceArmLabel(liveCommand.robot_id)} · ${liveCommand.operation === 'RETURN_HOME' ? '원위치 복귀' : liveCommand.operation === 'PICK_WITH_POLICY' ? '정책 실행' : liveCommand.operation} ${liveCommand.state === 'QUEUED' ? '대기 중' : liveCommand.state === 'RUNNING' ? '실행 중' : '접수 중'}${livePhase ? ` · ${phaseLabels[livePhase] || livePhase}` : ''}`
+        : `${run.sequence_id} · ${runStateLabels[run.state] || run.state}${currentCommand?.operator_cleared_at ? ' · 현장 확인 완료, 새 실행 가능' : ''}${placementUnknown && run.results.length ? ' · 적재 여부 미확인' : ''}`;
       const stepItems = run.steps.map((step, index) => {
         const item = document.createElement('li');
         const result = run.results.find((entry) => entry.step === index);
         const isCurrent = index === run.current_step && !result;
         const state = result?.state || (isCurrent ? currentCommand?.state : null);
+        const placementUnverifiedAtHome = result?.state === 'UNKNOWN' && result.home_confirmed === true
+          && result.reason_code === 'PLACE_NOT_VERIFIED';
         const stateText = result
-          ? result.home_confirmed === true
-            ? '초기자세 복귀 확인'
-            : commandStateLabels[result.state] || result.state
+          ? placementUnverifiedAtHome
+            ? '작업 종료 · 초기자세 복귀'
+            : result.home_confirmed === true
+              ? '초기자세 복귀 확인'
+              : commandStateLabels[result.state] || result.state
           : isCurrent
             ? `${commandStateLabels[currentCommand?.state] || runStateLabels[run.state] || run.state}${currentCommand?.events?.at(-1)?.payload?.phase ? ` · ${phaseLabels[currentCommand.events.at(-1).payload.phase] || currentCommand.events.at(-1).payload.phase}` : ''}`
             : index < run.current_step ? '완료' : '대기';
@@ -1117,7 +1189,11 @@ async function refreshSequences() {
         heading.textContent = `${index + 1}. ${step.label} · ${sequenceArmLabel(step.robot_id || run.robot_id)} · ${stateText}`;
         item.append(heading);
 
-        const detail = [currentCommand?.result?.message, result?.reason_code || currentCommand?.result?.reason_code]
+        const detailReason = result?.reason_code === 'PLACE_NOT_VERIFIED'
+          || currentCommand?.result?.reason_code === 'PLACE_NOT_VERIFIED'
+          ? '적재 여부 미확인'
+          : result?.reason_code || currentCommand?.result?.reason_code;
+        const detail = [currentCommand?.result?.message, detailReason]
           .filter(Boolean).join(' · ')
           || (result?.home_confirmed === true ? '초기자세 복귀 확인' : '')
           || (result?.placement_confirmed === true ? '카트 적재 확인' : '');
@@ -1126,7 +1202,26 @@ async function refreshSequences() {
           note.textContent = detail;
           item.append(note);
         }
-        item.dataset.state = state || (result ? 'COMPLETED' : isCurrent ? run.state : 'WAITING');
+        if (result?.state === 'UNKNOWN' && run.current_command_id && !currentCommand?.operator_cleared_at) {
+          const clear = document.createElement('button');
+          clear.type = 'button';
+          clear.className = 'secondary';
+          clear.textContent = '현장 확인 완료';
+          clear.addEventListener('click', async () => {
+            const note = window.prompt('팔과 그리퍼 상태를 실제로 확인한 내용을 적어 주세요.');
+            if (!note?.trim()) return;
+            await postArmCommand(`/api/arm/commands/${encodeURIComponent(run.current_command_id)}/clear-unknown`, { note: note.trim() });
+            await refreshSequences();
+          });
+          item.append(clear);
+        } else if (result?.state === 'UNKNOWN' && currentCommand?.operator_cleared_at) {
+          const confirmed = document.createElement('small');
+          confirmed.textContent = '현장 확인 완료 · 적재 결과는 미확인';
+          item.append(confirmed);
+        }
+        item.dataset.state = placementUnverifiedAtHome
+          ? 'COMPLETED'
+          : state || (result ? 'COMPLETED' : isCurrent ? run.state : 'WAITING');
         return item;
       });
       sequenceStepDetails?.replaceChildren(...stepItems);
@@ -1228,13 +1323,15 @@ armCommandForm.addEventListener('submit', async (event) => {
   button.disabled = false;
 });
 
-document.querySelector('#armReturnHome').addEventListener('click', async () => {
-  // No slot or place: the worker moves the arm back to the home pose it recorded.
-  const armId = manual.armId;
-  if (manual.busy) return;
+armHomeButtons.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-home-arm]');
+  if (!button || button.disabled || manual.busy) return;
+  const armId = button.dataset.homeArm;
+  if (!armId || !workerLive(workerFor(armId))
+      || manual.commands.some((command) => command.robot_id === armId && command.blocks_new_commands)) return;
   const go = await askConfirm({
     title: `${armLabel(armId)} 원상복귀`,
-    detail: '기록해 둔 home 자세로 팔이 움직여요. 팔이 물건을 잡고 있으면 떨어질 수 있어요.',
+    detail: `${armLabel(armId)}이 기록된 home 자세로 이동한 뒤 그리퍼를 접어요. 그리퍼가 물체를 다시 잡거나 누르지 않도록 주변을 확인하세요.`,
     ok: '돌려보내기',
   });
   if (!go) return;
@@ -1243,9 +1340,33 @@ document.querySelector('#armReturnHome').addEventListener('click', async () => {
     robot_id: armId,
     operation: 'RETURN_HOME',
     valid_for_s: 60,
-    source: { kind: 'OPERATOR_INPUT' },
+    source: { kind: 'OPERATOR_INPUT', note: `${armLabel(armId)} 팔별 원상복귀 버튼` },
   });
-  if (command) armCommandMessage.textContent = '원상복귀를 보냈어요 · 워커가 가져가면 움직여요';
+  if (command) armCommandMessage.textContent = `${armLabel(armId)} 원상복귀 명령을 보냈어요 · 워커가 가져가면 움직여요`;
+  setManualBusy(false);
+});
+
+armOpenButtons.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-open-arm]');
+  if (!button || button.disabled || manual.busy) return;
+  const armId = button.dataset.openArm;
+  if (!armId || !workerLive(workerFor(armId))
+      || manual.commands.some((command) => command.robot_id === armId && command.blocks_new_commands)) return;
+  const go = await askConfirm({
+    title: `${armLabel(armId)} 그리퍼 열기`,
+    detail: '그리퍼가 열려 물체가 현재 위치에 놓입니다. 아래에 안전한 받침이 있는지 확인하세요.',
+    ok: '그리퍼 열기',
+  });
+  if (!go) return;
+  setManualBusy(true);
+  const command = await postArmCommand('/api/arm/commands', {
+    robot_id: armId,
+    operation: 'OPEN_GRIPPER',
+    valid_for_s: 30,
+    target: {},
+    source: { kind: 'OPERATOR_INPUT', note: `${armLabel(armId)} 팔별 그리퍼 열기 버튼` },
+  });
+  if (command) armCommandMessage.textContent = `${armLabel(armId)} 그리퍼 열기 명령 등록 · 워커가 가져가면 실행돼요`;
   setManualBusy(false);
 });
 

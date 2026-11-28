@@ -39,7 +39,7 @@ ARM_ROBOT_IDS = frozenset({"arm-01", "arm-02"})
 # PICK_WITH_POLICY runs the LeRobot ACT policy trained for the named object (config/omx-act-policies.json). The
 # policy finds the object in its own camera images; a camera-observed slot, if any, is evidence, not an input.
 # JOG_JOINT is an operator-only, fixed-size relative nudge; it does not accept raw target ticks or coordinates.
-OPERATIONS = frozenset({"MOVE_TO_SLOT", "RETURN_HOME", "PICK_WITH_POLICY", "JOG_JOINT"})
+OPERATIONS = frozenset({"MOVE_TO_SLOT", "RETURN_HOME", "OPEN_GRIPPER", "PICK_WITH_POLICY", "JOG_JOINT"})
 # Operations whose SUCCEEDED means "measured joints reached the planned pose" rather than grasp and place.
 POSE_OPERATIONS = frozenset({"MOVE_TO_SLOT", "RETURN_HOME", "JOG_JOINT"})
 JOG_JOINTS = frozenset({"shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"})
@@ -49,6 +49,7 @@ SOURCE_KINDS = frozenset({"OPERATOR_INPUT"})
 PHASES = frozenset(
     {
         "APPROACH_TARGET",
+        "POLICY_RUNNING",
         "REFINE_TARGET",
         "GRASP_TARGET",
         "VERIFY_GRASP",
@@ -57,6 +58,8 @@ PHASES = frozenset(
         "PLACE_TARGET",
         "VERIFY_PLACEMENT",
         "RETURNING_HOME",
+        "OPENING_GRIPPER",
+        "CLOSING_GRIPPER",
     }
 )
 MAX_WAIT_S = 30.0
@@ -225,8 +228,8 @@ def validate_command_request(
 ) -> tuple[str, str, int, dict[str, Any]]:
     """Return (robot_id, operation, valid_for_s, frozen request) or raise ArmCommandError.
 
-    MOVE_TO_SLOT names one shelf slot (`pick_slot_id`), RETURN_HOME names nothing, PICK_WITH_POLICY names
-    an object with a trained policy, and JOG_JOINT names one joint and a direction (never raw ticks).
+    MOVE_TO_SLOT names one shelf slot (`pick_slot_id`), RETURN_HOME and OPEN_GRIPPER name no target,
+    PICK_WITH_POLICY names an object with a trained policy, and JOG_JOINT names one joint and a direction.
     """
     allowed = {"robot_id", "operation", "valid_for_s", "target", "place", "source"}
     if set(payload) - allowed:
@@ -241,6 +244,14 @@ def validate_command_request(
     if isinstance(valid_for_s, bool) or not isinstance(valid_for_s, int) or not 5 <= valid_for_s <= 600:
         raise ArmCommandError("valid_for_s must be an integer from 5 to 600")
     source = _operator_source(payload.get("source"))
+    if operation == "OPEN_GRIPPER":
+        if payload.get("target") not in (None, {}) or payload.get("place") is not None:
+            raise ArmCommandError("OPEN_GRIPPER takes no target or place")
+        return str(robot_id), str(operation), valid_for_s, {
+            "target": dict.fromkeys(("object_class", "pick_slot_id", "slot_label", "slot_map_version")),
+            "place": None,
+            "source": source,
+        }
     if operation == "JOG_JOINT":
         if not 5 <= valid_for_s <= 30:
             raise ArmCommandError("JOG_JOINT valid_for_s must be an integer from 5 to 30")
@@ -308,6 +319,21 @@ def _require_success_evidence(operation: str, body: Mapping[str, object]) -> Non
     if operation in POSE_OPERATIONS:
         if body.get("pose_reached") is not True:
             raise ArmCommandError(f"{operation} SUCCEEDED needs pose_reached true (measured joint positions at the goal)")
+        if operation == "RETURN_HOME":
+            details = body.get("details")
+            if not isinstance(details, Mapping):
+                raise ArmCommandError("RETURN_HOME SUCCEEDED needs measured home and gripper details")
+            max_error = details.get("max_error_ticks")
+            tolerance = details.get("tolerance_ticks")
+            if (not isinstance(max_error, int) or not isinstance(tolerance, int)
+                    or not 0 <= max_error <= tolerance <= 50):
+                raise ArmCommandError("RETURN_HOME SUCCEEDED needs measured home error within 50 ticks")
+            if details.get("gripper_closed_confirmed") is not True:
+                raise ArmCommandError("RETURN_HOME SUCCEEDED needs measured gripper_closed_confirmed true")
+    elif operation == "OPEN_GRIPPER":
+        details = body.get("details")
+        if not isinstance(details, Mapping) or details.get("gripper_open_confirmed") is not True:
+            raise ArmCommandError("OPEN_GRIPPER SUCCEEDED needs measured gripper_open_confirmed true")
     elif not (body.get("grasp_confirmed") is True and body.get("place_confirmed") is True):
         raise ArmCommandError(
             "SUCCEEDED needs grasp_confirmed and place_confirmed true; use RESULT_UNKNOWN when they cannot be confirmed"
